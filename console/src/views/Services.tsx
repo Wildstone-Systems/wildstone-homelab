@@ -637,7 +637,11 @@ function RemoveFormLoader(props: {
   loading?: boolean;
   onDone: () => void;
 }) {
-  const preview = useLoad(() => api.previewDisablePackage(props.pkg.name), [props.pkg.name]);
+  const instance = installedInstance(props.pkg);
+  const preview = useLoad(
+    () => api.previewDisablePackage(props.pkg.name, instance),
+    [props.pkg.name, instance],
+  );
   const steps = preview.data?.plan?.steps;
   return (
     <RemoveForm
@@ -669,7 +673,8 @@ function RemoveFormLoader(props: {
 // resource between them is ambiguous, and deleting it on a guess is the
 // wrong way to be wrong.
 export function ownedByPackage(resources: ResourceView[], pkg: PackageView): ResourceView[] {
-  const owner = `capability/${pkg.capability}`;
+  const instance = installedInstance(pkg);
+  const owner = `capability/${pkg.capability}${instance ? `-${instance}` : ""}`;
   const mine = resources.filter((r) => r.owner === owner);
   const claimants = new Set(mine.map((r) => r.package).filter((p): p is string => !!p));
   const legacyIsMine = claimants.size === 0 || (claimants.size === 1 && claimants.has(pkg.name));
@@ -882,7 +887,7 @@ export function RemoveForm({
           }
           onClick={() =>
             remove.run(
-              () => api.disablePackage(pkg.name),
+              () => api.disablePackage(pkg.name, installedInstance(pkg)),
               "removal proposed — approve it on Plans",
             )
           }
@@ -898,6 +903,14 @@ export function RemoveForm({
       {remove.state.phase === "error" && <ErrorLine error={remove.state.message} />}
     </>
   );
+}
+
+// Instanced packages are removed by package plus the instance that was
+// installed. The catalog already returns the recorded install params, so
+// the Console must carry that value through rather than asking the operator
+// to retype it (and accidentally proposing a blank-instance removal).
+function installedInstance(pkg: PackageView): string | undefined {
+  return pkg.params?.find((param) => param.name === "instance")?.installed?.trim() || undefined;
 }
 
 function resourceCount(owners: [string, number][]): string {

@@ -29,6 +29,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -185,6 +186,16 @@ type ButlerTask struct {
 
 	Retention       ButlerTaskRetention `json:"retention"`
 	EnvelopeVersion int                 `json:"envelopeVersion"`
+
+	// AsOwner and SystemExtra are the request-time facts a task handle
+	// alone cannot recover (migration 0083, ADR-W039 Phase 2b, #337):
+	// what the CALLER was when the turn that opened this task was
+	// admitted, not a decision the runtime makes or a fact about the
+	// Butler. They mirror butlerlive.Turn.AsOwner/SystemExtra exactly,
+	// and keystone/agentgateway reads them back to rebuild that Turn
+	// for a handle-resolved call.
+	AsOwner     bool   `json:"asOwner,omitempty"`
+	SystemExtra string `json:"systemExtra,omitempty"`
 }
 
 func butlerTaskID(seq int64) string { return fmt.Sprintf("bt-%d", seq) }
@@ -283,14 +294,16 @@ func (db *DB) InsertButlerTask(t ButlerTask) (string, error) {
 		     surface, agent_class, audience, session, origin_turn, origin_connection,
 		     origin_connection_ref, correlation_id, objective,
 		     completion_criteria, grants_json, budget_json, deadline_at, next_wakeup_at,
-		     lease_epoch, uncertainty, result_summary, retention, envelope_version, objective_kind, proposal_only)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, '', '', ?, ?, ?, ?)`,
+		     lease_epoch, uncertainty, result_summary, retention, envelope_version, objective_kind, proposal_only,
+		     as_owner, system_extra)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, '', '', ?, ?, ?, ?, ?, ?)`,
 		stamp, stamp, string(t.Kind), string(ButlerTaskPending), author, owner,
 		string(t.Surface), t.AgentClass, string(t.Audience), session, originTurn,
 		t.OriginConnection, t.OriginConnectionRef,
 		t.CorrelationID, t.Objective, t.CompletionCriteria, grants, budget,
 		timeText(t.DeadlineAt), timeText(t.NextWakeupAt),
-		string(t.Retention), TaskEnvelopeVersion, t.ObjectiveKind, t.ProposalOnly)
+		string(t.Retention), TaskEnvelopeVersion, t.ObjectiveKind, t.ProposalOnly,
+		t.AsOwner, t.SystemExtra)
 	if err != nil {
 		return "", fmt.Errorf("runtimedb: inserting butler task: %w", err)
 	}
@@ -496,7 +509,8 @@ const butlerTaskColumns = `SELECT t.seq, t.created_at, t.updated_at, t.kind, t.s
 	 t.surface, t.agent_class, t.audience, t.session, t.origin_turn, t.origin_connection,
 	 t.origin_connection_ref, t.correlation_id, t.objective,
 	 t.completion_criteria, t.grants_json, t.budget_json, t.deadline_at, t.next_wakeup_at,
-	 t.lease_epoch, t.uncertainty, t.result_summary, t.retention, t.envelope_version, t.objective_kind, t.proposal_only
+	 t.lease_epoch, t.uncertainty, t.result_summary, t.retention, t.envelope_version, t.objective_kind, t.proposal_only,
+	 t.as_owner, t.system_extra
 	 FROM butler_tasks t
 	 JOIN butler_members a ON a.person_id = t.author_person_id
 	 JOIN butler_members o ON o.person_id = t.owner_person_id`
@@ -512,7 +526,8 @@ func scanButlerTask(row rowScanner) (ButlerTask, error) {
 		&t.OriginConnectionRef, &t.CorrelationID,
 		&t.Objective, &t.CompletionCriteria, &t.GrantsJSON, &t.BudgetJSON,
 		&deadline, &wakeup, &t.LeaseEpoch, &t.Uncertainty, &t.ResultSummary,
-		&retention, &t.EnvelopeVersion, &t.ObjectiveKind, &t.ProposalOnly)
+		&retention, &t.EnvelopeVersion, &t.ObjectiveKind, &t.ProposalOnly,
+		&t.AsOwner, &t.SystemExtra)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ButlerTask{}, ErrNotFound
 	}
@@ -575,6 +590,63 @@ func (db *DB) ListButlerTasks(limit int, owner string) ([]ButlerTask, error) {
 	rows, err := db.sql.Query(butlerTaskColumns+where+` ORDER BY t.seq DESC LIMIT ?`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("runtimedb: listing butler tasks: %w", err)
+	}
+	defer rows.Close()
+	return collectButlerTasks(rows)
+}
+
+// openButlerTaskStates is every state a task can still do work in — the
+// set ListOpenButlerTasksByButler fences on revocation (ADR-W039 §3.7)
+// and ButlerTasksInState's resume queue draws from one at a time.
+// Deliberately not ButlerTaskWaiting alone: a pending task has not
+// dispatched yet and a paused-offboarded one is waiting on a human
+// review, but a runtime revoked mid-review must still lose its handle,
+// or the review's resume would hand the withdrawn runtime a live one.
+var openButlerTaskStates = []ButlerTaskState{
+	ButlerTaskPending, ButlerTaskRunning, ButlerTaskWaiting, ButlerTaskPausedOffboarded,
+}
+
+// ListOpenButlerTasksByButler returns every task not yet finished that
+// the named Agent currently runs, oldest first: the fencing sweep a
+// runtime revocation needs (ADR-W039 §3.7; api.fenceRuntimeTasks) to
+// withdraw every live handle and fence every in-flight attempt before a
+// revoked runtime's next call could reach one.
+//
+// Keyed by the Butler's NAME, like TaskButler/SetTaskButler and the
+// butler_tasks_butler index it reuses: butler_tasks.butler is the
+// snapshot taken when the task was assigned (ADR-W030 A4), the same
+// column ButlerTasksInState's sibling queries filter without a join.
+func (db *DB) ListOpenButlerTasksByButler(butler string) ([]ButlerTask, error) {
+	args := make([]any, 0, len(openButlerTaskStates)+1)
+	args = append(args, butler)
+	placeholders := make([]string, len(openButlerTaskStates))
+	for i, s := range openButlerTaskStates {
+		placeholders[i] = "?"
+		args = append(args, string(s))
+	}
+	query := butlerTaskColumns + ` WHERE t.butler = ? AND t.state IN (` +
+		strings.Join(placeholders, ",") + `) ORDER BY t.seq`
+	rows, err := db.sql.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("runtimedb: listing open tasks for butler %q: %w", butler, err)
+	}
+	defer rows.Close()
+	return collectButlerTasks(rows)
+}
+
+// ButlerTasksWaitingOnRuntime returns a Butler's own tasks currently
+// waiting with the given open (unresolved) reason, oldest first
+// (ADR-W039 §3.7, Phase 4, #340) — the resume queue a reconnected
+// runtime's arrival re-offers as deliveries.
+func (db *DB) ButlerTasksWaitingOnRuntime(butlerName string, reason ButlerWaitReason) ([]ButlerTask, error) {
+	rows, err := db.sql.Query(
+		butlerTaskColumns+`
+		 JOIN butler_task_waits w ON w.task = t.seq
+		 WHERE t.butler = ? AND t.state = ? AND w.resolved_at = '' AND w.reason = ?
+		 ORDER BY t.seq`,
+		butlerName, string(ButlerTaskWaiting), string(reason))
+	if err != nil {
+		return nil, fmt.Errorf("runtimedb: listing tasks waiting on the runtime for %q: %w", butlerName, err)
 	}
 	defer rows.Close()
 	return collectButlerTasks(rows)

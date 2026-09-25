@@ -123,11 +123,17 @@ func TestRequiredProtocolMinor(t *testing.T) {
 		spec ContainerSpec
 		want uint32
 	}{
-		"plain":    {ContainerSpec{Image: "x", Ports: []string{"53:53", "127.0.0.1:8080:80/tcp"}}, 0},
-		"udp":      {ContainerSpec{Image: "x", Ports: []string{"53:53/udp"}}, HostAccessProtocolMinor},
-		"device":   {ContainerSpec{Image: "x", Devices: []DeviceMapping{{Source: "/dev/net/tun"}}}, HostAccessProtocolMinor},
-		"cap":      {ContainerSpec{Image: "x", CapAdd: []string{"NET_ADMIN"}}, HostAccessProtocolMinor},
-		"nil spec": {ContainerSpec{}, 0},
+		"plain":            {ContainerSpec{Image: "x", Ports: []string{"53:53", "127.0.0.1:8080:80/tcp"}}, 0},
+		"udp":              {ContainerSpec{Image: "x", Ports: []string{"53:53/udp"}}, HostAccessProtocolMinor},
+		"device":           {ContainerSpec{Image: "x", Devices: []DeviceMapping{{Source: "/dev/net/tun"}}}, HostAccessProtocolMinor},
+		"cap":              {ContainerSpec{Image: "x", CapAdd: []string{"NET_ADMIN"}}, HostAccessProtocolMinor},
+		"nil spec":         {ContainerSpec{}, 0},
+		"readOnlyRootfs":   {ContainerSpec{Image: "x", ReadOnlyRootfs: true}, HardeningProtocolMinor},
+		"capDrop":          {ContainerSpec{Image: "x", CapDrop: []string{"ALL"}}, HardeningProtocolMinor},
+		"noNewPrivileges":  {ContainerSpec{Image: "x", NoNewPrivileges: true}, HardeningProtocolMinor},
+		"resources":        {ContainerSpec{Image: "x", Resources: &ContainerResources{Memory: "4g"}}, HardeningProtocolMinor},
+		"shmSize":          {ContainerSpec{Image: "x", ShmSize: "1g"}, HardeningProtocolMinor},
+		"hardening+device": {ContainerSpec{Image: "x", ReadOnlyRootfs: true, Devices: []DeviceMapping{{Source: "/dev/net/tun"}}}, HardeningProtocolMinor},
 	} {
 		if got := tc.spec.RequiredProtocolMinor(); got != tc.want {
 			t.Errorf("%s: RequiredProtocolMinor = %d, want %d", name, got, tc.want)
@@ -136,5 +142,50 @@ func TestRequiredProtocolMinor(t *testing.T) {
 	var nilSpec *ContainerSpec
 	if nilSpec.RequiredProtocolMinor() != 0 {
 		t.Error("nil spec must need nothing")
+	}
+}
+
+// TestContainerHardeningFieldsAreValidated is H1's lint coverage: a
+// container using the hardening fields correctly passes, and each
+// malformed form (bad capDrop syntax, a capability in both capAdd and
+// capDrop, a non-Docker-size memory/shmSize string, a non-positive cpus
+// value, a negative pidsLimit) is refused.
+func TestContainerHardeningFieldsAreValidated(t *testing.T) {
+	ok := containerWith(func(s *ContainerSpec) {
+		s.ReadOnlyRootfs = true
+		s.CapDrop = []string{"ALL"}
+		s.NoNewPrivileges = true
+		s.Resources = &ContainerResources{Memory: "4g", Cpus: "2", PidsLimit: 512}
+		s.ShmSize = "1g"
+	})
+	if err := ok.Validate(); err != nil {
+		t.Fatalf("well-formed hardening fields refused: %v", err)
+	}
+	for name, mutate := range map[string]func(*ContainerSpec){
+		"capDrop CAP_ prefixed":     func(s *ContainerSpec) { s.CapDrop = []string{"CAP_SYS_ADMIN"} },
+		"capDrop lowercase":         func(s *ContainerSpec) { s.CapDrop = []string{"sys_admin"} },
+		"capDrop empty entry":       func(s *ContainerSpec) { s.CapDrop = []string{""} },
+		"capDrop overlaps capAdd":   func(s *ContainerSpec) { s.CapAdd = []string{"NET_ADMIN"}; s.CapDrop = []string{"NET_ADMIN"} },
+		"memory not a size string":  func(s *ContainerSpec) { s.Resources = &ContainerResources{Memory: "lots"} },
+		"memory zero":               func(s *ContainerSpec) { s.Resources = &ContainerResources{Memory: "0"} },
+		"cpus not a number":         func(s *ContainerSpec) { s.Resources = &ContainerResources{Cpus: "two"} },
+		"cpus zero":                 func(s *ContainerSpec) { s.Resources = &ContainerResources{Cpus: "0"} },
+		"cpus negative":             func(s *ContainerSpec) { s.Resources = &ContainerResources{Cpus: "-1"} },
+		"pidsLimit negative":        func(s *ContainerSpec) { s.Resources = &ContainerResources{PidsLimit: -1} },
+		"shmSize not a size string": func(s *ContainerSpec) { s.ShmSize = "huge" },
+	} {
+		if err := containerWith(mutate).Validate(); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}
+
+// TestContainerHardeningFieldsAbsentDoNotChangeValidation: the H1 fields
+// are additive — a container that never sets them validates exactly as
+// it did before this change existed.
+func TestContainerHardeningFieldsAbsentDoNotChangeValidation(t *testing.T) {
+	plain := containerWith(func(s *ContainerSpec) {})
+	if err := plain.Validate(); err != nil {
+		t.Fatalf("a container with no hardening fields was refused: %v", err)
 	}
 }

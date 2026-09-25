@@ -1704,6 +1704,13 @@ func (r *Reconciler) refuseIfAgentTooOld(nodeID string, step plan.PlanStep, spec
 	if !known || have >= need {
 		return ""
 	}
+	if need >= resource.HardeningProtocolMinor {
+		return fmt.Sprintf("%s/%s needs wardstone protocol minor %d (readOnlyRootfs, capDrop, noNewPrivileges, "+
+			"resources or shmSize) and the agent on node %s speaks minor %d: upgrade wardstoned there first. An "+
+			"older agent would silently ignore these fields and start the container LESS contained than the plan "+
+			"asked for, which is refused rather than degraded",
+			step.Kind, step.Name, need, nodeID, have)
+	}
 	return fmt.Sprintf("%s/%s needs wardstone protocol minor %d (a UDP port, a device or a capability) and the agent on "+
 		"node %s speaks minor %d: upgrade wardstoned there first. An older agent would publish the UDP port as a second "+
 		"TCP binding, which Docker refuses, and start the container without its devices and capabilities",
@@ -1735,14 +1742,26 @@ func containerEnsureOp(name string, spec *resource.ContainerSpec, network, cfgDi
 	for _, d := range spec.Devices {
 		devices = append(devices, &wsv1.DeviceMapping{HostPath: d.Source, ContainerPath: d.Target})
 	}
+	// H1 hardening fields (protocol minor 18): a pre-minor-18 agent
+	// ignores them, which is exactly why refuseIfAgentTooOld stops a spec
+	// that sets any of them from ever reaching one.
+	var resources *wsv1.ContainerResources
+	if r := spec.Resources; r != nil {
+		resources = &wsv1.ContainerResources{Memory: r.Memory, Cpus: r.Cpus, PidsLimit: int64(r.PidsLimit)}
+	}
 	return &wsv1.Operation{Op: &wsv1.Operation_EnsureContainer{EnsureContainer: &wsv1.EnsureContainer{
 		Name: name, Image: spec.Image, Env: spec.Env, Ports: ports, Mounts: mounts, RestartPolicy: spec.Restart,
-		Command:     spec.Command,
-		Network:     network,
-		Devices:     devices,
-		CapAdd:      spec.CapAdd,
-		HostAliases: aliases,
-		Labels:      map[string]string{specHashLabel: specHash(spec, network, cfgDigest, aliases)},
+		Command:         spec.Command,
+		Network:         network,
+		Devices:         devices,
+		CapAdd:          spec.CapAdd,
+		HostAliases:     aliases,
+		ReadOnlyRootfs:  spec.ReadOnlyRootfs,
+		CapDrop:         spec.CapDrop,
+		NoNewPrivileges: spec.NoNewPrivileges,
+		Resources:       resources,
+		ShmSize:         spec.ShmSize,
+		Labels:          map[string]string{specHashLabel: specHash(spec, network, cfgDigest, aliases)},
 	}}}
 }
 

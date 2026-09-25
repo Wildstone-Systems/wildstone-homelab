@@ -8,6 +8,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/butler/provider"
+	"github.com/chickenrat17/wildstone-homelab/keystone/domestic"
 	"github.com/chickenrat17/wildstone-homelab/keystone/plan"
 	"github.com/chickenrat17/wildstone-homelab/keystone/statefile"
 )
@@ -137,6 +138,14 @@ type ToolGateway struct {
 	// endpoint makes, so the Butler and the operator cannot get different
 	// verdicts on one rule. nil makes dry_run_automation say so.
 	DryRunAutomation func(ctx context.Context, doc string, days int) (string, error)
+	// HostActions is the domestic Gateway the host.* tools dispatch
+	// through (tools_hostops.go; ADR-W039 H7, #353) — the SAME gateway a
+	// household rule's action goes through, so a host.* call gets the one
+	// tier check, the one confirm flow and the one audit line every other
+	// domestic action already has. nil (Tier 3 not enabled on this
+	// deployment) makes every host.* tool report itself unwired, exactly
+	// like get_container_logs does with a nil Reader.
+	HostActions *domestic.Gateway
 	// MaxContentBytes bounds a single tool result's size before it's
 	// handed back to the model. <= 0 uses defaultMaxContentBytes.
 	MaxContentBytes int
@@ -312,6 +321,7 @@ func NewToolGateway(store *statefile.Store, reader *AgentReader) *ToolGateway {
 		// AgentReader at all, so this tool cannot exist there.
 		"get_container_logs": {Spec: containerLogsSpec, Untrusted: true, Handler: handleGetContainerLogs},
 	}
+	registerHostOpsTools(gw)
 	return gw
 }
 

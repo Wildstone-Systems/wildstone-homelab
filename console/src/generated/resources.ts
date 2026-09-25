@@ -40,6 +40,12 @@ export interface DeviceMapping {
   target?: string;
 }
 
+export interface ContainerResources {
+  memory?: string;
+  cpus?: string;
+  pidsLimit?: number;
+}
+
 export interface ContainerSpec {
   image: string;
   env?: Record<string, string>;
@@ -49,6 +55,11 @@ export interface ContainerSpec {
   restart?: string;
   devices?: DeviceMapping[];
   capAdd?: string[];
+  readOnlyRootfs?: boolean;
+  capDrop?: string[];
+  noNewPrivileges?: boolean;
+  resources?: ContainerResources;
+  shmSize?: string;
 }
 
 export interface VolumeSpec {

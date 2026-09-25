@@ -16,7 +16,7 @@
 #   same way --console-dir overrides the Console.
 #   --agent-runtime <native|legacy> picks the loop Butler conversations
 #   run on. A fresh install defaults to native (the OpenAI Agents SDK,
-#   ADR-W039, for Butlers on OpenAI-compatible and Ollama models) when
+#   ADR-W041, for Butlers on OpenAI-compatible and Ollama models) when
 #   the runtime passes its self-check; an upgrade keeps its setting.
 #
 #   Either role also takes [--artifact-dir <dir>] to install from local
@@ -787,6 +787,20 @@ install_chat_adapter() {
   fetch_binary chat-adapter /srv/wildstone/bin
 }
 
+# install_agent_bridge puts the agent runtime bridge (ADR-W039 Phase
+# 6/H3, #349) where the agent-hermes package mounts it from, the same
+# way install_chat_adapter does: every node gets it, because a packaged
+# runtime can run on whichever node the Owner chose, in a public
+# distroless image with this directory bind-mounted read-only. A release
+# from before the bridge shipped simply has no packaged runtime.
+install_agent_bridge() {
+  release_has "agent-bridge_linux_${ARCH}.tar.gz" || {
+    log "this release has no agent-bridge; packaged agent runtimes will not run on this node"
+    return 0
+  }
+  fetch_binary agent-bridge /srv/wildstone/bin
+}
+
 install_console() {
   # The Console ships as its own release asset so a control-plane host
   # never needs Node (#34): building it pulled 568 apt packages to
@@ -819,7 +833,7 @@ install_console() {
 }
 
 install_native_agent() {
-  # The native agent runtime (ADR-W039): the OpenAI Agents SDK sidecar,
+  # The native agent runtime (ADR-W041): the OpenAI Agents SDK sidecar,
   # bundled into one file, beside the Node runtime it runs on. Shipped
   # whole, per architecture, so a control-plane host still never needs
   # Node, npm or a node_modules tree of its own (#34).
@@ -1701,7 +1715,7 @@ if [ "$ROLE" = keystone ]; then
   # flag package takes the LAST occurrence and reports nothing, so the
   # override would not even announce itself — the audit instance would
   # simply come up on the wrong interface.
-  # The agent runtime (ADR-W039). A FRESH install — no env file yet —
+  # The agent runtime (ADR-W041). A FRESH install — no env file yet —
   # starts on the native runtime when it installed and passed its
   # self-check; that is the product's default for a new household. An
   # UPGRADE is never switched: without --agent-runtime it keeps whatever
@@ -1824,6 +1838,7 @@ install -d -m 0755 /etc/wildstone
 install -d -m 0700 /var/lib/wildstone/wardstone
 install -d -m 0755 /srv/wildstone
 install_chat_adapter
+install_agent_bridge
 
 # The node identity and secret store used to live at
 # /etc/wildstone/wardstone — inside the managed prefix the ingress

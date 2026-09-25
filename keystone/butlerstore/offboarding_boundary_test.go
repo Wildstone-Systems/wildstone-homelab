@@ -10,7 +10,7 @@ import (
 
 func TestActiveTurnDoesNotContinueIntoAnotherModelRound(t *testing.T) {
 	f := newDerivedFixture(t)
-	r := runner(newCountingToolset(), f.ledger)
+	r := newRunner(t, newCountingToolset(), f.ledger, f.taskID)
 	p := &revokingProvider{
 		steps: []*provider.ChatResponse{readsFor("node-a")},
 		revoke: func() {
@@ -19,7 +19,8 @@ func TestActiveTurnDoesNotContinueIntoAnotherModelRound(t *testing.T) {
 			}
 		},
 	}
-	if _, err := r.Run(context.Background(), p, f.taskID, "read node-a"); !errors.Is(err, ErrAuthorityWithdrawn) {
+	r.Provider = p
+	if _, err := r.Run(context.Background(), "read node-a"); !errors.Is(err, ErrAuthorityWithdrawn) {
 		t.Fatalf("active turn after offboarding: %v", err)
 	}
 	if p.at != 1 {
@@ -29,14 +30,15 @@ func TestActiveTurnDoesNotContinueIntoAnotherModelRound(t *testing.T) {
 
 func TestRetryDoesNotFireAfterRevocation(t *testing.T) {
 	f := newDerivedFixture(t)
-	r := runner(newCountingToolset(), f.ledger)
+	r := newRunner(t, newCountingToolset(), f.ledger, f.taskID)
 	r.RetryLimit = 1
 	p := &failingThenRevokingProvider{revoke: func() {
 		if err := f.db.OffboardButlerMember("mika", "root-admin"); err != nil {
 			t.Fatal(err)
 		}
 	}}
-	if _, err := r.Run(context.Background(), p, f.taskID, "read node-a"); !errors.Is(err, ErrAuthorityWithdrawn) {
+	r.Provider = p
+	if _, err := r.Run(context.Background(), "read node-a"); !errors.Is(err, ErrAuthorityWithdrawn) {
 		t.Fatalf("retry after offboarding: %v", err)
 	}
 	if p.attempts != 1 {
@@ -46,7 +48,7 @@ func TestRetryDoesNotFireAfterRevocation(t *testing.T) {
 
 func TestPreparedPrivateContextDoesNotReachAPrompt(t *testing.T) {
 	f := newDerivedFixture(t)
-	r := runner(newCountingToolset(), f.ledger)
+	r := newRunner(t, newCountingToolset(), f.ledger, f.taskID)
 	// This history stands in for private context assembled while the
 	// Person still had authority, before the provider dispatch boundary.
 	r.History = []provider.Message{{Role: "user", Text: "private medical context"}}
@@ -54,7 +56,8 @@ func TestPreparedPrivateContextDoesNotReachAPrompt(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := &revokingProvider{steps: []*provider.ChatResponse{{Text: "should never run"}}}
-	if _, err := r.Run(context.Background(), p, f.taskID, "continue"); !errors.Is(err, ErrAuthorityWithdrawn) {
+	r.Provider = p
+	if _, err := r.Run(context.Background(), "continue"); !errors.Is(err, ErrAuthorityWithdrawn) {
 		t.Fatalf("prepared prompt after offboarding: %v", err)
 	}
 	if p.at != 0 {

@@ -408,6 +408,55 @@ export interface ButlerStatus {
   tools?: string[];
 }
 
+// --- Agent runtime (ADR-W039 §3.3). What reasons for an Agent, as
+// whom, and how it is doing. One field of the Agent: replacing it
+// replaces nothing else. The credential is a REFERENCE — the secret is
+// shown once, at rotation, and never stored.
+export type RuntimeType = "native" | "hermes" | "openclaw";
+export type RuntimeHealth = "unregistered" | "connected" | "degraded" | "offline" | "revoked";
+// The execution profile (#334, design doc §5): a setting independent of
+// RuntimeType. Choosing Hermes never changes the profile, and choosing
+// a profile never changes what the runtime is.
+export type ExecutionProfileRef = "platform-only" | "sandboxed" | "host-admin";
+export interface RuntimeRecord {
+  type: RuntimeType;
+  // Absent for native; a Route host or container/<name>:<port> for a
+  // packaged runtime.
+  endpoint?: string;
+  credentialRef: string;
+  health: RuntimeHealth;
+  lastHeartbeat?: string;
+  negotiated?: {
+    capabilities?: string[];
+    delivery?: "push" | "pull";
+    // Declared by the Owner at registration, never claimed by the
+    // runtime.
+    processingClass?: "local_only" | "cloud";
+  };
+  executionProfileRef?: string;
+}
+
+// One row of the runtime inventory across every live Agent (#355,
+// design doc §9 H9): what GET /api/v1/runtimes answers with, an Owner
+// scan of every Agent's runtime without opening each one's drawer.
+export interface RuntimeInventoryRow {
+  butler: string;
+  agentClass: AgentClass;
+  runtime: RuntimeRecord;
+}
+
+// What rotating a runtime credential answers with. `secret` is present
+// exactly once, when it was returned rather than placed on a node; when
+// a node was named, `node` and `secretName` say where it went instead.
+export interface RuntimeCredential {
+  credentialRef: string;
+  secret?: string;
+  node?: string;
+  secretName?: string;
+  expiresAt?: string;
+  plan?: string;
+}
+
 export interface AskResponse {
   sessionId: string;
   mode: string;
@@ -1811,6 +1860,38 @@ export const api = {
       `/api/v1/butlers/${encodeURIComponent(name)}/class`,
       { agentClass },
     ),
+  // The Agent's runtime (ADR-W039 §3.3, §3.7, §4.1). Reading is a read;
+  // the three writes are consequential (ADR-W033 A4.1) and go round the
+  // step-up on a stale sign-in like every other.
+  butlerRuntime: (name: string) =>
+    call<RuntimeRecord>("GET", `/api/v1/butlers/${encodeURIComponent(name)}/runtime`),
+  // Every live Agent's runtime, one call (#355, H9) — the Butlers
+  // screen's Runtimes strip, not a fetch per row.
+  runtimes: () => call<RuntimeInventoryRow[]>("GET", "/api/v1/runtimes"),
+  // Replaces the runtime and nothing else. A type change revokes the
+  // old credential; a config change on the same type does not.
+  setButlerRuntime: (
+    name: string,
+    rt: {
+      type: RuntimeType;
+      endpoint?: string;
+      negotiated?: { delivery?: "push" | "pull"; processingClass?: "local_only" | "cloud" };
+      executionProfileRef?: string;
+    },
+  ) => call<RuntimeRecord>("PUT", `/api/v1/butlers/${encodeURIComponent(name)}/runtime`, rt),
+  // Mints a successor credential and disables the predecessor. The
+  // secret comes back ONCE unless a node is named, in which case it is
+  // placed there as a provided secret and never returned.
+  rotateRuntimeCredential: (name: string, node?: string) =>
+    call<RuntimeCredential>(
+      "POST",
+      `/api/v1/butlers/${encodeURIComponent(name)}/runtime/credential`,
+      node ? { node } : {},
+    ),
+  // Every credential the runtime ever held stops working from the next
+  // request; the Agent itself is untouched.
+  revokeRuntime: (name: string) =>
+    call<RuntimeRecord>("POST", `/api/v1/butlers/${encodeURIComponent(name)}/runtime/revoke`, {}),
   capabilityRequests: (state?: string) =>
     call<{ requests: CapabilityRequest[] | null }>(
       "GET",
@@ -1920,16 +2001,23 @@ export const api = {
   // screen most people use. The catalog and the recorded install params
   // are what answer "what would the sibling still need", and only the
   // control plane has them.
-  disablePackage: (pkg: string) =>
-    call<PlanRecord>("POST", "/api/v1/capabilities/disable", { package: pkg }),
+  disablePackage: (pkg: string, instance?: string) =>
+    call<PlanRecord>("POST", "/api/v1/capabilities/disable", {
+      package: pkg,
+      ...(instance ? { instance } : {}),
+    }),
   // The same computation without proposing anything, so the preview is
   // the plan rather than a second guess at it. Filtering by package
   // stamp here still disagreed with the server: the surviving sibling's
   // needs are excluded there and cannot be known from the stamps alone,
   // so Secret/restic-books was listed as deletable and then wasn't
   // deleted.
-  previewDisablePackage: (pkg: string) =>
-    call<PlanRecord>("POST", "/api/v1/capabilities/disable", { package: pkg, dryRun: true }),
+  previewDisablePackage: (pkg: string, instance?: string) =>
+    call<PlanRecord>("POST", "/api/v1/capabilities/disable", {
+      package: pkg,
+      ...(instance ? { instance } : {}),
+      dryRun: true,
+    }),
   plan: (id: string) => call<PlanRecord>("GET", `/api/v1/plans/${encodeURIComponent(id)}`),
   approvePlan: (id: string) =>
     call<unknown>("POST", `/api/v1/plans/${encodeURIComponent(id)}/approve`),

@@ -97,6 +97,27 @@ var ldapEmailRegexp = regexp.MustCompile(`^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-
 // punctuation real names actually use.
 var ldapDisplayNameRegexp = regexp.MustCompile(`^[\p{L}\p{N} .'-]{1,64}$`)
 
+// capNameRegexp bounds a Linux capability name as CapAdd/CapDrop write it:
+// uppercase letters and underscores, without the CAP_ prefix Docker's own
+// API adds, e.g. "NET_ADMIN" or the special value "ALL". Shared by both
+// fields' validation so "CAP_NET_ADMIN" and "net_admin" fail the same way
+// on either side of the spec.
+var capNameRegexp = regexp.MustCompile(`^[A-Z][A-Z_]*$`)
+
+// dockerSizeRegexp matches a Docker byte-size string exactly as the
+// engine's own --memory/--shm-size flags accept it: a positive integer
+// with an optional b/k/m/g suffix (case-insensitive). "0" is refused —
+// Docker itself does not treat 0 as a memory limit, and a package meaning
+// "unset" should omit the field rather than write a value that means
+// nothing to the engine.
+var dockerSizeRegexp = regexp.MustCompile(`(?i)^[1-9][0-9]*[bkmg]?$`)
+
+// cpuCountRegexp matches a decimal CPU count, e.g. "2", "0.5", "1.25" —
+// Docker's own --cpus syntax. Whether it is POSITIVE is checked
+// separately (a regex cannot easily rule out "0" or "0.0" without ruling
+// out "0.5" too).
+var cpuCountRegexp = regexp.MustCompile(`^[0-9]+(\.[0-9]+)?$`)
+
 // Metadata is the ownership/placement envelope shared by every resource.
 type Metadata struct {
 	// Name is unique per kind.
@@ -166,6 +187,54 @@ type ContainerSpec struct {
 	// named without the CAP_ prefix (protocol minor 12). Closed set:
 	// ContainerCapabilities. SYS_ADMIN is not in it and never will be.
 	CapAdd []string `yaml:"capAdd,omitempty" json:"capAdd,omitempty"`
+
+	// The five fields below (protocol minor 18, ADR-W039 Phase 6/H1) HARDEN
+	// a container rather than widening it — the direction devices/capAdd
+	// never go. They exist for a container that must contain a shell
+	// rather than merely run one (the Tier 2 sandboxed execution profile,
+	// docs/design/hermes-capability-package-and-execution-profiles.md
+	// §5.2), and are useful to any package. Same omitempty rule as above,
+	// for the same reason: absent, they must not move the spec hash of a
+	// container that never asked for them (TestContainerWithNoManagedConfigIsUnaffected).
+
+	// ReadOnlyRootfs mounts the container's own filesystem read-only,
+	// leaving only declared Mounts and tmpfs writable.
+	ReadOnlyRootfs bool `yaml:"readOnlyRootfs,omitempty" json:"readOnlyRootfs,omitempty"`
+	// CapDrop are Linux capabilities REMOVED from Docker's default set,
+	// named without the CAP_ prefix — the mirror of CapAdd. Dropping never
+	// grants anything, so unlike CapAdd this carries no allowlist; it is
+	// still checked for the same syntax (no CAP_ prefix, uppercase) and
+	// for naming something CapAdd also names, which is a contradiction a
+	// package author almost certainly did not intend.
+	CapDrop []string `yaml:"capDrop,omitempty" json:"capDrop,omitempty"`
+	// NoNewPrivileges sets Docker's no-new-privileges security option: a
+	// process inside the container can never gain more privileges than it
+	// started with, regardless of setuid bits in the image.
+	NoNewPrivileges bool `yaml:"noNewPrivileges,omitempty" json:"noNewPrivileges,omitempty"`
+	// Resources bounds memory, CPU and PIDs. nil means the node's own
+	// defaults, exactly as before this field existed; a pointer so an
+	// empty block never appears in the hashed JSON (a struct value is
+	// never "empty" to encoding/json's omitempty, only nil is).
+	Resources *ContainerResources `yaml:"resources,omitempty" json:"resources,omitempty"`
+	// ShmSize is the container's /dev/shm size in Docker's own size-string
+	// syntax (e.g. "1g"); empty leaves Docker's default (64m).
+	ShmSize string `yaml:"shmSize,omitempty" json:"shmSize,omitempty"`
+}
+
+// ContainerResources bounds what one container may consume (protocol
+// minor 18). Every field is optional; a zero/empty field means "the
+// node's default", not "none" — asking for an explicitly UNLIMITED pids
+// count once a limit exists is not a thing this says, because omitting
+// Resources entirely already means unlimited.
+type ContainerResources struct {
+	// Memory is a Docker size string, e.g. "4g", "512m".
+	Memory string `yaml:"memory,omitempty" json:"memory,omitempty"`
+	// Cpus is a decimal core count, e.g. "2" or "0.5" (Docker's --cpus).
+	Cpus string `yaml:"cpus,omitempty" json:"cpus,omitempty"`
+	// PidsLimit caps the container cgroup's process/thread count — the
+	// field that stops a fork bomb from taking the node rather than only
+	// the container.
+	PidsLimit int `yaml:"pidsLimit,omitempty" json:"pidsLimit,omitempty"`
 }
 
 // DeviceMapping is one host device visible inside a container.
@@ -1088,6 +1157,70 @@ func validateContainer(r *Resource) error {
 			msg = fmt.Sprintf("%q: name it without the CAP_ prefix, as Docker does", c)
 		}
 		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: fmt.Sprintf("spec.capAdd[%d]", i), Msg: msg}
+	}
+	if err := validateContainerHardening(r); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validateContainerHardening checks the H1 hardening fields (protocol
+// minor 18): syntax for capDrop, resources and shmSize, plus the one
+// semantic rule worth catching before an approved plan — naming the same
+// capability in both capAdd and capDrop, which is a contradiction rather
+// than a stricter spec.
+//
+// CapDrop carries no ALLOWLIST the way CapAdd does. CapAdd grants the
+// container something it would not otherwise have, so ADR-W003's "no
+// arbitrary shell" concern applies and the closed set exists to enforce
+// it; CapDrop only ever takes something away, so there is nothing here
+// for a package to escalate with. It still gets the same syntax check
+// (uppercase, no CAP_ prefix) so a typo is a lint failure rather than a
+// silent no-op — Docker ignores a CapDrop entry it does not recognize.
+func validateContainerHardening(r *Resource) error {
+	c := r.Container
+	addedSet := make(map[string]bool, len(c.CapAdd))
+	for _, a := range c.CapAdd {
+		addedSet[a] = true
+	}
+	for i, d := range c.CapDrop {
+		field := fmt.Sprintf("spec.capDrop[%d]", i)
+		if strings.HasPrefix(d, "CAP_") {
+			return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: field,
+				Msg: fmt.Sprintf("%q: name it without the CAP_ prefix, as Docker does", d)}
+		}
+		if !capNameRegexp.MatchString(d) {
+			return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: field,
+				Msg: fmt.Sprintf("%q must be an uppercase capability name (or ALL), as Docker names them", d)}
+		}
+		if addedSet[d] {
+			return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: field,
+				Msg: fmt.Sprintf("%q is in both capAdd and capDrop — that adds and removes the same capability, which is never what was meant", d)}
+		}
+	}
+	if res := c.Resources; res != nil {
+		if res.Memory != "" && !dockerSizeRegexp.MatchString(res.Memory) {
+			return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.resources.memory",
+				Msg: fmt.Sprintf("%q is not a Docker size string: digits with an optional b/k/m/g suffix, e.g. 512m or 4g", res.Memory)}
+		}
+		if res.Cpus != "" {
+			if !cpuCountRegexp.MatchString(res.Cpus) {
+				return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.resources.cpus",
+					Msg: fmt.Sprintf("%q is not a CPU count: a decimal number, e.g. 2 or 0.5", res.Cpus)}
+			}
+			if f, err := strconv.ParseFloat(res.Cpus, 64); err != nil || f <= 0 {
+				return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.resources.cpus",
+					Msg: fmt.Sprintf("%q must be greater than zero — omit cpus rather than asking for none", res.Cpus)}
+			}
+		}
+		if res.PidsLimit < 0 {
+			return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.resources.pidsLimit",
+				Msg: fmt.Sprintf("%d must not be negative — omit it rather than asking for a negative limit", res.PidsLimit)}
+		}
+	}
+	if c.ShmSize != "" && !dockerSizeRegexp.MatchString(c.ShmSize) {
+		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.shmSize",
+			Msg: fmt.Sprintf("%q is not a Docker size string: digits with an optional b/k/m/g suffix, e.g. 512m or 1g", c.ShmSize)}
 	}
 	return nil
 }

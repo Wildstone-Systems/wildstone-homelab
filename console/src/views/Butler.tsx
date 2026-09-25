@@ -1,9 +1,13 @@
-import { useEffect, useRef, useState } from "react";
+import { ReactNode, useEffect, useRef, useState } from "react";
 import {
+  ArrowsClockwise,
   ArrowUp,
   CaretDown,
+  Check,
+  Copy,
   Eye,
   NotePencil,
+  Prohibit,
   SidebarSimple,
   Sparkle,
   Wrench,
@@ -12,7 +16,9 @@ import {
 import {
   api,
   ApiError,
+  isPendingStepUp,
   modelLabel,
+  pendingStepUp,
   AskResponse,
   ButlerRow,
   ButlerSession,
@@ -20,9 +26,13 @@ import {
   ButlerSurface,
   ButlerTurn,
   PlanRecord,
+  RuntimeCredential,
+  RuntimeHealth,
+  RuntimeRecord,
 } from "../api";
 import { ago, ErrorLine, useLoad, when } from "../lib";
-import { Dot, StatusPill } from "../ui/status";
+import { Confirm } from "../ui/Confirm";
+import { Dot, Kind, StatusPill } from "../ui/status";
 import { PendingPlan } from "./Plans";
 import { ButlerPicker, openingFor, preferred, SURFACE_LABEL } from "./butler/picker";
 
@@ -107,10 +117,22 @@ export function Butler({
     () => (butlerName ? api.butlerSessionsFor(butlerName) : Promise.resolve([])),
     [butlerName],
   );
+  // The runtime behind the Butler (ADR-W039 §3.3), shown beside the
+  // backend in the same popover. Its two actions are the Console
+  // holder's, so who is looking decides whether they are offered.
+  const runtime = useLoad<RuntimeRecord | null>(
+    () => (butlerName ? api.butlerRuntime(butlerName) : Promise.resolve(null)),
+    [butlerName],
+  );
+  const me = useLoad(() => api.whoami());
   // The list is a sidebar on a desk and a sheet over the thread on a
   // phone, so it starts open on one and closed on the other.
   const [railOpen, setRailOpen] = useState(() => !narrow());
-  const [statusOpen, setStatusOpen] = useState(false);
+  // A step-up interrupted a runtime action: the popover it lives in
+  // opens again, so the confirmation the card reopens is on screen.
+  const [statusOpen, setStatusOpen] = useState(
+    () => pendingStepUp()?.path.includes("/runtime") ?? false,
+  );
   const chip = useRef<HTMLButtonElement>(null);
 
   // The open conversation. null is a new one, which is the state the
@@ -317,6 +339,18 @@ export function Butler({
           onOpenRail={railOpen ? undefined : () => setRailOpen(true)}
           onNew={startNew}
           onManage={() => onNavigate?.("butlers")}
+          runtime={
+            butlerName ? (
+              <RuntimeCard
+                name={butlerName}
+                runtime={runtime.data}
+                loading={runtime.loading}
+                error={runtime.error}
+                canManage={me.data?.role === "admin"}
+                onChanged={() => void runtime.reload()}
+              />
+            ) : null
+          }
         />
 
         {current && !current.reachable && (
@@ -482,6 +516,7 @@ export function ThreadBar({
   onOpenRail,
   onNew,
   onManage,
+  runtime,
 }: {
   title: string;
   status: ButlerStatus | null;
@@ -493,6 +528,8 @@ export function ThreadBar({
   onOpenRail?: () => void;
   onNew: () => void;
   onManage: () => void;
+  // The runtime card, when the screen has a Butler to show one for.
+  runtime?: ReactNode;
 }) {
   const backend = configured
     ? [status?.provider, status?.model].filter(Boolean).join(" · ") || "configured"
@@ -542,6 +579,7 @@ export function ThreadBar({
           {/* The unconfigured card is already the pane behind this
               popover; showing it twice would say the same thing twice. */}
           {configured && <StatusCard status={status} loading={false} />}
+          {runtime}
           {/* Read-only, and ButlerSettings is gone from this screen.
               It writes the DEPLOYMENT's provider, model and endpoint,
               which is the pre-W031 shape: one model for everything.
@@ -927,6 +965,233 @@ export function StatusCard({ status, loading }: { status: ButlerStatus | null; l
             {t}
           </span>
         ))}
+      </div>
+    </div>
+  );
+}
+
+// The Agent's runtime (ADR-W039 §3.3): what reasons for it, as whom,
+// and how it is doing. This popover is read/rotate/revoke ONLY — the
+// type, endpoint, delivery, processing class and execution profile are
+// set on the Butlers screen's Runtime tab (#350/H4), the same place
+// every other Butler property is edited, and are not duplicated here.
+// The two acts an Owner has on this card are on the credential.
+// Rotating mints a successor and shows its secret ONCE — Wildstone
+// keeps a hash and cannot show it again — and revoking stops every
+// credential the runtime ever held from the next request (§3.7),
+// leaving the Agent itself as it was. Both are consequential (ADR-W033
+// A4.1): a stale sign-in goes round the step-up and comes back to this
+// card with its confirmation open.
+export const RUNTIME_HEALTH: Record<RuntimeHealth, { kind: Kind; label: string }> = {
+  connected: { kind: "ok", label: "connected" },
+  degraded: { kind: "warn", label: "degraded" },
+  offline: { kind: "bad", label: "offline" },
+  revoked: { kind: "bad", label: "revoked" },
+  unregistered: { kind: "mute", label: "unregistered" },
+};
+
+export function RuntimeCard({
+  name,
+  runtime,
+  loading,
+  error,
+  canManage,
+  onChanged,
+}: {
+  name: string;
+  runtime: RuntimeRecord | null;
+  loading: boolean;
+  error: string | null;
+  // Rotating and revoking need manage, which only the Console holder's
+  // session carries. Anyone else sees the record and no buttons.
+  canManage: boolean;
+  onChanged: () => void;
+}) {
+  const credentialPath = `/api/v1/butlers/${encodeURIComponent(name)}/runtime/credential`;
+  const revokePath = `/api/v1/butlers/${encodeURIComponent(name)}/runtime/revoke`;
+  const [confirm, setConfirm] = useState<"rotate" | "revoke" | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [issued, setIssued] = useState<RuntimeCredential | null>(null);
+
+  // Back from a step-up: the confirmation the person was at reopens,
+  // and nothing is done until they press it again.
+  useEffect(() => {
+    if (isPendingStepUp("POST", credentialPath)) setConfirm("rotate");
+    else if (isPendingStepUp("POST", revokePath)) setConfirm("revoke");
+  }, [credentialPath, revokePath]);
+
+  async function run(kind: "rotate" | "revoke") {
+    setBusy(true);
+    setActionError(null);
+    try {
+      if (kind === "rotate") {
+        setIssued(await api.rotateRuntimeCredential(name));
+      } else {
+        await api.revokeRuntime(name);
+        setIssued(null);
+      }
+      onChanged();
+    } catch (e) {
+      setActionError((e as Error).message);
+    } finally {
+      // Closed on failure too: a step-up refusal opens the shell's own
+      // dialog, and two stacked confirmations would say the same thing.
+      setConfirm(null);
+      setBusy(false);
+    }
+  }
+
+  if (loading && !runtime) return <div className="card runtime-card muted">Checking the runtime…</div>;
+  if (!runtime) {
+    return error ? (
+      <div className="card runtime-card">
+        <ErrorLine error={error} />
+      </div>
+    ) : null;
+  }
+  const health = RUNTIME_HEALTH[runtime.health] ?? { kind: "mute" as Kind, label: runtime.health };
+  const credential = runtime.credentialRef || "none yet";
+  return (
+    <div className="card runtime-card">
+      <h3>
+        Runtime <StatusPill kind={health.kind}>{health.label}</StatusPill>
+      </h3>
+      <div className="chips" style={{ marginBottom: 8 }}>
+        <span className="chip">type: {runtime.type}</span>
+        {runtime.endpoint && <span className="chip">endpoint: {runtime.endpoint}</span>}
+        <span className="chip" title="The Keystone principal the runtime authenticates as">
+          credential: {credential}
+        </span>
+        <span className="chip">delivery: {runtime.negotiated?.delivery ?? "push"}</span>
+        {runtime.negotiated?.processingClass && (
+          <span className="chip">class: {runtime.negotiated.processingClass}</span>
+        )}
+        <span className="chip">profile: {runtime.executionProfileRef || "platform-only"}</span>
+        <span className="chip">
+          heartbeat:{" "}
+          {runtime.lastHeartbeat
+            ? ago(runtime.lastHeartbeat)
+            : runtime.type === "native"
+              ? "in-process"
+              : "never"}
+        </span>
+      </div>
+      {/* Revoked first, whatever the type: it is the one state where
+          the runtime's usual description would be a lie. */}
+      <div className="muted">
+        {runtime.health === "revoked"
+          ? "Nothing can act for this Butler until a new credential is rotated" +
+            (runtime.type === "native" ? "." : " and the runtime presents it.")
+          : runtime.type === "native"
+            ? "Reasons inside Keystone, as this credential. Its model, reach and tools are set on the Butlers screen."
+            : "An external runtime. It is connected once it has presented this credential."}
+      </div>
+      {issued && <IssuedCredential credential={issued} onDismiss={() => setIssued(null)} />}
+      {actionError && <ErrorLine error={actionError} />}
+      {canManage && (
+        <div className="row" style={{ marginBottom: 0 }}>
+          <button
+            type="button"
+            className="btn btn-secondary btn-sm"
+            disabled={busy}
+            onClick={() => setConfirm("rotate")}
+          >
+            <ArrowsClockwise size={14} /> Rotate credential
+          </button>
+          <button
+            type="button"
+            className="btn btn-danger btn-sm"
+            disabled={busy || runtime.health === "revoked"}
+            onClick={() => setConfirm("revoke")}
+          >
+            <Prohibit size={14} /> Revoke runtime
+          </button>
+        </div>
+      )}
+      {confirm === "rotate" && (
+        <Confirm
+          kind="warn"
+          icon={<ArrowsClockwise size={18} weight="bold" />}
+          title="Rotate the runtime credential?"
+          body={`A new credential is minted for ${name} and shown once. ${credential} stops working immediately: whatever runs as it must be given the new secret.`}
+          confirmLabel="Rotate"
+          cancelLabel={`Keep ${credential}`}
+          busy={busy}
+          onConfirm={() => void run("rotate")}
+          onCancel={() => setConfirm(null)}
+        />
+      )}
+      {confirm === "revoke" && (
+        <Confirm
+          kind="bad"
+          icon={<Prohibit size={18} weight="bold" />}
+          title="Revoke the runtime?"
+          body={`Every credential ${name}'s runtime has ever held stops working from the next request, and the runtime is marked revoked. ${name} keeps its people, tools, connections and routines; nothing can act for it until you rotate a new credential.`}
+          confirmLabel="Revoke"
+          cancelLabel="Keep it running"
+          busy={busy}
+          onConfirm={() => void run("revoke")}
+          onCancel={() => setConfirm(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+// The one moment a runtime secret is on screen. Wildstone stores a
+// hash of it and nothing else, so there is no "show again": the person
+// copies it now or rotates again. A secret that was placed on a node
+// instead never appears here at all — the card says where it went.
+export function IssuedCredential({
+  credential,
+  onDismiss,
+}: {
+  credential: RuntimeCredential;
+  onDismiss: () => void;
+}) {
+  const [copied, setCopied] = useState(false);
+  const copy = () => {
+    // Guarded: the clipboard is absent off HTTPS and in the render
+    // check, and a copy button that throws is worse than one that
+    // leaves the secret selectable.
+    if (typeof navigator === "undefined" || !navigator.clipboard) return;
+    navigator.clipboard
+      .writeText(credential.secret ?? "")
+      .then(() => setCopied(true))
+      .catch(() => {});
+  };
+  if (!credential.secret) {
+    return (
+      <div className="callout callout-warn" role="status">
+        <div className="eyebrow">New credential: {credential.credentialRef}</div>
+        <div>
+          Placed on <strong>{credential.node}</strong> as <code>{credential.secretName}</code>. It was
+          never returned here; containers that read it have been re-created.
+        </div>
+        <div className="row" style={{ margin: "8px 0 0" }}>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={onDismiss}>
+            Done
+          </button>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="callout callout-warn" role="status">
+      <div className="eyebrow">New credential: {credential.credentialRef}</div>
+      <pre className="runtime-secret-value">{credential.secret}</pre>
+      <div className="row" style={{ margin: "8px 0 0" }}>
+        <button type="button" className="btn btn-secondary btn-sm" onClick={copy}>
+          {copied ? <Check size={14} /> : <Copy size={14} />} {copied ? "Copied" : "Copy"}
+        </button>
+        <button type="button" className="btn btn-ghost btn-sm" onClick={onDismiss}>
+          Done
+        </button>
+      </div>
+      <div className="danger-line">
+        This is the only time it will be shown. Paste it into the runtime's configuration now; if it
+        is lost, rotate again to get another.
       </div>
     </div>
   );

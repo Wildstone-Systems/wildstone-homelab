@@ -255,6 +255,34 @@ var Columns = []Column{
 	{"routine_plan_versions", "delivery", NotAPerson, "0071: immutable reviewed action delivery description"},
 	{"routine_plan_versions", "secret_ids", NotAPerson, "0073: JSON array of household_secrets.id values submitted as exact resource requests, not Person identities"},
 	{"routine_plan_versions", "memory_ids", NotAPerson, "0073: JSON array of numeric butler_memory.seq values submitted as exact resource requests"},
+	// 0081 (ADR-W039 Phase 1): the Agent's runtime record and its runtime
+	// principal. A runtime principal is a machine credential — the
+	// legacy machine axis — minted by the platform as runtime-<agent>-<n>
+	// with the butler role and no acting identity; it never names a
+	// Person.
+	{"butler_runtimes", "principal", Actor,
+		"0081: the Agent's current runtime credential, a machine principal from the principals table (ADR-W039 §3.3 credentialRef); minted by api.mintRuntimePrincipal, never a person"},
+	{"butler_runtimes", "health", NotAPerson, "0081: closed runtime health vocabulary (unregistered|connected|degraded|offline|revoked)"},
+	{"butler_runtimes", "last_heartbeat", NotAPerson, "0081: RFC3339 timestamp of the runtime's last heartbeat"},
+	{"butler_runtimes", "delivery", NotAPerson, "0081: closed delivery-mode vocabulary (push|pull)"},
+	{"butler_runtimes", "processing_class", NotAPerson, "0081: closed processing-class vocabulary declared by the Owner (local_only|cloud), not an identity"},
+	{"butler_runtimes", "execution_profile", NotAPerson, "0081: execution profile reference (#334), not an identity"},
+	{"butler_runtimes", "updated_by", Actor,
+		"written from actingMember(id) or id.Name: a person handle for a Console caller, a machine principal name otherwise; 'migration' for the 0081 backfill"},
+	{"runtime_principals", "principal", Actor,
+		"0081: a machine principal from the principals table bound to one Agent for life (ADR-W039 §4.1) — the legacy machine axis, never a person"},
+	// 0082 (ADR-W039 Phase 2a): the task handle. A hex sha256 digest of
+	// the handle's secret half, written by butlerstore.Ledger.IssueHandle;
+	// it names nobody and cannot be turned back into the handle.
+	{"butler_tasks", "handle_hash", NotAPerson,
+		"0082: sha256 hex digest of the opaque task handle's secret (ADR-W039 §3.1 principle 4); a digest, never an identity"},
+	// 0083 (ADR-W039 Phase 2b): request-time turn context a handle
+	// alone cannot recover. system_extra is surface guidance the
+	// caller added (butlerlive.Turn.SystemExtra) — an instruction
+	// fragment, never a Person reference. as_owner is INTEGER and is
+	// not a TEXT candidate at all.
+	{"butler_tasks", "system_extra", NotAPerson,
+		"0083: surface guidance the caller added for this turn (butlerlive.Turn.SystemExtra); instructs nothing about identity and names no Person"},
 	{"household_routines", "output_audience", NotAPerson, "0071: audience foreign key, not a Person"},
 	{"household_routines", "resource_signature", NotAPerson, "0073: canonical JSON of secret IDs and numeric memory IDs, never a Person reference"},
 	{"owner_review_preference", "console_url", NotAPerson, "0071: Console link for generic review notifications"},
@@ -614,4 +642,29 @@ var Columns = []Column{
 		"whoever made the appointment; the same principal text as the rest of this family until the Person/principal split"},
 	{"commitment_bookings", "cancelled_by", Actor,
 		"whoever cancelled it, empty while the booking stands"},
+
+	// 0084 (ADR-W039 Phase 3, #339): agent_deliveries, the Events
+	// family's outbound record. "kind", "payload", "created_at" and
+	// "expires_at" are dismissed by name (an enum, a serialized blob, a
+	// timestamp); cursor and acked_at are not generic enough for that
+	// list, so they are classified here.
+	{"agent_deliveries", "cursor", NotAPerson,
+		"0084: an opaque per-subscription resume position (ADR-W039 §3.6), never a Person reference"},
+	{"agent_deliveries", "acked_at", NotAPerson,
+		"0084: an RFC3339 timestamp of acknowledgement, or empty while pending"},
+	{"agent_deliveries", "expired_at", NotAPerson,
+		"0087: an RFC3339 timestamp of when the long-poll consumer marked this delivery expired, or empty"},
+
+	// 0086 (ADR-W039 Phase 4, #341): agent_subscriptions, the Events
+	// family's Owner-approved standing watch.
+	{"agent_subscriptions", "match_kind", NotAPerson,
+		"0086: names the matcher keystone/automation/subscriptions.go runs, not a party"},
+	{"agent_subscriptions", "match_json", NotAPerson,
+		"0086: the matcher's own parameters, a serialized blob"},
+	{"agent_subscriptions", "capability_set", NotAPerson,
+		"0086: a JSON array of tool names a matched Task may use, never a Person reference"},
+	{"agent_subscriptions", "approved_by", Actor,
+		"0086: the Owner who approved this subscription's Plan, id.Name from the same approve path as every other Plan"},
+	{"agent_subscriptions", "approved_at", NotAPerson,
+		"0086: an RFC3339 timestamp of approval, or empty while unapproved"},
 }

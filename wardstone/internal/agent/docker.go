@@ -189,6 +189,31 @@ type hostConfig struct {
 	// container's /etc/hosts (protocol minor 14). Resolved by the agent
 	// from host_aliases, because the node is where the name resolves.
 	ExtraHosts []string `json:"ExtraHosts,omitempty"`
+
+	// The H1 hardening fields (protocol minor 18). Reached only through
+	// ensureContainer's checks (checkCapDrop, dockerSizeToBytes,
+	// cpusToNanoCPUs) — nothing else constructs a hostConfig, the same
+	// invariant the comment above Devices/CapAdd already states.
+	ReadonlyRootfs bool     `json:"ReadonlyRootfs,omitempty"`
+	CapDrop        []string `json:"CapDrop,omitempty"`
+	// SecurityOpt carries "no-new-privileges:true" when the spec asks for
+	// it; empty otherwise. A slice rather than a bool field because that
+	// is the shape Docker's own API takes ("Docker security options"),
+	// even though the agent only ever populates this one entry.
+	SecurityOpt []string `json:"SecurityOpt,omitempty"`
+	// Memory (bytes), NanoCpus (billionths of a core) and PidsLimit are
+	// Docker's own HostConfig.Resources fields, converted from the spec's
+	// human units ("4g", "2") by dockerSizeToBytes/cpusToNanoCPUs — the
+	// wire and the YAML both stay in the units an operator reads, and the
+	// arithmetic happens once, at the edge that actually calls Docker.
+	Memory   int64 `json:"Memory,omitempty"`
+	NanoCpus int64 `json:"NanoCpus,omitempty"`
+	// PidsLimit's zero value is the same as leaving it unset (no limit),
+	// which is also what the spec's own PidsLimit==0 means — there is no
+	// "explicitly unlimited" distinct from "not set" on either side.
+	PidsLimit int64 `json:"PidsLimit,omitempty"`
+	// ShmSize (bytes); zero leaves Docker's own default (64 MiB).
+	ShmSize int64 `json:"ShmSize,omitempty"`
 }
 
 // deviceMapping is Docker's HostConfig.Devices entry.

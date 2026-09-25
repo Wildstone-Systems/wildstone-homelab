@@ -2069,3 +2069,20 @@ tr[aria-pressed="true"] { box-shadow: inset 2px 0 0 var(--color-accent); }
  * wear one — this says the picture exists and where it appears. */
 .theme-name { display: inline-flex; align-items: center; gap: 4px; }
 .theme-haspic { color: var(--muted); flex: none; }
+
+/* ------------------------------------------------ Butler runtime card */
+/* The runtime card sits under the backend card in the same popover, as
+   a second section rather than a second box. */
+.popover .card + .runtime-card {
+  margin-top: var(--space-6);
+  padding-top: var(--space-6);
+  border-top: 1px solid var(--hair);
+}
+/* A 68-character bearer in a 380px panel wraps rather than reaching
+   past its edge, and selects whole so a drag cannot miss its tail. */
+.runtime-secret-value {
+  white-space: pre-wrap;
+  word-break: break-all;
+  user-select: all;
+  margin: var(--space-2) 0 0;
+}

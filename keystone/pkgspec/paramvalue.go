@@ -42,6 +42,56 @@ func ParamShapeNames() []string {
 	return names
 }
 
+// enumShapePrefix opens the one PARAMETERIZED shape in the vocabulary: the
+// values a closed-choice param accepts are named in the shape itself
+// (`enum:a|b|c`), so they cannot live in ParamShapes' fixed map the way
+// `iana_timezone` or `port` do — each package invents its own set.
+//
+// This is still a closed vocabulary in the sense that matters: what the
+// FORM of a shape may be stays fixed (a bare name, or "enum:" plus a
+// pipe-separated list), so `validate: enu:a|b` fails review as loudly as
+// `validate: iana-timezone` (the wrong hyphen) always has. What varies is
+// the values after the colon, which are the package author's to choose —
+// exactly like an AccessGroups entry or a Route host, which name real
+// things this package knows about rather than picking from Keystone's own
+// vocabulary.
+const enumShapePrefix = "enum:"
+
+// enumShapeValues reports the pipe-separated values of an `enum:` shape,
+// and whether shape is one at all. It does not validate them — a caller
+// that only wants to know "is this the enum form" (ValidateParamValue)
+// gets exactly that, and the one that also has to reject a malformed
+// declaration (Package.Validate) checks the slice itself.
+func enumShapeValues(shape string) ([]string, bool) {
+	rest, ok := strings.CutPrefix(shape, enumShapePrefix)
+	if !ok {
+		return nil, false
+	}
+	return strings.Split(rest, "|"), true
+}
+
+// validateEnumShapeDecl checks an `enum:` shape's OWN declaration is
+// well-formed: at least one value, none blank, none repeated. Called once,
+// from Package.Validate, so a package with `validate: enum:` (nothing
+// after the colon) or `validate: enum:a|a` fails review rather than
+// shipping a picker with no options or two identical ones.
+func validateEnumShapeDecl(values []string) error {
+	if len(values) == 0 || (len(values) == 1 && strings.TrimSpace(values[0]) == "") {
+		return fmt.Errorf("enum shape lists no values: write enum:a|b|c naming at least one")
+	}
+	seen := map[string]bool{}
+	for _, v := range values {
+		if strings.TrimSpace(v) == "" {
+			return fmt.Errorf("enum shape %q has an empty value between two '|'s", enumShapePrefix+strings.Join(values, "|"))
+		}
+		if seen[v] {
+			return fmt.Errorf("enum shape %q lists %q twice", enumShapePrefix+strings.Join(values, "|"), v)
+		}
+		seen[v] = true
+	}
+	return nil
+}
+
 // ValidateParamValue checks one value against one declared shape.
 //
 // An empty shape passes: a param that declares nothing is a param this
@@ -56,9 +106,17 @@ func ValidateParamValue(shape, value string) error {
 	if shape == "" || value == "" {
 		return nil
 	}
+	if values, ok := enumShapeValues(shape); ok {
+		for _, v := range values {
+			if v == value {
+				return nil
+			}
+		}
+		return fmt.Errorf("%q is not one of the allowed values: %s", value, strings.Join(values, ", "))
+	}
 	check, ok := ParamShapes[shape]
 	if !ok {
-		return fmt.Errorf("unknown validate shape %q (one of: %s)", shape, strings.Join(ParamShapeNames(), ", "))
+		return fmt.Errorf("unknown validate shape %q (one of: %s, or enum:a|b|c for a closed choice)", shape, strings.Join(ParamShapeNames(), ", "))
 	}
 	return check(value)
 }

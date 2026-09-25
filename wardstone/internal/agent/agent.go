@@ -89,7 +89,18 @@ import (
 //	it refuses Exec(string). A pre-minor-12 agent ignores all three
 //	fields — a UDP port is published as TCP, a device is absent, a
 //	capability is not granted — and the app reports what it is missing.
-const ProtocolMinor = 16
+//
+// 18: adds EnsureContainer.read_only_rootfs, .cap_drop,
+//
+//	.no_new_privileges, .resources and .shm_size (ADR-W039 Phase 6/H1).
+//	Unlike minor 12's fields, these NARROW a container rather than widen
+//	it, so an agent that silently ignored one would start the container
+//	LESS contained than the plan asked for — the wrong direction to fail
+//	quiet in. Keystone's reconciler therefore refuses to dispatch a spec
+//	using any of them to an agent below this minor
+//	(resource.HardeningProtocolMinor), rather than letting an older
+//	agent apply it partially.
+const ProtocolMinor = 18
 
 // maxUpdateMsgBytes is the gRPC message size cap on both ends of the
 // session/join connections (ADR-W003 W5). SelfUpdate ships the new binary

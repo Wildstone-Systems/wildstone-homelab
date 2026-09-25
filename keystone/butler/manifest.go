@@ -30,6 +30,7 @@ import (
 	"strings"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/butler/provider"
+	"github.com/chickenrat17/wildstone-homelab/keystone/domestic"
 	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
 )
 
@@ -288,6 +289,14 @@ func (gw *ToolGateway) operatorWired(name string) bool {
 		return gw.DryRunAutomation != nil
 	case "get_system_overview", "get_capability_status", "get_plan", "explain_resource", "propose_change":
 		return gw.Store != nil
+	}
+	if strings.HasPrefix(name, domestic.HostOpsCapability+".") {
+		// The host.* family (ADR-W039 H7, #353) dispatches through the
+		// domestic Gateway a call actually reaches a node with. A
+		// deployment that has not enabled Tier 3 leaves HostActions nil,
+		// which reports every host.* tool unavailable — never absent, so
+		// an Owner asking why can be told the truth instead of nothing.
+		return gw.HostActions != nil
 	}
 	// describe_capabilities and anything else read purely from what the
 	// gateway already holds.

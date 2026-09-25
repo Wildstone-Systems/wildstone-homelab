@@ -70,6 +70,11 @@ var operatorOnly = map[string]bool{
 	"chat-matrix":   true,
 	"chat-discord":  true,
 	"chat-slack":    true,
+	// An Agent's runtime. Bound to one Agent by the Console's Agent ->
+	// Runtime screen, exactly like a chat bot's Connection — there is
+	// nothing here a member could usefully ask for either (ADR-W039
+	// Phase 6/H5, #351).
+	"agent-hermes": true,
 	// Wildstone's own surfaces. A member cannot request the dashboard
 	// they are standing on, or the drop box behind its Files card.
 	"dashboard": true,

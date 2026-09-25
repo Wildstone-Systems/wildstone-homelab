@@ -433,6 +433,11 @@ const (
 	ButlerWaitClarification     ButlerWaitReason = "clarification"
 	ButlerWaitSourceUnavailable ButlerWaitReason = "source-unavailable"
 	ButlerWaitUncertainOutcome  ButlerWaitReason = "uncertain-outcome"
+	// ButlerWaitRuntimeOffline mirrors agentapi.WorkWaitRuntimeOffline
+	// (ADR-W039 §3.7, Phase 4, #340): the task's Agent has no connected
+	// runtime to hand its next turn to. Deterministic work elsewhere in
+	// the household continues; only this task waits.
+	ButlerWaitRuntimeOffline ButlerWaitReason = "runtime-offline"
 )
 
 // ButlerTaskWait is one recorded waiting reason.
@@ -457,7 +462,7 @@ func (db *DB) OpenButlerTaskWait(taskID string, w ButlerTaskWait) error {
 	switch w.Reason {
 	case ButlerWaitReply, ButlerWaitApproval, ButlerWaitSchedule, ButlerWaitModelUnavailable,
 		ButlerWaitBudgetExhausted, ButlerWaitClarification, ButlerWaitSourceUnavailable,
-		ButlerWaitUncertainOutcome:
+		ButlerWaitUncertainOutcome, ButlerWaitRuntimeOffline:
 	default:
 		return fmt.Errorf("runtimedb: unknown butler wait reason %q (ADR-W030 A4)", w.Reason)
 	}

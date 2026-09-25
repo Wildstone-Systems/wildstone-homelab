@@ -71,17 +71,34 @@ func ContainerCapabilityNames() []string {
 // carried UDP port publication, devices and capabilities.
 const HostAccessProtocolMinor = 12
 
+// HardeningProtocolMinor is the wardstone protocol minor that first
+// carried the H1 hardening fields: readOnlyRootfs, capDrop,
+// noNewPrivileges, resources and shmSize (ADR-W039 Phase 6/H1). Unlike
+// HostAccessProtocolMinor's fields, which WIDEN what a container may
+// touch, these NARROW it — so an agent that silently ignores one does
+// not fail loud, it gives the container more reach than the spec asked
+// for. That is the wrong direction to degrade in, which is why a spec
+// using any of them is refused rather than dispatched to an agent that
+// cannot honour it, exactly as HostAccessProtocolMinor already is.
+const HardeningProtocolMinor = 18
+
 // RequiredProtocolMinor reports the lowest agent protocol minor that can
 // honour this spec in full, or 0 when any agent can. An agent below it
 // does not fail: it IGNORES the fields it cannot read, which is the
 // wrong kind of quiet — a "/udp" port published as TCP is a second
-// binding on the same TCP port, which Docker refuses, and a device or
-// capability simply absent leaves the app to discover it. The
-// reconciler asks this before dispatching, so the answer is a refusal
-// naming the node rather than a container that failed to start.
+// binding on the same TCP port, which Docker refuses, a device or
+// capability simply absent leaves the app to discover it, and a
+// hardening field silently dropped leaves the container LESS contained
+// than the spec asked for. The reconciler asks this before dispatching,
+// so the answer is a refusal naming the node rather than a container
+// that failed to start, or one that started with a shell it should not
+// have had.
 func (s *ContainerSpec) RequiredProtocolMinor() uint32 {
 	if s == nil {
 		return 0
+	}
+	if s.usesHardeningFields() {
+		return HardeningProtocolMinor
 	}
 	if len(s.Devices) > 0 || len(s.CapAdd) > 0 {
 		return HostAccessProtocolMinor
@@ -92,4 +109,14 @@ func (s *ContainerSpec) RequiredProtocolMinor() uint32 {
 		}
 	}
 	return 0
+}
+
+// usesHardeningFields reports whether the spec sets any H1 field, so
+// RequiredProtocolMinor can gate on the HIGHEST minor a spec actually
+// needs: a plan that uses hardening AND a device still needs only minor
+// 18, since 18 is defined to also carry everything minor 12 did (v1
+// evolves additively, ADR-W003) and an agent new enough for hardening is
+// new enough for devices too.
+func (s *ContainerSpec) usesHardeningFields() bool {
+	return s.ReadOnlyRootfs || len(s.CapDrop) > 0 || s.NoNewPrivileges || s.Resources != nil || s.ShmSize != ""
 }

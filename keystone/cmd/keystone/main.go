@@ -25,7 +25,9 @@ import (
 	"time"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/adapter/caldav"
+	"github.com/chickenrat17/wildstone-homelab/keystone/agentgateway"
 	"github.com/chickenrat17/wildstone-homelab/keystone/agentruntime"
+	"github.com/chickenrat17/wildstone-homelab/keystone/agentruntime/legacy"
 	"github.com/chickenrat17/wildstone-homelab/keystone/agentruntime/native"
 	"github.com/chickenrat17/wildstone-homelab/keystone/api"
 	"github.com/chickenrat17/wildstone-homelab/keystone/automation"
@@ -99,7 +101,8 @@ func main() {
 	butlerModel := flag.String("butler-model", "", "model name for the legacy single-provider Butler; empty uses the provider's default. A named Butler's model comes from its assigned route, not from here")
 	butlerEndpoint := flag.String("butler-endpoint", "", "base URL for the legacy single-provider Butler (openai-compatible gateways, ollama host); empty uses the provider's default. A named Butler's endpoint comes from its assigned route")
 	automationEvery := flag.Duration("automation-interval", 15*time.Second, "how often the household automation engine ticks between event pokes (ADR-W024 H3)")
-	agentRuntime := flag.String("agent-runtime", agentRuntimeLegacy, "which loop drives Butler conversations: legacy (butler.Runner) or native (the OpenAI Agents SDK runtime, ADR-W039). native applies to Butlers on OpenAI-compatible and Ollama routes; Anthropic routes stay on legacy. If the native runtime is not installed or fails its self-check, keystone logs why and every conversation stays on legacy")
+	agentHeartbeatTTL := flag.Duration("agent-heartbeat-ttl", 90*time.Second, "how long a non-native Agent runtime may go without a heartbeat before it is marked offline (ADR-W039 §3.7, Phase 4, #340)")
+	agentRuntime := flag.String("agent-runtime", agentRuntimeLegacy, "which loop drives Butler conversations: legacy (Wildstone's own loop, agentruntime/legacy.Runner) or native (the OpenAI Agents SDK runtime, ADR-W041). native applies to Butlers on OpenAI-compatible and Ollama routes; Anthropic routes stay on legacy. If the native runtime is not installed or fails its self-check, keystone logs why and every conversation stays on legacy")
 	nativeAgentDir := flag.String("native-agent-dir", native.DefaultInstallDir, "where the native agent runtime is installed (bin/node and main.mjs, from the release's native-agent_linux_<arch>.tar.gz)")
 	householdTZ := flag.String("household-timezone", "Local", "IANA time zone the household's rules keep (timeOfDay/weekday conditions), e.g. Europe/London")
 	ntfyURL := flag.String("ntfy-url", "", "ntfy base URL the notifications.notify household action publishes to (ADR-W024 H4); empty leaves that action unregistered. The access token comes ONLY from NTFY_TOKEN, never a flag")
@@ -112,6 +115,7 @@ func main() {
 	calendarURL := flag.String("calendar-url", "", "CalDAV collection the calendar.* household actions read and write, e.g. http://radicale:5232/wildstone-calendar/household/ (ADR-W034). Empty leaves them all unregistered, so a Butler does not offer the household a calendar this deployment has not got. The password comes ONLY from CALENDAR_PASSWORD, never a flag")
 	calendarUser := flag.String("calendar-user", "", "directory account the calendar actions sign in to the CalDAV collection as; its password comes from CALENDAR_PASSWORD")
 	householdIngress := flag.String("household-ingress", "", "comma-separated EXACT remote addresses of the identity proxy (Authelia). Empty fails closed. This names ONE trust boundary and it now gates TWO things: the household review page (ADR-W030 A8.1), and Console sign-in by forwarded identity (ADR-W032) — a request from one of these addresses carrying Remote-User and a Remote-Groups list containing console_users is authenticated as that person, with admin authority. Setting this does not by itself grant anyone the Console: they must also be in the console_users directory group, which packages/wildstone-console declares")
+	hostOpsEnabled := flag.Bool("hostops-enabled", false, "enable the host.* executor family (ADR-W039 Phase 6/H7, #353): Tier 3 host administration (container logs/stats/restart, disk usage, systemd unit status, image pruning, a reconcile poke) through existing Wardstone ops, never a privileged container or a shell. Off by default; an Owner still has to grant the family to a specific Agent (opt-in) and confirm every mutating call before anything runs")
 	flag.Parse()
 
 	if *showVersion {
@@ -134,6 +138,8 @@ func main() {
 		CalendarURL: *calendarURL, CalendarUser: *calendarUser,
 		Ingress:            splitNonEmpty(*householdIngress),
 		ConsoleEntryWindow: *consoleEntry, ConsoleStepUpWindow: *consoleStepUp,
+		HostOpsEnabled:    *hostOpsEnabled,
+		AgentHeartbeatTTL: *agentHeartbeatTTL,
 	}
 	if err := run(*listen, *apiListen, *joinTokens, *hosts, *dataDir, *ingestEvery, *reconcileEvery, *managedPrefix, *backupEvery, *resticImage, *consoleDir, *catalogDir, *wallpaperDir, butlerCfg, householdCfg, log); err != nil {
 		fmt.Fprintln(os.Stderr, "keystone:", err)
@@ -279,6 +285,22 @@ type householdConfig struct {
 	// Its password arrives in CALENDAR_PASSWORD, never in a flag — the
 	// same division -ntfy-url and NTFY_TOKEN already make.
 	CalendarUser string
+	// HostOpsEnabled turns on the host.* executor family (ADR-W039 H7,
+	// #353): Tier 3 "host administration" through Wildstone executors —
+	// never a privileged container, never a shell. Off by default, like
+	// every other optional executor here (NtfyURL, CalendarURL): a
+	// household that never sets -hostops-enabled never has host.*
+	// declared, registered, or offered to any Agent. Even turned on, the
+	// family is reachable only by an Owner-class Agent holding an
+	// explicit opt-in grant (keystone/butler/tools_hostops.go) and its
+	// mutating calls still need a Person to confirm each one — this flag
+	// makes Tier 3 POSSIBLE, an Owner's own grant and confirmation make
+	// it happen.
+	HostOpsEnabled bool
+	// AgentHeartbeatTTL bounds how long a non-native Agent runtime may
+	// go without a heartbeat before the sweeper marks it offline
+	// (ADR-W039 §3.7, Phase 4, #340).
+	AgentHeartbeatTTL time.Duration
 }
 
 // confirmWindow is how long a confirm-tier question stays open, and
@@ -351,7 +373,7 @@ type butlerConfig struct {
 	Provider string // off | anthropic | openai | ollama
 	Model    string
 	Endpoint string
-	// AgentRuntime picks the loop named Butlers converse on (ADR-W039):
+	// AgentRuntime picks the loop named Butlers converse on (ADR-W041):
 	// agentRuntimeLegacy or agentRuntimeNative. It is deployment
 	// configuration, not Butler configuration, so the stored config
 	// (ADR-W017 A9) never overrides it.
@@ -856,10 +878,26 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	// names a tool this deployment has not wired is refused with a
 	// reason on the household stream rather than failing silently.
 	actions := &domestic.Gateway{Authority: db, Log: log}
-	if cat != nil {
-		// Only with a catalog: DeclaredFromPackages over an empty set
-		// would refuse every action, which is not what "no catalog" means.
-		actions.Declared = domestic.DeclaredFromPackages(agentToolSources(cat))
+	if cat != nil || householdCfg.HostOpsEnabled {
+		// Only with a catalog OR Tier 3 host ops: DeclaredFromPackages
+		// over an empty set would refuse every action, which is not what
+		// "no catalog" means.
+		sources := agentToolSources(cat)
+		if sources == nil {
+			// agentToolSources(nil) is nil rather than BuiltinAgentTools,
+			// so that "no catalog" and "no Declared at all" stayed the
+			// same case. Host ops needs Declared regardless, so this is
+			// the one place that still needs Keystone's own builtins.
+			sources = append([]domestic.AgentToolSource(nil), domestic.BuiltinAgentTools...)
+		}
+		if householdCfg.HostOpsEnabled {
+			// Tier 3 host administration (ADR-W039 H7, #353): Keystone's
+			// own capability, declared exactly like BuiltinAgentTools'
+			// propose_timezone — no package installs "host", Wildstone's
+			// own executors do.
+			sources = append(sources, domestic.HostOpsAgentTools)
+		}
+		actions.Declared = domestic.DeclaredFromPackages(sources)
 	}
 	// Asking a household member to confirm one action (ADR-W024 A5.1).
 	//
@@ -971,6 +1009,25 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 			if declaresSend {
 				chatCapabilities = append(chatCapabilities, capName)
 			}
+		}
+	}
+
+	// The host.* executor family (ADR-W039 §3.4, §5.4; H7, #353): Tier 3
+	// host administration through the SAME Wardstone gateway and
+	// reconcile loop every other Keystone surface uses — never a
+	// privileged container, never a shell (ADR-W003 A1). Off by default
+	// (householdCfg.HostOpsEnabled); an Owner enabling Tier 3 is a
+	// deliberate, deployment-wide flag flip, and reaching any one of its
+	// tools additionally needs the opt-in grant keystone/butler/
+	// tools_hostops.go requires per Agent.
+	if householdCfg.HostOpsEnabled {
+		hostOps := &domestic.HostOps{
+			Authority:     db,
+			Node:          &domestic.GatewayHostNode{Gateway: gw},
+			ReconcilePoke: svc.Poke,
+		}
+		for _, e := range hostOps.Executors() {
+			actions.Register(e)
 		}
 	}
 
@@ -1099,7 +1156,7 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	}
 	apiSrv.SecretVault = secretVault
 	if calendarActions != nil {
-		calendarActions.SecretUse = calendarSecretUse(secretVault)
+		calendarActions.SecretUse = calendarSecretUse(db, secretVault)
 	}
 
 	// Every Agent is on the assigned-tools model (ADR-W033 design §6.3,
@@ -1109,6 +1166,13 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	// so a tool an Owner removed does not come back on a restart.
 	if err := apiSrv.BackfillAgentTools(); err != nil {
 		return fmt.Errorf("backfilling agent tools: %w", err)
+	}
+	// Every Agent authenticates as a runtime principal bound to it
+	// (ADR-W039 §3.3). 0081 gave Agents made before it their native
+	// runtime record; the credential is minted here, once, because a
+	// principal name goes through a discipline SQL cannot apply.
+	if err := apiSrv.BackfillRuntimePrincipals(); err != nil {
+		return fmt.Errorf("backfilling agent runtime principals: %w", err)
 	}
 	// The pictures the themes ship with. Counted and logged rather than
 	// assumed: a wrong or unpopulated -wallpaper-dir is otherwise a
@@ -1412,6 +1476,15 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 			mode, _ = probeButler(context.Background(), bp, log)
 		}
 		bgw := butler.NewToolGateway(state, &butler.AgentReader{Gateway: gw})
+		// The host.* tools dispatch through the SAME domestic Gateway a
+		// household rule's action does (ADR-W039 H7, #353) — one tier
+		// check, one confirm flow, one audit line, whichever surface
+		// called. Only wired when Tier 3 is on: gw.HostActions == nil is
+		// what makes every host.* tool report itself unavailable in the
+		// manifest when it is not (butler/manifest.go's operatorWired).
+		if householdCfg.HostOpsEnabled {
+			bgw.HostActions = actions
+		}
 		// Where the household's commitments stand, for the agent's read
 		// tool. The adapter is in this package because neither the pass
 		// nor the model should import the other (commitmentstandings.go).
@@ -1462,6 +1535,18 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 			// deployment has not installed will promise the household
 			// something that cannot happen (ADR-W026 A8).
 			for _, tool := range actions.Tools() {
+				// host.* is registered on the SAME domestic Gateway
+				// (ADR-W039 H7, #353) but must never enter a household
+				// rule's or a family session's vocabulary: it is an
+				// Owner-class, opt-in-only surface, reached from
+				// keystone/butler's ToolGateway, never from an
+				// Automation or the HouseholdGateway a household member
+				// talks to. Excluded unconditionally, not gated on
+				// CapabilityEnabled like chat/filedrop below, because
+				// there is no household-visible "on" state for it at all.
+				if capName, _, ok := strings.Cut(tool, "."); ok && capName == domestic.HostOpsCapability {
+					continue
+				}
 				// filedrop is registered from the catalog too, and is
 				// gated on the install for the same reason: a Butler
 				// that lists "find_file" to a household with no drop
@@ -1643,6 +1728,17 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 				DB:     db,
 				Ledger: ledger,
 				Log:    log,
+				// The native reasoning loop reaches Wildstone only
+				// through the in-process Agent Gateway now (ADR-W039
+				// Phase 2b, #337): a Handle issued at task admission,
+				// resolved fresh on every Manifest/Invoke call, with
+				// the runtime-principal binding checked exactly as an
+				// out-of-process runtime would be. Default true on
+				// this feature branch — it is validated as a whole
+				// before merge — with false kept selectable so the
+				// pre-2b closure wiring stays reachable for one
+				// release if something regresses.
+				UseAgentGateway: true,
 				// Every Butler is told the date and time in the
 				// household's zone; see butlerlive.clockLine.
 				Location: householdLoc,
@@ -1685,18 +1781,17 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 						mine := household
 						mine.ProposeRoutine = apiSrv.RoutineProposalSeam(b.Name)
 						mine.Memory = butlerstore.MemorySeams(db, b.Name, t.Member, t.MemoryDestination(), log)
-						if household.Actions != nil {
-							mine.Actions = func(ctx context.Context, c butler.HouseholdActionCall) (string, error) {
-								ctx = runtimedb.WithSecretUseContext(ctx, db.BindMemoryRead(t.Member, b.Name, t.MemoryDestination()))
-								return household.Actions(ctx, c)
-							}
-						}
-						if household.ActionResult != nil {
-							mine.ActionResult = func(ctx context.Context, c butler.HouseholdActionCall) (butler.ToolOutcome, error) {
-								ctx = runtimedb.WithSecretUseContext(ctx, db.BindMemoryRead(t.Member, b.Name, t.MemoryDestination()))
-								return household.ActionResult(ctx, c)
-							}
-						}
+						// Actions and ActionResult are handed through
+						// unwrapped: an executor that needs a secret-use
+						// context (calendar_secret.go) resolves it itself,
+						// gateway-side, from operation.Identity's TaskID
+						// (agentgateway.MemoryReadContextForTask) — ADR-W039
+						// Phase 4, C11. Pre-computing one here and stuffing
+						// it into ctx meant a runtime's own call reached an
+						// executor carrying authority nobody derived from
+						// its handle; the executor deriving it from the
+						// task it is actually running under is the same
+						// fix §3.1 principle 4 makes everywhere else.
 
 						if t.Group {
 							return butler.NewHouseholdGroupGateway(t.Member, mine), nil
@@ -1719,7 +1814,66 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 			// The stalled-task notice goes to the direct surface the
 			// task's owner was already talking on (ADR-W030 A4/P4).
 			butlers.Notifier = &butlerstore.Notifier{Ledger: ledger}
+
+			// The in-process Agent Gateway (ADR-W039 Phase 2b, #337).
+			// It is built here, not inside keystone/butlerlive, because
+			// it imports butlerlive (for Gateways, Turn, Scoped,
+			// SystemPromptFor) and a reverse import would cycle; wiring
+			// it here is the seam keystone/butlerlive.Butlers.
+			// AgentClient/WithPrincipal exist for.
+			agentGw := &agentgateway.Gateway{
+				DB: db, Ledger: ledger, Gateways: butlers.Gateways, Log: log, Clock: butlers.ClockLine,
+				// The ONE proposal pipeline (ADR-W039 Phase 3, #339):
+				// the same Statefile, policy engine and database every
+				// HTTP-reachable proposal-filing call site uses, so a
+				// Plan an Agent's own propose_change or Propose files
+				// gets the identical validation, standing policy and
+				// audit event a human's POST /plans does.
+				Proposals: apiSrv.ProposalDeps(),
+			}
+			butlers.AgentClient = agentgateway.InProcess(agentGw)
+			butlers.WithPrincipal = func(ctx context.Context, name string) context.Context {
+				rt, err := db.GetButlerRuntimeByName(name)
+				if err != nil || rt.Principal == "" {
+					return ctx
+				}
+				return agentgateway.WithPrincipal(ctx, rt.Principal)
+			}
 			apiSrv.Butlers = butlers
+			// The Agent API over HTTP (ADR-W039 Phase 2c, #337; ADR-W040):
+			// the identical agentapi.Client instance the native runner
+			// holds in-process, so an external runtime calling
+			// /api/v1/agent/... reaches the same Gateway methods under
+			// the same Ledger — the byte-identical behaviour Phase 2c's
+			// conformance test rests on. apiSrv.Ledger is also this
+			// coordinator's ledger, for fenceRuntimeTasks (§3.7).
+			apiSrv.AgentGateway = butlers.AgentClient
+			apiSrv.Ledger = ledger
+
+			// The heartbeat sweeper (ADR-W039 §3.7, Phase 4, #340): the
+			// only thing that ever marks a runtime offline on its own,
+			// rather than in answer to a call it made. It never touches
+			// native runtimes (nothing runs out of process to lose a
+			// heartbeat over) or a runtime that is already anything
+			// other than connected. Ticking at a third of the TTL keeps
+			// the worst-case detection lag well under it without
+			// hammering the database.
+			go func(ttl time.Duration) {
+				if ttl <= 0 {
+					ttl = 90 * time.Second
+				}
+				interval := ttl / 3
+				if interval < time.Second {
+					interval = time.Second
+				}
+				ticker := time.NewTicker(interval)
+				defer ticker.Stop()
+				for range ticker.C {
+					if _, err := db.SweepStaleRuntimeHeartbeats(time.Now().Add(-ttl)); err != nil {
+						log.Error("agent heartbeat sweep failed", "err", err)
+					}
+				}
+			}(householdCfg.AgentHeartbeatTTL)
 
 			named, lerr := db.ListButlers()
 			switch {
@@ -1782,7 +1936,7 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 		// sent household escalation facts to the old hosted provider,
 		// which is contrary to the saved configuration and to the
 		// privacy intent behind choosing local in the first place.
-		phraser := &butler.Phraser{
+		phraser := &legacy.Phraser{
 			Provider: butlerProviderRef{host: apiSrv.ButlerHost},
 			Model:    butlerCfg.Model,
 			Record: func(_ context.Context, providerName, prompt, reply string) error {
@@ -1802,11 +1956,11 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 			},
 		}
 		auto.Escalator = automation.EscalatorFunc(func(ctx context.Context, req automation.EscalationRequest) (string, error) {
-			facts := make([]butler.Fact, 0, len(req.Facts))
+			facts := make([]legacy.Fact, 0, len(req.Facts))
 			for _, f := range req.Facts {
-				facts = append(facts, butler.Fact{Label: f.Label, Content: f.Content})
+				facts = append(facts, legacy.Fact{Label: f.Label, Content: f.Content})
 			}
-			return phraser.Phrase(ctx, butler.PhraseRequest{
+			return phraser.Phrase(ctx, legacy.PhraseRequest{
 				Rule: req.Rule, Instruction: req.Instruction, Fallback: req.Fallback, Facts: facts,
 			})
 		})
@@ -1824,34 +1978,7 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 		// and dispatches them; the domestic gateway rechecks that lease at
 		// every external-effect boundary.
 		auto.ReviewedActions = actions
-		auto.ReviewedEscalator = func(ctx context.Context, agent string, req automation.EscalationRequest) (string, error) {
-			b, err := db.GetButler(agent)
-			if err != nil || !b.Reachable() {
-				return "", fmt.Errorf("assigned Agent %s is unavailable", agent)
-			}
-			p, err := butlerProviderFor(b)
-			if err != nil || p == nil {
-				return "", fmt.Errorf("assigned Agent %s has no available provider: %v", agent, err)
-			}
-			facts := make([]butler.Fact, 0, len(req.Facts))
-			for _, f := range req.Facts {
-				facts = append(facts, butler.Fact{Label: f.Label, Content: f.Content})
-			}
-			phraser := &butler.Phraser{Provider: p, Model: b.ProviderModel,
-				Record: func(_ context.Context, providerName, prompt, reply string) error {
-					_, err := db.InsertButlerSession(runtimedb.ButlerSession{
-						Principal: butlerSessionPrincipal, ActingFor: automation.Source,
-						Butler: b.Name, AgentID: b.Seq, Provider: providerName,
-						Mode: runtimedb.ButlerModeFull, Surface: b.Surface,
-						FinalText:      redact.String(reply),
-						TranscriptJSON: redact.String(`{"kind":"reviewed-routine-escalation","prompt":` + strconv.Quote(prompt) + `}`),
-					})
-					return err
-				}}
-			return phraser.Phrase(ctx, butler.PhraseRequest{
-				Rule: req.Rule, Instruction: req.Instruction, Fallback: req.Fallback, Facts: facts,
-			})
-		}
+		auto.ReviewedEscalator = newReviewedEscalator(db, log, butlerProviderFor)
 		go auto.RunReviewed(context.Background(), automationEvery)
 	}
 

@@ -120,6 +120,7 @@ one mechanism, which is worth deciding before any of them individually.
 | `pdf-stirling` | pdf-tools | Stirling PDF | proxy |
 | `tools-it-tools` | utilities | IT-Tools | proxy |
 | `chat-telegram-*`, `chat-matrix-*` | chat | the Butler over Telegram / Matrix (ADR-W026) | — |
+| `agent-hermes-*` | agent-hermes | an Agent runtime (Hermes): the cognition behind one Agent, reaching Wildstone only as a bearer-authenticated MCP client (ADR-W039 Phase 6, #351) | — |
 
 ### Host access: devices, capabilities, UDP
 
@@ -308,6 +309,22 @@ params:
 `url`, `hostname`, `email`, `port`, `duration`) and `capability.Expand`
 refuses a value that fails it — so the check runs against the value an
 operator actually supplied, not only the one you shipped.
+
+For a param with a fixed set of answers — a picker, not a text box — use
+`validate: enum:a|b|c`, naming every allowed value pipe-separated:
+
+```yaml
+params:
+  - { name: execution_profile, default: platform-only,
+      validate: "enum:platform-only|sandboxed|host-admin",
+      description: "How much the runtime's container may do on its own." }
+```
+
+Unlike the fixed shapes above, the VALUES after `enum:` are yours to
+invent — they are your package's own vocabulary, not Keystone's — but the
+form is still checked at `wild pkg lint`: at least one value, none blank,
+none repeated. A value outside the list is refused at Expand with every
+allowed value named, the same as any other shape.
 
 The description above was already there when a household typed `CST`. A
 description is addressed to a human who may not read it; a shape is

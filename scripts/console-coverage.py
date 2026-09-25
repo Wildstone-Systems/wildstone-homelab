@@ -34,6 +34,23 @@ MACHINE_FACING = {
     "/api/v1/household/events",
     "/api/v1/butler/requests",
     "/api/v1/butler/tasks/{}/debug",
+    # The Agent API (ADR-W039 Phase 2c, #337; ADR-W040): a runtime's own
+    # HTTP surface, authenticated as a runtime principal — never a
+    # Console session, and there is no screen for it to be missing from.
+    "/api/v1/agent/manifest",
+    "/api/v1/agent/invoke",
+    "/api/v1/agent/recall",
+    "/api/v1/agent/remember",
+    "/api/v1/agent/checkpoint",
+    "/api/v1/agent/start",
+    "/api/v1/agent/wait",
+    "/api/v1/agent/complete",
+    "/api/v1/agent/fail",
+    "/api/v1/agent/propose",
+    "/api/v1/agent/notify",
+    "/api/v1/agent/heartbeat",
+    "/api/v1/agent/deliveries",
+    "/api/v1/agent/deliveries/{}/ack",
 }
 
 

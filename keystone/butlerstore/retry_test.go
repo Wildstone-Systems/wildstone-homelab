@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -38,12 +39,13 @@ func TestProviderStallFencesRetriesAndWaits(t *testing.T) {
 	id := newTask(t, db)
 	ts := newCountingToolset()
 
-	r := runner(ts, ledger)
+	r := newRunner(t, ts, ledger, id)
 	r.StallTimeout = 20 * time.Millisecond
 	r.RetryLimit = 2
 
 	p := &hangingProvider{}
-	if _, err := r.Run(context.Background(), p, id, "diagnose"); err == nil {
+	r.Provider = p
+	if _, err := r.Run(context.Background(), "diagnose"); err == nil {
 		t.Fatal("a permanently stalled provider produced an answer")
 	}
 	if p.calls != 3 {
@@ -112,8 +114,17 @@ func TestWithdrawnAuthorityBlocksContinuation(t *testing.T) {
 		if err := db.TransitionButlerTask(id, runtimedb.ButlerTaskCancelled, "user cancelled", "mika"); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := runner(ts, ledger).Run(context.Background(), answer, id, "go"); !errors.Is(err, ErrAuthorityWithdrawn) {
-			t.Fatalf("a cancelled task continued: %v", err)
+		// A cancelled task is refused a step earlier now than the raw
+		// TaskLedger.Authorize check this test used to reach directly
+		// (ADR-W039 Phase 2a): IssueHandle itself refuses a task that
+		// has already finished — cancelled, completed or failed —
+		// precisely so a finished task's material is never assembled
+		// for nothing (butlerstore/handle.go's own doc).
+		// Ledger.Authorize would say the same thing one call later; the
+		// guarantee this test pins — a cancelled task's continuation is
+		// refused — holds at the earlier boundary too.
+		if _, err := ledger.IssueHandle(id); err == nil || !strings.Contains(err.Error(), "already finished") {
+			t.Fatalf("a cancelled task was issued a handle: %v", err)
 		}
 	})
 
@@ -122,7 +133,9 @@ func TestWithdrawnAuthorityBlocksContinuation(t *testing.T) {
 		if err := db.TransitionButlerTask(id, runtimedb.ButlerTaskPausedOffboarded, "offboarded", "admin"); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := runner(ts, ledger).Run(context.Background(), answer, id, "go"); !errors.Is(err, ErrAuthorityWithdrawn) {
+		r := newRunner(t, ts, ledger, id)
+		r.Provider = answer
+		if _, err := r.Run(context.Background(), "go"); !errors.Is(err, ErrAuthorityWithdrawn) {
 			t.Fatalf("offboarded work continued: %v", err)
 		}
 	})
@@ -140,7 +153,9 @@ func TestWithdrawnAuthorityBlocksContinuation(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := runner(ts, ledger).Run(context.Background(), answer, id, "go"); !errors.Is(err, ErrAuthorityWithdrawn) {
+		r := newRunner(t, ts, ledger, id)
+		r.Provider = answer
+		if _, err := r.Run(context.Background(), "go"); !errors.Is(err, ErrAuthorityWithdrawn) {
 			t.Fatalf("an expired task continued: %v", err)
 		}
 	})
@@ -151,8 +166,9 @@ func TestWithdrawnAuthorityBlocksContinuation(t *testing.T) {
 		gated.OwnerActive = func(owner string) error {
 			return fmt.Errorf("%s is no longer admitted", owner)
 		}
-		r := runner(ts, &gated)
-		if _, err := r.Run(context.Background(), answer, id, "go"); !errors.Is(err, ErrAuthorityWithdrawn) {
+		r := newRunner(t, ts, &gated, id)
+		r.Provider = answer
+		if _, err := r.Run(context.Background(), "go"); !errors.Is(err, ErrAuthorityWithdrawn) {
 			t.Fatalf("a disabled owner's task continued: %v", err)
 		}
 		if len(ts.calls) != 0 {
@@ -178,23 +194,24 @@ func TestStaleObservationsAreRefreshed(t *testing.T) {
 			id := newTask(t, db)
 			ts := newCountingToolset()
 
-			first := &scriptedProvider{dieAt: 1, steps: []*provider.ChatResponse{readsFor("n1")}}
-			if _, err := runner(ts, ledger).Run(context.Background(), first, id, "check n1"); err == nil {
+			first := newRunner(t, ts, ledger, id)
+			first.Provider = &scriptedProvider{dieAt: 1, steps: []*provider.ChatResponse{readsFor("n1")}}
+			if _, err := first.Run(context.Background(), "check n1"); err == nil {
 				t.Fatal("the first slice was expected to end on a dead provider")
 			}
 			db.Close()
 
 			db2, ledger2 := testLedger(t, path)
 			defer db2.Close()
-			r := runner(ts, ledger2)
-			r.ObservationTTL = tc.ttl
+			r := newRunner(t, ts, ledger2, id)
+			r.Client.(*testGateway).ObservationTTL = tc.ttl
 			// A clock a moment in the future, so the "stale" case does
 			// not depend on how fast the test machine is.
-			r.Now = func() time.Time { return time.Now().Add(time.Millisecond) }
-			second := &scriptedProvider{dieAt: -1, steps: []*provider.ChatResponse{
+			r.Client.(*testGateway).Now = func() time.Time { return time.Now().Add(time.Millisecond) }
+			r.Provider = &scriptedProvider{dieAt: -1, steps: []*provider.ChatResponse{
 				readsFor("n1"), {Text: "n1 is fine"},
 			}}
-			if _, err := r.Run(context.Background(), second, id, "check n1"); err != nil {
+			if _, err := r.Run(context.Background(), "check n1"); err != nil {
 				t.Fatalf("resume: %v", err)
 			}
 			if got := ts.calls["get_health/n1"]; got != tc.wantCalls {

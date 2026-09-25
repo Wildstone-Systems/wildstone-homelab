@@ -1,6 +1,6 @@
 package butlerlive
 
-// Conversations on the native agent runtime (ADR-W039): the route
+// Conversations on the native agent runtime (ADR-W041): the route
 // decides which loop runs, and the loop changes nothing about the
 // ledger, the tools, authority or the answer's shape.
 

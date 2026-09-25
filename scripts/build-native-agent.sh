@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Package the native agent runtime (ADR-W039) for one architecture:
+# Package the native agent runtime (ADR-W041) for one architecture:
 #
 #   scripts/build-native-agent.sh <amd64|arm64> <out-dir>
 #

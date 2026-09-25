@@ -1,4 +1,11 @@
-package butler
+// Package native is the small, in-process native reasoning loop
+// (ADR-W039 Phase 2b, #337): the durable Runner and the tool-free
+// Phraser, moved out of keystone/butler so their only path to
+// Wildstone's tool gateways, ledger and database is keystone/agentapi's
+// Client interface — never a direct import. keystone/butler keeps the
+// two tool gateways (ToolGateway, HouseholdGateway) and the legacy
+// closure-driven Session, which this package does not touch.
+package legacy
 
 // Household escalation (ADR-W024 A6/A4, work package H6): the Butler's
 // second job, and a deliberately smaller one than operating the homelab.
@@ -29,6 +36,7 @@ import (
 	"unicode"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/butler/provider"
+	"github.com/chickenrat17/wildstone-homelab/keystone/redact"
 )
 
 const (
@@ -166,11 +174,11 @@ func buildPhrasePrompt(req PhraseRequest) string {
 		b.WriteString("No facts were gathered for this one.\n")
 	}
 	for _, f := range facts {
-		content := redact(f.Content)
+		content := redact.String(f.Content)
 		if len(content) > MaxFactBytes {
 			content = content[:MaxFactBytes] + "\n[truncated]"
 		}
-		fmt.Fprintf(&b, "%s:\n%s\n\n", oneLine(f.Label), envelope(content))
+		fmt.Fprintf(&b, "%s:\n%s\n\n", oneLine(f.Label), redact.Envelope(content))
 	}
 	b.WriteString("Reply with the message text and nothing else.")
 	return b.String()

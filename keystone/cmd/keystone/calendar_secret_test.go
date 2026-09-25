@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/domestic"
+	"github.com/chickenrat17/wildstone-homelab/keystone/operation"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 )
 
@@ -65,7 +66,7 @@ func TestCalendarCallUsesRoutinePrincipalWithoutBorrowingPerson(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	callback := calendarSecretUse(vault)
+	callback := calendarSecretUse(db, vault)
 	ctx := runtimedb.WithRoutineSecretUseContext(context.Background(), p)
 	ctx = runtimedb.WithSecretUseContext(ctx, db.BindMemoryRead("sam", "shared", runtimedb.MemoryDestination{BuiltIn: true}))
 	called := false
@@ -111,5 +112,85 @@ func TestCalendarCallUsesRoutinePrincipalWithoutBorrowingPerson(t *testing.T) {
 	})
 	if !bound || err != nil || !called {
 		t.Fatalf("exact-version Household grant unusable: bound=%v err=%v called=%v", bound, err, called)
+	}
+}
+
+// TestCalendarCallResolvesPersonSecretFromTheTaskIdentity is Commit 3's
+// own evidence (ADR-W039 Phase 4, C11): the attended/Person branch no
+// longer reads a MemoryReadContext someone else stuffed into ctx — it
+// derives one itself, gateway-side, from operation.Identity's TaskID
+// alone, by reading the task's own admission back.
+func TestCalendarCallResolvesPersonSecretFromTheTaskIdentity(t *testing.T) {
+	db, err := runtimedb.Open(filepath.Join(t.TempDir(), "keystone.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := db.RecordButlerMember("sam", runtimedb.RoleMember, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AdmitButlerMember("sam", "root-admin"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertModel(runtimedb.Model{Name: "local", Kind: runtimedb.ModelLocal, Provider: "ollama",
+		ProviderModel: "llama", Readiness: runtimedb.ModelReady, Enabled: true}, "root-admin"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.CreateButler(runtimedb.Butler{Name: "alfred", Directive: "family",
+		Surface: runtimedb.ButlerSurfaceFamily, AgentClass: runtimedb.AgentClassMember, Model: "local"}, "root-admin"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.GrantButlerAccess("alfred", "sam", "root-admin"); err != nil {
+		t.Fatal(err)
+	}
+	vault, err := db.OpenSecretVault(filepath.Join(t.TempDir(), "household.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	personal, err := vault.Create("sam", runtimedb.SecretInput{Scope: "personal", Label: "Personal calendar", Value: "sams-token"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := vault.AgentGrant("sam", personal.ID, "alfred", "calendar.get_agenda", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := vault.BindCalendar("sam", personal.ID); err != nil {
+		t.Fatal(err)
+	}
+	taskID, err := db.InsertButlerTask(runtimedb.ButlerTask{
+		Kind: runtimedb.ButlerTaskConversation, Author: "sam", Owner: "sam",
+		Surface: runtimedb.ButlerSurfaceFamily, AgentClass: runtimedb.AgentClassMember,
+		Audience: runtimedb.ButlerAudiencePrivate, OriginConnection: "console",
+		Objective: "what's on today", ObjectiveKind: runtimedb.ObjectiveInformational,
+		Retention: runtimedb.ButlerRetentionConversation,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SetTaskButler(taskID, "alfred"); err != nil {
+		t.Fatal(err)
+	}
+
+	callback := calendarSecretUse(db, vault)
+	ctx := operation.With(context.Background(), operation.Identity{TaskID: taskID})
+	var got string
+	bound, err := callback(ctx, domestic.Call{Tool: "calendar.get_agenda", Attended: true}, func(raw string) error {
+		got = raw
+		return nil
+	})
+	if !bound || err != nil {
+		t.Fatalf("bound=%v err=%v, want bound and no error", bound, err)
+	}
+	if got != "sams-token" {
+		t.Fatalf("got %q, want sam's own personal calendar token", got)
+	}
+
+	// A call with no task identity at all is refused, never guessed.
+	bound, err = callback(context.Background(), domestic.Call{Tool: "calendar.get_agenda", Attended: true}, func(string) error {
+		t.Fatal("the callback ran with no task identity at all")
+		return nil
+	})
+	if !bound || err == nil {
+		t.Fatalf("no-task-identity call: bound=%v err=%v, want bound=true and a refusal", bound, err)
 	}
 }

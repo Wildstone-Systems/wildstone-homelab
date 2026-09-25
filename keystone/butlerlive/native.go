@@ -1,16 +1,18 @@
 package butlerlive
 
-// Serving a turn on the native agent runtime (ADR-W039).
+// Serving a turn on the native agent runtime (ADR-W041).
 //
 // When Butlers.Native is set and the Butler's route speaks a protocol
 // the runtime understands, the turn's reasoning loop runs there — the
-// OpenAI Agents SDK, in its sidecar — instead of in butler.Runner. What
+// OpenAI Agents SDK, in its sidecar — instead of in the legacy Runner. What
 // does NOT move is everything the Runner's loop is surrounded by:
 //
 //   - the durable ledger: every model attempt and tool call is
-//     checkpointed through butler.Slice, which is the Runner's own code
-//     with the loop taken out, so budgets, verified-read reuse, fencing
-//     and completion evidence are identical;
+//     checkpointed through legacy.Slice, which is the Runner's own code
+//     with the loop taken out and reaches the task only through
+//     agentapi.Client, so budgets, verified-read reuse, fencing and
+//     completion evidence are identical — and are the Agent API's, the
+//     contract every runtime is held to (ADR-W039);
 //   - authority: re-checked before every model attempt, tool dispatch
 //     and outcome, by the same calls;
 //   - privacy: the turn's destination policy is checked before and after
@@ -34,6 +36,7 @@ import (
 	"time"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/agentruntime"
+	"github.com/chickenrat17/wildstone-homelab/keystone/agentruntime/legacy"
 	"github.com/chickenrat17/wildstone-homelab/keystone/butler"
 	"github.com/chickenrat17/wildstone-homelab/keystone/butler/provider"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
@@ -94,10 +97,11 @@ func (bs *Butlers) nativeRouteFor(b runtimedb.Butler) (agentruntime.ModelRoute, 
 // runNative drives one slice of taskID on the native runtime. It returns
 // what runner.Run would: the transcript, and an error only when the turn
 // could not be answered.
-func (bs *Butlers) runNative(ctx context.Context, runner *butler.Runner, p provider.Provider,
-	privacy *runtimedb.PrivacyTurn, route agentruntime.ModelRoute, taskID string, t Turn,
+func (bs *Butlers) runNative(ctx context.Context, runner *legacy.Runner,
+	privacy *runtimedb.PrivacyTurn, route agentruntime.ModelRoute, t Turn,
 ) (*butler.Transcript, error) {
-	s, tr, err := runner.BeginSlice(p, taskID, t.Text)
+	taskID := runner.Handle.TaskID()
+	s, tr, err := runner.BeginSlice(ctx, t.Text)
 	if s == nil {
 		return tr, err
 	}
@@ -115,11 +119,14 @@ func (bs *Butlers) runNative(ctx context.Context, runner *butler.Runner, p provi
 		Model:        route,
 		Hooks:        hooks,
 		Limits: agentruntime.Limits{
-			JobTimeout:   nativeJobTimeout,
-			TurnTimeout:  runner.StallTimeout,
-			ToolTimeout:  nativeToolTimeout,
-			MaxTurns:     runner.MaxSliceRounds,
-			MaxToolCalls: runner.MaxToolCalls,
+			JobTimeout:  nativeJobTimeout,
+			TurnTimeout: runner.StallTimeout,
+			ToolTimeout: nativeToolTimeout,
+			MaxTurns:    runner.MaxSliceRounds,
+			// No MaxToolCalls: the task's aggregate budget is the
+			// gateway's, spent per Invoke through Slice.Call, and a
+			// spent one parks the task. The runtime's own default is
+			// a backstop above it.
 		},
 	}
 	if _, err := bs.Native.Start(ctx, job); err != nil {
@@ -191,7 +198,7 @@ func utterances(history []provider.Message) []agentruntime.Utterance {
 // through Slice.Call, so it is checkpointed, budgeted and authorized
 // exactly as the Runner's own calls are.
 type sliceTools struct {
-	s *butler.Slice
+	s *legacy.Slice
 
 	mu     sync.Mutex
 	err    error
@@ -244,7 +251,7 @@ func (st *sliceTools) isParked() bool {
 // sliceHooks keeps the Runner's per-attempt boundaries and the turn's
 // privacy policy around a loop the platform does not run.
 type sliceHooks struct {
-	s       *butler.Slice
+	s       *legacy.Slice
 	privacy *runtimedb.PrivacyTurn
 
 	mu  sync.Mutex

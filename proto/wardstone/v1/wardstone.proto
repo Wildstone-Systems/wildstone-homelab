@@ -253,6 +253,61 @@ message EnsureContainer {
   // A pre-minor-14 agent ignores this field, so the container starts
   // exactly as it does today.
   repeated string host_aliases = 12;
+
+  // The following five fields (protocol minor 18, ADR-W039 Phase 6/H1)
+  // hardening keys for a container that must contain a shell rather than
+  // merely run one: a Hermes-backed Agent's Tier 2 sandbox (docs/design/
+  // hermes-capability-package-and-execution-profiles.md §5.2), and useful
+  // to every package. Unlike devices/cap_add (protocol minor 12), these
+  // narrow what the container can do rather than widen it — an agent that
+  // ignores one silently gives the container MORE reach than the spec
+  // asked for, which is the wrong direction to fail quiet in. Keystone's
+  // reconciler therefore refuses to dispatch a spec using any of them to
+  // an agent below minor 18 (resource.HostAccessProtocolMinor's sibling)
+  // rather than letting it start unhardened.
+
+  // Mounts the container's own filesystem read-only, leaving only
+  // declared volumes/binds and tmpfs writable. A coerced shell can still
+  // read and fill /opt/data; it cannot install a persistent implant
+  // anywhere else in the image.
+  bool read_only_rootfs = 13;
+  // Linux capabilities REMOVED from Docker's default set, named without
+  // the CAP_ prefix, e.g. "ALL". The mirror of cap_add: cap_add WIDENS
+  // (closed allowlist, agent-enforced), cap_drop NARROWS, so it carries
+  // no allowlist of its own — dropping a capability never grants the
+  // container anything.
+  repeated string cap_drop = 14;
+  // Sets the no-new-privileges security option: a process inside the
+  // container can never gain more privileges than it started with (no
+  // setuid escalation), regardless of the image's own file permissions.
+  bool no_new_privileges = 15;
+  // Resource ceilings (memory, cpus, pids). Unset/zero fields are left to
+  // the node's own defaults, exactly as today.
+  ContainerResources resources = 16;
+  // Size of the container's /dev/shm, in Docker's own size-string syntax
+  // (e.g. "1g"); empty leaves Docker's default (64m). Hermes's browser
+  // toolset needs this raised (§5.2); most images never touch /dev/shm at
+  // all, which is why Docker's default is small enough to matter.
+  string shm_size = 17;
+}
+
+// ContainerResources bounds what one container may consume (protocol
+// minor 18). Every field is optional; a zero/empty field means "the
+// node's default", not "none" — there is no way to ask Wardstone for an
+// UNLIMITED pids count once a limit exists, because "unlimited" is
+// already what omitting Resources means.
+message ContainerResources {
+  // Memory limit in Docker's own size-string syntax, e.g. "4g", "512m".
+  string memory = 1;
+  // CPU limit as a decimal count of cores, e.g. "2" or "0.5" (Docker's
+  // --cpus). Fractional values are honoured through CFS quota/period, not
+  // by rounding.
+  string cpus = 2;
+  // Maximum number of PIDs (processes/threads) the container's cgroup may
+  // hold. The one field here that stops a fork bomb from taking the node
+  // rather than merely the container — Tier 2's whole reason for existing
+  // (§5.2).
+  int64 pids_limit = 3;
 }
 
 message PortBinding {

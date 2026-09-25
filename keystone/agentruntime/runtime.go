@@ -1,17 +1,3 @@
-// Package agentruntime is Wildstone's agent runtime contract (issue #357).
-//
-// Wildstone is an agent platform, not an agent framework. This package
-// is the line between the two. Wildstone owns everything on this side of
-// it — job lifecycle, identity, tool authorization, audit, timeouts,
-// cancellation and runtime selection — and a runtime owns only the
-// model's reasoning loop on the other side.
-//
-// A runtime is an adapter that implements AgentRuntime. The native
-// adapter (keystone/agentruntime/native) delegates the loop to the
-// OpenAI Agents SDK; Hermes and OpenClaw adapters implement the same
-// interface. Nothing in this package names a model provider or an SDK
-// type, and nothing may: an adapter that needs one keeps it behind its
-// own boundary.
 package agentruntime
 
 import (

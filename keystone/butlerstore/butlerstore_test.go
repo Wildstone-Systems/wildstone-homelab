@@ -7,16 +7,21 @@ package butlerstore
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/chickenrat17/wildstone-homelab/keystone/agentapi"
+	"github.com/chickenrat17/wildstone-homelab/keystone/agentruntime/legacy"
 	"github.com/chickenrat17/wildstone-homelab/keystone/butler"
 	"github.com/chickenrat17/wildstone-homelab/keystone/butler/provider"
 	"github.com/chickenrat17/wildstone-homelab/keystone/internal/dbtemplate"
+	"github.com/chickenrat17/wildstone-homelab/keystone/operation"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 )
 
@@ -158,16 +163,324 @@ func newTask(t *testing.T, db *runtimedb.DB) string {
 	return id
 }
 
-func runner(ts *countingToolset, l *Ledger) *butler.Runner {
-	return &butler.Runner{
-		Gateway: ts, Ledger: l, MaxSliceRounds: 12,
-		PermissionLabel: "operator", Audience: string(runtimedb.ButlerAudiencePrivate), Actor: "butler",
-		// Long enough that nothing in these tests goes stale, so a
-		// repeated dispatch means the ledger failed rather than that a
-		// reading aged out. TestStaleObservationsAreRefreshed sets it
-		// the other way on purpose.
-		ObservationTTL: time.Hour,
+// testGateway is a minimal, test-local agentapi.Client standing in for
+// keystone/agentgateway.Gateway (ADR-W039 Phase 2b, #337): this package
+// cannot import agentgateway (it imports keystone/butlerstore, which
+// would cycle), so these tests exercise keystone/agentruntime/legacy's
+// Runner against the same ledger-driving sequence
+// keystone/agentgateway/invoke.go documents, reimplemented here over
+// the countingToolset and the *Ledger already in scope. It is
+// deliberately close kin to keystone/butlerlive's own closureClient,
+// for the same reason: two packages that cannot see keystone/agentgateway
+// still need one Runner to drive their Toolset through this exact
+// sequence.
+type testGateway struct {
+	Toolset butler.Toolset
+	Ledger  *Ledger
+	// ToolCalls bounds a task's tool calls; 0 means unbounded — these
+	// tests never wire a durable conversation's parent budget
+	// (UseParentBudget did that pre-Phase-2, and nothing here needs it).
+	ToolCalls int
+	// ObservationTTL is how long a verified read may be reused; 0
+	// defaults to an hour, long enough that nothing here goes stale, so
+	// a repeated dispatch means the ledger failed rather than that a
+	// reading aged out on its own.
+	ObservationTTL time.Duration
+	Now            func() time.Time
+
+	mu      sync.Mutex
+	records []butler.ToolCallRecord
+}
+
+var _ agentapi.Client = (*testGateway)(nil)
+
+func (g *testGateway) now() time.Time {
+	if g.Now != nil {
+		return g.Now()
 	}
+	return time.Now()
+}
+
+func (g *testGateway) observationTTL() time.Duration {
+	if g.ObservationTTL > 0 {
+		return g.ObservationTTL
+	}
+	return time.Hour
+}
+
+func (g *testGateway) Manifest(ctx context.Context, h agentapi.Handle) (agentapi.Manifest, error) {
+	caps := g.Toolset.Capabilities(false)
+	offered := g.Toolset.OfferedSpecs(false)
+	tools := make([]agentapi.ToolSpec, 0, len(offered))
+	for _, spec := range offered {
+		tools = append(tools, agentapi.ToolSpec{Name: spec.Name, Description: spec.Description})
+	}
+	return agentapi.Manifest{
+		AgentClass:   agentapi.AgentClass(caps.AgentClass),
+		SystemPrompt: g.Toolset.SystemPrompt(),
+		Tools:        tools,
+		Fingerprint:  caps.Fingerprint(),
+	}, nil
+}
+
+func (g *testGateway) Invoke(ctx context.Context, req agentapi.InvokeRequest) (agentapi.InvokeResult, error) {
+	taskID := req.Handle.TaskID()
+	var input map[string]any
+	if len(req.Args) > 0 {
+		_ = json.Unmarshal(req.Args, &input)
+	}
+	rec := butler.ToolCallRecord{Name: req.Tool, Input: input}
+
+	if err := g.Ledger.Authorize(taskID); err != nil {
+		return agentapi.InvokeResult{Outcome: agentapi.OutcomeDenied, Reason: err.Error()}, nil
+	}
+	steps, err := g.Ledger.Steps(taskID)
+	if err != nil {
+		return agentapi.InvokeResult{}, fmt.Errorf("testGateway: reading the step ledger: %w", err)
+	}
+	if g.ToolCalls > 0 && countToolSteps(steps) >= g.ToolCalls {
+		return agentapi.InvokeResult{
+			Outcome: agentapi.OutcomeWaiting, WaitReason: agentapi.WaitBudgetExhausted,
+			Reason: fmt.Sprintf("%d tool calls used; this task's budget needs review before it continues", countToolSteps(steps)),
+		}, nil
+	}
+	fp := butler.CallFingerprint(req.Tool, input)
+	verified := butler.VerifiedResults(steps, g.now(), g.observationTTL())
+	if content, ok := verified[fp]; ok && fp != "" && req.Tool != "recall" {
+		if allowed, why := g.Toolset.Permits(req.Tool, false); !allowed {
+			rec.Rejected, rec.Result = true, why
+			g.record(rec)
+			return agentapi.InvokeResult{Outcome: agentapi.OutcomeDenied, Reason: why}, nil
+		}
+		rec.Result = content
+		g.record(rec)
+		g.trace(taskID, butler.LedgerTraceEvent{
+			Type: butler.TraceToolResult, SourceIDs: []string{req.Tool}, Payload: jsonPayload(map[string]any{"servedFromLedger": true}),
+		})
+		return agentapi.InvokeResult{Outcome: agentapi.OutcomeOK, Content: content, ServedFromLedger: true}, nil
+	}
+
+	if err := g.Ledger.Fence(); err != nil {
+		return agentapi.InvokeResult{}, fmt.Errorf("testGateway: %w", err)
+	}
+	step, err := g.Ledger.AppendStep(taskID, butler.LedgerStepTool, req.Tool, jsonPayload(input))
+	if err != nil {
+		return agentapi.InvokeResult{}, fmt.Errorf("testGateway: checkpointing a tool call: %w", err)
+	}
+	rec.StepSeq = step
+	attempt, err := g.Ledger.StartAttempt(step)
+	if err != nil {
+		return agentapi.InvokeResult{}, fmt.Errorf("testGateway: checkpointing a tool call: %w", err)
+	}
+	g.trace(taskID, butler.LedgerTraceEvent{Type: butler.TraceToolDispatched, Step: step, Attempt: attempt.Seq, SourceIDs: []string{req.Tool}})
+
+	id := operation.Identity{TaskID: taskID, Step: step, PermissionLabel: "operator", Audience: string(runtimedb.ButlerAudiencePrivate)}
+	outcome, err := g.Toolset.Execute(operation.With(ctx, id), req.Tool, input, false)
+	if err != nil {
+		rec.Error = err.Error()
+		g.record(rec)
+		_ = g.Ledger.FinishAttempt(attempt.Seq, false, "", err.Error())
+		_ = g.Ledger.SetStepState(step, butler.LedgerStepFailed)
+		g.trace(taskID, butler.LedgerTraceEvent{Type: butler.TraceToolResult, Step: step, Attempt: attempt.Seq, Payload: jsonPayload(map[string]any{"error": true})})
+		return agentapi.InvokeResult{Outcome: agentapi.OutcomeError, Content: fmt.Sprintf("error: %v", err), Reason: err.Error()}, nil
+	}
+	rec.Result, rec.Plan, rec.ResourceYAML, rec.Rejected = outcome.Content, outcome.Plan, outcome.ResourceYAML, outcome.Rejected
+	g.record(rec)
+
+	result := butler.ToolStepResult{
+		EffectPending: outcome.EffectPending && !outcome.Rejected, EffectConfirmed: outcome.EffectConfirmed && !outcome.Rejected,
+		ProposalConfirmed: outcome.ProposalConfirmed && !outcome.Rejected, Version: 1, Fingerprint: fp,
+		Content: outcome.Content, Rejected: outcome.Rejected,
+	}
+	body, _ := json.Marshal(result)
+	if err := g.Ledger.FinishAttempt(attempt.Seq, true, string(body), ""); errors.Is(err, runtimedb.ErrAttemptFenced) {
+		_ = g.Ledger.SetStepState(step, butler.LedgerStepFailed)
+		g.trace(taskID, butler.LedgerTraceEvent{Type: butler.TraceAttemptFenced, Step: step, Attempt: attempt.Seq, SourceIDs: []string{req.Tool}})
+		return agentapi.InvokeResult{Outcome: agentapi.OutcomeError, Reason: "the attempt was fenced while the tool ran, so its result was refused"}, nil
+	}
+	if outcome.Rejected {
+		_ = g.Ledger.SetStepState(step, butler.LedgerStepFailed)
+	} else {
+		_ = g.Ledger.SetStepState(step, butler.LedgerStepVerified)
+	}
+	g.trace(taskID, butler.LedgerTraceEvent{
+		Type: butler.TraceToolResult, Step: step, Attempt: attempt.Seq, SourceIDs: []string{req.Tool},
+		Payload: jsonPayload(map[string]any{"rejected": outcome.Rejected, "bytes": len(outcome.Content)}),
+	})
+	switch {
+	case outcome.Rejected:
+		return agentapi.InvokeResult{Outcome: agentapi.OutcomeDenied, Content: outcome.Content, Reason: outcome.Content}, nil
+	case outcome.EffectPending:
+		return agentapi.InvokeResult{Outcome: agentapi.OutcomeWaiting, WaitReason: agentapi.WaitConfirmPending, Content: outcome.Content}, nil
+	}
+	return agentapi.InvokeResult{Outcome: agentapi.OutcomeOK, Content: outcome.Content}, nil
+}
+
+func (g *testGateway) record(rec butler.ToolCallRecord) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.records = append(g.records, rec)
+}
+
+func (g *testGateway) trace(taskID string, e butler.LedgerTraceEvent) {
+	e.PermissionLabel, e.Audience = "operator", string(runtimedb.ButlerAudiencePrivate)
+	_ = g.Ledger.Trace(taskID, e)
+}
+
+func (g *testGateway) Checkpoint(ctx context.Context, ck agentapi.Checkpoint) (agentapi.CheckpointReceipt, error) {
+	taskID := ck.Handle.TaskID()
+	if err := g.Ledger.Fence(); err != nil {
+		return agentapi.CheckpointReceipt{}, fmt.Errorf("testGateway: %w", err)
+	}
+	if err := g.Ledger.Authorize(taskID); err != nil {
+		return agentapi.CheckpointReceipt{}, err
+	}
+	if ck.State == agentapi.StepProposed {
+		params := string(ck.Params)
+		if params == "" {
+			params = "{}"
+		}
+		step, err := g.Ledger.AppendStep(taskID, string(ck.Kind), ck.Name, params)
+		if err != nil {
+			return agentapi.CheckpointReceipt{}, err
+		}
+		return agentapi.CheckpointReceipt{Step: step}, nil
+	}
+	switch ck.State {
+	case agentapi.StepRunning:
+		attempt, err := g.Ledger.StartAttempt(ck.Step)
+		if err != nil {
+			return agentapi.CheckpointReceipt{}, err
+		}
+		return agentapi.CheckpointReceipt{Step: ck.Step, Attempt: attempt.Seq, Epoch: attempt.Epoch}, nil
+	case agentapi.StepVerified, agentapi.StepFailed:
+		if ck.Attempt != 0 {
+			if err := g.Ledger.FinishAttempt(ck.Attempt, ck.State == agentapi.StepVerified, string(ck.Result), ck.Error); err != nil {
+				return agentapi.CheckpointReceipt{}, err
+			}
+		}
+		if err := g.Ledger.SetStepState(ck.Step, string(ck.State)); err != nil {
+			return agentapi.CheckpointReceipt{}, err
+		}
+		return agentapi.CheckpointReceipt{Step: ck.Step, Attempt: ck.Attempt}, nil
+	}
+	return agentapi.CheckpointReceipt{}, fmt.Errorf("testGateway: %q is not a checkpoint state", ck.State)
+}
+
+func (g *testGateway) Start(ctx context.Context, w agentapi.WorkStart) error {
+	taskID := w.Handle.TaskID()
+	if err := g.Ledger.Fence(); err != nil {
+		return fmt.Errorf("testGateway: %w", err)
+	}
+	if err := g.Ledger.Authorize(taskID); err != nil {
+		return err
+	}
+	reason := w.Reason
+	if reason == "" {
+		reason = "slice started"
+	}
+	return g.Ledger.Running(taskID, reason)
+}
+
+func (g *testGateway) Wait(ctx context.Context, w agentapi.WorkWait) error {
+	if err := g.Ledger.Fence(); err != nil {
+		return fmt.Errorf("testGateway: %w", err)
+	}
+	return g.Ledger.Wait(w.Handle.TaskID(), string(w.Reason), w.Detail)
+}
+
+func (g *testGateway) Complete(ctx context.Context, w agentapi.WorkComplete) error {
+	if err := g.Ledger.Fence(); err != nil {
+		return fmt.Errorf("testGateway: refusing to complete work after this coordinator was superseded: %w", err)
+	}
+	evidence := make([]butler.LedgerEvidence, 0, len(w.Evidence))
+	for _, e := range w.Evidence {
+		evidence = append(evidence, butler.LedgerEvidence{
+			ReceiptID: e.ReceiptID, ProposalOnly: e.ProposalOnly, ReceiptStep: e.ReceiptStep,
+			Kind: e.Kind, Description: e.Description, SourceID: e.SourceID,
+			PermissionLabel: "operator", Audience: string(runtimedb.ButlerAudiencePrivate),
+		})
+	}
+	return g.Ledger.Complete(w.Handle.TaskID(), evidence, w.Summary)
+}
+
+func (g *testGateway) Fail(ctx context.Context, w agentapi.WorkFail) error {
+	taskID := w.Handle.TaskID()
+	if err := g.Ledger.Fence(); err != nil {
+		return fmt.Errorf("testGateway: %w", err)
+	}
+	if err := g.Ledger.Fail(taskID, w.Reason); err != nil {
+		return err
+	}
+	_, err := g.Ledger.FenceAttempts(taskID)
+	return err
+}
+
+func (g *testGateway) Heartbeat(context.Context, agentapi.Heartbeat) error { return nil }
+func (g *testGateway) Recall(context.Context, agentapi.RecallRequest) ([]agentapi.MemoryHit, error) {
+	return nil, &agentapi.NotImplementedError{Method: "Recall", Phase: "n/a"}
+}
+func (g *testGateway) Remember(context.Context, agentapi.RememberRequest) error {
+	return &agentapi.NotImplementedError{Method: "Remember", Phase: "n/a"}
+}
+func (g *testGateway) Propose(context.Context, agentapi.ProposeRequest) (agentapi.ProposalRef, error) {
+	return agentapi.ProposalRef{}, &agentapi.NotImplementedError{Method: "Propose", Phase: "n/a"}
+}
+func (g *testGateway) Notify(context.Context, agentapi.NotifyRequest) error {
+	return &agentapi.NotImplementedError{Method: "Notify", Phase: "n/a"}
+}
+
+func jsonPayload(v any) string {
+	body, err := json.Marshal(v)
+	if err != nil {
+		return "{}"
+	}
+	return string(body)
+}
+
+// countToolSteps counts the tool steps a task's ledger already carries,
+// the same accounting the pre-Phase-2 Runner kept locally across a
+// slice; recomputing it fresh from the ledger on every Invoke call
+// gives the same numbers, since every earlier dispatch in the same run
+// already appended its step by the time the next call is made.
+func countToolSteps(steps []butler.LedgerStep) int {
+	n := 0
+	for _, s := range steps {
+		if s.Kind == butler.LedgerStepTool {
+			n++
+		}
+	}
+	return n
+}
+
+// newRunner builds a legacy.Runner bound to id through a fresh
+// testGateway, with the same defaults the pre-Phase-2 helper gave every
+// test: a 12-round slice budget and the operator's own label/audience.
+// Its Toolset is reachable at r.Client.(*testGateway).Toolset for a
+// test that swaps it after construction, exactly as the old helper let
+// a test overwrite Runner.Gateway.
+func newRunner(t *testing.T, ts butler.Toolset, l *Ledger, id string) *legacy.Runner {
+	t.Helper()
+	h, err := l.IssueHandle(id)
+	if err != nil {
+		t.Fatalf("IssueHandle: %v", err)
+	}
+	return &legacy.Runner{
+		Client: &testGateway{Toolset: ts, Ledger: l}, Handle: h, Ledger: l,
+		MaxSliceRounds:  12,
+		PermissionLabel: "operator", Audience: string(runtimedb.ButlerAudiencePrivate), Actor: "butler",
+	}
+}
+
+// newRunnerWithProvider is newRunner plus the one field every single-
+// shot call site also needs, since legacy.Runner.Run no longer takes
+// the provider or the task id as call arguments (both moved onto the
+// Runner: Provider is a field, and the task comes from Handle).
+func newRunnerWithProvider(t *testing.T, ts butler.Toolset, l *Ledger, id string, p provider.Provider) *legacy.Runner {
+	t.Helper()
+	r := newRunner(t, ts, l, id)
+	r.Provider = p
+	return r
 }
 
 // An operator diagnosis that needs eight reads completes, and every read
@@ -188,7 +501,7 @@ func TestEightReadDiagnosisDoesNotRepeatVerifiedReads(t *testing.T) {
 		readsFor("n7", "n8", "n3"),
 		{Text: "photos is down because n4's disk is full"},
 	}}
-	tr, err := runner(ts, ledger).Run(context.Background(), p, id, "why is photos unhealthy?")
+	tr, err := newRunnerWithProvider(t, ts, ledger, id, p).Run(context.Background(), "why is photos unhealthy?")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -233,7 +546,7 @@ func TestInterruptedRunResumesWithoutRepeatingReads(t *testing.T) {
 		readsFor("n1", "n2", "n3"),
 		readsFor("n4", "n5"),
 	}}
-	if _, err := runner(ts, ledger).Run(context.Background(), dying, id, "why is photos unhealthy?"); err == nil {
+	if _, err := newRunnerWithProvider(t, ts, ledger, id, dying).Run(context.Background(), "why is photos unhealthy?"); err == nil {
 		t.Fatal("Run succeeded against a provider that died")
 	}
 	if len(ts.calls) != 5 {
@@ -255,7 +568,7 @@ func TestInterruptedRunResumesWithoutRepeatingReads(t *testing.T) {
 		readsFor("n6"),
 		{Text: "n6 is the root cause"},
 	}}
-	tr, err := runner(ts, ledger2).Run(context.Background(), resumed, id, "why is photos unhealthy?")
+	tr, err := newRunnerWithProvider(t, ts, ledger2, id, resumed).Run(context.Background(), "why is photos unhealthy?")
 	if err != nil {
 		t.Fatalf("resume: %v", err)
 	}
@@ -290,7 +603,7 @@ func TestTerminationAtEveryCheckpointResumesSafely(t *testing.T) {
 				readsFor("n1"), readsFor("n2"), readsFor("n3"), readsFor("n4"),
 			}
 			dying := &scriptedProvider{dieAt: dieAt, steps: rounds}
-			if _, err := runner(ts, ledger).Run(context.Background(), dying, id, "diagnose"); err == nil {
+			if _, err := newRunnerWithProvider(t, ts, ledger, id, dying).Run(context.Background(), "diagnose"); err == nil {
 				t.Fatal("run survived a dead provider")
 			}
 			if task, _ := db.GetButlerTask(id); task.State == runtimedb.ButlerTaskCompleted {
@@ -303,7 +616,7 @@ func TestTerminationAtEveryCheckpointResumesSafely(t *testing.T) {
 			defer db2.Close()
 			finish := &scriptedProvider{dieAt: -1, steps: append(append([]*provider.ChatResponse{}, rounds...),
 				&provider.ChatResponse{Text: "done"})}
-			if _, err := runner(ts, ledger2).Run(context.Background(), finish, id, "diagnose"); err != nil {
+			if _, err := newRunnerWithProvider(t, ts, ledger2, id, finish).Run(context.Background(), "diagnose"); err != nil {
 				t.Fatalf("resume: %v", err)
 			}
 			if len(ts.calls) < before {
@@ -348,7 +661,7 @@ func TestSecondCoordinatorCannotDispatch(t *testing.T) {
 	}
 	ts := newCountingToolset()
 	p := &scriptedProvider{dieAt: -1, steps: []*provider.ChatResponse{readsFor("n1")}}
-	_, err = runner(ts, ledger).Run(context.Background(), p, id, "diagnose")
+	_, err = newRunnerWithProvider(t, ts, ledger, id, p).Run(context.Background(), "diagnose")
 	if !errors.Is(err, runtimedb.ErrCoordinatorFenced) {
 		t.Fatalf("the fenced coordinator dispatched: %v", err)
 	}
@@ -371,12 +684,12 @@ func TestSliceAndAggregateBudgets(t *testing.T) {
 
 	t.Run("slice limit waits and keeps verified reads", func(t *testing.T) {
 		id := newTask(t, db)
-		r := runner(ts, ledger)
-		r.MaxSliceRounds = 2
 		p := &scriptedProvider{dieAt: -1, steps: []*provider.ChatResponse{
 			readsFor("s1"), readsFor("s2"), readsFor("s3"), {Text: "done"},
 		}}
-		tr, err := r.Run(context.Background(), p, id, "diagnose")
+		r := newRunnerWithProvider(t, ts, ledger, id, p)
+		r.MaxSliceRounds = 2
+		tr, err := r.Run(context.Background(), "diagnose")
 		if err != nil {
 			t.Fatalf("Run: %v", err)
 		}
@@ -398,8 +711,8 @@ func TestSliceAndAggregateBudgets(t *testing.T) {
 			t.Fatalf("verified reads after the pause = %d, want 2 kept", verified)
 		}
 		// Continuing gets another slice and finishes.
-		p2 := &scriptedProvider{dieAt: -1, steps: []*provider.ChatResponse{{Text: "done"}}}
-		if _, err := r.Run(context.Background(), p2, id, "continue"); err != nil {
+		r.Provider = &scriptedProvider{dieAt: -1, steps: []*provider.ChatResponse{{Text: "done"}}}
+		if _, err := r.Run(context.Background(), "continue"); err != nil {
 			t.Fatalf("continue: %v", err)
 		}
 		if task, _ := db.GetButlerTask(id); task.State != runtimedb.ButlerTaskCompleted {
@@ -409,15 +722,15 @@ func TestSliceAndAggregateBudgets(t *testing.T) {
 
 	t.Run("aggregate limit does not reset on the next slice", func(t *testing.T) {
 		id := newTask(t, db)
-		r := runner(ts, ledger)
-		// Room for more rounds than the aggregate budget allows, so it
-		// is the tool budget that stops this run and not the slice one.
-		r.MaxSliceRounds = 6
-		r.MaxToolCalls = 2
 		p := &scriptedProvider{dieAt: -1, steps: []*provider.ChatResponse{
 			readsFor("a1"), readsFor("a2"), readsFor("a3"),
 		}}
-		tr, err := r.Run(context.Background(), p, id, "diagnose")
+		r := newRunnerWithProvider(t, ts, ledger, id, p)
+		// Room for more rounds than the aggregate budget allows, so it
+		// is the tool budget that stops this run and not the slice one.
+		r.MaxSliceRounds = 6
+		r.Client.(*testGateway).ToolCalls = 2
+		tr, err := r.Run(context.Background(), "diagnose")
 		if err != nil {
 			t.Fatalf("Run: %v", err)
 		}
@@ -429,8 +742,8 @@ func TestSliceAndAggregateBudgets(t *testing.T) {
 			t.Fatalf("waits = %+v", waits)
 		}
 		// A second slice finds the budget still spent.
-		p2 := &scriptedProvider{dieAt: -1, steps: []*provider.ChatResponse{readsFor("a4")}}
-		tr2, err := r.Run(context.Background(), p2, id, "continue")
+		r.Provider = &scriptedProvider{dieAt: -1, steps: []*provider.ChatResponse{readsFor("a4")}}
+		tr2, err := r.Run(context.Background(), "continue")
 		if err != nil {
 			t.Fatalf("continue: %v", err)
 		}
@@ -450,7 +763,7 @@ func TestRunProducesAnExplanatoryTrace(t *testing.T) {
 	p := &scriptedProvider{dieAt: -1, steps: []*provider.ChatResponse{
 		readsFor("n1"), readsFor("n1"), {Text: "n1 is fine"},
 	}}
-	if _, err := runner(ts, ledger).Run(context.Background(), p, id, "check n1"); err != nil {
+	if _, err := newRunnerWithProvider(t, ts, ledger, id, p).Run(context.Background(), "check n1"); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	trace, err := db.ListButlerTrace(id)
@@ -500,7 +813,6 @@ func TestASupersededCoordinatorCannotFinishOrComplete(t *testing.T) {
 	ts := newCountingToolset()
 
 	id := newTask(t, db)
-	r := runner(ts, ledger)
 	// An answer with NO tool calls, which is the case Codex named: it
 	// passes no later dispatch fence, so it goes straight to
 	// completion. A response WITH tool calls is caught by the next
@@ -512,8 +824,9 @@ func TestASupersededCoordinatorCannotFinishOrComplete(t *testing.T) {
 	// pre-dispatch fence that already existed, and would prove nothing
 	// about the new one.
 	promoting := &promotingProvider{inner: p, db: db}
+	r := newRunnerWithProvider(t, ts, ledger, id, promoting)
 
-	_, err := r.Run(context.Background(), promoting, id, "diagnose")
+	_, err := r.Run(context.Background(), "diagnose")
 	if err == nil {
 		t.Fatal("a superseded coordinator ran to completion")
 	}

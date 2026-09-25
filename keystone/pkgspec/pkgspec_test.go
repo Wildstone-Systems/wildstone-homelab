@@ -367,3 +367,82 @@ func TestProvidedSecretsComeFromThePackage(t *testing.T) {
 		t.Fatalf("ProvidedSecrets = %v, want only the provided one", got)
 	}
 }
+
+// TestValidateAcceptsEnumParamShape: a param declaring the H2 closed-choice
+// shape loads and validates like any other shape-bearing param.
+func TestValidateAcceptsEnumParamShape(t *testing.T) {
+	doc := strings.Replace(wellFormed, "{ name: photos_subdomain, default: photos }",
+		"{ name: photos_subdomain, default: photos }\n  - { name: execution_profile, default: platform-only, validate: \"enum:platform-only|sandboxed|host-admin\" }",
+		1)
+	pkg, err := Parse([]byte(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := pkg.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+}
+
+// TestValidateRejectsEmptyEnumShape is H2's package-lint requirement: a
+// `validate: enum:` with nothing after the colon must fail Validate (which
+// pkgtool.Lint calls via pkgspec.Load before anything else), not silently
+// accept every value or render a picker with no options.
+func TestValidateRejectsEmptyEnumShape(t *testing.T) {
+	doc := strings.Replace(wellFormed, "{ name: photos_subdomain, default: photos }",
+		`{ name: photos_subdomain, default: photos }
+  - { name: execution_profile, validate: "enum:" }`,
+		1)
+	pkg, err := Parse([]byte(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = pkg.Validate()
+	if err == nil {
+		t.Fatal("expected an error for an empty enum")
+	}
+	ve, ok := err.(*ValidationError)
+	if !ok {
+		t.Fatalf("got %T, want *ValidationError", err)
+	}
+	if ve.Field != "params[2].validate" {
+		t.Errorf("Field = %q", ve.Field)
+	}
+}
+
+// TestValidateRejectsMalformedEnumShape covers the other two structural
+// mistakes: a blank value between two pipes, and the same value twice.
+func TestValidateRejectsMalformedEnumShape(t *testing.T) {
+	for name, shape := range map[string]string{
+		"blank between pipes": "enum:a||b",
+		"duplicate value":     "enum:a|b|a",
+	} {
+		doc := strings.Replace(wellFormed, "{ name: photos_subdomain, default: photos }",
+			`{ name: photos_subdomain, default: photos }
+  - { name: execution_profile, validate: "`+shape+`" }`,
+			1)
+		pkg, err := Parse([]byte(doc))
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if err := pkg.Validate(); err == nil {
+			t.Errorf("%s: expected an error", name)
+		}
+	}
+}
+
+// TestValidateStillRejectsUnknownShape pins that the enum form is an
+// ADDITION to the closed vocabulary, not a replacement of it: a
+// misspelled fixed shape still fails exactly as before.
+func TestValidateStillRejectsUnknownShape(t *testing.T) {
+	doc := strings.Replace(wellFormed, "{ name: photos_subdomain, default: photos }",
+		`{ name: photos_subdomain, default: photos }
+  - { name: tz, validate: iana-timezone }`, // hyphen, not underscore
+		1)
+	pkg, err := Parse([]byte(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := pkg.Validate(); err == nil {
+		t.Fatal("expected an error for a misspelled shape")
+	}
+}

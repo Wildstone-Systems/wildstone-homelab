@@ -16,7 +16,8 @@ import { join } from "path";
 import { renderToString } from "react-dom/server";
 import { createElement as h } from "react";
 import { Services, InstallForm } from "../src/views/Services";
-import { Butler, bucket, ConversationRail, EmptyState, StatusCard, SURFACES, Thread, ThreadBar, ToolTrace, Turn } from "../src/views/Butler";
+import { Butler, bucket, ConversationRail, EmptyState, IssuedCredential, RuntimeCard, StatusCard, SURFACES, Thread, ThreadBar, ToolTrace, Turn } from "../src/views/Butler";
+import type { RuntimeRecord } from "../src/api";
 import { BotList, Chat, ConnectForm } from "../src/views/Chat";
 import { Freshness, Shell, TokenGate } from "../src/App";
 import { HomeView, buildProblems } from "../src/views/Home";
@@ -67,17 +68,18 @@ const store = new Map<string, string>();
   length: 0,
 } as Storage;
 import { Household, AddMember, EditMember } from "../src/views/Household";
-import { AttentionBanner, Butlers, NoButlers, NoMatches, RosterRow, needsAttention, reachLine, select, toolLine } from "../src/views/Butlers";
+import { AttentionBanner, Butlers, NoButlers, NoMatches, RosterRow, RuntimesStrip, needsAttention, reachLine, select, toolLine } from "../src/views/Butlers";
 import { HouseholdActions, Tool } from "../src/views/butlers/TabTools";
 import { ButlerPicker, matches, openingFor, preferred } from "../src/views/butler/picker";
 import { BlockedStrip } from "../src/views/Butler";
 import { withheldFrom } from "../src/views/butlers/TabReach";
 import { retireLines } from "../src/views/butlers/ButlerDrawer";
+import { TabRuntime } from "../src/views/butlers/TabRuntime";
 import { NewButlerDialog } from "../src/views/butlers/NewButlerDialog";
 import { RouteList } from "../src/views/butlers/TabModel";
 import { Confirm } from "../src/ui/Confirm";
 import { Tabs } from "../src/ui/Tabs";
-import type { ButlerRow as ButlerRosterRow, Model } from "../src/api";
+import type { ButlerRow as ButlerRosterRow, Model, RuntimeInventoryRow } from "../src/api";
 
 // Exactly what GET /api/v1/packages serves, copied from the live VM.
 const pkg = {
@@ -205,6 +207,56 @@ const on = renderToString(
 );
 check("configured card shows the resolved backend", on.includes("llama3.1") && on.includes("11434"));
 check("qa-only card explains the withheld tool", on.includes("propose_change"));
+
+// The runtime card (ADR-W039 §3.3). The type is read-only here; the
+// two acts are the Console holder's, and the secret a rotation returns
+// is shown once with the warning that it will not be shown again.
+const nativeRuntime: RuntimeRecord = {
+  type: "native", credentialRef: "runtime-health-1", health: "connected",
+  negotiated: { delivery: "push" }, executionProfileRef: "platform-only",
+};
+const rtOwner = renderToString(h(RuntimeCard, {
+  name: "health", runtime: nativeRuntime, loading: false, error: null, canManage: true, onChanged: () => {},
+}));
+check("the runtime card names the runtime type and its credential",
+  text(rtOwner).includes("type: native") && rtOwner.includes("runtime-health-1"), text(rtOwner));
+check("the runtime card shows health, delivery and profile",
+  rtOwner.includes("connected") && text(rtOwner).includes("delivery: push") && text(rtOwner).includes("profile: platform-only"));
+check("an Owner can rotate the credential and revoke the runtime",
+  rtOwner.includes("Rotate credential") && rtOwner.includes("Revoke runtime"));
+check("the runtime type is not editable here", !rtOwner.includes("<select") && !rtOwner.includes('type="text"'));
+check("the runtime card never carries a secret", !rtOwner.includes("wst_"));
+const rtMember = renderToString(h(RuntimeCard, {
+  name: "health", runtime: nativeRuntime, loading: false, error: null, canManage: false, onChanged: () => {},
+}));
+check("without manage the runtime card offers no actions",
+  !rtMember.includes("Rotate credential") && !rtMember.includes("Revoke runtime") && rtMember.includes("runtime-health-1"));
+const rtRevoked = renderToString(h(RuntimeCard, {
+  name: "health", runtime: { ...nativeRuntime, health: "revoked" }, loading: false, error: null, canManage: true, onChanged: () => {},
+}));
+check("a revoked runtime says so and says how it comes back",
+  rtRevoked.includes("revoked") && rtRevoked.includes("new credential"), text(rtRevoked));
+const rtHermes = renderToString(h(RuntimeCard, {
+  name: "health", loading: false, error: null, canManage: true, onChanged: () => {},
+  runtime: { type: "hermes", endpoint: "https://hermes-health.internal/", credentialRef: "runtime-health-2",
+    health: "unregistered", negotiated: { delivery: "pull", processingClass: "local_only" }, executionProfileRef: "sandboxed" },
+}));
+check("an external runtime shows its endpoint and declared class",
+  rtHermes.includes("hermes-health.internal") && text(rtHermes).includes("class: local_only") && rtHermes.includes("unregistered"));
+// Assembled at run time so no token-shaped literal sits in the source
+// for a secret scanner to (rightly) flag; see .gitleaksignore.
+const fakeRuntimeSecret = ["wst", "0123abcd"].join("_");
+const issued = renderToString(h(IssuedCredential, {
+  credential: { credentialRef: "runtime-health-2", secret: fakeRuntimeSecret }, onDismiss: () => {},
+}));
+check("a rotated secret is shown once with a copy button",
+  issued.includes(fakeRuntimeSecret) && issued.includes("Copy") && issued.includes("runtime-health-2"));
+check("and with the warning that it will not be shown again", issued.includes("only time it will be shown"));
+const placed = renderToString(h(IssuedCredential, {
+  credential: { credentialRef: "runtime-health-2", node: "n1", secretName: "secret/runtime-health-token" }, onDismiss: () => {},
+}));
+check("a secret placed on a node is named, not shown",
+  placed.includes("n1") && placed.includes("secret/runtime-health-token") && !placed.includes("wst_"));
 
 // The thread (ADR-W027). A proposal renders as the SAME card Plans
 // shows, with the same handlers — one component, two placements, which
@@ -1515,6 +1567,101 @@ const banner = renderToString(h(AttentionBanner, {
   rows: [roster[1], roster[2]], routes: [localModel(), CLOUD, QA], onShow: () => {},
 }));
 check("the banner names each Butler and its fault", banner.includes("nutrition can&#x27;t reach its model") && banner.includes("ops answers questions only"), banner);
+
+// TabRuntime (#350/H4): attaching a runtime and setting its execution
+// profile, on the Butlers screen — the form RuntimeCard's popover on
+// the Butler screen deliberately does not duplicate. Owner-only, like
+// rotating or revoking a credential.
+const runtimeNative: RuntimeRecord = {
+  type: "native", credentialRef: "runtime-health-1", health: "connected",
+  negotiated: { delivery: "push" }, executionProfileRef: "platform-only",
+};
+const trOwner = renderToString(h(TabRuntime, {
+  row: bRow(), runtime: runtimeNative, loading: false, error: null, nodes: [],
+  canManage: true, say: () => {}, onChanged: () => {},
+}));
+check("an Owner sees the runtime type and execution profile controls",
+  trOwner.includes("Wildstone Native") && trOwner.includes("Host administration") && trOwner.includes("Save runtime"),
+  trOwner);
+check("endpoint is hidden for the native runtime", !text(trOwner).includes("Endpoint"), trOwner);
+
+const trMember = renderToString(h(TabRuntime, {
+  row: bRow(), runtime: runtimeNative, loading: false, error: null, nodes: [],
+  canManage: false, say: () => {}, onChanged: () => {},
+}));
+check("without manage the runtime tab offers no save button and no confirm prompt",
+  !trMember.includes("Save runtime") && !trMember.includes("Issue a credential"), trMember);
+check("without manage the runtime record is still shown",
+  text(trMember).includes("Wildstone Native"), trMember);
+check("without manage every control is disabled", trMember.includes("disabled"), trMember);
+
+const runtimeHermes: RuntimeRecord = {
+  type: "hermes", endpoint: "https://hermes-health.internal/", credentialRef: "runtime-health-2",
+  health: "unregistered", negotiated: { delivery: "pull", processingClass: "local_only" },
+  executionProfileRef: "sandboxed",
+};
+const trHermes = renderToString(h(TabRuntime, {
+  row: bRow(), runtime: runtimeHermes, loading: false, error: null,
+  nodes: [{ id: "n1", connected: true, firstJoinedAt: "2026-01-01T00:00:00Z", lastSeenAt: "2026-09-01T00:00:00Z" }],
+  canManage: true, say: () => {}, onChanged: () => {},
+}));
+check("the endpoint field appears for a non-native runtime",
+  trHermes.includes('id="runtime-endpoint"') && trHermes.includes("hermes-health.internal"), trHermes);
+check("a blank endpoint is explained as fine for pull delivery",
+  text(trHermes).toLowerCase().includes("leave it blank if the runtime only pulls"),
+  trHermes);
+
+const trHostAdmin = renderToString(h(TabRuntime, {
+  row: bRow(), runtime: { ...runtimeHermes, executionProfileRef: "host-admin" }, loading: false, error: null, nodes: [],
+  canManage: true, say: () => {}, onChanged: () => {},
+}));
+check("host administration shows its warning",
+  trHostAdmin.includes("Host administration") &&
+    text(trHostAdmin).includes("Owner-class Agent") &&
+    text(trHostAdmin).includes("opt-in tools"),
+  trHostAdmin);
+
+const trBlocked = renderToString(h(TabRuntime, {
+  row: bRow({ agentClass: "member" }),
+  runtime: { ...runtimeNative, executionProfileRef: "host-admin" },
+  loading: false, error: null, nodes: [], canManage: true, say: () => {}, onChanged: () => {},
+}));
+check("host-admin on a native, member-class Agent is flagged before Save",
+  text(trBlocked).includes("needs a non-native runtime or an Owner-class Agent"), trBlocked);
+
+// RuntimesStrip (#355, H9): every live Agent's runtime at a glance,
+// unhealthy first, Owner-only like the Runtime tab it links to.
+const runtimeRows: RuntimeInventoryRow[] = [
+  {
+    butler: "health", agentClass: "member",
+    runtime: { type: "native", credentialRef: "runtime-health-1", health: "connected",
+      negotiated: { delivery: "push" }, executionProfileRef: "platform-only" },
+  },
+  {
+    butler: "nutrition", agentClass: "member",
+    runtime: { type: "hermes", endpoint: "https://hermes-nutrition.internal/", credentialRef: "runtime-nutrition-2",
+      health: "offline", lastHeartbeat: "2026-09-20T09:00:00Z",
+      negotiated: { delivery: "push", processingClass: "local_only" }, executionProfileRef: "sandboxed" },
+  },
+];
+const stripOwner = renderToString(h(RuntimesStrip, { rows: runtimeRows, error: null, canManage: true, onOpen: () => {} }));
+check("the strip lists every Agent it was given", stripOwner.includes("health") && stripOwner.includes("nutrition"), stripOwner);
+check("an offline runtime says so", stripOwner.includes(">offline<"), stripOwner);
+check("a connected native runtime says so", stripOwner.includes(">connected<"), stripOwner);
+check("the strip shows the runtime type, profile and declared class",
+  stripOwner.includes(">hermes<") && stripOwner.includes("sandboxed") && stripOwner.includes("local_only"), stripOwner);
+// Unhealthy first: nutrition (offline) sorts ahead of health (connected)
+// even though "health" is alphabetically first. Matched by the name
+// button's own markup, not the bare word — "health" is also a column
+// header, which renders earlier than either row.
+check("the strip sorts unhealthy runtimes first",
+  stripOwner.indexOf(">nutrition</button>") < stripOwner.indexOf(">health</button>"), stripOwner);
+
+const stripMember = renderToString(h(RuntimesStrip, { rows: runtimeRows, error: null, canManage: false, onOpen: () => {} }));
+check("without manage the strip renders nothing", stripMember === "", stripMember);
+
+const stripEmpty = renderToString(h(RuntimesStrip, { rows: [], error: null, canManage: true, onOpen: () => {} }));
+check("an Owner with no Agents sees no empty strip", stripEmpty === "", stripEmpty);
 
 // Tool rows: three states, and only two of them are ours to undo.
 const onTool = renderToString(h(Tool, {

@@ -108,6 +108,32 @@ func TestExpandUnknownParam(t *testing.T) {
 	}
 }
 
+// TestExpandEnumParamShape is H2's end-to-end case: the check that
+// matters is the one an OPERATOR'S value passes through, at Expand, not
+// only the package author's Default or Example (that is lint's job).
+func TestExpandEnumParamShape(t *testing.T) {
+	pkg := simplePackage()
+	pkg.Params = append(pkg.Params, pkgspec.ParamDecl{
+		Name:     "execution_profile",
+		Default:  "platform-only",
+		Validate: "enum:platform-only|sandboxed|host-admin",
+	})
+
+	if _, err := (&Engine{}).Expand(pkg, map[string]string{"node": "n", "execution_profile": "sandboxed"}, NewCatalog()); err != nil {
+		t.Fatalf("allowed value refused: %v", err)
+	}
+
+	_, err := (&Engine{}).Expand(pkg, map[string]string{"node": "n", "execution_profile": "sandbox"}, NewCatalog())
+	if err == nil {
+		t.Fatal("expected an error for a value outside the enum")
+	}
+	for _, want := range []string{"platform-only", "sandboxed", "host-admin"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not name allowed value %q", err.Error(), want)
+		}
+	}
+}
+
 func TestExpandDefaultParamFilled(t *testing.T) {
 	pkg := simplePackage()
 	pkg.Params = append(pkg.Params, pkgspec.ParamDecl{Name: "region", Default: "home"})

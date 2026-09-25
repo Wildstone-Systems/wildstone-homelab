@@ -1,4 +1,6 @@
-# ADR-W039: The AgentRuntime contract and the native runtime
+# ADR-W041: The AgentRuntime contract and the native runtime
+
+> **Numbering and as-built note (2026-09-25).** This ADR was first filed as ADR-W039, a number already taken by *Canonical Agent API and pluggable agent runtimes* (#333), which has its own follow-up ADR-W040. It was renumbered W041 when the two lines of work were merged. As merged, the loop this ADR calls `Runner` lives in `keystone/agentruntime/legacy` (it moved out of `keystone/butler` under ADR-W039 Phase 2b and reaches Wildstone only through `agentapi.Client`), and `butler.Slice` below is `legacy.Slice`, built on that same client. `keystone/butler/runner.go` and `butler/slice.go` no longer exist; references to them below describe the design as proposed.
 
 Status: proposed (#357)
 

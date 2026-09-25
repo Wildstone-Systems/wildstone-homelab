@@ -2,7 +2,7 @@
 
 This is the reasoning loop of Wildstone's native agent. It runs on the
 official [OpenAI Agents SDK](https://github.com/openai/openai-agents-js), and
-Keystone starts it once per run. See ADR-W039 for the design.
+Keystone starts it once per run. See ADR-W041 for the design.
 
 - **What it owns:** the model → tool → observation loop.
 - **What it does not own:** tools, authorization, audit, timeouts, budgets

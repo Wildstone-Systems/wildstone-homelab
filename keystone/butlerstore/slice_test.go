@@ -1,7 +1,7 @@
 package butlerstore
 
-// butler.Slice against the real ledger: an external reasoning loop (the
-// native agent runtime, ADR-W039) gets exactly the durable guarantees
+// legacy.Slice against the real ledger: an external reasoning loop (the
+// native agent runtime, ADR-W041) gets exactly the durable guarantees
 // Runner.Run gives its own loop.
 
 import (
@@ -10,14 +10,25 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/chickenrat17/wildstone-homelab/keystone/agentruntime/legacy"
 	"github.com/chickenrat17/wildstone-homelab/keystone/butler"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 )
 
-func beginSlice(t *testing.T, r *butler.Runner, id string) *butler.Slice {
+// sliceRunner is a Runner for a Slice: the loop is the runtime's, so the
+// provider is only named, never called.
+func sliceRunner(t *testing.T, ts butler.Toolset, l *Ledger, id string) *legacy.Runner {
 	t.Helper()
-	s, _, err := r.BeginSlice(&scriptedProvider{dieAt: -1}, id, "why is photos unhealthy?")
+	r := newRunnerWithProvider(t, ts, l, id, &scriptedProvider{dieAt: -1})
+	r.Client.(*testGateway).ObservationTTL = time.Hour
+	return r
+}
+
+func beginSlice(t *testing.T, r *legacy.Runner) *legacy.Slice {
+	t.Helper()
+	s, _, err := r.BeginSlice(context.Background(), "why is photos unhealthy?")
 	if err != nil || s == nil {
 		t.Fatalf("BeginSlice: %v", err)
 	}
@@ -38,7 +49,7 @@ func TestSliceCompletesWithEvidenceAndDoesNotRepeatReads(t *testing.T) {
 	defer db.Close()
 	id := newTask(t, db)
 	ts := newCountingToolset()
-	s := beginSlice(t, runner(ts, ledger), id)
+	s := beginSlice(t, sliceRunner(t, ts, ledger, id))
 	ctx := context.Background()
 
 	if err := s.ModelStarted(); err != nil {
@@ -85,9 +96,9 @@ func TestSliceParksOnTheAggregateBudget(t *testing.T) {
 	defer db.Close()
 	id := newTask(t, db)
 	ts := newCountingToolset()
-	r := runner(ts, ledger)
-	r.MaxToolCalls = 1
-	s := beginSlice(t, r, id)
+	r := sliceRunner(t, ts, ledger, id)
+	r.Client.(*testGateway).ToolCalls = 1
+	s := beginSlice(t, r)
 
 	if _, err := s.Call(context.Background(), "get_health", map[string]any{"node": "n1"}); err != nil {
 		t.Fatal(err)
@@ -102,23 +113,23 @@ func TestSliceParksOnTheAggregateBudget(t *testing.T) {
 	if got := taskState(t, db, id); got != runtimedb.ButlerTaskWaiting {
 		t.Fatalf("task %s, want waiting", got)
 	}
-	if !strings.Contains(s.Transcript().FinalText, "budget is used up") {
+	if !strings.Contains(s.Transcript().FinalText, "budget") {
 		t.Fatalf("final text %q", s.Transcript().FinalText)
 	}
 }
 
 func TestSliceParksForAQuestionABlockAndAnOutage(t *testing.T) {
-	for name, park := range map[string]func(*butler.Slice) error{
-		"question": func(s *butler.Slice) error { return s.AskUser("Which node?") },
-		"blocked":  func(s *butler.Slice) error { return s.Blocked("no access to the NAS") },
-		"pause":    func(s *butler.Slice) error { return s.Pause() },
-		"outage":   func(s *butler.Slice) error { _ = s.Unavailable("model unreachable"); return nil },
+	for name, park := range map[string]func(*legacy.Slice) error{
+		"question": func(s *legacy.Slice) error { return s.AskUser("Which node?") },
+		"blocked":  func(s *legacy.Slice) error { return s.Blocked("no access to the NAS") },
+		"pause":    func(s *legacy.Slice) error { return s.Pause() },
+		"outage":   func(s *legacy.Slice) error { _ = s.Unavailable("model unreachable"); return nil },
 	} {
 		t.Run(name, func(t *testing.T) {
 			db, ledger := testLedger(t, filepath.Join(t.TempDir(), "keystone.db"))
 			defer db.Close()
 			id := newTask(t, db)
-			s := beginSlice(t, runner(newCountingToolset(), ledger), id)
+			s := beginSlice(t, sliceRunner(t, newCountingToolset(), ledger, id))
 			if err := park(s); err != nil {
 				t.Fatal(err)
 			}
@@ -133,7 +144,7 @@ func TestSliceFailedAttemptIsClosedAndTheNextOneProceeds(t *testing.T) {
 	db, ledger := testLedger(t, filepath.Join(t.TempDir(), "keystone.db"))
 	defer db.Close()
 	id := newTask(t, db)
-	s := beginSlice(t, runner(newCountingToolset(), ledger), id)
+	s := beginSlice(t, sliceRunner(t, newCountingToolset(), ledger, id))
 	if err := s.ModelStarted(); err != nil {
 		t.Fatal(err)
 	}
@@ -172,8 +183,8 @@ func TestSliceStopsWhenAuthorityIsWithdrawn(t *testing.T) {
 	defer db.Close()
 	id := newTask(t, db)
 	ts := newCountingToolset()
-	s := beginSlice(t, runner(ts, ledger), id)
-	if err := db.TransitionButlerTask(id, runtimedb.ButlerTaskCancelled, "stopped by owner", "mika"); err != nil {
+	s := beginSlice(t, sliceRunner(t, ts, ledger, id))
+	if err := db.TransitionButlerTask(id, runtimedb.ButlerTaskCancelled, "stopped by owner", "owner"); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.ModelStarted(); err == nil {
@@ -213,12 +224,12 @@ func TestSliceBudgetCountsACallStillInFlight(t *testing.T) {
 	defer db.Close()
 	id := newTask(t, db)
 	ts := &blockingToolset{countingToolset: newCountingToolset(), release: make(chan struct{}), started: make(chan struct{}, 1)}
-	r := runner(ts.countingToolset, ledger)
-	r.Gateway = ts
-	r.MaxToolCalls = 1
-	s := beginSlice(t, r, id)
+	r := sliceRunner(t, ts.countingToolset, ledger, id)
+	r.Client.(*testGateway).Toolset = ts
+	r.Client.(*testGateway).ToolCalls = 1
+	s := beginSlice(t, r)
 
-	done := make(chan butler.ToolCallResult, 1)
+	done := make(chan legacy.ToolCallResult, 1)
 	go func() {
 		res, _ := s.Call(context.Background(), "get_health", map[string]any{"node": "n1"})
 		done <- res
@@ -242,9 +253,9 @@ func TestSliceBudgetIsNotSpentByLedgerHits(t *testing.T) {
 	db, ledger := testLedger(t, filepath.Join(t.TempDir(), "keystone.db"))
 	defer db.Close()
 	id := newTask(t, db)
-	r := runner(newCountingToolset(), ledger)
-	r.MaxToolCalls = 2
-	s := beginSlice(t, r, id)
+	r := sliceRunner(t, newCountingToolset(), ledger, id)
+	r.Client.(*testGateway).ToolCalls = 2
+	s := beginSlice(t, r)
 	ctx := context.Background()
 	// n1 dispatched, n1 again served from the ledger (free), n2 dispatched.
 	for _, node := range []string{"n1", "n1", "n2"} {

@@ -8,6 +8,7 @@
 #   UPDATE_PACKAGE_LOCK=1 go test ./pkgtool/ -run PackageContentMatchesItsVersion
 #
 # name  version  sha256(package.yaml)[:16]
+agent-hermes 0.1.1 fa8ef8bd86180a80
 ai-ollama 1.0.0 f6b24b7aed67c8ea
 ai-open-webui 1.0.1 b0f5146b6ee76626
 assistant-wildstone 1.0.1 75fe068a57dbe4c9
@@ -16,7 +17,7 @@ bookmarks-linkding 1.0.1 7e6b58723ddbc0c6
 books-calibre-web 1.0.2 b202d14553db085e
 books-kavita 1.0.2 b3fde26c0d2b3b05
 budget-actual 1.1.0 68f1dfdf247433cc
-calendar-radicale 2.0.4 1f8f14fed124a71b
+calendar-radicale 2.1.0 073e921ad3b21dac
 cameras-frigate 1.0.1 0ac585beb5876da1
 captcha-flaresolverr 1.0.1 6420402a747e2ee5
 chat-discord 2.0.0 f18460627b32cd15

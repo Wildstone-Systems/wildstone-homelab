@@ -26,16 +26,16 @@ func TestRereadingAnEstablishedFactDoesNotSpendBudget(t *testing.T) {
 	ts := newCountingToolset()
 
 	id := newTask(t, db)
-	r := runner(ts, ledger)
-	r.MaxSliceRounds = 8
-	r.MaxToolCalls = 2
-
 	// Four turns asking for the SAME read. One dispatch; the rest come
 	// back from the ledger.
 	p := &scriptedProvider{dieAt: -1, steps: []*provider.ChatResponse{
 		readsFor("a1"), readsFor("a1"), readsFor("a1"), readsFor("a1"),
 	}}
-	tr, err := r.Run(context.Background(), p, id, "diagnose")
+	r := newRunnerWithProvider(t, ts, ledger, id, p)
+	r.MaxSliceRounds = 8
+	r.Client.(*testGateway).ToolCalls = 2
+
+	tr, err := r.Run(context.Background(), "diagnose")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -52,13 +52,14 @@ func TestRereadingAnEstablishedFactDoesNotSpendBudget(t *testing.T) {
 	// The budget still bites on real dispatches: three DIFFERENT reads
 	// against a budget of two stops the run.
 	id2 := newTask(t, db)
-	r2 := runner(ts, ledger)
-	r2.MaxSliceRounds = 8
-	r2.MaxToolCalls = 2
 	p2 := &scriptedProvider{dieAt: -1, steps: []*provider.ChatResponse{
 		readsFor("b1"), readsFor("b2"), readsFor("b3"),
 	}}
-	tr2, err := r2.Run(context.Background(), p2, id2, "diagnose")
+	r2 := newRunnerWithProvider(t, ts, ledger, id2, p2)
+	r2.MaxSliceRounds = 8
+	r2.Client.(*testGateway).ToolCalls = 2
+
+	tr2, err := r2.Run(context.Background(), "diagnose")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
