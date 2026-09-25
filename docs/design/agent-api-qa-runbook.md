@@ -376,8 +376,10 @@ approve it: Hermes freezes a session's tool set at start, so this is
 Approve the Plan, confirm the containers are recreated, and re-check
 the bridge's logged config for the new profile's `disabled_toolsets`.
 
-Known open points, honestly: the pinned Hermes image digest is still a
-placeholder pending real digest-pinning tooling; the `/v1/runs` body
+Known open points, honestly: the Hermes image is pinned to the
+`v2026.9.21` index digest (package 0.1.1; an install made from 0.1.0
+recorded a placeholder digest that 404s, and must be reconfigured with
+the new `hermes_image_digest`); the `/v1/runs` body
 shape is only pinned by a unit test, never verified against a live
 Hermes (design-doc spike S3 was never run); the bridge's
 `identity_header` is static, leaning on `max_concurrent_runs: 1`

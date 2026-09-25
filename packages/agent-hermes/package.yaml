@@ -45,7 +45,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: agent-hermes
-  version: 0.1.0
+  version: 0.1.1
   capability: agent-hermes
   profile: hermes
   instanced: true
@@ -98,13 +98,13 @@ params:
     # unlike the brief's own wording this is a digest param, not a tag
     # one, resolved with `wild pkg` tooling at authoring the way
     # ai-ollama's and ai-open-webui's own pins are (never typed from
-    # memory). The value below is a PLACEHOLDER: this environment could
-    # not reach Docker Hub's registry API to resolve the real digest for
-    # nousresearch/hermes-agent (rate-limited both unauthenticated and
-    # through this environment's proxy) — resolve it for real before
-    # this package ships.
-    default: "sha256:a0582e1993ead68ba61735f4c09f35c3788bb1b97d17abff65c52ae561fead2f"
-    description: "The pinned nousresearch/hermes-agent image digest, sha256:<64 hex>. PLACEHOLDER — resolve with `wild pkg` before shipping (see the comment above)."
+    # memory). Resolved 2026-09-25 from Docker Hub's registry API: the
+    # OCI image index for tag v2026.9.21 (linux/amd64 + linux/arm64),
+    # the release the design doc pins. The earlier value was a
+    # placeholder that did not exist in the registry, so a pull failed
+    # with 404 and the runtime never started.
+    default: "sha256:6bece0644e29a347e5ae17db43c36938c86f171c6f5e0cef18aa2075d331f3a3"
+    description: "The pinned nousresearch/hermes-agent image digest, sha256:<64 hex> (default: the v2026.9.21 image index)."
 policies:
   classifications: [internal_only]
   dataSensitivity: high
