@@ -373,60 +373,11 @@ func countToolSteps(steps []LedgerStep) int {
 // dispatches only what has not been established yet. The caller decides
 // what userMessage is on a resume — normally the task's own objective.
 func (r *Runner) Run(ctx context.Context, p provider.Provider, taskID, userMessage string) (*Transcript, error) {
-	tr := &Transcript{Audit: Audit{Provider: p.Name()}}
-	if r.Ledger == nil {
-		return tr, fmt.Errorf("butler runner: no task ledger configured")
+	s, tr, err := r.begin(p, taskID)
+	if s == nil {
+		return tr, err
 	}
-	if err := r.Ledger.Fence(); err != nil {
-		return tr, fmt.Errorf("butler runner: %w", err)
-	}
-	// Authority is rechecked before the task is even moved to running:
-	// a task cancelled, offboarded or expired while it waited must not
-	// take another step, and finding that out after the first model call
-	// has already cost a provider round (ADR-W030 A2.1, A4).
-	if err := r.Ledger.Authorize(taskID); err != nil {
-		r.trace(taskID, LedgerTraceEvent{
-			Type: TraceDenial, Payload: jsonPayload(map[string]any{"authority": "refused"}),
-		})
-		return tr, fmt.Errorf("butler runner: %w", err)
-	}
-	if err := r.Ledger.Running(taskID, "slice started"); err != nil {
-		return tr, fmt.Errorf("butler runner: %w", err)
-	}
-
-	steps, err := r.Ledger.Steps(taskID)
-	if err != nil {
-		return tr, fmt.Errorf("butler runner: reading the step ledger: %w", err)
-	}
-	verified := verifiedResults(steps, r.now(), r.ObservationTTL)
-	toolsUsed := countToolSteps(steps)
-	toolLimit := r.MaxToolCalls
-	if aggregate, ok := r.Ledger.(interface {
-		AggregateToolCalls(string) (int, int, bool, error)
-	}); ok && r.UseParentBudget {
-		var uncertain bool
-		var parentLimit int
-		toolsUsed, parentLimit, uncertain, err = aggregate.AggregateToolCalls(taskID)
-		if err != nil {
-			return tr, fmt.Errorf("butler runner: reading conversation budget: %w", err)
-		}
-		if parentLimit > 0 {
-			toolLimit = parentLimit
-		}
-		if uncertain {
-			return tr, r.Ledger.Wait(taskID, LedgerWaitUncertainOutcome, "an earlier turn has an unresolved effect outcome")
-		}
-	}
-	resumed := len(steps) > 0
-
-	manifest := r.Gateway.Capabilities(r.ReadOnly)
-	r.trace(taskID, LedgerTraceEvent{
-		Type:            TraceSliceStarted,
-		ModelEndpoint:   p.Name(),
-		ModelVerdict:    manifest.ModelVerdict,
-		ManifestVersion: manifest.Fingerprint(),
-		Payload:         jsonPayload(map[string]any{"resumed": resumed, "verifiedResults": len(verified)}),
-	})
+	steps, verified, toolsUsed, toolLimit, manifest := s.steps, s.verified, s.toolsUsed, s.toolLimit, s.manifest
 
 	messages := make([]provider.Message, 0, len(r.History)+1)
 	messages = append(messages, r.History...)
@@ -444,26 +395,7 @@ func (r *Runner) Run(ctx context.Context, p provider.Provider, taskID, userMessa
 			return tr, err
 		}
 		if len(answer.ToolCalls) == 0 {
-			// Accepting an answer is a boundary too: completing the
-			// task writes evidence and a result summary the household
-			// reads, and doing that for a person whose authority went
-			// away mid-call would record work nobody was entitled to.
-			if err := r.stillAuthorized(taskID, "final answer"); err != nil {
-				return tr, err
-			}
-			if r.VerifyObjective {
-				if err := r.verifyObjective(ctx, p, taskID, userMessage, answer.Text, manifest); err != nil {
-					return tr, err
-				}
-			}
-			tr.FinalText = answer.Text
-			err := r.complete(taskID, tr, steps, answer.Text)
-			var missing interface{ MissingEffectReceipt() bool }
-			if errors.As(err, &missing) && missing.MissingEffectReceipt() {
-				tr.FinalText = "I couldn't verify every requested effect. The task is still open; any confirmed work is preserved for review."
-				return tr, r.Ledger.Wait(taskID, LedgerWaitUncertainOutcome, "one or more required effects lack matching successful receipts; review before continuing")
-			}
-			return tr, err
+			return tr, r.finish(ctx, p, taskID, userMessage, answer.Text, manifest, tr, steps)
 		}
 
 		messages = append(messages, provider.Message{
@@ -472,19 +404,7 @@ func (r *Runner) Run(ctx context.Context, p provider.Provider, taskID, userMessa
 		results := make([]provider.ToolResult, 0, len(answer.ToolCalls))
 		for _, tc := range answer.ToolCalls {
 			if toolLimit > 0 && toolsUsed >= toolLimit {
-				// The aggregate budget is exhausted. This is not a
-				// failure and not a retry: the work stands, and a person
-				// decides whether it gets more (A4).
-				r.trace(taskID, LedgerTraceEvent{
-					Type:    TraceDenial,
-					Payload: jsonPayload(map[string]any{"reason": "task tool budget exhausted", "used": toolsUsed}),
-				})
-				tr.CappedIterations = true
-				tr.FinalText = fmt.Sprintf(
-					"(stopped after %d tool calls — this task's budget is used up and needs review before it continues)",
-					toolsUsed)
-				return tr, r.Ledger.Wait(taskID, LedgerWaitBudgetExhausted,
-					fmt.Sprintf("%d tool calls used", toolsUsed))
+				return tr, r.budgetExhausted(taskID, tr, toolsUsed)
 			}
 			// The dispatch boundary. Checked per call rather than per
 			// round because the model's answer arrived some time ago
@@ -515,16 +435,134 @@ func (r *Runner) Run(ctx context.Context, p provider.Provider, taskID, userMessa
 		}
 	}
 
-	// The slice limit is a pause, not a failure: nothing is discarded and
-	// the aggregate budget is untouched, so a continue picks up with
-	// every verified read still verified (A4).
+	return tr, r.pause(taskID, tr)
+}
+
+// sliceStart is what begin established about a slice before its first
+// model call.
+type sliceStart struct {
+	steps     []LedgerStep
+	verified  map[string]string
+	toolsUsed int
+	toolLimit int
+	manifest  CapabilityManifest
+}
+
+// begin opens a slice: fence, authority, running, the ledger read and
+// the budget. A nil *sliceStart means the slice must not proceed, and
+// the returned error (possibly nil, when the task was parked waiting
+// instead) is the caller's answer.
+func (r *Runner) begin(p provider.Provider, taskID string) (*sliceStart, *Transcript, error) {
+	tr := &Transcript{Audit: Audit{Provider: p.Name()}}
+	if r.Ledger == nil {
+		return nil, tr, fmt.Errorf("butler runner: no task ledger configured")
+	}
+	if err := r.Ledger.Fence(); err != nil {
+		return nil, tr, fmt.Errorf("butler runner: %w", err)
+	}
+	// Authority is rechecked before the task is even moved to running:
+	// a task cancelled, offboarded or expired while it waited must not
+	// take another step, and finding that out after the first model call
+	// has already cost a provider round (ADR-W030 A2.1, A4).
+	if err := r.Ledger.Authorize(taskID); err != nil {
+		r.trace(taskID, LedgerTraceEvent{
+			Type: TraceDenial, Payload: jsonPayload(map[string]any{"authority": "refused"}),
+		})
+		return nil, tr, fmt.Errorf("butler runner: %w", err)
+	}
+	if err := r.Ledger.Running(taskID, "slice started"); err != nil {
+		return nil, tr, fmt.Errorf("butler runner: %w", err)
+	}
+
+	steps, err := r.Ledger.Steps(taskID)
+	if err != nil {
+		return nil, tr, fmt.Errorf("butler runner: reading the step ledger: %w", err)
+	}
+	verified := verifiedResults(steps, r.now(), r.ObservationTTL)
+	toolsUsed := countToolSteps(steps)
+	toolLimit := r.MaxToolCalls
+	if aggregate, ok := r.Ledger.(interface {
+		AggregateToolCalls(string) (int, int, bool, error)
+	}); ok && r.UseParentBudget {
+		var uncertain bool
+		var parentLimit int
+		toolsUsed, parentLimit, uncertain, err = aggregate.AggregateToolCalls(taskID)
+		if err != nil {
+			return nil, tr, fmt.Errorf("butler runner: reading conversation budget: %w", err)
+		}
+		if parentLimit > 0 {
+			toolLimit = parentLimit
+		}
+		if uncertain {
+			return nil, tr, r.Ledger.Wait(taskID, LedgerWaitUncertainOutcome, "an earlier turn has an unresolved effect outcome")
+		}
+	}
+	resumed := len(steps) > 0
+
+	manifest := r.Gateway.Capabilities(r.ReadOnly)
+	r.trace(taskID, LedgerTraceEvent{
+		Type:            TraceSliceStarted,
+		ModelEndpoint:   p.Name(),
+		ModelVerdict:    manifest.ModelVerdict,
+		ManifestVersion: manifest.Fingerprint(),
+		Payload:         jsonPayload(map[string]any{"resumed": resumed, "verifiedResults": len(verified)}),
+	})
+	return &sliceStart{steps: steps, verified: verified, toolsUsed: toolsUsed, toolLimit: toolLimit, manifest: manifest}, tr, nil
+}
+
+// finish accepts a final answer: the authority boundary, the optional
+// objective check, and completion with evidence.
+func (r *Runner) finish(ctx context.Context, p provider.Provider, taskID, userMessage, answer string,
+	manifest CapabilityManifest, tr *Transcript, steps []LedgerStep,
+) error {
+	// Accepting an answer is a boundary too: completing the
+	// task writes evidence and a result summary the household
+	// reads, and doing that for a person whose authority went
+	// away mid-call would record work nobody was entitled to.
+	if err := r.stillAuthorized(taskID, "final answer"); err != nil {
+		return err
+	}
+	if r.VerifyObjective {
+		if err := r.verifyObjective(ctx, p, taskID, userMessage, answer, manifest); err != nil {
+			return err
+		}
+	}
+	tr.FinalText = answer
+	err := r.complete(taskID, tr, steps, answer)
+	var missing interface{ MissingEffectReceipt() bool }
+	if errors.As(err, &missing) && missing.MissingEffectReceipt() {
+		tr.FinalText = "I couldn't verify every requested effect. The task is still open; any confirmed work is preserved for review."
+		return r.Ledger.Wait(taskID, LedgerWaitUncertainOutcome, "one or more required effects lack matching successful receipts; review before continuing")
+	}
+	return err
+}
+
+// budgetExhausted parks the task when its aggregate tool budget is spent.
+// This is not a failure and not a retry: the work stands, and a person
+// decides whether it gets more (A4).
+func (r *Runner) budgetExhausted(taskID string, tr *Transcript, used int) error {
+	r.trace(taskID, LedgerTraceEvent{
+		Type:    TraceDenial,
+		Payload: jsonPayload(map[string]any{"reason": "task tool budget exhausted", "used": used}),
+	})
+	tr.CappedIterations = true
+	tr.FinalText = fmt.Sprintf(
+		"(stopped after %d tool calls — this task's budget is used up and needs review before it continues)",
+		used)
+	return r.Ledger.Wait(taskID, LedgerWaitBudgetExhausted, fmt.Sprintf("%d tool calls used", used))
+}
+
+// pause parks the task at the slice limit. It is a pause, not a failure:
+// nothing is discarded and the aggregate budget is untouched, so a
+// continue picks up with every verified read still verified (A4).
+func (r *Runner) pause(taskID string, tr *Transcript) error {
 	tr.CappedIterations = true
 	tr.FinalText = "(paused after this turn's tool-call limit — say continue and I will pick up where I left off)"
 	r.trace(taskID, LedgerTraceEvent{
 		Type:    TraceWaitOpened,
 		Payload: jsonPayload(map[string]any{"reason": LedgerWaitReply, "rounds": r.sliceRounds()}),
 	})
-	return tr, r.Ledger.Wait(taskID, LedgerWaitReply, "turn tool-call limit reached; awaiting continue")
+	return r.Ledger.Wait(taskID, LedgerWaitReply, "turn tool-call limit reached; awaiting continue")
 }
 
 // stillAuthorized re-evaluates the task's authority at one boundary and

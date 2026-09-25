@@ -25,6 +25,8 @@ import (
 	"time"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/adapter/caldav"
+	"github.com/chickenrat17/wildstone-homelab/keystone/agentruntime"
+	"github.com/chickenrat17/wildstone-homelab/keystone/agentruntime/native"
 	"github.com/chickenrat17/wildstone-homelab/keystone/api"
 	"github.com/chickenrat17/wildstone-homelab/keystone/automation"
 	"github.com/chickenrat17/wildstone-homelab/keystone/backup"
@@ -97,6 +99,8 @@ func main() {
 	butlerModel := flag.String("butler-model", "", "model name for the legacy single-provider Butler; empty uses the provider's default. A named Butler's model comes from its assigned route, not from here")
 	butlerEndpoint := flag.String("butler-endpoint", "", "base URL for the legacy single-provider Butler (openai-compatible gateways, ollama host); empty uses the provider's default. A named Butler's endpoint comes from its assigned route")
 	automationEvery := flag.Duration("automation-interval", 15*time.Second, "how often the household automation engine ticks between event pokes (ADR-W024 H3)")
+	agentRuntime := flag.String("agent-runtime", agentRuntimeLegacy, "which loop drives Butler conversations: legacy (butler.Runner) or native (the OpenAI Agents SDK runtime, ADR-W039). native applies to Butlers on OpenAI-compatible and Ollama routes; Anthropic routes stay on legacy. If the native runtime is not installed or fails its self-check, keystone logs why and every conversation stays on legacy")
+	nativeAgentDir := flag.String("native-agent-dir", native.DefaultInstallDir, "where the native agent runtime is installed (bin/node and main.mjs, from the release's native-agent_linux_<arch>.tar.gz)")
 	householdTZ := flag.String("household-timezone", "Local", "IANA time zone the household's rules keep (timeOfDay/weekday conditions), e.g. Europe/London")
 	ntfyURL := flag.String("ntfy-url", "", "ntfy base URL the notifications.notify household action publishes to (ADR-W024 H4); empty leaves that action unregistered. The access token comes ONLY from NTFY_TOKEN, never a flag")
 	replyURL := flag.String("household-reply-url", "", "household event intake URL a notification's reply buttons post to, as a PHONE can reach it (not Keystone's loopback address); empty means notifications carry no reply buttons and a rule that asks for them fails loudly")
@@ -116,7 +120,14 @@ func main() {
 	}
 
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
-	butlerCfg := butlerConfig{Provider: *butlerProvider, Model: *butlerModel, Endpoint: *butlerEndpoint}
+	butlerCfg := butlerConfig{
+		Provider: *butlerProvider, Model: *butlerModel, Endpoint: *butlerEndpoint,
+		AgentRuntime: *agentRuntime, NativeAgentDir: *nativeAgentDir,
+	}
+	if butlerCfg.AgentRuntime != agentRuntimeLegacy && butlerCfg.AgentRuntime != agentRuntimeNative {
+		fmt.Fprintf(os.Stderr, "keystone: -agent-runtime must be %s or %s, not %q\n", agentRuntimeLegacy, agentRuntimeNative, butlerCfg.AgentRuntime)
+		os.Exit(2)
+	}
 	householdCfg := householdConfig{
 		Interval: *automationEvery, Timezone: *householdTZ,
 		NtfyURL: *ntfyURL, ReplyURL: *replyURL, ReplyTTL: *replyTTL,
@@ -340,6 +351,44 @@ type butlerConfig struct {
 	Provider string // off | anthropic | openai | ollama
 	Model    string
 	Endpoint string
+	// AgentRuntime picks the loop named Butlers converse on (ADR-W039):
+	// agentRuntimeLegacy or agentRuntimeNative. It is deployment
+	// configuration, not Butler configuration, so the stored config
+	// (ADR-W017 A9) never overrides it.
+	AgentRuntime   string
+	NativeAgentDir string
+}
+
+const (
+	agentRuntimeLegacy = "legacy"
+	agentRuntimeNative = "native"
+)
+
+// nativeRuntime returns the native agent runtime when the deployment
+// asked for it and it is installed and healthy, or nil.
+//
+// A runtime that is missing or broken is not a reason to refuse to
+// start: the control plane is the whole household's, and the legacy
+// loop answers every conversation correctly. It is a reason to say so,
+// loudly, once.
+func nativeRuntime(ctx context.Context, cfg butlerConfig, log *slog.Logger) agentruntime.AgentRuntime {
+	if cfg.AgentRuntime != agentRuntimeNative {
+		return nil
+	}
+	rt, err := native.New(native.Config{Command: native.InstalledCommand(cfg.NativeAgentDir)})
+	if err != nil {
+		log.Error("native agent runtime not started; conversations stay on the legacy loop", "err", err)
+		return nil
+	}
+	h := rt.Health(ctx)
+	if !h.OK {
+		log.Error("native agent runtime failed its self-check; conversations stay on the legacy loop",
+			"dir", cfg.NativeAgentDir, "detail", h.Detail)
+		return nil
+	}
+	log.Info("butler conversations run on the native agent runtime (OpenAI-compatible and Ollama routes)",
+		"dir", cfg.NativeAgentDir, "engine", h.Detail)
+	return rt
 }
 
 // butlerBackend is what the flags RESOLVED to: the model and base URL the
@@ -1336,7 +1385,10 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	} else if ok {
 		log.Info("butler config from runtime state", "provider", stored.Provider,
 			"model", stored.Model, "endpoint", stored.Endpoint)
-		butlerCfg = butlerConfig{Provider: stored.Provider, Model: stored.Model, Endpoint: stored.Endpoint}
+		butlerCfg = butlerConfig{
+			Provider: stored.Provider, Model: stored.Model, Endpoint: stored.Endpoint,
+			AgentRuntime: butlerCfg.AgentRuntime, NativeAgentDir: butlerCfg.NativeAgentDir,
+		}
 	}
 
 	// The commitment pass (ADR-W035 A15). Declared here because the
@@ -1607,6 +1659,10 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 				// asks it for a model called "ollama-cloud" and gets a
 				// 404 naming something the person never typed.
 				Providers: butlerProviderFor,
+				// The loop is a deployment choice (-agent-runtime); the
+				// model is still only ever the one the Butler was
+				// assigned.
+				Native: nativeRuntime(context.Background(), butlerCfg, log),
 				Gateways: butlerlive.GatewayFunc(func(b runtimedb.Butler, t butlerlive.Turn) (butler.Toolset, error) {
 					switch b.Surface {
 					case runtimedb.ButlerSurfaceFamily:

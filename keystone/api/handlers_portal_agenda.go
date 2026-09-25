@@ -366,7 +366,11 @@ func (s *Server) agendaCommitments(who string, asker who, today time.Time, loc *
 		}
 		// The same bound the render loop uses. These two disagreeing is
 		// how a row gets computed and then never drawn.
-		if at.After(today.AddDate(0, 0, agendaDays)) {
+		// The window ENDS at the close of its last day, as the events'
+		// does (today+agendaDays+1, exclusive). Comparing against the
+		// start of that day dropped anything later on it — a chore moved
+		// to noon on day seven computed a row and never drew it.
+		if !at.Before(today.AddDate(0, 0, agendaDays+1)) {
 			continue
 		}
 		key := at.Format("2006-01-02")
