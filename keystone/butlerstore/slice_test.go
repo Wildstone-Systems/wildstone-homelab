@@ -8,6 +8,7 @@ import (
 	"context"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/butler"
@@ -186,5 +187,69 @@ func TestSliceStopsWhenAuthorityIsWithdrawn(t *testing.T) {
 	}
 	if err := s.Finish(context.Background(), "done"); err == nil {
 		t.Fatal("a cancelled task accepted an answer")
+	}
+}
+
+// blockingToolset holds every dispatch until released, standing in for
+// a tool the runtime abandoned after its deadline and that is still
+// running.
+type blockingToolset struct {
+	*countingToolset
+	mu      sync.Mutex
+	release chan struct{}
+	started chan struct{}
+}
+
+func (b *blockingToolset) Execute(ctx context.Context, name string, input map[string]any, ro bool) (butler.ToolOutcome, error) {
+	b.started <- struct{}{}
+	<-b.release
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.countingToolset.Execute(ctx, name, input, ro)
+}
+
+func TestSliceBudgetCountsACallStillInFlight(t *testing.T) {
+	db, ledger := testLedger(t, filepath.Join(t.TempDir(), "keystone.db"))
+	defer db.Close()
+	id := newTask(t, db)
+	ts := &blockingToolset{countingToolset: newCountingToolset(), release: make(chan struct{}), started: make(chan struct{}, 1)}
+	r := runner(ts.countingToolset, ledger)
+	r.Gateway = ts
+	r.MaxToolCalls = 1
+	s := beginSlice(t, r, id)
+
+	done := make(chan butler.ToolCallResult, 1)
+	go func() {
+		res, _ := s.Call(context.Background(), "get_health", map[string]any{"node": "n1"})
+		done <- res
+	}()
+	<-ts.started // the first call is out and has not come back
+
+	res, err := s.Call(context.Background(), "get_health", map[string]any{"node": "n2"})
+	if err != nil || !res.Parked {
+		t.Fatalf("a second call went past a budget of 1 while the first was in flight: %+v %v", res, err)
+	}
+	close(ts.release)
+	<-done
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	if ts.calls["get_health/n2"] != 0 {
+		t.Fatal("the call past the budget was dispatched")
+	}
+}
+
+func TestSliceBudgetIsNotSpentByLedgerHits(t *testing.T) {
+	db, ledger := testLedger(t, filepath.Join(t.TempDir(), "keystone.db"))
+	defer db.Close()
+	id := newTask(t, db)
+	r := runner(newCountingToolset(), ledger)
+	r.MaxToolCalls = 2
+	s := beginSlice(t, r, id)
+	ctx := context.Background()
+	// n1 dispatched, n1 again served from the ledger (free), n2 dispatched.
+	for _, node := range []string{"n1", "n1", "n2"} {
+		if res, err := s.Call(ctx, "get_health", map[string]any{"node": node}); err != nil || res.Parked {
+			t.Fatalf("%s: %+v %v", node, res, err)
+		}
 	}
 }

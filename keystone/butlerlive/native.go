@@ -47,6 +47,10 @@ const nativeJobTimeout = 10 * time.Minute
 // never answers cannot hold the turn forever.
 const nativeToolTimeout = 2 * time.Minute
 
+// nativeStopWait bounds how long a turn whose caller went away waits for
+// its cancelled job to stop before parking the task anyway.
+const nativeStopWait = 10 * time.Second
+
 var nativeJobSeq atomic.Uint64
 
 // nativeRoute is the model route a Butler runs on, in the runtime's
@@ -124,9 +128,19 @@ func (bs *Butlers) runNative(ctx context.Context, runner *butler.Runner, p provi
 	st, err := bs.Native.Wait(ctx, id)
 	if err != nil {
 		// The person went away (or the request timed out). Stop the
-		// work rather than let it finish for nobody; the task keeps
-		// everything it verified.
+		// work rather than let it finish for nobody, and leave the task
+		// the way the Runner leaves it when its call is cancelled:
+		// parked, with every verified read kept, and not "running" with
+		// nobody driving it.
+		//
+		// The job is waited on first, boundedly, so no late hook of the
+		// stopped run can write to the ledger after it is parked.
 		_, _ = bs.Native.Cancel(context.Background(), id)
+		stopCtx, cancel := context.WithTimeout(context.Background(), nativeStopWait)
+		_, _ = bs.Native.Wait(stopCtx, id)
+		cancel()
+		_ = s.ModelEnded(false, nil)
+		_ = s.Unavailable("the request ended before the answer: " + err.Error())
 		return s.Transcript(), err
 	}
 

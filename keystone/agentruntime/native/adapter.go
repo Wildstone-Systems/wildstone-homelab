@@ -247,9 +247,24 @@ func (a *Adapter) Cancel(ctx context.Context, jobID string) (agentruntime.Status
 		a.mu.Unlock()
 		return st, nil
 	case j.status.State.Settled():
-		// Parked: nothing is running to stop.
+		// Parked: nothing is running to stop. The move to CANCELLED is
+		// made under the SAME lock hold that saw the job parked, so a
+		// Resume cannot slip in between, start a run, and have it
+		// reported cancelled while it carries on working. Once this
+		// unlocks the job is terminal and Resume refuses it.
+		now := time.Now()
+		j.status.State = agentruntime.StateCancelled
+		j.status.Reason = "cancelled"
+		j.status.Question, j.status.Output = "", ""
+		j.status.UpdatedAt, j.status.FinishedAt = now, now
 		a.mu.Unlock()
-		a.settle(j, agentruntime.StateCancelled, "cancelled", "", "", nil)
+		if err := a.record(context.Background(), j, agentruntime.AuditEvent{
+			Type: agentruntime.AuditJobState, State: agentruntime.StateCancelled, Detail: "cancelled",
+		}); err != nil {
+			a.mu.Lock()
+			j.status.Reason = "cancelled (audit unavailable: " + err.Error() + ")"
+			a.mu.Unlock()
+		}
 	default:
 		// cancelRun is always set before a job leaves the lock in a
 		// moving state (prepareLocked), so there is no window in which
@@ -433,6 +448,12 @@ func (a *Adapter) settle(j *job, state agentruntime.State, reason, question, out
 	if cur.Terminal() || (cur.Settled() && state != agentruntime.StateCancelled) {
 		a.mu.Unlock()
 		return
+	}
+	// Once a person has asked for a cancel, whatever breaks next — the
+	// process refusing to start on a dead context, its pipes closing as
+	// it is killed — is the cancel taking effect, not a failure.
+	if state == agentruntime.StateFailed && j.cancelling {
+		state, reason = agentruntime.StateCancelled, "cancelled"
 	}
 	now := time.Now()
 	j.status.State = state

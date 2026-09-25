@@ -179,6 +179,12 @@ func (s *Slice) Call(ctx context.Context, name string, input map[string]any) (To
 		s.mu.Unlock()
 		return ToolCallResult{Parked: true}, err
 	}
+	// The budget is RESERVED here, before the lock is released, and
+	// handed back below if nothing was dispatched. Counting only after
+	// the call returned let a call the runtime had abandoned (a tool
+	// that ignored its deadline) leave the count stale, so the next call
+	// passed the check too and the task went one past its cap.
+	s.start.toolsUsed++
 	s.calls++
 	id := fmt.Sprintf("native-%d", s.calls)
 	// A copy: toolCall writes into the map it is given, and the lock is
@@ -192,13 +198,18 @@ func (s *Slice) Call(ctx context.Context, name string, input map[string]any) (To
 	s.mu.Unlock()
 
 	if err := s.r.stillAuthorized(s.taskID, "tool dispatch"); err != nil {
+		s.mu.Lock()
+		s.start.toolsUsed--
+		s.mu.Unlock()
 		return ToolCallResult{}, err
 	}
 	rec, content, dispatched := s.r.toolCall(ctx, s.taskID, provider.ToolCall{ID: id, Name: name, Input: input}, verified)
 
 	s.mu.Lock()
-	if dispatched {
-		s.start.toolsUsed++
+	if !dispatched {
+		// Served from the ledger, or refused before it went out: it
+		// spent nothing, exactly as Run counts it.
+		s.start.toolsUsed--
 	}
 	s.tr.Audit.Calls = append(s.tr.Audit.Calls, rec)
 	if rec.Plan != nil {

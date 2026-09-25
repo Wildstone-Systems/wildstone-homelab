@@ -752,3 +752,45 @@ func TestJobModelRouteAndConversation(t *testing.T) {
 		}
 	}
 }
+
+// Cancel and Resume racing on a parked job: whichever wins, a job that
+// ends up CANCELLED has no run still working behind it.
+func TestParkedCancelAndResumeDoNotRace(t *testing.T) {
+	for i := 0; i < 20; i++ {
+		var calls sync.Map
+		tools := &toolHost{tools: map[string]func(context.Context, map[string]any) (agentruntime.ToolResult, error){
+			"lookup": func(_ context.Context, in map[string]any) (agentruntime.ToolResult, error) {
+				calls.Store(fmt.Sprint(in["n"]), true)
+				return agentruntime.ToolResult{Content: "ok"}, nil
+			},
+		}}
+		// First run parks; a resumed run would call tools forever.
+		var script []step
+		script = append(script, send(message{Type: msgWaiting, Question: "Which room?"}))
+		a := fakeAdapter(t, script)
+		id := fmt.Sprintf("race-%d", i)
+		startJob(t, a, id, tools, &auditLog{}, agentruntime.Limits{})
+		expectState(t, waitFor(t, a, id), agentruntime.StateWaitingForUser, "")
+
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() { defer wg.Done(); _, _ = a.Cancel(context.Background(), id) }()
+		go func() {
+			defer wg.Done()
+			_, _ = a.Resume(context.Background(), id, agentruntime.Event{Kind: agentruntime.EventUserReply, Text: "kitchen"})
+		}()
+		wg.Wait()
+		st := waitFor(t, a, id)
+		if st.State != agentruntime.StateCancelled {
+			// Resume won and Cancel then stopped the running job: still
+			// cancelled in the end, or parked again by the fake.
+			if !st.State.Settled() {
+				t.Fatalf("round %d: unsettled %s", i, st.State)
+			}
+			_, _ = a.Cancel(context.Background(), id)
+		}
+		if st, _ := a.Status(context.Background(), id); st.State != agentruntime.StateCancelled {
+			t.Fatalf("round %d: state %s after cancel", i, st.State)
+		}
+	}
+}

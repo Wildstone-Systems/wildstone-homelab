@@ -21,9 +21,17 @@ import (
 type scriptRuntime struct {
 	script func(ctx context.Context, j agentruntime.Job) agentruntime.Status
 
-	mu      sync.Mutex
-	started []agentruntime.Job
-	done    map[string]chan agentruntime.Status
+	mu        sync.Mutex
+	started   []agentruntime.Job
+	done      map[string]chan agentruntime.Status
+	cancelled map[string]chan struct{}
+}
+
+// stopped is closed when the job is cancelled; a script may select on it.
+func (r *scriptRuntime) stopped(id string) <-chan struct{} {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.cancelled[id]
 }
 
 func (r *scriptRuntime) Name() string { return "script" }
@@ -36,6 +44,10 @@ func (r *scriptRuntime) Start(ctx context.Context, j agentruntime.Job) (agentrun
 	}
 	ch := make(chan agentruntime.Status, 1)
 	r.done[j.ID] = ch
+	if r.cancelled == nil {
+		r.cancelled = map[string]chan struct{}{}
+	}
+	r.cancelled[j.ID] = make(chan struct{})
 	r.mu.Unlock()
 	go func() { ch <- r.script(context.Background(), j) }()
 	return agentruntime.Status{JobID: j.ID, State: agentruntime.StateQueued}, nil
@@ -47,6 +59,7 @@ func (r *scriptRuntime) Wait(ctx context.Context, id string) (agentruntime.Statu
 	r.mu.Unlock()
 	select {
 	case st := <-ch:
+		ch <- st // a job can be waited on more than once
 		return st, nil
 	case <-ctx.Done():
 		return agentruntime.Status{}, ctx.Err()
@@ -56,7 +69,16 @@ func (r *scriptRuntime) Wait(ctx context.Context, id string) (agentruntime.Statu
 func (r *scriptRuntime) Resume(context.Context, string, agentruntime.Event) (agentruntime.Status, error) {
 	return agentruntime.Status{}, errors.New("not used")
 }
-func (r *scriptRuntime) Cancel(context.Context, string) (agentruntime.Status, error) {
+func (r *scriptRuntime) Cancel(_ context.Context, id string) (agentruntime.Status, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if ch, ok := r.cancelled[id]; ok {
+		select {
+		case <-ch:
+		default:
+			close(ch)
+		}
+	}
 	return agentruntime.Status{}, nil
 }
 func (r *scriptRuntime) Status(context.Context, string) (agentruntime.Status, error) {
@@ -322,6 +344,40 @@ func TestNativeRoutes(t *testing.T) {
 		route, ok := nativeRoute(c.b)
 		if ok != c.ok || route.BaseURL != c.base {
 			t.Errorf("%s: %+v %v", name, route, ok)
+		}
+	}
+}
+
+// The person goes away mid-turn: the job is stopped, the open model
+// checkpoint is closed, and the task is parked — not left "running"
+// with nobody driving it.
+func TestANativeTurnWhoseCallerLeavesIsParked(t *testing.T) {
+	var rt *scriptRuntime
+	inModel := make(chan struct{})
+	f, rt := nativeFixture(t, func(ctx context.Context, j agentruntime.Job) agentruntime.Status {
+		if err := j.Hooks.BeforeModel(ctx); err != nil {
+			return failed(err)
+		}
+		close(inModel)
+		<-rt.stopped(j.ID) // a model call that never returns until cancelled
+		return agentruntime.Status{State: agentruntime.StateCancelled}
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { <-inModel; cancel() }()
+	ans, err := f.butlers.Serve(ctx, f.turn("alfred", "anything"))
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err %v, want the caller's cancellation", err)
+	}
+	if task := taskOf(t, f, ans.TaskID); task.State != runtimedb.ButlerTaskWaiting {
+		t.Fatalf("task %s, want waiting rather than running with nobody driving it", task.State)
+	}
+	steps, err := f.butlers.Ledger.Steps(ans.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, st := range steps {
+		if st.Kind == "model" && st.State != "failed" {
+			t.Fatalf("the interrupted model step was left %q", st.State)
 		}
 	}
 }
