@@ -92,7 +92,13 @@ func standardTools() *toolHost {
 			return agentruntime.ToolResult{Content: "lights are on"}, nil
 		},
 		"broken": func(context.Context, map[string]any) (agentruntime.ToolResult, error) {
-			return agentruntime.ToolResult{}, errors.New("backend down")
+			return agentruntime.ToolResult{Content: "error: backend down", Failed: true}, nil
+		},
+		"hostdown": func(context.Context, map[string]any) (agentruntime.ToolResult, error) {
+			return agentruntime.ToolResult{}, errors.New("authority withdrawn")
+		},
+		"spent": func(context.Context, map[string]any) (agentruntime.ToolResult, error) {
+			return agentruntime.ToolResult{Block: "this conversation's tool budget is used up"}, nil
 		},
 		"forbidden": func(context.Context, map[string]any) (agentruntime.ToolResult, error) {
 			return agentruntime.ToolResult{Content: "not permitted for you", Denied: true}, nil
@@ -596,5 +602,153 @@ func TestInstalledCommand(t *testing.T) {
 	want := []string{"/usr/lib/wildstone/native-agent/bin/node", "/usr/lib/wildstone/native-agent/main.mjs"}
 	if strings.Join(got, " ") != strings.Join(want, " ") {
 		t.Fatalf("InstalledCommand = %v, want %v (install.sh and build-native-agent.sh use this layout)", got, want)
+	}
+}
+
+// hookLog records hook calls and can refuse at one of them.
+type hookLog struct {
+	mu       sync.Mutex
+	calls    []string
+	refuseAt string
+}
+
+func (h *hookLog) note(s string) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.calls = append(h.calls, s)
+	if s == h.refuseAt {
+		return errors.New("privacy boundary closed")
+	}
+	return nil
+}
+
+func (h *hookLog) BeforeModel(context.Context) error { return h.note("before") }
+func (h *hookLog) AfterModel(_ context.Context, ok bool, tools []string) error {
+	return h.note(fmt.Sprintf("after:%v:%s", ok, strings.Join(tools, ",")))
+}
+func (h *hookLog) BeforeOutcome(_ context.Context, s agentruntime.State) error {
+	return h.note("outcome:" + string(s))
+}
+
+func (h *hookLog) seen() string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return strings.Join(h.calls, " ")
+}
+
+func startWithHooks(t *testing.T, a *Adapter, hooks agentruntime.Hooks) {
+	t.Helper()
+	if _, err := a.Start(context.Background(), agentruntime.Job{
+		ID: "h", Input: "hi", Recorder: &auditLog{}, Tools: standardTools(), Hooks: hooks,
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestHooksWrapEveryModelAttemptAndTheOutcome(t *testing.T) {
+	script := []step{
+		send(message{Type: msgTurn, Turn: 1, Attempt: 1}),
+		send(message{Type: msgModelDone, IsError: true}),
+		send(message{Type: msgTurn, Turn: 1, Attempt: 2}),
+		send(message{Type: msgModelDone, ToolCalls: []string{"lookup"}}),
+		{Call: call("lookup", `{}`)},
+		send(message{Type: msgTurn, Turn: 2, Attempt: 1}),
+		send(message{Type: msgModelDone}),
+		{FinalWithLastResult: true},
+	}
+	h := &hookLog{}
+	a := fakeAdapter(t, script)
+	startWithHooks(t, a, h)
+	st := waitFor(t, a, "h")
+	expectState(t, st, agentruntime.StateCompleted, "")
+	want := "before after:false: before after:true:lookup before after:true: outcome:COMPLETED"
+	if got := h.seen(); got != want {
+		t.Fatalf("hooks\n got %s\nwant %s", got, want)
+	}
+	if st.Turns != 2 {
+		t.Fatalf("a retry spent a turn: Turns = %d", st.Turns)
+	}
+}
+
+func TestHookRefusalStopsTheJob(t *testing.T) {
+	for _, at := range []string{"before", "after:true:", "outcome:COMPLETED"} {
+		t.Run(at, func(t *testing.T) {
+			h := &hookLog{refuseAt: at}
+			a := fakeAdapter(t, []step{
+				send(message{Type: msgTurn, Turn: 1, Attempt: 1}),
+				send(message{Type: msgModelDone}),
+				send(message{Type: msgFinal, Output: "the answer"}),
+			})
+			startWithHooks(t, a, h)
+			st := waitFor(t, a, "h")
+			expectState(t, st, agentruntime.StateFailed, "privacy boundary closed")
+			if st.Output != "" {
+				t.Fatal("a refused outcome was accepted")
+			}
+		})
+	}
+}
+
+func TestToolHostCanStopTheJob(t *testing.T) {
+	t.Run("an error fails it", func(t *testing.T) {
+		a := fakeAdapter(t, []step{{Call: call("hostdown", `{}`)}, {FinalWithLastResult: true}})
+		log := &auditLog{}
+		startJob(t, a, "j", standardTools(), log, agentruntime.Limits{})
+		expectState(t, waitFor(t, a, "j"), agentruntime.StateFailed, "authority withdrawn")
+		if !log.has(agentruntime.AuditToolFailed) {
+			t.Fatalf("audit %v", log.types())
+		}
+	})
+	t.Run("a block blocks it", func(t *testing.T) {
+		a := fakeAdapter(t, []step{{Call: call("spent", `{}`)}, {FinalWithLastResult: true}})
+		startJob(t, a, "j", standardTools(), &auditLog{}, agentruntime.Limits{})
+		expectState(t, waitFor(t, a, "j"), agentruntime.StateBlocked, "budget is used up")
+	})
+}
+
+func TestJobModelRouteAndConversation(t *testing.T) {
+	capture := filepath.Join(t.TempDir(), "capture.json")
+	a := fakeAdapter(t, []step{send(message{Type: msgFinal, Output: "ok"})}, fakeCaptureEnv+"="+capture)
+	_, err := a.Start(context.Background(), agentruntime.Job{
+		ID: "m", Input: "and now?", Recorder: &auditLog{},
+		Conversation: []agentruntime.Utterance{{Role: "user", Text: "hello"}, {Role: "assistant", Text: "hi"}},
+		Model: agentruntime.ModelRoute{
+			Protocol: agentruntime.ProtocolOpenAIChat, BaseURL: "http://ollama:11434/v1",
+			Model: "qwen3", Credential: "route-key",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, a, "m")
+	raw, _ := os.ReadFile(capture)
+	var got struct {
+		Start message  `json:"start"`
+		Env   []string `json:"env"`
+	}
+	_ = json.Unmarshal(raw, &got)
+	if got.Start.Model.BaseURL != "http://ollama:11434/v1" || got.Start.Model.Name != "qwen3" {
+		t.Fatalf("model %+v", got.Start.Model)
+	}
+	if len(got.Start.Conversation) != 2 || got.Start.Conversation[1].Text != "hi" {
+		t.Fatalf("conversation %+v", got.Start.Conversation)
+	}
+	var key string
+	for _, kv := range got.Env {
+		if strings.HasPrefix(kv, APIKeyEnv+"=") {
+			key = strings.TrimPrefix(kv, APIKeyEnv+"=")
+		}
+	}
+	if key != "route-key" {
+		t.Fatalf("sidecar got key %q, want the route's own", key)
+	}
+
+	for name, route := range map[string]agentruntime.ModelRoute{
+		"anthropic protocol": {Protocol: "anthropic-messages", Model: "x"},
+		"no model":           {Protocol: agentruntime.ProtocolOpenAIChat},
+	} {
+		if _, err := a.Start(context.Background(), agentruntime.Job{ID: name, Input: "x", Recorder: &auditLog{}, Model: route}); !errors.Is(err, agentruntime.ErrInvalidJob) {
+			t.Errorf("%s: %v", name, err)
+		}
 	}
 }

@@ -44,6 +44,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/chickenrat17/wildstone-homelab/keystone/agentruntime"
 	"github.com/chickenrat17/wildstone-homelab/keystone/butler"
 	"github.com/chickenrat17/wildstone-homelab/keystone/butler/provider"
 	"github.com/chickenrat17/wildstone-homelab/keystone/butlerstore"
@@ -238,6 +239,10 @@ type Butlers struct {
 	// them; it is not a place to choose.
 	Providers func(b runtimedb.Butler) (provider.Provider, error)
 	Gateways  Gateways
+	// Native, when set, is the agent runtime conversations run on
+	// (ADR-W039) for every Butler whose route it can speak. nil keeps
+	// every conversation on butler.Runner.
+	Native agentruntime.AgentRuntime
 	// Notifier delivers the one stalled-task notice. nil records the
 	// stall and messages nobody.
 	Notifier butler.StallNotifier

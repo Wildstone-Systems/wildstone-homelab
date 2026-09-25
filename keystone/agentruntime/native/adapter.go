@@ -316,7 +316,7 @@ func (a *Adapter) Health(ctx context.Context) agentruntime.Health {
 	defer cancel()
 	args := append(append([]string{}, a.cfg.Command[1:]...), "--health")
 	cmd := exec.CommandContext(cctx, a.cfg.Command[0], args...)
-	cmd.Env = a.childEnv()
+	cmd.Env = a.childEnv(nil)
 	out, err := cmd.Output()
 	var m message
 	switch {
@@ -345,6 +345,19 @@ func validate(spec agentruntime.Job) error {
 	if strings.TrimSpace(spec.Input) == "" {
 		return fmt.Errorf("%w: input is required", agentruntime.ErrInvalidJob)
 	}
+	if m := spec.Model; m != (agentruntime.ModelRoute{}) {
+		if m.Protocol != agentruntime.ProtocolOpenAIChat {
+			return fmt.Errorf("%w: the native runtime cannot speak model protocol %q", agentruntime.ErrInvalidJob, m.Protocol)
+		}
+		if strings.TrimSpace(m.Model) == "" {
+			return fmt.Errorf("%w: the model route names no model", agentruntime.ErrInvalidJob)
+		}
+	}
+	for _, u := range spec.Conversation {
+		if u.Role != "user" && u.Role != "assistant" {
+			return fmt.Errorf("%w: conversation role %q", agentruntime.ErrInvalidJob, u.Role)
+		}
+	}
 	if spec.Tools != nil {
 		for _, t := range spec.Tools.Specs() {
 			if t.Name == toolAskUser || t.Name == toolReportBlocked {
@@ -366,8 +379,9 @@ func (a *Adapter) pruneLocked(now time.Time) {
 
 // childEnv is the sidecar's whole environment: a short allowlist from
 // Keystone's (enough to find node and reach a model through a proxy),
-// the API key, and Config.Env.
-func (a *Adapter) childEnv() []string {
+// the API key — the job's own route's when it has one — and Config.Env.
+// j is nil for the self-check, which calls no model.
+func (a *Adapter) childEnv(j *job) []string {
 	pass := []string{
 		"PATH", "SYSTEMROOT", "TMPDIR", "TEMP", "TMP", "HOME",
 		"HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY", "https_proxy", "http_proxy", "no_proxy",
@@ -379,15 +393,22 @@ func (a *Adapter) childEnv() []string {
 			env = append(env, k+"="+v)
 		}
 	}
-	if a.cfg.Model.APIKey != "" {
-		env = append(env, APIKeyEnv+"="+a.cfg.Model.APIKey)
+	key := a.cfg.Model.APIKey
+	if j != nil && j.spec.Model != (agentruntime.ModelRoute{}) {
+		key = j.spec.Model.Credential
+	}
+	if key != "" {
+		env = append(env, APIKeyEnv+"="+key)
 	}
 	return append(env, a.cfg.Env...)
 }
 
-func (a *Adapter) modelSpec() *modelSpec {
+func (a *Adapter) modelSpec(j *job) *modelSpec {
 	if a.cfg.scriptedModel != nil {
 		return &modelSpec{Provider: "scripted", Script: a.cfg.scriptedModel}
+	}
+	if m := j.spec.Model; m != (agentruntime.ModelRoute{}) {
+		return &modelSpec{Provider: "openai", BaseURL: m.BaseURL, Name: m.Model, API: "chat_completions"}
 	}
 	return &modelSpec{Provider: "openai", BaseURL: a.cfg.Model.BaseURL, Name: a.cfg.Model.Name, API: a.cfg.Model.API}
 }
@@ -501,9 +522,9 @@ type run struct {
 	stderr  *tail
 }
 
-func (a *Adapter) spawn(ctx context.Context) (*run, error) {
+func (a *Adapter) spawn(ctx context.Context, j *job) (*run, error) {
 	cmd := exec.CommandContext(ctx, a.cfg.Command[0], a.cfg.Command[1:]...)
-	cmd.Env = a.childEnv()
+	cmd.Env = a.childEnv(j)
 	cmd.WaitDelay = 2 * time.Second
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -545,7 +566,7 @@ func (a *Adapter) drive(ctx context.Context, j *job, input string, history json.
 		return
 	}
 
-	r, err := a.spawn(ctx)
+	r, err := a.spawn(ctx, j)
 	if err != nil {
 		a.settle(j, agentruntime.StateFailed, "could not start the agent runtime: "+err.Error(), "", "", nil)
 		return
@@ -570,8 +591,9 @@ func (a *Adapter) drive(ctx context.Context, j *job, input string, history json.
 	start := message{
 		Type: msgStart, Protocol: ProtocolVersion, JobID: j.spec.ID,
 		Instructions: j.spec.Instructions + controlGuidance,
-		Input:        input, History: history, Tools: tools, Model: a.modelSpec(),
-		MaxTurns: lim.MaxTurns, HeartbeatMS: lim.HeartbeatInterval.Milliseconds(),
+		Input:        input, History: history, Tools: tools, Model: a.modelSpec(j),
+		Conversation: conversation(j.spec.Conversation, history),
+		MaxTurns:     lim.MaxTurns, HeartbeatMS: lim.HeartbeatInterval.Milliseconds(),
 	}
 	if err := r.enc.Encode(start); err != nil {
 		a.settle(j, agentruntime.StateFailed, "could not start the agent runtime: "+err.Error(), "", "", nil)
@@ -633,11 +655,33 @@ func (a *Adapter) drive(ctx context.Context, j *job, input string, history json.
 				a.touch(j, true, 0)
 			case msgTurn:
 				reset(turn, lim.TurnTimeout)
-				if why := j.guard.Turn(); why != "" {
-					a.settle(j, agentruntime.StateBlocked, why, "", "", nil)
-					return
+				// A retry is the same turn again, not a new one: it spends
+				// no turn budget, but it is checked like any attempt.
+				if m.Attempt <= 1 {
+					if why := j.guard.Turn(); why != "" {
+						a.settle(j, agentruntime.StateBlocked, why, "", "", nil)
+						return
+					}
 				}
 				a.touch(j, true, j.guard.Turns())
+				if h := j.spec.Hooks; h != nil {
+					if err := h.BeforeModel(ctx); err != nil {
+						a.settle(j, agentruntime.StateFailed, "model call refused: "+err.Error(), "", "", nil)
+						return
+					}
+				}
+				if err := r.enc.Encode(message{Type: msgProceed}); err != nil {
+					a.settle(j, agentruntime.StateFailed, "lost the agent runtime: "+err.Error(), "", "", nil)
+					return
+				}
+			case msgModelDone:
+				reset(turn, lim.TurnTimeout)
+				if h := j.spec.Hooks; h != nil {
+					if err := h.AfterModel(ctx, !m.IsError, m.ToolCalls); err != nil {
+						a.settle(j, agentruntime.StateFailed, "model answer refused: "+err.Error(), "", "", nil)
+						return
+					}
+				}
 			case msgInvalid:
 				if a.invalid(ctx, j, m.Name, m.CallID, m.Reason) {
 					return
@@ -658,12 +702,18 @@ func (a *Adapter) drive(ctx context.Context, j *job, input string, history json.
 					a.settle(j, agentruntime.StateBlocked, "the agent produced no answer and no next action", "", "", m.History)
 					return
 				}
+				if a.outcomeRefused(ctx, j, agentruntime.StateCompleted) {
+					return
+				}
 				a.settle(j, agentruntime.StateCompleted, "", "", m.Output, m.History)
 				return
 			case msgWaiting:
 				q := strings.TrimSpace(m.Question)
 				if q == "" {
 					a.settle(j, agentruntime.StateBlocked, "the agent asked for input without a question", "", "", m.History)
+					return
+				}
+				if a.outcomeRefused(ctx, j, agentruntime.StateWaitingForUser) {
 					return
 				}
 				a.settle(j, agentruntime.StateWaitingForUser, "", q, "", m.History)
@@ -673,11 +723,14 @@ func (a *Adapter) drive(ctx context.Context, j *job, input string, history json.
 				if why == "" {
 					why = "the agent reported it is blocked"
 				}
+				if a.outcomeRefused(ctx, j, agentruntime.StateBlocked) {
+					return
+				}
 				a.settle(j, agentruntime.StateBlocked, why, "", "", m.History)
 				return
 			case msgError:
 				if m.Kind == errKindMaxTurns {
-					a.settle(j, agentruntime.StateBlocked, "turn budget exhausted", "", "", m.History)
+					a.settle(j, agentruntime.StateBlocked, agentruntime.ReasonTurnBudget, "", "", m.History)
 					return
 				}
 				a.settle(j, agentruntime.StateFailed, fmt.Sprintf("agent runtime error (%s): %s", m.Kind, m.Message), "", "", nil)
@@ -688,6 +741,33 @@ func (a *Adapter) drive(ctx context.Context, j *job, input string, history json.
 			}
 		}
 	}
+}
+
+// outcomeRefused runs the BeforeOutcome hook, and settles the job
+// FAILED when it refuses. It reports whether it did.
+func (a *Adapter) outcomeRefused(ctx context.Context, j *job, s agentruntime.State) bool {
+	h := j.spec.Hooks
+	if h == nil {
+		return false
+	}
+	if err := h.BeforeOutcome(ctx, s); err != nil {
+		a.settle(j, agentruntime.StateFailed, "outcome refused: "+err.Error(), "", "", nil)
+		return true
+	}
+	return false
+}
+
+// conversation is what a run is told was said before its input. A
+// resumed run carries its own history instead, which already holds it.
+func conversation(us []agentruntime.Utterance, history json.RawMessage) []utterance {
+	if len(history) > 0 || len(us) == 0 {
+		return nil
+	}
+	out := make([]utterance, 0, len(us))
+	for _, u := range us {
+		out = append(out, utterance{Role: u.Role, Text: u.Text})
+	}
+	return out
 }
 
 // invalid records a malformed action. It returns true when the job has
@@ -744,7 +824,7 @@ func (a *Adapter) toolCall(ctx context.Context, j *job, r *run, known map[string
 	}
 
 	a.setState(j, agentruntime.StateWaitingForTool)
-	res, auditType, detail := a.execute(ctx, j, m.Name, input)
+	res, auditType, detail, hostErr := a.execute(ctx, j, m.Name, input)
 	a.setState(j, agentruntime.StateRunning)
 	if ctx.Err() != nil {
 		// Cancelled or timed out mid-call; drive's ctx branch settles.
@@ -753,6 +833,14 @@ func (a *Adapter) toolCall(ctx context.Context, j *job, r *run, known map[string
 	}
 	if err := a.record(ctx, j, agentruntime.AuditEvent{Type: auditType, Tool: m.Name, CallID: m.CallID, Detail: detail}); err != nil {
 		a.settle(j, agentruntime.StateFailed, "audit unavailable: "+err.Error(), "", "", nil)
+		return true
+	}
+	if hostErr != nil {
+		a.settle(j, agentruntime.StateFailed, "the tool host stopped the job: "+hostErr.Error(), "", "", nil)
+		return true
+	}
+	if res.Block != "" {
+		a.settle(j, agentruntime.StateBlocked, res.Block, "", "", nil)
 		return true
 	}
 	failed := res.Denied || res.Failed
@@ -765,8 +853,9 @@ func (a *Adapter) toolCall(ctx context.Context, j *job, r *run, known map[string
 
 // execute runs the call under the tool timeout. A tool that ignores its
 // context is abandoned rather than waited on: the job moves on, and the
-// audit trail says the outcome is unknown.
-func (a *Adapter) execute(ctx context.Context, j *job, name string, input map[string]any) (agentruntime.ToolResult, string, string) {
+// audit trail says the outcome is unknown. A non-nil error is the host
+// saying the job must stop.
+func (a *Adapter) execute(ctx context.Context, j *job, name string, input map[string]any) (agentruntime.ToolResult, string, string, error) {
 	tctx, cancel := context.WithTimeout(ctx, j.limits.ToolTimeout)
 	defer cancel()
 	type result struct {
@@ -782,21 +871,22 @@ func (a *Adapter) execute(ctx context.Context, j *job, name string, input map[st
 	case out := <-done:
 		switch {
 		case out.err != nil:
-			return agentruntime.ToolResult{Content: "error: " + name + " could not be run", Failed: true},
-				agentruntime.AuditToolFailed, out.err.Error()
+			return agentruntime.ToolResult{}, agentruntime.AuditToolFailed, out.err.Error(), out.err
+		case out.res.Block != "":
+			return out.res, agentruntime.AuditToolDenied, out.res.Block, nil
 		case out.res.Denied:
-			return out.res, agentruntime.AuditToolDenied, out.res.Content
+			return out.res, agentruntime.AuditToolDenied, out.res.Content, nil
 		case out.res.Failed:
-			return out.res, agentruntime.AuditToolFailed, ""
+			return out.res, agentruntime.AuditToolFailed, "", nil
 		default:
-			return out.res, agentruntime.AuditToolResult, ""
+			return out.res, agentruntime.AuditToolResult, "", nil
 		}
 	case <-tctx.Done():
 		return agentruntime.ToolResult{
 				Content: fmt.Sprintf("error: %s timed out after %s; its outcome is unknown", name, j.limits.ToolTimeout),
 				Failed:  true,
 			}, agentruntime.AuditToolTimeout,
-			"outcome unknown after " + j.limits.ToolTimeout.String()
+			"outcome unknown after " + j.limits.ToolTimeout.String(), nil
 	}
 }
 

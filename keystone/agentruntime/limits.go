@@ -43,6 +43,11 @@ type Limits struct {
 	MaxInvalidActions int
 }
 
+// ReasonTurnBudget is the BLOCKED reason when a run spends its turn
+// budget. It is a pause rather than a problem — the agent was still
+// working — so callers may treat it as "say continue".
+const ReasonTurnBudget = "turn budget exhausted"
+
 // DefaultLimits are conservative values for a conversational job.
 var DefaultLimits = Limits{
 	JobTimeout:        10 * time.Minute,
@@ -123,7 +128,7 @@ func (g *Guard) NewRun() {
 func (g *Guard) Turn() (blocked string) {
 	g.turns++
 	if g.turns > g.limits.MaxTurns {
-		return "turn budget exhausted"
+		return ReasonTurnBudget
 	}
 	return ""
 }

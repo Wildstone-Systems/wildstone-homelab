@@ -88,8 +88,59 @@ export class ToolBridge {
 }
 
 /**
- * Wraps the real model to report each turn, and each malformed tool call
- * the SDK would otherwise handle silently, to Keystone.
+ * Holds each model attempt until Keystone says proceed. Keystone checks
+ * its own boundaries (authority, privacy, fencing) in between; if it
+ * refuses, it stops this process and the promise never resolves.
+ */
+export class ModelGate {
+  private waiting: (() => void) | undefined;
+
+  constructor(private readonly send: Send, private readonly signal: AbortSignal) {}
+
+  ask(turn: number, attempt: number): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      if (this.signal.aborted) {
+        reject(new Error('cancelled'));
+        return;
+      }
+      const onAbort = () => {
+        this.waiting = undefined;
+        reject(new Error('cancelled'));
+      };
+      this.signal.addEventListener('abort', onAbort, { once: true });
+      this.waiting = () => {
+        this.signal.removeEventListener('abort', onAbort);
+        resolve();
+      };
+      this.send({ type: 'turn', turn, attempt });
+    });
+  }
+
+  /** Keystone's proceed. Returns false when nothing was waiting. */
+  proceed(): boolean {
+    const go = this.waiting;
+    if (!go) return false;
+    this.waiting = undefined;
+    go();
+    return true;
+  }
+}
+
+/** How many times one model call is retried, each attempt gated. */
+export const MODEL_RETRIES = 1;
+
+function retryable(err: unknown): boolean {
+  const status = (err as { status?: unknown } | null)?.status;
+  // No status: a network failure or a timeout. 429 and 5xx: the provider
+  // is busy or broken. Anything else is the request's fault and would
+  // fail the same way again.
+  return typeof status !== 'number' || status === 429 || status >= 500;
+}
+
+/**
+ * Wraps the real model. Every attempt waits for Keystone's go-ahead and
+ * reports how it ended; each malformed tool call the SDK would otherwise
+ * handle silently is reported too.
  */
 export class ReportingModel implements Model {
   private turns = 0;
@@ -98,19 +149,36 @@ export class ReportingModel implements Model {
     private readonly inner: Model,
     private readonly send: Send,
     private readonly known: Set<string>,
+    private readonly gate: ModelGate,
+    private readonly signal: AbortSignal,
+    private readonly backoffMs = 1000,
   ) {}
 
   async getResponse(request: ModelRequest): Promise<ModelResponse> {
-    this.send({ type: 'turn', turn: ++this.turns });
-    const response = await this.inner.getResponse(request);
-    for (const item of response.output) {
-      if (item.type !== 'function_call') continue;
-      const reason = invalidReason(item.name, item.arguments, this.known);
-      if (reason) {
-        this.send({ type: 'invalid_action', call_id: item.callId, name: item.name, reason });
+    const turn = ++this.turns;
+    for (let attempt = 1; ; attempt++) {
+      await this.gate.ask(turn, attempt);
+      let response: ModelResponse;
+      try {
+        response = await this.inner.getResponse(request);
+      } catch (err) {
+        this.send({ type: 'model_done', is_error: true });
+        if (this.signal.aborted || attempt > MODEL_RETRIES || !retryable(err)) throw err;
+        await new Promise((r) => setTimeout(r, this.backoffMs * attempt));
+        continue;
       }
+      const calls: string[] = [];
+      for (const item of response.output) {
+        if (item.type !== 'function_call') continue;
+        calls.push(item.name);
+        const reason = invalidReason(item.name, item.arguments, this.known);
+        if (reason) {
+          this.send({ type: 'invalid_action', call_id: item.callId, name: item.name, reason });
+        }
+      }
+      this.send({ type: 'model_done', tool_calls: calls.sort() });
+      return response;
     }
-    return response;
   }
 
   getStreamedResponse(): never {
@@ -172,7 +240,9 @@ export async function runJob(
   model: Model,
   send: Send,
   bridge: ToolBridge,
+  gate: ModelGate,
   signal: AbortSignal,
+  backoffMs = 1000,
 ): Promise<void> {
   const specs = start.tools ?? [];
   const known = new Set<string>([TOOL_ASK_USER, TOOL_REPORT_BLOCKED, ...specs.map((s) => s.name)]);
@@ -205,15 +275,21 @@ export async function runJob(
   const agent = new Agent({
     name: 'wildstone-native',
     instructions: start.instructions,
-    model: new ReportingModel(model, send, known),
+    model: new ReportingModel(model, send, known, gate, signal, backoffMs),
     tools: [...specs.map((s) => wildstoneTool(s, bridge)), ...controlTools],
     toolUseBehavior: { stopAtToolNames: [TOOL_ASK_USER, TOOL_REPORT_BLOCKED] },
   });
 
-  const input: string | AgentInputItem[] =
+  const earlier: AgentInputItem[] =
     start.history && start.history.length > 0
-      ? [...(start.history as AgentInputItem[]), { type: 'message', role: 'user', content: start.input }]
-      : start.input;
+      ? (start.history as AgentInputItem[])
+      : (start.conversation ?? []).map((u): AgentInputItem =>
+          u.role === 'assistant'
+            ? { type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: u.text }] }
+            : { type: 'message', role: 'user', content: u.text },
+        );
+  const input: string | AgentInputItem[] =
+    earlier.length > 0 ? [...earlier, { type: 'message', role: 'user', content: start.input }] : start.input;
 
   const fail = (kind: ErrorKind, err: unknown) =>
     send({ type: 'error', kind, message: bound(err instanceof Error ? err.message : String(err), MAX_ERROR_TEXT) });

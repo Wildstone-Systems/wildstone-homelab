@@ -12,18 +12,27 @@ import (
 // conversation history travels as an opaque JSON value that only the
 // sidecar reads.
 //
-// Keystone → sidecar: start, tool_result, cancel.
-// Sidecar → Keystone: ready, heartbeat, turn, tool_call, invalid_action,
-// and exactly one outcome — final, waiting_for_user, blocked or error.
+// Keystone → sidecar: start, proceed, tool_result, cancel.
+// Sidecar → Keystone: ready, heartbeat, turn, model_done, tool_call,
+// invalid_action, and exactly one outcome — final, waiting_for_user,
+// blocked or error.
+//
+// A turn message is a REQUEST: the sidecar sends one before every model
+// attempt, retries included, and makes the call only after Keystone
+// answers proceed. That is where the platform's own boundaries —
+// authority, privacy, fencing — are checked on a loop it does not run.
+// model_done reports how the attempt ended.
 //
 // The TypeScript side is runtimes/native-agent/src/protocol.ts. Bump
 // ProtocolVersion on both sides together when a message changes shape.
-const ProtocolVersion = 1
+const ProtocolVersion = 2
 
 const (
 	msgStart     = "start"
 	msgToolRes   = "tool_result"
 	msgCancel    = "cancel"
+	msgProceed   = "proceed"
+	msgModelDone = "model_done"
 	msgReady     = "ready"
 	msgHeartbeat = "heartbeat"
 	msgTurn      = "turn"
@@ -61,6 +70,12 @@ type modelSpec struct {
 	Script json.RawMessage `json:"script,omitempty"`
 }
 
+// utterance is one earlier message of the conversation, as plain text.
+type utterance struct {
+	Role string `json:"role"`
+	Text string `json:"text"`
+}
+
 // message is every protocol message; Type says which fields apply.
 type message struct {
 	Type     string `json:"type"`
@@ -68,6 +83,7 @@ type message struct {
 
 	// start
 	JobID        string                  `json:"job_id,omitempty"`
+	Conversation []utterance             `json:"conversation,omitempty"`
 	Instructions string                  `json:"instructions,omitempty"`
 	Input        string                  `json:"input,omitempty"`
 	History      json.RawMessage         `json:"history,omitempty"`
@@ -83,12 +99,16 @@ type message struct {
 	IsError   bool   `json:"is_error,omitempty"`
 
 	// outcomes and ready
-	Output        string `json:"output,omitempty"`
-	Question      string `json:"question,omitempty"`
-	Reason        string `json:"reason,omitempty"`
-	Kind          string `json:"kind,omitempty"`
-	Message       string `json:"message,omitempty"`
-	Turn          int    `json:"turn,omitempty"`
-	Engine        string `json:"engine,omitempty"`
-	EngineVersion string `json:"engine_version,omitempty"`
+	Output   string `json:"output,omitempty"`
+	Question string `json:"question,omitempty"`
+	Reason   string `json:"reason,omitempty"`
+	Kind     string `json:"kind,omitempty"`
+	Message  string `json:"message,omitempty"`
+	Turn     int    `json:"turn,omitempty"`
+	Attempt  int    `json:"attempt,omitempty"`
+	// model_done: the attempt failed when IsError; otherwise ToolCalls
+	// names what the model asked for.
+	ToolCalls     []string `json:"tool_calls,omitempty"`
+	Engine        string   `json:"engine,omitempty"`
+	EngineVersion string   `json:"engine_version,omitempty"`
 }

@@ -82,6 +82,59 @@ type Job struct {
 	Recorder Recorder
 	// Limits are the guardrails. Zero fields take DefaultLimits.
 	Limits Limits
+	// Conversation is what was said before Input, oldest first: the
+	// person's and the agent's TEXT only. Tool traffic from earlier
+	// turns is deliberately not carried (ADR-W027).
+	Conversation []Utterance
+	// Model is the route this job's reasoning runs on. Zero means the
+	// runtime's own default.
+	Model ModelRoute
+	// Hooks are the caller's checkpoints around the loop. Nil means none.
+	Hooks Hooks
+}
+
+// Utterance is one earlier message in a conversation.
+type Utterance struct {
+	// Role is "user" or "assistant".
+	Role string
+	Text string
+}
+
+// ModelRoute says which model a job reasons with. It describes a wire
+// protocol, not a vendor: a runtime that cannot speak Protocol refuses
+// the job rather than guessing.
+type ModelRoute struct {
+	// Protocol is the API the endpoint speaks. ProtocolOpenAIChat is
+	// the one every runtime here understands.
+	Protocol string
+	// BaseURL is the endpoint, e.g. https://api.openai.com/v1 or
+	// http://ollama:11434/v1.
+	BaseURL string
+	// Model is the provider's own name for the model.
+	Model string
+	// Credential is the API key, or "". It is a secret: runtimes pass
+	// it only through channels that are not logged.
+	Credential string
+}
+
+// ProtocolOpenAIChat is the OpenAI Chat Completions API, which OpenAI,
+// OpenRouter, Ollama (at /v1) and most local servers speak.
+const ProtocolOpenAIChat = "openai-chat"
+
+// Hooks are checkpoints a caller runs around a runtime's loop. They let
+// the platform keep its own boundaries — authorization, privacy,
+// coordinator fencing, durable checkpoints — on a loop it does not run.
+// An error from any hook stops the job: FAILED, with the error as the
+// reason, and the thing it guarded does not happen.
+type Hooks interface {
+	// BeforeModel runs before EVERY model attempt, retries included.
+	BeforeModel(ctx context.Context) error
+	// AfterModel runs when an attempt ends. ok is false when it failed;
+	// toolCalls names the tools the model asked for when it succeeded.
+	AfterModel(ctx context.Context, ok bool, toolCalls []string) error
+	// BeforeOutcome runs before a runtime's outcome (an answer, a
+	// question, a blocked report) is accepted.
+	BeforeOutcome(ctx context.Context, s State) error
 }
 
 // EventKind names what Resume is being told.

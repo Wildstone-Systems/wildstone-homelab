@@ -14,6 +14,10 @@
 #          [--node-id <id>] [--skip-docker] [--version vX.Y.Z]
 #   --wallpaper-dir overrides the pictures the themes ship with, the
 #   same way --console-dir overrides the Console.
+#   --agent-runtime native runs Butler conversations on the native agent
+#   runtime (the OpenAI Agents SDK, ADR-W039) for Butlers on OpenAI-
+#   compatible and Ollama models; legacy (the default) keeps them all on
+#   Keystone's own loop. The runtime itself is always installed.
 #
 #   Either role also takes [--artifact-dir <dir>] to install from local
 #   release artifacts instead of downloading (private repos, air-gap),
@@ -60,6 +64,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ARTIFACT_DIR=""
 CONSOLE_DIR=""
 CATALOG_DIR=""
+AGENT_RUNTIME=""
 WALLPAPER_DIR=""
 KEYSTONE_ARGS=""
 KEYSTONE_ARGS_SET=0
@@ -128,7 +133,7 @@ ask_yes_no() {
 }
 
 usage() {
-  sed -n '2,47p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,51p' "$0" | sed 's/^# \{0,1\}//'
   exit 2
 }
 
@@ -145,6 +150,7 @@ while [ $# -gt 0 ]; do
     --catalog-dir)    CATALOG_DIR="$2"; shift 2 ;;
     --wallpaper-dir)  WALLPAPER_DIR="$2"; shift 2 ;;
     --keystone-arg)   KEYSTONE_ARGS="$KEYSTONE_ARGS $2"; KEYSTONE_ARGS_SET=1; shift 2 ;;
+    --agent-runtime)  AGENT_RUNTIME="$2"; shift 2 ;;
     --token)          TOKEN="$2"; shift 2 ;;
     --tailscale-authkey)  TAILSCALE_AUTHKEY="$2"; shift 2 ;;
     --tailscale-hostname) TAILSCALE_HOSTNAME="$2"; shift 2 ;;
@@ -1691,6 +1697,16 @@ if [ "$ROLE" = keystone ]; then
   # flag package takes the LAST occurrence and reports nothing, so the
   # override would not even announce itself — the audit instance would
   # simply come up on the wrong interface.
+  # Only when asked: an upgrade without --agent-runtime keeps whatever
+  # the env file already says, like every other flag here.
+  if [ -n "$AGENT_RUNTIME" ]; then
+    case "$AGENT_RUNTIME" in
+      legacy|native) ;;
+      *) fail "--agent-runtime must be legacy or native, not '$AGENT_RUNTIME'" ;;
+    esac
+    KEYSTONE_ARGS="$KEYSTONE_ARGS -agent-runtime $AGENT_RUNTIME"
+    KEYSTONE_ARGS_SET=1
+  fi
   if [ -n "${HOUSEHOLD_TZ:-}" ] && ! keystone_arg_named -household-timezone; then
     KEYSTONE_ARGS="$KEYSTONE_ARGS -household-timezone $HOUSEHOLD_TZ"
     KEYSTONE_ARGS_SET=1

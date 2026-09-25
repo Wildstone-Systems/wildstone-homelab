@@ -32,8 +32,9 @@ Before this change the Butler's loop was written by hand, in Go.
   hand-written HTTP clients for Anthropic, OpenAI-compatible servers and
   Ollama.
 
-This ADR does not remove that code. `Runner` keeps serving live Butler
-traffic until the native runtime is switched on for it (see Follow-up).
+This ADR does not remove that code. `Runner` stays the default loop, and
+still serves every route the native runtime cannot speak (see Butler
+conversations).
 
 ## States
 
@@ -145,13 +146,84 @@ It talks to Keystone over newline-delimited JSON on stdin and stdout
 - `native/sidecar_e2e_test.go` runs the real sidecar with the real SDK and a
   scripted model. It includes the formerly stalling case: a model that keeps
   calling the same tool now ends `BLOCKED`.
+- `butlerstore/slice_test.go` runs `butler.Slice` against the real ledger:
+  - evidence;
+  - verified-read reuse;
+  - the budget park;
+  - question, blocked, pause and outage waits;
+  - failed-attempt fencing;
+  - withdrawn authority.
+- `butlerlive/native_test.go` runs `Serve` on a scripted runtime. It covers
+  route selection, every outcome, withdrawn authority, and an audit trail
+  with no detail text.
+- `butlerlive/native_e2e_test.go` runs a whole Butler conversation through
+  the real sidecar and SDK, over HTTP to a fake Ollama `/v1` server.
 - CI runs all three (the `native-agent` job).
+
+## Butler conversations
+
+Which loop drives a Butler conversation is a deployment choice. The model is
+still only ever the one the Butler was assigned (ADR-W031 A2/A6).
+
+- **Turning it on:** `keystone -agent-runtime=native`, or
+  `install.sh --agent-runtime native`, which writes the flag into
+  `/etc/wildstone/keystone.env`. The default is `legacy`.
+- **Which Butlers use it:** Butlers on OpenAI, OpenRouter, OpenAI-compatible
+  and Ollama routes. Ollama is reached through its OpenAI-compatible `/v1`
+  endpoint. Anthropic routes stay on `Runner`.
+- **If the runtime is missing or fails its self-check:** Keystone logs an
+  error at startup and every conversation stays on `Runner`. A broken
+  sidecar never stops the control plane.
+
+### What does not change
+
+Moving the loop does not change the ledger, authority, privacy or the tools.
+`butler.Slice` is the Runner's own code with the loop taken out. `Runner.Run`
+and `Slice` share the slice start (`begin`), final-answer acceptance
+(`finish`), the budget park and the pause. `butlerlive/native.go` wires them
+to the runtime:
+
+- **Before every model attempt, retries included,** the runtime's
+  `BeforeModel` hook runs three checks:
+  1. the turn's privacy policy (`PrivacyTurn.Check`);
+  2. the task's authority;
+  3. the coordinator fence.
+
+  It then records a model step and attempt.
+- **Retries.** The sidecar's OpenAI client does no retries of its own. The
+  sidecar retries once itself, and every attempt asks Keystone first
+  (protocol v2 `turn` → `proceed`).
+- **After each attempt,** `AfterModel` closes the checkpoint. A failed
+  attempt fences the task's attempts. A successful one is accepted only if
+  this coordinator still holds the database and the privacy policy still
+  allows it.
+- **Before an outcome is accepted,** `BeforeOutcome` re-checks privacy.
+- **Every tool call** goes through `Slice.Call`, so the same things apply as
+  on `Runner`:
+  - the aggregate budget;
+  - the dispatch authority check;
+  - verified-read reuse from the ledger;
+  - effect receipts.
+- **How each outcome maps onto the ledger:**
+
+  | Outcome | What happens |
+  |---|---|
+  | `COMPLETED` | The objective check runs, then completion with evidence. |
+  | `WAITING_FOR_USER` | The task waits for a reply, and the question is the answer. |
+  | `BLOCKED` on the turn budget | Pause ("say continue"). |
+  | Other `BLOCKED` | The task waits for a reply, with the reason shown. |
+  | `FAILED` | The task waits as model-unavailable, and the stalled-task notice is sent. |
+  | A refused boundary | The turn fails with that error. |
+
+- **The audit trail** goes to the event stream as structure only: job,
+  tool, state and actor. It never carries detail text, because a detail can
+  hold what the model said about a private conversation.
+
+Conversations are sent as a fresh job each turn: the earlier turns' text
+travels in `Job.Conversation`, as `Runner.History` does, and a parked task
+resumes on the next message exactly as it does on `Runner`.
 
 ## Follow-up
 
-1. Switch `butlerlive` to the native runtime behind a per-deployment
-   setting. This needs a `Recorder` over the Butler task ledger, so native
-   runs keep ADR-W030's durable evidence and fencing. The sidecar is already
-   installed at `native.DefaultInstallDir` (see Packaging).
-2. Hermes and OpenClaw adapters implement `AgentRuntime`, reusing
-   `agentruntime.Guard` so every runtime stops for the same reasons.
+- Hermes and OpenClaw adapters implement `AgentRuntime`, reusing
+  `agentruntime.Guard` so every runtime stops for the same reasons.

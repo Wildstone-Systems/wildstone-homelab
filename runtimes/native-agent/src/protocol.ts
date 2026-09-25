@@ -1,10 +1,14 @@
 // The sidecar protocol: newline-delimited JSON on stdin (from Keystone)
 // and stdout (to Keystone), one message per line.
 //
+// A turn message is a request: before every model attempt, retries
+// included, the sidecar sends one and waits for Keystone's proceed.
+// model_done reports how the attempt ended.
+//
 // This file mirrors keystone/agentruntime/native/protocol.go. Bump
 // PROTOCOL_VERSION on both sides together when a message changes shape.
 
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 2;
 
 // Control tools added to every agent. Keystone refuses Wildstone tools
 // that would shadow them.
@@ -33,6 +37,8 @@ export type StartMessage = {
   input: string;
   // Opaque to Keystone: whatever a previous run of this sidecar returned.
   history?: unknown[];
+  // Earlier turns as plain text, when there is no history.
+  conversation?: { role: 'user' | 'assistant'; text: string }[];
   tools?: ToolSpec[];
   model: ModelSpec;
   max_turns: number;
@@ -48,7 +54,9 @@ export type ToolResultMessage = {
 
 export type CancelMessage = { type: 'cancel' };
 
-export type Inbound = StartMessage | ToolResultMessage | CancelMessage;
+export type ProceedMessage = { type: 'proceed' };
+
+export type Inbound = StartMessage | ToolResultMessage | CancelMessage | ProceedMessage;
 
 export type ErrorKind =
   | 'max_turns'
@@ -66,7 +74,8 @@ export type Outbound =
       engine_version: string;
     }
   | { type: 'heartbeat' }
-  | { type: 'turn'; turn: number }
+  | { type: 'turn'; turn: number; attempt: number }
+  | { type: 'model_done'; is_error?: boolean; tool_calls?: string[] }
   | { type: 'tool_call'; call_id: string; name: string; arguments: string }
   | { type: 'invalid_action'; call_id: string; name: string; reason: string }
   | { type: 'final'; output: string; history: unknown[] }

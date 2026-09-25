@@ -11,7 +11,7 @@ import OpenAI from 'openai';
 
 import { PROTOCOL_VERSION, type Inbound, type ModelSpec, type Outbound, type StartMessage } from './protocol.js';
 import { ScriptedModel, type ScriptStep } from './scripted.js';
-import { ToolBridge, runJob } from './sidecar.js';
+import { ModelGate, ToolBridge, runJob } from './sidecar.js';
 
 // stdout is the protocol. Anything a library logs goes to stderr, where
 // Keystone keeps a short tail for diagnostics.
@@ -56,8 +56,10 @@ function buildModel(spec: ModelSpec, env: NodeJS.ProcessEnv): Model {
     // still insists on a value.
     apiKey: env[API_KEY_ENV] || 'unused',
     baseURL: spec.base_url || undefined,
-    // Bounded: Keystone's turn timeout is the real ceiling.
-    maxRetries: 2,
+    // No retries inside the client: each retry is a new model attempt,
+    // and every attempt must be let through by Keystone first
+    // (ReportingModel retries, through the gate).
+    maxRetries: 0,
   });
   return spec.api === 'responses'
     ? new OpenAIResponsesModel(client, spec.name)
@@ -72,6 +74,7 @@ async function main(): Promise<number> {
 
   const abort = new AbortController();
   const bridge = new ToolBridge(send, abort.signal);
+  const gate = new ModelGate(send, abort.signal);
   let started: Promise<void> | undefined;
   let heartbeat: NodeJS.Timeout | undefined;
 
@@ -97,11 +100,14 @@ async function main(): Promise<number> {
           }
           send(ready());
           heartbeat = setInterval(() => send({ type: 'heartbeat' }), Math.max(250, m.heartbeat_ms || 5000));
-          started = start(m, bridge, abort.signal).finally(resolve);
+          started = start(m, bridge, gate, abort.signal).finally(resolve);
           return;
         }
         case 'tool_result':
           bridge.resolve(m);
+          return;
+        case 'proceed':
+          gate.proceed();
           return;
         case 'cancel':
           abort.abort();
@@ -120,7 +126,7 @@ async function main(): Promise<number> {
   return 0;
 }
 
-async function start(m: StartMessage, bridge: ToolBridge, signal: AbortSignal): Promise<void> {
+async function start(m: StartMessage, bridge: ToolBridge, gate: ModelGate, signal: AbortSignal): Promise<void> {
   let model: Model;
   try {
     model = buildModel(m.model, process.env);
@@ -128,7 +134,7 @@ async function start(m: StartMessage, bridge: ToolBridge, signal: AbortSignal): 
     send({ type: 'error', kind: 'internal', message: err instanceof Error ? err.message : String(err) });
     return;
   }
-  await runJob(m, model, send, bridge, signal);
+  await runJob(m, model, send, bridge, gate, signal);
 }
 
 main().then(

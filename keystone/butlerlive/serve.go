@@ -148,7 +148,18 @@ func (bs *Butlers) Serve(ctx context.Context, t Turn) (Answer, error) {
 		History:         t.History,
 	}
 
-	tr, err := runner.Run(ctx, p, task.ID, t.Text)
+	// The loop that drives this turn. The native agent runtime when this
+	// deployment runs it and the Butler's route is one it can speak;
+	// the Runner otherwise. Either way the same model, the same tools
+	// and the same ledger (see native.go).
+	var tr *butler.Transcript
+	loop := "runner"
+	if route, ok := bs.nativeRouteFor(b); ok {
+		loop = "native"
+		tr, err = bs.runNative(ctx, runner, p, privacy, route, task.ID, t)
+	} else {
+		tr, err = runner.Run(ctx, p, task.ID, t.Text)
+	}
 	answer := bs.blank(b)
 	answer.TaskID = task.ID
 	answer.Resumed = resumed
@@ -165,7 +176,7 @@ func (bs *Butlers) Serve(ctx context.Context, t Turn) (Answer, error) {
 		// something if it is written down somewhere a person can read.
 		bs.Log.Info("butler answered", "butler", b.Name, "model", b.Model,
 			"answers_as", b.ProviderModel, "kind", b.ModelKind, "task", task.ID,
-			"member", t.Member, "resumed", resumed)
+			"member", t.Member, "resumed", resumed, "loop", loop)
 	}
 	return answer, nil
 }

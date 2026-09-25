@@ -23,6 +23,11 @@ type ToolResult struct {
 	Denied bool
 	// Failed is true when the tool ran and errored.
 	Failed bool
+	// Block, when set, stops the job: BLOCKED, with Block as the reason,
+	// and the model is not told anything further. A host uses it when
+	// the job must not continue without a person — a spent budget, an
+	// outcome it could not confirm.
+	Block string
 }
 
 // ToolHost is the Wildstone tool surface a runtime drives. It is the
@@ -33,7 +38,9 @@ type ToolHost interface {
 	// use right now.
 	Specs() []ToolSpec
 	// Call authorizes and runs one tool. A refusal is a result
-	// (Denied), not an error; an error means the host itself broke.
+	// (Denied), not an error. An error means the job must not continue
+	// at all — the host broke, or the authority behind the whole job was
+	// withdrawn — and ends it FAILED.
 	Call(ctx context.Context, name string, input map[string]any) (ToolResult, error)
 }
 

@@ -186,7 +186,7 @@ jobs:
         run: |
           WILDSTONE_NATIVE_AGENT_NODE="$RUNNER_TEMP/native-agent/bin/node" \
           WILDSTONE_NATIVE_AGENT_SIDECAR="$RUNNER_TEMP/native-agent/main.mjs" \
-            go -C keystone test -race -count=1 -run '^TestE2E' -v ./agentruntime/native
+            go -C keystone test -race -count=1 -run '^TestE2E' -v ./agentruntime/native ./butlerlive
         env:
           CGO_ENABLED: "1"
 

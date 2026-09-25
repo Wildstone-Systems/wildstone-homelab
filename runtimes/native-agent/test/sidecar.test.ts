@@ -3,7 +3,7 @@ import { test } from 'node:test';
 
 import { PROTOCOL_VERSION, type Outbound, type StartMessage } from '../src/protocol.js';
 import { ScriptedModel, type ScriptStep } from '../src/scripted.js';
-import { ToolBridge, runJob } from '../src/sidecar.js';
+import { ModelGate, ToolBridge, runJob } from '../src/sidecar.js';
 
 const lookup = {
   name: 'lookup',
@@ -38,14 +38,19 @@ async function drive(
 ): Promise<Outbound[]> {
   const sent: Outbound[] = [];
   let bridge!: ToolBridge;
+  let gate!: ModelGate;
   const send = (m: Outbound) => {
     sent.push(m);
     if (m.type === 'tool_call') {
       queueMicrotask(() => bridge.resolve({ type: 'tool_result', call_id: m.call_id, output: answer(m.name, m.arguments) }));
     }
+    // Keystone lets every attempt through (its refusals are tested on
+    // the Go side, where they are decided).
+    if (m.type === 'turn') queueMicrotask(() => gate.proceed());
   };
   bridge = new ToolBridge(send, abort.signal);
-  await runJob(startMsg(over), new ScriptedModel(steps), send, bridge, abort.signal);
+  gate = new ModelGate(send, abort.signal);
+  await runJob(startMsg(over), new ScriptedModel(steps), send, bridge, gate, abort.signal, 1);
   return sent;
 }
 
@@ -124,4 +129,41 @@ test('a resumed run continues from its history', async () => {
   assert.equal(out.type, 'final');
   const h = JSON.stringify(out.type === 'final' ? out.history : []);
   assert.ok(h.includes('Which room?') && h.includes('the kitchen'), 'history carries the question and the answer');
+});
+
+test('every model attempt waits for keystone and reports how it ended', async () => {
+  const sent: Outbound[] = [];
+  const abort = new AbortController();
+  let gate!: ModelGate;
+  const send = (m: Outbound) => sent.push(m);
+  gate = new ModelGate(send, abort.signal);
+  const bridge = new ToolBridge(send, abort.signal);
+  const done = runJob(startMsg(), new ScriptedModel([{ text: 'hi' }]), send, bridge, gate, abort.signal, 1);
+  await new Promise((r) => setTimeout(r, 50));
+  assert.deepEqual(sent.map((m) => m.type), ['turn'], 'no model call before proceed');
+  gate.proceed();
+  await done;
+  assert.deepEqual(sent.map((m) => m.type), ['turn', 'model_done', 'final']);
+});
+
+test('a failed model call is retried once, and the retry is gated too', async () => {
+  const sent = await drive([{ throw: 'blip' }, { text: 'recovered' }]);
+  const turns = sent.filter((m) => m.type === 'turn');
+  assert.deepEqual(turns.map((m) => m.type === 'turn' && [m.turn, m.attempt]), [[1, 1], [1, 2]]);
+  const dones = sent.filter((m) => m.type === 'model_done');
+  assert.deepEqual(dones.map((m) => m.type === 'model_done' && Boolean(m.is_error)), [true, false]);
+  assert.equal(outcome(sent).type, 'final');
+});
+
+test('earlier conversation reaches the model as messages', async () => {
+  const sent = await drive([{ text: 'Yes, the kitchen.' }], {
+    conversation: [
+      { role: 'user', text: 'turn on the lights' },
+      { role: 'assistant', text: 'Which room?' },
+    ],
+    input: 'kitchen',
+  });
+  const out = outcome(sent);
+  const h = JSON.stringify(out.type === 'final' ? out.history : []);
+  assert.ok(h.indexOf('turn on the lights') < h.indexOf('Which room?') && h.indexOf('Which room?') < h.indexOf('kitchen'));
 });
