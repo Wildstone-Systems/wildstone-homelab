@@ -1,0 +1,140 @@
+package api
+
+// The Home dashboard's Lists card (packages/lists-wildstone).
+//
+// The same household lists the Agents' lists.* tools read and change
+// (keystone/domestic/lists.go), through the same store, so a tick on the
+// card and "I got the milk" in chat are the same write. The card's door is
+// the `lists` capability's own group, lists_users, checked on every
+// request like every other household surface's.
+//
+// A request names a list and items, never a person: who added or ticked
+// something is the signed-in member, from the forwarded identity, exactly
+// as the Agent tools take it from the session rather than a parameter.
+// Deleting a whole list is not here on purpose — it is an Agent action
+// that asks first (lists.delete_list at the confirm tier).
+
+import (
+	"errors"
+	"fmt"
+	"net/http"
+	"strings"
+
+	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
+	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
+)
+
+var surfaceLists = portalSurface{capability: "lists", title: "Lists"}
+
+type listsCard struct {
+	Lists []runtimedb.HouseholdList `json:"lists"`
+}
+
+// listsRead answers every list with its items, most recently changed
+// first. Household lists are short (runtimedb.MaxHouseholdLists and
+// MaxHouseholdListItems bound them), so the card gets everything in one
+// read.
+func (s *Server) listsRead(_ http.ResponseWriter, _ *http.Request, _ string, _ []resource.Resource) (any, int, error) {
+	summaries, err := s.DB.HouseholdLists()
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	out := listsCard{Lists: make([]runtimedb.HouseholdList, 0, len(summaries))}
+	for _, l := range summaries {
+		full, err := s.DB.HouseholdList(l.Name)
+		if errors.Is(err, runtimedb.ErrListNotFound) {
+			continue // deleted between the two reads
+		}
+		if err != nil {
+			return nil, http.StatusInternalServerError, err
+		}
+		out.Lists = append(out.Lists, full)
+	}
+	return out, http.StatusOK, nil
+}
+
+type listItemsRequest struct {
+	List    string   `json:"list"`
+	Items   []string `json:"items"`
+	Checked *bool    `json:"checked,omitempty"`
+}
+
+func decodeListRequest(r *http.Request) (listItemsRequest, int, error) {
+	var req listItemsRequest
+	if code, err := decodeStrict(r, &req); err != nil {
+		return req, code, err
+	}
+	if strings.TrimSpace(req.List) == "" {
+		return req, http.StatusBadRequest, fmt.Errorf("name a list")
+	}
+	return req, 0, nil
+}
+
+// listWriteStatus maps a store error onto what the card is told.
+func listWriteStatus(err error) (int, error) {
+	if errors.Is(err, runtimedb.ErrListNotFound) {
+		return http.StatusNotFound, fmt.Errorf("that list is not here any more")
+	}
+	if errors.Is(err, runtimedb.ErrQuarantined) {
+		return http.StatusServiceUnavailable, err
+	}
+	// Everything else the store refuses is the request's own fault: an
+	// empty or over-long item, a full list, too many lists.
+	return http.StatusBadRequest, errors.New(strings.TrimPrefix(err.Error(), "runtimedb: "))
+}
+
+func (s *Server) listsAdd(_ http.ResponseWriter, r *http.Request, member string, _ []resource.Resource) (any, int, error) {
+	req, code, err := decodeListRequest(r)
+	if err != nil {
+		return nil, code, err
+	}
+	change, err := s.DB.AddListItems(req.List, req.Items, member)
+	if err != nil {
+		code, err := listWriteStatus(err)
+		return nil, code, err
+	}
+	return change, http.StatusOK, nil
+}
+
+func (s *Server) listsCheck(_ http.ResponseWriter, r *http.Request, member string, _ []resource.Resource) (any, int, error) {
+	req, code, err := decodeListRequest(r)
+	if err != nil {
+		return nil, code, err
+	}
+	checked := true
+	if req.Checked != nil {
+		checked = *req.Checked
+	}
+	change, err := s.DB.SetListItemsChecked(req.List, req.Items, checked, member)
+	if err != nil {
+		code, err := listWriteStatus(err)
+		return nil, code, err
+	}
+	return change, http.StatusOK, nil
+}
+
+func (s *Server) listsRemove(_ http.ResponseWriter, r *http.Request, _ string, _ []resource.Resource) (any, int, error) {
+	req, code, err := decodeListRequest(r)
+	if err != nil {
+		return nil, code, err
+	}
+	change, err := s.DB.RemoveListItems(req.List, req.Items)
+	if err != nil {
+		code, err := listWriteStatus(err)
+		return nil, code, err
+	}
+	return change, http.StatusOK, nil
+}
+
+func (s *Server) listsClearChecked(_ http.ResponseWriter, r *http.Request, _ string, _ []resource.Resource) (any, int, error) {
+	req, code, err := decodeListRequest(r)
+	if err != nil {
+		return nil, code, err
+	}
+	name, n, err := s.DB.ClearCheckedListItems(req.List)
+	if err != nil {
+		code, err := listWriteStatus(err)
+		return nil, code, err
+	}
+	return map[string]any{"list": name, "cleared": n}, http.StatusOK, nil
+}

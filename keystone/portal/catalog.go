@@ -81,6 +81,9 @@ var operatorOnly = map[string]bool{
 	"filedrop":  true,
 	"assistant": true,
 	"homarr":    true,
+	// The household lists behind the dashboard's Lists card, installed
+	// with the dashboard like the drop box is.
+	"lists": true,
 }
 
 // Requestable reports whether a capability may be asked for from a

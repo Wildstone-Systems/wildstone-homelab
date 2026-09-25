@@ -319,6 +319,14 @@ the steps you redo by hand.
   fails loudly rather than asking a question nobody can answer.
   `-household-reply-ttl` bounds how long a reply token stays valid
   (default 12h).
+- **Household lists** (`lists-wildstone`, installed with the homepage):
+  shopping, chores, packing — shared by the whole household. Agents
+  read and change them through `lists.*` household actions (adding,
+  ticking and removing items act at once; deleting a whole list asks the
+  person first), and the dashboard's Lists card shows them to members in
+  `lists_users`. Nothing runs for it: Keystone keeps the lists in its
+  runtime database, so they are backed up with the runtime state
+  ([recovery.md](recovery.md)), not with the Statefile.
 - **Butler** (ADR-W017): `-butler-provider anthropic|openai|ollama`,
   with `-butler-model`/`-butler-endpoint` as needed. There is
   deliberately no key flag: a hosted provider's key is either entered in

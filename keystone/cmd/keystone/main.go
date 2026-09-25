@@ -1314,6 +1314,16 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 		for _, e := range filedrop.Executors() {
 			actions.Register(e)
 		}
+		// The household lists (packages/lists-wildstone). Registered
+		// unconditionally and gated per call on the install, for the
+		// drop box's reason: installing or removing the package takes
+		// effect without a restart.
+		lists := &domestic.Lists{Authority: db, Store: db,
+			Enabled: func() (bool, error) { return apiSrv.CapabilityEnabled(domestic.ListsCapability) },
+		}
+		for _, e := range lists.Executors() {
+			actions.Register(e)
+		}
 	}
 	// Wire the chat delivery executors now that the API server exists:
 	// both seams are its methods, so keystone/domestic learns neither
@@ -1547,12 +1557,14 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 				if capName, _, ok := strings.Cut(tool, "."); ok && capName == domestic.HostOpsCapability {
 					continue
 				}
-				// filedrop is registered from the catalog too, and is
-				// gated on the install for the same reason: a Butler
-				// that lists "find_file" to a household with no drop
-				// box has promised them something that cannot happen.
+				// filedrop and lists are registered from the catalog
+				// too, and are gated on the install for the same
+				// reason: a Butler that lists "find_file" or "add_items"
+				// to a household without the capability has promised
+				// them something that cannot happen.
 				if capName, _, ok := strings.Cut(tool, "."); ok &&
-					(strings.HasPrefix(capName, "chat-") || capName == domestic.FiledropCapability) {
+					(strings.HasPrefix(capName, "chat-") || capName == domestic.FiledropCapability ||
+						capName == domestic.ListsCapability) {
 					on, cerr := apiSrv.CapabilityEnabled(capName)
 					if cerr != nil {
 						return v, cerr

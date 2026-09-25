@@ -1295,7 +1295,7 @@ seed_calendar_account() {
 # keeps them irreplaceable until a second one exists (§2.4, §2.5).
 # The groups the first Owner is given behind the proxy: the Console's,
 # and the family homepage's.
-OWNER_GROUPS='"console_users","homepage_users","filedrop_users","assistant_users","calendar_users"'
+OWNER_GROUPS='"console_users","homepage_users","filedrop_users","assistant_users","calendar_users","lists_users"'
 
 # grant_owner_groups puts an ALREADY-declared first Owner in those
 # groups. A resumed install finds the account an earlier run created —
@@ -1312,7 +1312,7 @@ grant_owner_groups() {
   groups="$(printf '%s' "$account_row" |
     sed -n 's/.*"groups":\(\[[^]]*\]\).*/\1/p')"
   [ -n "$groups" ] || fail "could not read groups for '$ADMIN_USER'"
-  for group in console_users homepage_users filedrop_users assistant_users calendar_users; do
+  for group in console_users homepage_users filedrop_users assistant_users calendar_users lists_users; do
     if [[ "$groups" != *"\"$group\""* ]]; then
       if [ "$groups" = '[]' ]; then
         groups="[\"$group\"]"
@@ -1584,6 +1584,10 @@ post_install() {
       "{\"public_domain\":\"$dom\",\"node\":\"$NODE_ID\",\"keystone_addr\":\"$KEYSTONE_API_ADDR\"}"
     enable_capability assistant-wildstone \
       "{\"public_domain\":\"$dom\",\"node\":\"$NODE_ID\",\"keystone_addr\":\"$KEYSTONE_API_ADDR\"}"
+    # The household's shared lists, behind the dashboard's Lists card and
+    # the assistant's lists tools. Nothing runs: Keystone keeps them.
+    log "installing the household lists"
+    enable_capability lists-wildstone "{\"node\":\"$NODE_ID\"}"
     # Calendar is part of the homepage. Keep the generated credential on
     # reruns: changing the Secret without rerunning its credential-file
     # Job would leave Radicale using the old password. The generation
