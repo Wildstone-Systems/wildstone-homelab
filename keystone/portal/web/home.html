@@ -1862,7 +1862,9 @@
   }
 
   // =========================================================== assistant
-  var agents = [], session = "", agent = "";
+  // fresh: the next message starts a new conversation rather than
+  // continuing a recent one (set by /new, cleared once it has one).
+  var agents = [], session = "", agent = "", fresh = false;
 
   // setupNote is an empty assistant's explanation, from the server:
   // what is missing and, to somebody who can fix it, a link to where.
@@ -1988,14 +1990,34 @@
     fetch("/api/v1/assistant/ask", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ agent: agent, session: session, text: body })
+      body: JSON.stringify({ agent: agent, session: session, text: body, new: fresh })
     })
       .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
       .then(function (res) {
         thread.removeChild(working);
         mine.style.opacity = "";
         if (!res.ok) { throw new Error(res.j.error || "I couldn't answer that one"); }
+        if (res.j.command) {
+          // A slash command: answered without the assistant, and not a
+          // turn of the conversation. /new and /resume move which
+          // conversation the next message belongs to.
+          if (res.j.newConversation) {
+            session = "";
+            fresh = true;
+            clear(thread);
+          } else if (res.j.session) {
+            session = res.j.session;
+            fresh = false;
+          }
+          thread.appendChild(turn("assistant", res.j.reply || ""));
+          el("open-conversation").href = session
+            ? "/assistant/?session=" + encodeURIComponent(session)
+            : "/assistant/";
+          box.value = "";
+          return;
+        }
         session = res.j.session || session;
+        fresh = false;
         // Model output is untrusted display content: rendered as text,
         // never as markup.
         var t = turn("assistant", res.j.reply || "");

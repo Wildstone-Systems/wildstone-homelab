@@ -139,6 +139,11 @@ func (s *Server) runNamedButlerSession(ctx context.Context, turn butlerlive.Turn
 		}
 		return askResponse{FinalText: note}, http.StatusOK, nil
 	}
+	// Slash commands answer here, as they do over a chat transport:
+	// deterministically, with no model and no recorded turn.
+	if resp, handled := s.runNamedWebCommand(turn); handled {
+		return resp, http.StatusOK, nil
+	}
 	ans, err := s.Butlers.Serve(ctx, turn)
 	if err != nil {
 		// Serve returns the durable task id ALONGSIDE its error, and

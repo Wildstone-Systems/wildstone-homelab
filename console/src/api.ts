@@ -466,6 +466,11 @@ export interface AskResponse {
   // approves them on the Plans screen, never here.
   planIds?: string[];
   proposalErrors?: string[];
+  // Set when a slash command answered instead of the Butler: no model
+  // ran and no turn was recorded, so the reply is not in the thread.
+  command?: string;
+  // /new, /reset, /clear: start the next message as a new conversation.
+  newConversation?: boolean;
 }
 
 export interface ButlerSession {

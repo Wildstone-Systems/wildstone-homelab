@@ -41,6 +41,33 @@ type chatCommandCtx struct {
 	// announcing to an audience (ADR-W026 A7).
 	Group bool
 	Arg   string
+	// Web is set when the command arrived through a built-in web chat
+	// (the household dashboard's assistant, or the Console) rather than
+	// over a chat transport. A web chat has no server-side thread: the
+	// page holds which conversation it is in and sends it with every
+	// message. So a command that moves the conversation records what
+	// the page should do next here, and the web handler returns it,
+	// instead of rewriting a chat thread that does not exist.
+	Web *webCommandEffect
+}
+
+// webCommandEffect is what a slash command asks a web chat to do with
+// its conversation after the reply.
+type webCommandEffect struct {
+	// NewConversation: drop the conversation the page is in, and start
+	// the next message fresh rather than continuing a recent one.
+	NewConversation bool
+	// ResumeSession: continue this conversation from the next message.
+	ResumeSession string
+}
+
+// destination is where this command's answer is disclosed, for the
+// privacy checks a Plan is subject to.
+func (c chatCommandCtx) destination() runtimedb.MemoryDestination {
+	if c.Web != nil {
+		return runtimedb.MemoryDestination{BuiltIn: true}
+	}
+	return runtimedb.MemoryDestination{ConnectionRef: c.At.Seq}
 }
 
 type chatCommand struct {
@@ -220,6 +247,10 @@ func (s *Server) chatWhoami(c chatCommandCtx) (string, error) {
 }
 
 func (s *Server) chatNewConversation(c chatCommandCtx) (string, error) {
+	if c.Web != nil {
+		c.Web.NewConversation = true
+		return "Starting fresh. The previous conversation is still recorded — this one just won't build on it.", nil
+	}
 	if err := s.DB.BreakChatThread(c.At, c.Conversation, c.Identity); err != nil {
 		return "", err
 	}
@@ -256,6 +287,10 @@ func (s *Server) chatResumeConversation(c chatCommandCtx) (string, error) {
 			return "That choice is invalid or has expired. Use /sessions for a new list.", nil
 		}
 		return "", err
+	}
+	if c.Web != nil {
+		c.Web.ResumeSession = session
+		return "Continuing that conversation. Your next message picks up where it left off.", nil
 	}
 	if err := s.DB.SetChatThreadSession(c.At, c.Conversation, c.Identity, session); err != nil {
 		return "", err
@@ -700,12 +735,18 @@ func (s *Server) chatApprove(c chatCommandCtx) (string, error) {
 			"the house's routines, ask for a review link: it opens a page that signs you in, shows " +
 			"you exactly what changes, and works once.", nil
 	}
+	if c.Web != nil {
+		// Already in the Console: the place to approve is its Plans
+		// screen, which shows exactly what changes before anyone agrees.
+		return "I can't approve anything, and a message typed here can't either. Approve it on the Plans " +
+			"screen, which shows exactly what the plan changes, or with `wild plan approve`.", nil
+	}
 	return "I can't approve anything, and neither can you from here. Approve it in the Console, or " +
 		"with `wild plan approve`. Both establish who you are first; a chat message doesn't.", nil
 }
 
 func (s *Server) checkChatPlanDisclosure(c chatCommandCtx, id string) error {
-	if err := s.DB.CheckPlanPrivacy(id, runtimedb.ModelLocal, runtimedb.MemoryDestination{ConnectionRef: c.At.Seq}); err != nil {
+	if err := s.DB.CheckPlanPrivacy(id, runtimedb.ModelLocal, c.destination()); err != nil {
 		return err
 	}
 	sessions, _, err := s.DB.PlanPrivacySessions(id)
