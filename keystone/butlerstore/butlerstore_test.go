@@ -210,10 +210,16 @@ func (g *testGateway) observationTTL() time.Duration {
 
 func (g *testGateway) Manifest(ctx context.Context, h agentapi.Handle) (agentapi.Manifest, error) {
 	caps := g.Toolset.Capabilities(false)
+	// ReadOnlyHint as agentgateway.Manifest derives it: the capability
+	// manifest's own Mutating flag, never the model's word.
+	mutating := make(map[string]bool, len(caps.Tools))
+	for _, t := range caps.Tools {
+		mutating[t.Name] = t.Mutating
+	}
 	offered := g.Toolset.OfferedSpecs(false)
 	tools := make([]agentapi.ToolSpec, 0, len(offered))
 	for _, spec := range offered {
-		tools = append(tools, agentapi.ToolSpec{Name: spec.Name, Description: spec.Description})
+		tools = append(tools, agentapi.ToolSpec{Name: spec.Name, Description: spec.Description, ReadOnlyHint: !mutating[spec.Name]})
 	}
 	return agentapi.Manifest{
 		AgentClass:   agentapi.AgentClass(caps.AgentClass),

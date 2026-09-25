@@ -280,7 +280,7 @@ func (r *Runner) Run(ctx context.Context, userMessage string) (*agentruntime.Tra
 			return tr, err
 		}
 		if len(answer.ToolCalls) == 0 {
-			return tr, r.finish(ctx, taskID, userMessage, answer.Text, manifest.Fingerprint, tr)
+			return tr, r.finish(ctx, taskID, userMessage, answer.Text, manifest, tr)
 		}
 
 		messages = append(messages, provider.Message{
@@ -341,26 +341,107 @@ func (r *Runner) start(ctx context.Context, taskID string) (agentapi.Manifest, e
 // finish accepts a final answer: the authority boundary, the optional
 // objective check, and completion with evidence. Shared by Run and by
 // Slice, whose loop runs in another runtime.
-func (r *Runner) finish(ctx context.Context, taskID, userMessage, answer, manifestVersion string, tr *agentruntime.Transcript) error {
+//
+// An effectful objective completes only with a matching receipt (the
+// effectful_completion_requires_receipt trigger), and that stays so. What
+// finish decides is what a refused completion MEANS. When a tool that can
+// change something ran and no receipt proves the change, the outcome
+// really is uncertain: the task waits and the conversation is held until
+// a person reviews it. When nothing that could change anything ran at
+// all, there is no uncertainty to review — the request simply was not
+// done — so the task ends failed, with an answer that says so, and the
+// conversation carries on. See nothingAttempted for what "could change
+// something" means.
+func (r *Runner) finish(ctx context.Context, taskID, userMessage, answer string, manifest agentapi.Manifest, tr *agentruntime.Transcript) error {
 	if err := r.checkAuthority(taskID, "final answer"); err != nil {
 		return err
 	}
+	claims := true
 	if r.VerifyObjective {
-		if err := r.verifyObjective(ctx, taskID, userMessage, answer, manifestVersion); err != nil {
+		var err error
+		if claims, err = r.verifyObjective(ctx, taskID, userMessage, answer, manifest.Fingerprint); err != nil {
 			return err
 		}
 	}
 	tr.FinalText = answer
 	err := r.complete(ctx, taskID, answer)
 	var missing interface{ MissingEffectReceipt() bool }
-	if errors.As(err, &missing) && missing.MissingEffectReceipt() {
-		tr.FinalText = "I couldn't verify every requested effect. The task is still open; any confirmed work is preserved for review."
-		return r.Client.Wait(ctx, agentapi.WorkWait{
-			Handle: r.Handle, Reason: agentapi.WorkWaitUncertainOutcome,
-			Detail: "one or more required effects lack matching successful receipts; review before continuing",
-		})
+	if !errors.As(err, &missing) || !missing.MissingEffectReceipt() {
+		return err
 	}
-	return err
+	if r.nothingAttempted(taskID, manifest) {
+		return r.notDone(ctx, taskID, answer, claims, tr)
+	}
+	tr.FinalText = "I couldn't verify every requested effect. The task is still open; any confirmed work is preserved for review."
+	return r.Client.Wait(ctx, agentapi.WorkWait{
+		Handle: r.Handle, Reason: agentapi.WorkWaitUncertainOutcome,
+		Detail: "one or more required effects lack matching successful receipts; review before continuing",
+	})
+}
+
+// notDoneAnswer replaces an answer that claims an effect nothing
+// performed. It is true by construction: nothing that could change
+// anything ran.
+const notDoneAnswer = "I wasn't able to do that — nothing was changed."
+
+// notDone ends a task whose requested effect was never attempted. The
+// answer is shown as the model wrote it when it does not claim the
+// effect (a decline, a question, an explanation), and replaced when it
+// does, or when that cannot be judged: a claim with nothing behind it is
+// exactly what the receipt rule exists to keep from reaching a person.
+func (r *Runner) notDone(ctx context.Context, taskID, answer string, claims bool, tr *agentruntime.Transcript) error {
+	tr.FinalText = answer
+	if claims || strings.TrimSpace(answer) == "" {
+		tr.FinalText = notDoneAnswer
+	}
+	r.trace(taskID, agentruntime.LedgerTraceEvent{
+		Type:    agentruntime.TraceOutcome,
+		Payload: jsonPayload(map[string]any{"notDone": true, "answerClaimedEffect": claims}),
+	})
+	return r.Client.Fail(ctx, agentapi.WorkFail{
+		Handle: r.Handle,
+		Reason: "not done: the requested effect was never attempted (no tool that can change anything ran)",
+	})
+}
+
+// nothingAttempted reports whether this task provably changed nothing:
+// every tool step it recorded names a tool the manifest marks read-only,
+// and none of them reported an effect. The read-only mark is the
+// platform's own declaration (a capability's Mutating flag), never the
+// model's. A tool the manifest does not list, a step whose result cannot
+// be read, or an unreadable ledger all count as "something may have
+// happened", so the uncertain path stays the default.
+func (r *Runner) nothingAttempted(taskID string, manifest agentapi.Manifest) bool {
+	if r.Ledger == nil {
+		return false
+	}
+	steps, err := r.Ledger.Steps(taskID)
+	if err != nil {
+		return false
+	}
+	readOnly := make(map[string]bool, len(manifest.Tools))
+	for _, t := range manifest.Tools {
+		readOnly[t.Name] = t.ReadOnlyHint
+	}
+	for _, step := range steps {
+		if step.Kind != agentruntime.LedgerStepTool {
+			continue
+		}
+		if !readOnly[step.Name] {
+			return false
+		}
+		if step.Result == "" {
+			continue // a read that never finished changed nothing either
+		}
+		var result agentruntime.ToolStepResult
+		if json.Unmarshal([]byte(step.Result), &result) != nil {
+			return false
+		}
+		if result.EffectConfirmed || result.EffectPending || result.ProposalConfirmed {
+			return false
+		}
+	}
+	return true
 }
 
 // pause parks the task at the slice limit. It is a pause, not a failure:

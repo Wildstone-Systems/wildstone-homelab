@@ -246,7 +246,7 @@ func (s *Slice) Call(_ context.Context, name string, input map[string]any) (Tool
 func (s *Slice) Finish(_ context.Context, answer string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.r.finish(s.ctx, s.taskID, s.userMessage, answer, s.manifest.Fingerprint, s.tr)
+	return s.r.finish(s.ctx, s.taskID, s.userMessage, answer, s.manifest, s.tr)
 }
 
 // Pause parks the task at the slice limit, as Run does.
