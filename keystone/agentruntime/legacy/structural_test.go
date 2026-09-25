@@ -1,4 +1,4 @@
-package native
+package legacy
 
 import (
 	"go/parser"

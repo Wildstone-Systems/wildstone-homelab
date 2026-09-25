@@ -3,17 +3,17 @@ package butler
 // The ledger-envelope and objective-classification vocabulary that used
 // to live in runner.go, ledger_envelope.go and objective.go before
 // ADR-W039 Phase 2b (#337) moved the Runner itself to
-// keystone/agentruntime/native.
+// keystone/agentruntime/legacy.
 //
 // These names are aliased rather than dropped: keystone/butlerstore's
 // Ledger implements TaskLedger/ObjectiveLedger structurally and is
 // documented against these exact names, keystone/agentgateway writes
 // the same trace and step vocabulary on the runner's behalf, and
 // keystone/butlerlive's StallNotifier field and
-// keystone/agentruntime/native's own SliceLedger both need the same
+// keystone/agentruntime/legacy's own SliceLedger both need the same
 // LedgerStep/LedgerTraceEvent/ObjectiveEffect shapes. Moving the
 // definitions to keystone/agentruntime — a leaf package neither this
-// package nor keystone/agentruntime/native's strict import ban needs to
+// package nor keystone/agentruntime/legacy's strict import ban needs to
 // worry about — and aliasing them back here changed no call site.
 
 import (

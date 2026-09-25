@@ -80,6 +80,17 @@ type Gateway struct {
 	ToolCalls      int
 	ObservationTTL time.Duration
 
+	// reserve makes Invoke's budget check and the AppendStep that spends
+	// it one step. Calls can arrive together: the OpenAI Agents SDK runs
+	// a model's tool calls concurrently, and so may any external runtime.
+	// A conversation's budget is also guarded in AppendStep's own UPDATE
+	// (tool_calls < tool_limit), so a call that lost that race used to
+	// fail with a checkpoint error instead of waiting on the budget; a
+	// task with no conversation work has no such guard at all. Held only
+	// across ledger reads and one insert, never across the tool's own
+	// execution, so a tool that hangs holds up nobody else's call.
+	reserve sync.Mutex
+
 	mu sync.Mutex
 	// records keeps, per task, the audit record of every call this
 	// gateway served — what the runner's Transcript.Audit carried when

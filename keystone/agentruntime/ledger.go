@@ -103,7 +103,7 @@ type LedgerTraceEvent struct {
 // TaskLedger is the durable checkpoint seam keystone/butlerstore
 // implements over the runtime database. It predates the Agent Gateway
 // (ADR-W039 Phase 2a/2b): the gateway now drives most of it on a
-// runner's behalf, and keystone/agentruntime/native's Runner reaches
+// runner's behalf, and keystone/agentruntime/legacy's Runner reaches
 // only the narrower SliceLedger seam directly. The full interface is
 // kept here, aliased from keystone/butler, because keystone/butlerstore
 // documents its Ledger against it.
@@ -157,7 +157,7 @@ type StallNotifier interface {
 // Two writers share this definition: the Agent Gateway
 // (keystone/agentgateway), which now writes it on the runner's behalf
 // for every tool call (ADR-W039 §3.4 step 7), and
-// keystone/agentruntime/native's Runner, which still writes it directly
+// keystone/agentruntime/legacy's Runner, which still writes it directly
 // for the closure path and reads it back to serve a verified read on a
 // resume (see the objective-verification helper below).
 type ToolStepResult struct {

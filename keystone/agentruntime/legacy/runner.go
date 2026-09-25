@@ -1,4 +1,4 @@
-package native
+package legacy
 
 // The durable conversational runner (ADR-W030 A4/A11, work package P3;
 // re-plumbed onto keystone/agentapi in ADR-W039 Phase 2b, #337).
@@ -226,7 +226,7 @@ func (r *Runner) trace(taskID string, e agentruntime.LedgerTraceEvent) {
 		e.Actor = r.Actor
 	}
 	if err := r.Ledger.Trace(taskID, e); err != nil && r.Log != nil {
-		r.Log.Warn("agentruntime/native: trace write failed", "type", e.Type, "err", err)
+		r.Log.Warn("agentruntime/legacy: trace write failed", "type", e.Type, "err", err)
 	}
 }
 
@@ -242,7 +242,7 @@ func (r *Runner) checkAuthority(taskID, at string) error {
 		r.trace(taskID, agentruntime.LedgerTraceEvent{
 			Type: agentruntime.TraceDenial, Payload: jsonPayload(map[string]any{"authority": "withdrawn", "at": at}),
 		})
-		return fmt.Errorf("agentruntime/native: %w", err)
+		return fmt.Errorf("agentruntime/legacy: %w", err)
 	}
 	return nil
 }
@@ -254,45 +254,20 @@ func (r *Runner) checkAuthority(taskID, at string) error {
 func (r *Runner) Run(ctx context.Context, userMessage string) (*agentruntime.Transcript, error) {
 	tr := &agentruntime.Transcript{Audit: agentruntime.Audit{Provider: r.providerName()}}
 	if r.Client == nil {
-		return tr, fmt.Errorf("agentruntime/native: no agent API client configured")
+		return tr, fmt.Errorf("agentruntime/legacy: no agent API client configured")
 	}
 	if r.Handle.IsZero() {
-		return tr, fmt.Errorf("agentruntime/native: no task handle configured")
+		return tr, fmt.Errorf("agentruntime/legacy: no task handle configured")
 	}
 	if r.Provider == nil {
-		return tr, fmt.Errorf("agentruntime/native: no provider configured")
+		return tr, fmt.Errorf("agentruntime/legacy: no provider configured")
 	}
 	taskID := r.Handle.TaskID()
 
-	// Slice start: Client.Start fences, re-checks authority and moves
-	// the task to running, in that order, exactly as Ledger.Fence +
-	// Ledger.Authorize + Ledger.Running used to here.
-	if err := r.Client.Start(ctx, agentapi.WorkStart{Handle: r.Handle, Reason: "slice started"}); err != nil {
-		r.trace(taskID, agentruntime.LedgerTraceEvent{
-			Type: agentruntime.TraceDenial, Payload: jsonPayload(map[string]any{"authority": "refused"}),
-		})
-		return tr, fmt.Errorf("agentruntime/native: %w", err)
-	}
-
-	var resumed bool
-	var priorSteps int
-	if r.Ledger != nil {
-		if steps, err := r.Ledger.Steps(taskID); err == nil {
-			resumed = len(steps) > 0
-			priorSteps = len(steps)
-		}
-	}
-
-	manifest, err := r.Client.Manifest(ctx, r.Handle)
+	manifest, err := r.start(ctx, taskID)
 	if err != nil {
-		return tr, fmt.Errorf("agentruntime/native: fetching the manifest: %w", err)
+		return tr, err
 	}
-	r.trace(taskID, agentruntime.LedgerTraceEvent{
-		Type:            agentruntime.TraceSliceStarted,
-		ModelEndpoint:   r.providerName(),
-		ManifestVersion: manifest.Fingerprint,
-		Payload:         jsonPayload(map[string]any{"resumed": resumed, "priorSteps": priorSteps}),
-	})
 
 	messages := make([]provider.Message, 0, len(r.History)+1)
 	messages = append(messages, r.History...)
@@ -305,25 +280,7 @@ func (r *Runner) Run(ctx context.Context, userMessage string) (*agentruntime.Tra
 			return tr, err
 		}
 		if len(answer.ToolCalls) == 0 {
-			if err := r.checkAuthority(taskID, "final answer"); err != nil {
-				return tr, err
-			}
-			if r.VerifyObjective {
-				if err := r.verifyObjective(ctx, taskID, userMessage, answer.Text, manifest.Fingerprint); err != nil {
-					return tr, err
-				}
-			}
-			tr.FinalText = answer.Text
-			err := r.complete(ctx, taskID, answer.Text)
-			var missing interface{ MissingEffectReceipt() bool }
-			if errors.As(err, &missing) && missing.MissingEffectReceipt() {
-				tr.FinalText = "I couldn't verify every requested effect. The task is still open; any confirmed work is preserved for review."
-				return tr, r.Client.Wait(ctx, agentapi.WorkWait{
-					Handle: r.Handle, Reason: agentapi.WorkWaitUncertainOutcome,
-					Detail: "one or more required effects lack matching successful receipts; review before continuing",
-				})
-			}
-			return tr, err
+			return tr, r.finish(ctx, taskID, userMessage, answer.Text, manifest.Fingerprint, tr)
 		}
 
 		messages = append(messages, provider.Message{
@@ -344,13 +301,79 @@ func (r *Runner) Run(ctx context.Context, userMessage string) (*agentruntime.Tra
 		messages = append(messages, provider.Message{Role: "tool", ToolResults: results})
 	}
 
+	return tr, r.pause(ctx, taskID, tr)
+}
+
+// start opens a slice: Client.Start fences, re-checks authority and
+// moves the task to running, in that order, exactly as Ledger.Fence +
+// Ledger.Authorize + Ledger.Running used to here; then the manifest the
+// slice's model is offered. Shared by Run and BeginSlice.
+func (r *Runner) start(ctx context.Context, taskID string) (agentapi.Manifest, error) {
+	if err := r.Client.Start(ctx, agentapi.WorkStart{Handle: r.Handle, Reason: "slice started"}); err != nil {
+		r.trace(taskID, agentruntime.LedgerTraceEvent{
+			Type: agentruntime.TraceDenial, Payload: jsonPayload(map[string]any{"authority": "refused"}),
+		})
+		return agentapi.Manifest{}, fmt.Errorf("agentruntime/legacy: %w", err)
+	}
+
+	var resumed bool
+	var priorSteps int
+	if r.Ledger != nil {
+		if steps, err := r.Ledger.Steps(taskID); err == nil {
+			resumed = len(steps) > 0
+			priorSteps = len(steps)
+		}
+	}
+
+	manifest, err := r.Client.Manifest(ctx, r.Handle)
+	if err != nil {
+		return agentapi.Manifest{}, fmt.Errorf("agentruntime/legacy: fetching the manifest: %w", err)
+	}
+	r.trace(taskID, agentruntime.LedgerTraceEvent{
+		Type:            agentruntime.TraceSliceStarted,
+		ModelEndpoint:   r.providerName(),
+		ManifestVersion: manifest.Fingerprint,
+		Payload:         jsonPayload(map[string]any{"resumed": resumed, "priorSteps": priorSteps}),
+	})
+	return manifest, nil
+}
+
+// finish accepts a final answer: the authority boundary, the optional
+// objective check, and completion with evidence. Shared by Run and by
+// Slice, whose loop runs in another runtime.
+func (r *Runner) finish(ctx context.Context, taskID, userMessage, answer, manifestVersion string, tr *agentruntime.Transcript) error {
+	if err := r.checkAuthority(taskID, "final answer"); err != nil {
+		return err
+	}
+	if r.VerifyObjective {
+		if err := r.verifyObjective(ctx, taskID, userMessage, answer, manifestVersion); err != nil {
+			return err
+		}
+	}
+	tr.FinalText = answer
+	err := r.complete(ctx, taskID, answer)
+	var missing interface{ MissingEffectReceipt() bool }
+	if errors.As(err, &missing) && missing.MissingEffectReceipt() {
+		tr.FinalText = "I couldn't verify every requested effect. The task is still open; any confirmed work is preserved for review."
+		return r.Client.Wait(ctx, agentapi.WorkWait{
+			Handle: r.Handle, Reason: agentapi.WorkWaitUncertainOutcome,
+			Detail: "one or more required effects lack matching successful receipts; review before continuing",
+		})
+	}
+	return err
+}
+
+// pause parks the task at the slice limit. It is a pause, not a failure:
+// nothing is discarded and the aggregate budget is untouched, so a
+// continue picks up with every verified read still verified.
+func (r *Runner) pause(ctx context.Context, taskID string, tr *agentruntime.Transcript) error {
 	tr.CappedIterations = true
 	tr.FinalText = "(paused after this turn's tool-call limit — say continue and I will pick up where I left off)"
 	r.trace(taskID, agentruntime.LedgerTraceEvent{
 		Type:    agentruntime.TraceWaitOpened,
 		Payload: jsonPayload(map[string]any{"reason": string(agentapi.WorkWaitReply), "rounds": r.sliceRounds()}),
 	})
-	return tr, r.Client.Wait(ctx, agentapi.WorkWait{
+	return r.Client.Wait(ctx, agentapi.WorkWait{
 		Handle: r.Handle, Reason: agentapi.WorkWaitReply, Detail: "turn tool-call limit reached; awaiting continue",
 	})
 }
@@ -445,7 +468,7 @@ func (r *Runner) modelRound(ctx context.Context, taskID, system, manifestVersion
 		_ = r.Notifier.NotifyStalled(taskID,
 			"I could not reach the model to finish this. Nothing is lost — say continue and I will pick up where I left off.")
 	}
-	return nil, fmt.Errorf("agentruntime/native: chat: %w", lastErr)
+	return nil, fmt.Errorf("agentruntime/legacy: chat: %w", lastErr)
 }
 
 // modelAttempt is one checkpointed model call.
@@ -455,11 +478,11 @@ func (r *Runner) modelAttempt(ctx context.Context, taskID, system, manifestVersi
 		Params: json.RawMessage(jsonPayload(map[string]any{"messages": len(messages), "tools": len(specs)})),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("agentruntime/native: checkpointing a model call: %w", err)
+		return nil, fmt.Errorf("agentruntime/legacy: checkpointing a model call: %w", err)
 	}
 	started, err := r.Client.Checkpoint(ctx, agentapi.Checkpoint{Handle: r.Handle, Step: opened.Step, State: agentapi.StepRunning})
 	if err != nil {
-		return nil, fmt.Errorf("agentruntime/native: checkpointing a model call: %w", err)
+		return nil, fmt.Errorf("agentruntime/legacy: checkpointing a model call: %w", err)
 	}
 	r.trace(taskID, agentruntime.LedgerTraceEvent{
 		Type: agentruntime.TraceModelCall, Step: opened.Step, Attempt: started.Attempt,
@@ -500,14 +523,14 @@ func (r *Runner) modelAttempt(ctx context.Context, taskID, system, manifestVersi
 				Type: agentruntime.TraceDenial, Step: opened.Step, Attempt: started.Attempt,
 				Payload: jsonPayload(map[string]any{"reason": "coordinator changed during the model call"}),
 			})
-			return nil, fmt.Errorf("agentruntime/native: a model answer arrived after this coordinator was superseded: %w", err)
+			return nil, fmt.Errorf("agentruntime/legacy: a model answer arrived after this coordinator was superseded: %w", err)
 		}
 	}
 	if _, err := r.Client.Checkpoint(ctx, agentapi.Checkpoint{
 		Handle: r.Handle, Step: opened.Step, Attempt: started.Attempt, State: agentapi.StepVerified,
 		Result: json.RawMessage(jsonPayload(map[string]any{"toolCalls": len(resp.ToolCalls)})),
 	}); err != nil {
-		return nil, fmt.Errorf("agentruntime/native: closing a model checkpoint: %w", err)
+		return nil, fmt.Errorf("agentruntime/legacy: closing a model checkpoint: %w", err)
 	}
 	r.trace(taskID, agentruntime.LedgerTraceEvent{
 		Type: agentruntime.TraceModelAnswer, Step: opened.Step, Attempt: started.Attempt,

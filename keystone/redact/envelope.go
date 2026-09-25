@@ -12,7 +12,7 @@ import (
 // given."
 //
 // Shared here (ADR-W039 Phase 2b, #337) so keystone/butler's Toolset
-// dispatch and keystone/agentruntime/native's Phraser envelope
+// dispatch and keystone/agentruntime/legacy's Phraser envelope
 // attacker-influenceable content through the exact same delimiters and
 // the exact same defanging, rather than two copies that agree until the
 // day they do not.

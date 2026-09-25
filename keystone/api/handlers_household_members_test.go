@@ -197,6 +197,40 @@ func TestAddHouseholdMemberRefusals(t *testing.T) {
 	}
 }
 
+// Two members cannot share an email, whether added or edited into it.
+// Accepted, the plan would apply and the directory would refuse the
+// account, failing the provisioning job for every plan after it.
+func TestHouseholdMemberEmailMustBeUnique(t *testing.T) {
+	h := newHarness(t)
+	seedDirectory(t, h)
+
+	var body map[string]any
+	resp := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/household/members", map[string]any{
+		"username": "kim", "email": "SAM@example.com", "groups": []string{"photos_users"},
+	}, &body)
+	if resp.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("adding with sam's email = %d, want 422", resp.StatusCode)
+	}
+	if msg, _ := body["error"].(string); !strings.Contains(msg, "sam") {
+		t.Fatalf("the refusal did not name the member who has the address: %v", body)
+	}
+
+	var p planView
+	if resp := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/household/members", map[string]any{
+		"username": "kim", "email": "kim@example.com", "groups": []string{"photos_users"},
+	}, &p); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("adding with her own email = %d, want 201", resp.StatusCode)
+	}
+	if resp := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/plans/"+p.ID+"/approve", nil, nil); resp.StatusCode != http.StatusOK {
+		t.Fatalf("approve = %d", resp.StatusCode)
+	}
+	if resp := h.do(runtimedb.RoleAdmin, http.MethodPut, "/api/v1/household/members/kim", map[string]any{
+		"email": "sam@example.com", "groups": []string{"photos_users"},
+	}, nil); resp.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("editing onto sam's email = %d, want 422", resp.StatusCode)
+	}
+}
+
 // Editing a member cannot take a group away.
 //
 // The provisioning job is additive in both directions: it adds a

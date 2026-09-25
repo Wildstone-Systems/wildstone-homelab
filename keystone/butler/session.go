@@ -14,7 +14,7 @@ const defaultMaxIterations = 8
 
 // ToolCallRecord, Audit and Transcript moved to keystone/agentruntime in
 // ADR-W039 Phase 2b (#337), the small leaf package shared with
-// keystone/agentruntime/native's Runner, so the two sides of the split
+// keystone/agentruntime/legacy's Runner, so the two sides of the split
 // agree on one shape for a turn's audit record without native importing
 // this package. These aliases keep every existing reference — in this
 // package, keystone/agentgateway, keystone/butlerlive and

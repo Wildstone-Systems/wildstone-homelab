@@ -9,7 +9,7 @@ import ksredact "github.com/chickenrat17/wildstone-homelab/keystone/redact"
 //
 // The delimiters and the defanging live in keystone/redact now
 // (ADR-W039 Phase 2b, #337), shared with
-// keystone/agentruntime/native's Phraser; these package-local names
+// keystone/agentruntime/legacy's Phraser; these package-local names
 // keep ToolGateway.Dispatch and the existing hardening tests reading
 // unchanged.
 const (

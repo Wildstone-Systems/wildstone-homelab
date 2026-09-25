@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/agentruntime/native"
+	"github.com/chickenrat17/wildstone-homelab/keystone/agentruntime/legacy"
 	"github.com/chickenrat17/wildstone-homelab/keystone/automation"
 	"github.com/chickenrat17/wildstone-homelab/keystone/butler/provider"
 	"github.com/chickenrat17/wildstone-homelab/keystone/domestic"
@@ -729,15 +729,15 @@ func TestBreakfastEscalationEndToEnd(t *testing.T) {
 	gw := &domestic.Gateway{Authority: h.s.DB}
 	gw.Register(&domestic.Notifier{Authority: h.s.DB, BaseURL: ntfy.URL})
 	llm := &phrasingProvider{reply: "You usually have porridge about now — did you eat before heading out?"}
-	phraser := &native.Phraser{Provider: llm}
+	phraser := &legacy.Phraser{Provider: llm}
 
 	h.s.Automation.Actions = gw
 	h.s.Automation.Escalator = automation.EscalatorFunc(func(ctx context.Context, req automation.EscalationRequest) (string, error) {
-		facts := make([]native.Fact, 0, len(req.Facts))
+		facts := make([]legacy.Fact, 0, len(req.Facts))
 		for _, f := range req.Facts {
-			facts = append(facts, native.Fact{Label: f.Label, Content: f.Content})
+			facts = append(facts, legacy.Fact{Label: f.Label, Content: f.Content})
 		}
-		return phraser.Phrase(ctx, native.PhraseRequest{
+		return phraser.Phrase(ctx, legacy.PhraseRequest{
 			Rule: req.Rule, Instruction: req.Instruction, Fallback: req.Fallback, Facts: facts,
 		})
 	})

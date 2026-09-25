@@ -14,6 +14,10 @@
 #          [--node-id <id>] [--skip-docker] [--version vX.Y.Z]
 #   --wallpaper-dir overrides the pictures the themes ship with, the
 #   same way --console-dir overrides the Console.
+#   --agent-runtime <native|legacy> picks the loop Butler conversations
+#   run on. A fresh install defaults to native (the OpenAI Agents SDK,
+#   ADR-W041, for Butlers on OpenAI-compatible and Ollama models) when
+#   the runtime passes its self-check; an upgrade keeps its setting.
 #
 #   Either role also takes [--artifact-dir <dir>] to install from local
 #   release artifacts instead of downloading (private repos, air-gap),
@@ -60,6 +64,10 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ARTIFACT_DIR=""
 CONSOLE_DIR=""
 CATALOG_DIR=""
+AGENT_RUNTIME=""
+# Set to 1 by install_native_agent when the runtime installed AND passed
+# its self-check: the condition for making it the default.
+NATIVE_AGENT_OK=0
 WALLPAPER_DIR=""
 KEYSTONE_ARGS=""
 KEYSTONE_ARGS_SET=0
@@ -128,7 +136,7 @@ ask_yes_no() {
 }
 
 usage() {
-  sed -n '2,47p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,51p' "$0" | sed 's/^# \{0,1\}//'
   exit 2
 }
 
@@ -145,6 +153,7 @@ while [ $# -gt 0 ]; do
     --catalog-dir)    CATALOG_DIR="$2"; shift 2 ;;
     --wallpaper-dir)  WALLPAPER_DIR="$2"; shift 2 ;;
     --keystone-arg)   KEYSTONE_ARGS="$KEYSTONE_ARGS $2"; KEYSTONE_ARGS_SET=1; shift 2 ;;
+    --agent-runtime)  AGENT_RUNTIME="$2"; shift 2 ;;
     --token)          TOKEN="$2"; shift 2 ;;
     --tailscale-authkey)  TAILSCALE_AUTHKEY="$2"; shift 2 ;;
     --tailscale-hostname) TAILSCALE_HOSTNAME="$2"; shift 2 ;;
@@ -821,6 +830,50 @@ install_console() {
   tar --no-same-owner -xzf "$WORK/console_dist.tar.gz" -C "$dir"
   CONSOLE_DIR="$dir"
   log "installed the Console to $dir"
+}
+
+install_native_agent() {
+  # The native agent runtime (ADR-W041): the OpenAI Agents SDK sidecar,
+  # bundled into one file, beside the Node runtime it runs on. Shipped
+  # whole, per architecture, so a control-plane host still never needs
+  # Node, npm or a node_modules tree of its own (#34).
+  #
+  # Skipped, not failed, when the release predates the asset: the
+  # Butler's own loop does not need it.
+  local dir=/usr/lib/wildstone/native-agent
+  local stage=/usr/lib/wildstone/.native-agent.new
+  local old=/usr/lib/wildstone/.native-agent.old
+  local artifact="native-agent_linux_${ARCH}.tar.gz"
+  release_has "$artifact" || {
+    log "this release has no $artifact; the native agent runtime is not installed"
+    return 0
+  }
+  fetch_asset "$artifact"
+  install -d -m 0755 /usr/lib/wildstone
+  # Fixed paths, never a variable that could be empty, for the one rm -rf.
+  rm -rf /usr/lib/wildstone/.native-agent.new /usr/lib/wildstone/.native-agent.old
+  install -d -m 0755 "$stage"
+  # --no-same-owner for the reason install_console gives (F42).
+  tar --no-same-owner -xzf "$WORK/$artifact" -C "$stage"
+  if [ ! -x "$stage/bin/node" ] || [ ! -f "$stage/main.mjs" ]; then
+    fail "$artifact is missing bin/node or main.mjs"
+  fi
+  # Staged and swapped by rename, like fetch_binary: a sidecar that is
+  # mid-job keeps running from the old files it already has open.
+  if [ -d "$dir" ]; then
+    mv "$dir" "$old"
+  fi
+  mv "$stage" "$dir"
+  rm -rf /usr/lib/wildstone/.native-agent.old
+  # A self-check that loads the SDK and calls no model. A host whose C
+  # library is too old for this Node fails here, and it is reported
+  # rather than fatal: nothing depends on the runtime yet.
+  if "$dir/bin/node" "$dir/main.mjs" --health 2>/dev/null | grep -q '"type":"ready"'; then
+    NATIVE_AGENT_OK=1
+    log "installed the native agent runtime to $dir ($(tr '\n' ' ' < "$dir/VERSION"))"
+  else
+    log "WARNING: installed the native agent runtime to $dir, but its self-check failed: run '$dir/bin/node $dir/main.mjs --health' to see why"
+  fi
 }
 
 install_unit() {
@@ -1615,6 +1668,7 @@ if [ "$ROLE" = keystone ]; then
   [ -n "$CONSOLE_DIR" ] || install_console
   [ -n "$CATALOG_DIR" ] || install_packages
   [ -n "$WALLPAPER_DIR" ] || install_wallpapers
+  install_native_agent
   if [ -n "$CONSOLE_DIR" ]; then
     [ -d "$CONSOLE_DIR" ] || fail "--console-dir $CONSOLE_DIR does not exist (build the Console elsewhere and copy dist/ here)"
     KEYSTONE_ARGS="$KEYSTONE_ARGS -console-dir $CONSOLE_DIR"
@@ -1661,6 +1715,29 @@ if [ "$ROLE" = keystone ]; then
   # flag package takes the LAST occurrence and reports nothing, so the
   # override would not even announce itself — the audit instance would
   # simply come up on the wrong interface.
+  # The agent runtime (ADR-W041). A FRESH install — no env file yet —
+  # starts on the native runtime when it installed and passed its
+  # self-check; that is the product's default for a new household. An
+  # UPGRADE is never switched: without --agent-runtime it keeps whatever
+  # the env file already says (nothing, for an install that predates
+  # the runtime, which is Keystone's legacy default), like every other
+  # flag here. --agent-runtime legacy opts a fresh install out.
+  if [ -z "$AGENT_RUNTIME" ] && [ ! -f "$KEYSTONE_ENV" ]; then
+    if [ "$NATIVE_AGENT_OK" = 1 ]; then
+      AGENT_RUNTIME=native
+      log "Butler conversations will run on the native agent runtime (pass --agent-runtime legacy to keep Keystone's own loop)"
+    else
+      log "the native agent runtime is not available on this host; Butler conversations will run on Keystone's own loop"
+    fi
+  fi
+  if [ -n "$AGENT_RUNTIME" ]; then
+    case "$AGENT_RUNTIME" in
+      legacy|native) ;;
+      *) fail "--agent-runtime must be legacy or native, not '$AGENT_RUNTIME'" ;;
+    esac
+    KEYSTONE_ARGS="$KEYSTONE_ARGS -agent-runtime $AGENT_RUNTIME"
+    KEYSTONE_ARGS_SET=1
+  fi
   if [ -n "${HOUSEHOLD_TZ:-}" ] && ! keystone_arg_named -household-timezone; then
     KEYSTONE_ARGS="$KEYSTONE_ARGS -household-timezone $HOUSEHOLD_TZ"
     KEYSTONE_ARGS_SET=1

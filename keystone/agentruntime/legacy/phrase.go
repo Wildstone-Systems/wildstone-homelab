@@ -5,7 +5,7 @@
 // Client interface — never a direct import. keystone/butler keeps the
 // two tool gateways (ToolGateway, HouseholdGateway) and the legacy
 // closure-driven Session, which this package does not touch.
-package native
+package legacy
 
 // Household escalation (ADR-W024 A6/A4, work package H6): the Butler's
 // second job, and a deliberately smaller one than operating the homelab.

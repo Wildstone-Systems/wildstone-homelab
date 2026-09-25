@@ -514,7 +514,8 @@ Following the ADR-W033 Part G convention, older ADRs remain historical records; 
 | `keystone/agentapi/httpclient` | 2c | HTTP implementation of `agentapi.Client`; own structural test |
 | `keystone/agentgateway` | 2a–3 | `Gateway{DB,Ledger,Gateways,Log}`; `Manifest`/`Invoke` (`invoke.go`), `memory.go`, `propose.go`, `work.go`; `InProcess(*Gateway) agentapi.Client`; `WithPrincipal` |
 | `keystone/agentruntime` | 2b | Shared leaf vocabulary: `ToolCallRecord`, `Audit`, `Transcript`, ledger step/attempt/evidence types |
-| `keystone/agentruntime/native` | 2b | `Runner`, `Phraser`, objective; the strict import-ban structural test (§7.4 amendment) |
+| `keystone/agentruntime/legacy` | 2b | `Runner`, `Phraser`, objective, and `Slice` (the Runner's boundaries for a loop that runs elsewhere); the strict import-ban structural test (§7.4 amendment). Was `agentruntime/native` until the merge with ADR-W041 — see the amendment below |
+| `keystone/agentruntime/native` | — | The OpenAI Agents SDK sidecar adapter (ADR-W041), not this ADR's loop |
 | `keystone/proposals` | 3 | Plan-filing pipeline moved out of `keystone/api`; `Deps{DB,State,Policy,Log,Event}` |
 | `runtimedb/migrations/0081_agent_runtimes.sql` | 1a | `butler_runtimes` + `runtime_principals` tables, native backfill |
 | `runtimedb/migrations/0082_task_handles.sql` | 2a | `butler_tasks.handle_hash` |
@@ -526,6 +527,8 @@ Following the ADR-W033 Part G convention, older ADRs remain historical records; 
 | `domestic/hostops.go` + `butler/tools_hostops.go` | 6/H7 | Seven `host.*` executors behind `-hostops-enabled` (default off) and Owner-class opt-in |
 | `resource.go` `ContainerSpec` hardening fields + `resource/hostaccess.go` `HardeningProtocolMinor = 18` | 6/H1 | `ReadOnlyRootfs`, `CapDrop`, `NoNewPrivileges`, `Resources{Memory,Cpus,PidsLimit}`, `ShmSize`, all `omitempty` |
 | `pkgspec.go` `enum:` shape | 6/H2 | Closed-choice param validation (`validate: enum:a\|b\|c`) |
+
+> **Amendment (2026-09-25, merge with ADR-W041).** Main shipped ADR-W041 (#357): the OpenAI Agents SDK as the native agent runtime, run as a sidecar, with Keystone's own loop kept as `-agent-runtime legacy`. That made "native" mean the SDK runtime in the product's own vocabulary (the flag, the installer, the install directory). This ADR's loop package was therefore renamed `keystone/agentruntime/native` → `keystone/agentruntime/legacy`, and `agentruntime/native` holds ADR-W041's sidecar adapter. Nothing about the loop changed: it keeps its import ban and still reaches Wildstone only through `agentapi.Client`. ADR-W041's `butler.Slice` (the Runner's ledger boundaries for a loop driven elsewhere) was ported to `legacy.Slice` over the same `agentapi.Client`, so an SDK-driven Butler checkpoints, spends budget and completes through the Agent API exactly as an external runtime does — the §1 goal, now true of the shipped native runtime too. `agentgateway.Invoke` also gained a reservation lock across its budget check and step append, because the SDK (and any external runtime) can issue tool calls concurrently.
 
 ### 10.c Couplings closed vs. remaining (§2.1)
 

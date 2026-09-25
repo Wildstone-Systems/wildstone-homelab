@@ -32,6 +32,8 @@ done
 rm -f -- /etc/systemd/system/keystone.service /etc/systemd/system/wardstoned.service
 systemctl daemon-reload
 rm -f -- /usr/local/bin/keystone /usr/local/bin/wardstoned /usr/local/bin/wild
+# The native agent runtime is program files, not data: no app mounts it.
+rm -rf -- /usr/lib/wildstone/native-agent
 
 # The applications still mount files under /etc/wildstone and /srv/wildstone;
 # deleting those paths would break retained containers, including ingress

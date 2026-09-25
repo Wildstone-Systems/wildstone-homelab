@@ -7,11 +7,12 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/agentapi"
-	"github.com/chickenrat17/wildstone-homelab/keystone/agentruntime/native"
+	"github.com/chickenrat17/wildstone-homelab/keystone/agentruntime/legacy"
 	"github.com/chickenrat17/wildstone-homelab/keystone/butler"
 	"github.com/chickenrat17/wildstone-homelab/keystone/butler/provider"
 	"github.com/chickenrat17/wildstone-homelab/keystone/butlerstore"
@@ -127,7 +128,7 @@ func TestInvokeWritesTheRunnersLedgerRows(t *testing.T) {
 	// proves the two calls agree with themselves — which is still worth
 	// pinning, since it is what a real deployment does too).
 	taskA, hA := f.openTask(t, "alfred", "mika")
-	r := &native.Runner{
+	r := &legacy.Runner{
 		Client: InProcess(f.g), Handle: hA,
 		MaxSliceRounds:  4,
 		PermissionLabel: "alfred", Audience: string(runtimedb.ButlerAudiencePrivate), Actor: "mika",
@@ -539,6 +540,59 @@ func TestAnExhaustedBudgetWaits(t *testing.T) {
 	}
 	if steps, _ := f.ledger.Steps(taskID); len(steps) != limit {
 		t.Fatalf("%d steps after the budget, want %d", len(steps), limit)
+	}
+}
+
+// Concurrent calls at the budget's last slot: exactly one runs, and every
+// other one waits on the budget cleanly rather than failing. The OpenAI
+// Agents SDK runs a model's tool calls concurrently, and so may any
+// external runtime (see Gateway.reserve).
+func TestConcurrentCallsCannotOverspendTheBudget(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	taskID, h := f.openTask(t, "alfred", "mika")
+	_, limit, _, err := f.ledger.AggregateToolCalls(taskID)
+	if err != nil || limit <= 1 {
+		t.Fatalf("aggregate limit = %d, %v", limit, err)
+	}
+	for i := 0; i < limit-1; i++ {
+		args, _ := json.Marshal(map[string]any{"n": i})
+		if res, err := f.g.Invoke(ctx, agentapi.InvokeRequest{Handle: h, Tool: "describe_capabilities", Args: args}); err != nil || res.Outcome != agentapi.OutcomeOK {
+			t.Fatalf("call %d = %+v, %v", i, res, err)
+		}
+	}
+
+	const racers = 8
+	var wg sync.WaitGroup
+	outcomes := make(chan agentapi.InvokeResult, racers)
+	start := make(chan struct{})
+	for i := 0; i < racers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			args, _ := json.Marshal(map[string]any{"racer": i})
+			res, err := f.g.Invoke(ctx, agentapi.InvokeRequest{Handle: h, Tool: "describe_capabilities", Args: args})
+			if err != nil {
+				t.Errorf("racer %d: %v", i, err)
+			}
+			outcomes <- res
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+	close(outcomes)
+	ok := 0
+	for res := range outcomes {
+		if res.Outcome == agentapi.OutcomeOK {
+			ok++
+		}
+	}
+	if ok != 1 {
+		t.Fatalf("%d concurrent calls ran on the budget's one remaining slot, want 1", ok)
+	}
+	if steps, _ := f.ledger.Steps(taskID); len(steps) != limit {
+		t.Fatalf("%d tool steps written, want exactly the budget of %d", len(steps), limit)
 	}
 }
 

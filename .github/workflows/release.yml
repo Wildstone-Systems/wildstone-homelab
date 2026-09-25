@@ -28,7 +28,9 @@ jobs:
         with:
           node-version: "22"
           cache: npm
-          cache-dependency-path: console/package-lock.json
+          cache-dependency-path: |
+            console/package-lock.json
+            runtimes/native-agent/package-lock.json
       - name: build console
         # Same reason as ci.yml: the release build has no use for the
         # browser `playwright` would otherwise fetch on install.
@@ -37,9 +39,17 @@ jobs:
         run: |
           set -euo pipefail
           cd console && npm ci && npm run build
+      # The native agent runtime's sidecar (ADR-W039), bundled into one
+      # file. It is packaged per architecture below, next to the Node
+      # runtime it runs on, so a control-plane host still needs no Node.
+      - name: bundle native agent sidecar
+        run: |
+          set -euo pipefail
+          cd runtimes/native-agent && npm ci && npm test && npm run bundle
       - name: build matrix
         env:
           CGO_ENABLED: "0"
+          NODE_CACHE: ${{ runner.tool_cache }}/wildstone-node
         run: |
           set -euo pipefail
           mkdir -p dist
@@ -88,6 +98,13 @@ jobs:
           # megabytes of art inside the binary, and this is how a theme
           # gets its picture without reopening that.
           tar -czf dist/wallpapers.tar.gz -C wallpapers .
+          # The native agent runtime: the bundled sidecar plus a pinned,
+          # checksum-verified Node, one archive per architecture
+          # (native-agent_linux_<arch>.tar.gz). install.sh puts it in
+          # /usr/lib/wildstone/native-agent.
+          for arch in amd64 arm64; do
+            scripts/build-native-agent.sh "$arch" dist
+          done
           cp scripts/install.sh dist/install.sh
           cp scripts/uninstall.sh dist/uninstall.sh
           # Bare names, no ./ prefix: the installer greps checksums.txt

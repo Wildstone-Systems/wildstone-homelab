@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/agentapi"
 	"github.com/chickenrat17/wildstone-homelab/keystone/automation"
@@ -85,6 +86,11 @@ func (g *Gateway) Invoke(ctx context.Context, req agentapi.InvokeRequest) (agent
 		return agentapi.InvokeResult{Outcome: agentapi.OutcomeDenied, Reason: err.Error()}, nil
 	}
 
+	// Steps 2–5 are one reservation: see Gateway.reserve.
+	g.reserve.Lock()
+	release := sync.OnceFunc(g.reserve.Unlock)
+	defer release()
+
 	// 2. The aggregate budget (runner.go:474-488). The runner moves the
 	// task to waiting when it hits this itself; the gateway only
 	// refuses, because the slice's state transition is the runner's
@@ -136,6 +142,9 @@ func (g *Gateway) Invoke(ctx context.Context, req agentapi.InvokeRequest) (agent
 		return agentapi.InvokeResult{}, fmt.Errorf("agentgateway: checkpointing a tool call: %w", err)
 	}
 	rec.StepSeq = step
+	// The step is written, so this call now counts against the budget
+	// whatever happens to it: the reservation is complete.
+	release()
 	attempt, err := g.Ledger.StartAttempt(step)
 	if err != nil {
 		return agentapi.InvokeResult{}, fmt.Errorf("agentgateway: checkpointing a tool call: %w", err)

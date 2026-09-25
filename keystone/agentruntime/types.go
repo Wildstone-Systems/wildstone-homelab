@@ -6,7 +6,7 @@ import "github.com/chickenrat17/wildstone-homelab/keystone/plan"
 // the (already redacted/enveloped/truncated) result it got back.
 //
 // Moved from keystone/butler (ADR-W039 Phase 2b, #337) so that
-// keystone/agentruntime/native's Runner and keystone/butler's Toolset
+// keystone/agentruntime/legacy's Runner and keystone/butler's Toolset
 // implementations can share one shape without native importing butler:
 // butler.ToolCallRecord is now a type alias of this.
 type ToolCallRecord struct {

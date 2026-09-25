@@ -7,12 +7,12 @@ package main
 // itself is the audit record of what was asked, whether or not
 // anything is waiting synchronously on the answer. For the native
 // runtime it is additionally served in-process, right here, by the same
-// native Phraser and the same wording/fallback contract the engine has
-// always had (never any tools, the rule's own wording used whenever
-// this returns an error). A non-native runtime has no synchronous
-// answer path yet — a future bridge answers the recorded delivery
-// instead — so it falls back exactly as an unreachable Agent already
-// does.
+// Phraser (keystone/agentruntime/legacy) and the same wording/fallback
+// contract the engine has always had (never any tools, the rule's own
+// wording used whenever this returns an error). A non-native runtime
+// has no synchronous answer path yet — a future bridge answers the
+// recorded delivery instead — so it falls back exactly as an
+// unreachable Agent already does.
 //
 // Extracted to its own function, rather than inlined where it is wired
 // in serve(), so it is unit-testable without standing up the whole
@@ -26,7 +26,7 @@ import (
 	"strconv"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/agentapi"
-	"github.com/chickenrat17/wildstone-homelab/keystone/agentruntime/native"
+	"github.com/chickenrat17/wildstone-homelab/keystone/agentruntime/legacy"
 	"github.com/chickenrat17/wildstone-homelab/keystone/automation"
 	"github.com/chickenrat17/wildstone-homelab/keystone/butler/provider"
 	"github.com/chickenrat17/wildstone-homelab/keystone/redact"
@@ -60,11 +60,11 @@ func newReviewedEscalator(db *runtimedb.DB, log *slog.Logger, providerFor func(r
 		if err != nil || p == nil {
 			return "", fmt.Errorf("assigned Agent %s has no available provider: %v", agent, err)
 		}
-		facts := make([]native.Fact, 0, len(req.Facts))
+		facts := make([]legacy.Fact, 0, len(req.Facts))
 		for _, f := range req.Facts {
-			facts = append(facts, native.Fact{Label: f.Label, Content: f.Content})
+			facts = append(facts, legacy.Fact{Label: f.Label, Content: f.Content})
 		}
-		phraser := &native.Phraser{Provider: p, Model: b.ProviderModel,
+		phraser := &legacy.Phraser{Provider: p, Model: b.ProviderModel,
 			Record: func(_ context.Context, providerName, prompt, reply string) error {
 				_, err := db.InsertButlerSession(runtimedb.ButlerSession{
 					Principal: butlerSessionPrincipal, ActingFor: automation.Source,
@@ -75,7 +75,7 @@ func newReviewedEscalator(db *runtimedb.DB, log *slog.Logger, providerFor func(r
 				})
 				return err
 			}}
-		return phraser.Phrase(ctx, native.PhraseRequest{
+		return phraser.Phrase(ctx, legacy.PhraseRequest{
 			Rule: req.Rule, Instruction: req.Instruction, Fallback: req.Fallback, Facts: facts,
 		})
 	}

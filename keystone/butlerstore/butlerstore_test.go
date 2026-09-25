@@ -17,7 +17,7 @@ import (
 	"time"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/agentapi"
-	"github.com/chickenrat17/wildstone-homelab/keystone/agentruntime/native"
+	"github.com/chickenrat17/wildstone-homelab/keystone/agentruntime/legacy"
 	"github.com/chickenrat17/wildstone-homelab/keystone/butler"
 	"github.com/chickenrat17/wildstone-homelab/keystone/butler/provider"
 	"github.com/chickenrat17/wildstone-homelab/keystone/internal/dbtemplate"
@@ -166,7 +166,7 @@ func newTask(t *testing.T, db *runtimedb.DB) string {
 // testGateway is a minimal, test-local agentapi.Client standing in for
 // keystone/agentgateway.Gateway (ADR-W039 Phase 2b, #337): this package
 // cannot import agentgateway (it imports keystone/butlerstore, which
-// would cycle), so these tests exercise keystone/agentruntime/native's
+// would cycle), so these tests exercise keystone/agentruntime/legacy's
 // Runner against the same ledger-driving sequence
 // keystone/agentgateway/invoke.go documents, reimplemented here over
 // the countingToolset and the *Ledger already in scope. It is
@@ -453,19 +453,19 @@ func countToolSteps(steps []butler.LedgerStep) int {
 	return n
 }
 
-// newRunner builds a native.Runner bound to id through a fresh
+// newRunner builds a legacy.Runner bound to id through a fresh
 // testGateway, with the same defaults the pre-Phase-2 helper gave every
 // test: a 12-round slice budget and the operator's own label/audience.
 // Its Toolset is reachable at r.Client.(*testGateway).Toolset for a
 // test that swaps it after construction, exactly as the old helper let
 // a test overwrite Runner.Gateway.
-func newRunner(t *testing.T, ts butler.Toolset, l *Ledger, id string) *native.Runner {
+func newRunner(t *testing.T, ts butler.Toolset, l *Ledger, id string) *legacy.Runner {
 	t.Helper()
 	h, err := l.IssueHandle(id)
 	if err != nil {
 		t.Fatalf("IssueHandle: %v", err)
 	}
-	return &native.Runner{
+	return &legacy.Runner{
 		Client: &testGateway{Toolset: ts, Ledger: l}, Handle: h, Ledger: l,
 		MaxSliceRounds:  12,
 		PermissionLabel: "operator", Audience: string(runtimedb.ButlerAudiencePrivate), Actor: "butler",
@@ -473,10 +473,10 @@ func newRunner(t *testing.T, ts butler.Toolset, l *Ledger, id string) *native.Ru
 }
 
 // newRunnerWithProvider is newRunner plus the one field every single-
-// shot call site also needs, since native.Runner.Run no longer takes
+// shot call site also needs, since legacy.Runner.Run no longer takes
 // the provider or the task id as call arguments (both moved onto the
 // Runner: Provider is a field, and the task comes from Handle).
-func newRunnerWithProvider(t *testing.T, ts butler.Toolset, l *Ledger, id string, p provider.Provider) *native.Runner {
+func newRunnerWithProvider(t *testing.T, ts butler.Toolset, l *Ledger, id string, p provider.Provider) *legacy.Runner {
 	t.Helper()
 	r := newRunner(t, ts, l, id)
 	r.Provider = p

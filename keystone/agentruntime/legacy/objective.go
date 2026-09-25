@@ -1,4 +1,4 @@
-package native
+package legacy
 
 // Objective/effect classification (ADR-W030), still ledger-backed
 // directly (see runner.go's SliceLedger doc): a separate, tool-free
@@ -25,7 +25,7 @@ const objectivePrompt = `Classify both required and claimed effects. A claim of 
 // not happen; it never means the turn's own answer was wrong.
 func (r *Runner) verifyObjective(ctx context.Context, taskID, request, answer, manifestVersion string) error {
 	if r.Ledger == nil {
-		return fmt.Errorf("agentruntime/native: objective verification unavailable")
+		return fmt.Errorf("agentruntime/legacy: objective verification unavailable")
 	}
 	objective, err := r.Ledger.Objective(taskID)
 	if err != nil {
