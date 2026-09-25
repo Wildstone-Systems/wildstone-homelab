@@ -25,6 +25,7 @@ const (
 	RuleSecretValuesForbidden    = "secret-values-forbidden"
 	RuleButlerAdminScope         = "butler-admin-scope"
 	RuleAutomationActionTier     = "automation-action-tier"
+	RuleLdapUserEmailUnique      = "ldap-user-email-unique"
 )
 
 // automationTiers is the closed set of action tiers a household rule may
@@ -123,6 +124,7 @@ func (e *Engine) Validate(ch Change) (violations, exempted []Violation) {
 		currentByKey[string(r.Kind)+"/"+r.Metadata.Name] = r
 	}
 	proposedRoutes := map[string]bool{}
+	emailOwners := ldapEmailOwners(ch.Proposed)
 
 	var all []Violation
 	for _, r := range ch.Proposed {
@@ -159,6 +161,11 @@ func (e *Engine) Validate(ch Change) (violations, exempted []Violation) {
 				continue
 			}
 			all = append(all, automationRules(r)...)
+		case resource.KindLdapUser:
+			if r.LdapUser == nil {
+				continue
+			}
+			all = append(all, ldapUserRules(r, emailOwners)...)
 		}
 	}
 	// Deletions of admin routes by the butler (RuleButlerAdminScope
@@ -183,6 +190,55 @@ func (e *Engine) Validate(ch Change) (violations, exempted []Violation) {
 		}
 	}
 	return violations, exempted
+}
+
+// ldapEmailKey is how the directory compares addresses: LLDAP keeps a
+// UNIQUE index on the lowercased email, so two spellings that differ
+// only in case are the same address to it.
+func ldapEmailKey(node, email string) string {
+	return node + "\x00" + strings.ToLower(strings.TrimSpace(email))
+}
+
+// ldapEmailOwners maps each (directory node, email) in the target tree
+// to the usernames declaring it.
+func ldapEmailOwners(proposed []resource.Resource) map[string][]string {
+	out := map[string][]string{}
+	for _, r := range proposed {
+		if r.Kind != resource.KindLdapUser || r.LdapUser == nil || r.LdapUser.Email == "" {
+			continue
+		}
+		k := ldapEmailKey(r.Metadata.Node, r.LdapUser.Email)
+		out[k] = append(out[k], r.LdapUser.Username)
+	}
+	return out
+}
+
+// ldapUserRules refuses a household member whose email another member
+// on the same directory already has.
+//
+// The directory refuses it anyway, but far too late: the plan applies,
+// the provisioning job fails its createUser on LLDAP's unique email
+// index, and because the job reports failure for the whole run, every
+// later plan that touches the directory fails with it — an app install
+// an hour afterwards, for a reason nowhere near the app. Refusing at
+// proposal time names the two accounts while the operator is still
+// looking at them.
+func ldapUserRules(r resource.Resource, emailOwners map[string][]string) []Violation {
+	var others []string
+	for _, u := range emailOwners[ldapEmailKey(r.Metadata.Node, r.LdapUser.Email)] {
+		if u != r.LdapUser.Username {
+			others = append(others, u)
+		}
+	}
+	if len(others) == 0 {
+		return nil
+	}
+	sort.Strings(others)
+	return []Violation{{
+		Rule: RuleLdapUserEmailUnique, Kind: string(r.Kind), Name: r.Metadata.Name,
+		Msg: fmt.Sprintf("email %q is already used by %s on this directory; each household member needs their own address",
+			r.LdapUser.Email, strings.Join(others, ", ")),
+	}}
 }
 
 // routeRules applies the Route-scoped invariants to one proposed route.

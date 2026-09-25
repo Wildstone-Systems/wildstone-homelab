@@ -363,3 +363,84 @@ func TestJobEnvIsHeldToTheContainerSecretRule(t *testing.T) {
 		})
 	}
 }
+
+func ldapUser(name, node, email string) resource.Resource {
+	return resource.Resource{
+		ApiVersion: resource.ApiVersion,
+		Kind:       resource.KindLdapUser,
+		Metadata:   resource.Metadata{Name: name, Owner: "household", Node: node},
+		LdapUser:   &resource.LdapUserSpec{Username: name, Email: email},
+	}
+}
+
+// Two members of one directory cannot share an email. LLDAP refuses the
+// second createUser on its unique index, and the provisioning job that
+// hits it fails every later plan touching the directory.
+func TestLdapUserEmailUnique(t *testing.T) {
+	e := NewEngine(nil)
+	sam := ldapUser("sam", "n1", "sam@example.com")
+	cases := []struct {
+		name   string
+		change Change
+		want   []string
+	}{
+		{
+			name: "a new member with another member's email",
+			change: Change{
+				Proposed: []resource.Resource{sam, ldapUser("kim", "n1", "sam@example.com")},
+				Current:  []resource.Resource{sam},
+			},
+			want: []string{RuleLdapUserEmailUnique},
+		},
+		{
+			name: "case is not a different address to the directory",
+			change: Change{
+				Proposed: []resource.Resource{sam, ldapUser("kim", "n1", "Sam@Example.com")},
+				Current:  []resource.Resource{sam},
+			},
+			want: []string{RuleLdapUserEmailUnique},
+		},
+		{
+			name: "changing a member's email onto another's",
+			change: Change{
+				Proposed: []resource.Resource{sam, ldapUser("kim", "n1", "sam@example.com")},
+				Current:  []resource.Resource{sam, ldapUser("kim", "n1", "kim@example.com")},
+			},
+			want: []string{RuleLdapUserEmailUnique},
+		},
+		{
+			name: "distinct emails",
+			change: Change{
+				Proposed: []resource.Resource{sam, ldapUser("kim", "n1", "kim@example.com")},
+				Current:  []resource.Resource{sam},
+			},
+		},
+		{
+			name: "the same email on another directory is another account",
+			change: Change{
+				Proposed: []resource.Resource{sam, ldapUser("sam2", "n2", "sam@example.com")},
+				Current:  []resource.Resource{sam},
+			},
+		},
+		{
+			name: "an existing duplicate does not wedge an unrelated change",
+			change: Change{
+				Proposed: []resource.Resource{sam, ldapUser("kim", "n1", "sam@example.com"), route("app", "internal_only", "none")},
+				Current:  []resource.Resource{sam, ldapUser("kim", "n1", "sam@example.com")},
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, _ := e.Validate(tc.change)
+			if strings.Join(ruleIDs(got), ",") != strings.Join(tc.want, ",") {
+				t.Fatalf("violations = %v, want %v", got, tc.want)
+			}
+			for _, v := range got {
+				if v.Name != "kim" || !strings.Contains(v.Msg, "sam") {
+					t.Fatalf("violation %v should be on kim and name sam", v)
+				}
+			}
+		})
+	}
+}
