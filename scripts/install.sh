@@ -14,10 +14,10 @@
 #          [--node-id <id>] [--skip-docker] [--version vX.Y.Z]
 #   --wallpaper-dir overrides the pictures the themes ship with, the
 #   same way --console-dir overrides the Console.
-#   --agent-runtime native runs Butler conversations on the native agent
-#   runtime (the OpenAI Agents SDK, ADR-W039) for Butlers on OpenAI-
-#   compatible and Ollama models; legacy (the default) keeps them all on
-#   Keystone's own loop. The runtime itself is always installed.
+#   --agent-runtime <native|legacy> picks the loop Butler conversations
+#   run on. A fresh install defaults to native (the OpenAI Agents SDK,
+#   ADR-W039, for Butlers on OpenAI-compatible and Ollama models) when
+#   the runtime passes its self-check; an upgrade keeps its setting.
 #
 #   Either role also takes [--artifact-dir <dir>] to install from local
 #   release artifacts instead of downloading (private repos, air-gap),
@@ -65,6 +65,9 @@ ARTIFACT_DIR=""
 CONSOLE_DIR=""
 CATALOG_DIR=""
 AGENT_RUNTIME=""
+# Set to 1 by install_native_agent when the runtime installed AND passed
+# its self-check: the condition for making it the default.
+NATIVE_AGENT_OK=0
 WALLPAPER_DIR=""
 KEYSTONE_ARGS=""
 KEYSTONE_ARGS_SET=0
@@ -852,6 +855,7 @@ install_native_agent() {
   # library is too old for this Node fails here, and it is reported
   # rather than fatal: nothing depends on the runtime yet.
   if "$dir/bin/node" "$dir/main.mjs" --health 2>/dev/null | grep -q '"type":"ready"'; then
+    NATIVE_AGENT_OK=1
     log "installed the native agent runtime to $dir ($(tr '\n' ' ' < "$dir/VERSION"))"
   else
     log "WARNING: installed the native agent runtime to $dir, but its self-check failed: run '$dir/bin/node $dir/main.mjs --health' to see why"
@@ -1697,8 +1701,21 @@ if [ "$ROLE" = keystone ]; then
   # flag package takes the LAST occurrence and reports nothing, so the
   # override would not even announce itself — the audit instance would
   # simply come up on the wrong interface.
-  # Only when asked: an upgrade without --agent-runtime keeps whatever
-  # the env file already says, like every other flag here.
+  # The agent runtime (ADR-W039). A FRESH install — no env file yet —
+  # starts on the native runtime when it installed and passed its
+  # self-check; that is the product's default for a new household. An
+  # UPGRADE is never switched: without --agent-runtime it keeps whatever
+  # the env file already says (nothing, for an install that predates
+  # the runtime, which is Keystone's legacy default), like every other
+  # flag here. --agent-runtime legacy opts a fresh install out.
+  if [ -z "$AGENT_RUNTIME" ] && [ ! -f "$KEYSTONE_ENV" ]; then
+    if [ "$NATIVE_AGENT_OK" = 1 ]; then
+      AGENT_RUNTIME=native
+      log "Butler conversations will run on the native agent runtime (pass --agent-runtime legacy to keep Keystone's own loop)"
+    else
+      log "the native agent runtime is not available on this host; Butler conversations will run on Keystone's own loop"
+    fi
+  fi
   if [ -n "$AGENT_RUNTIME" ]; then
     case "$AGENT_RUNTIME" in
       legacy|native) ;;

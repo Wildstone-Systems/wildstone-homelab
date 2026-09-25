@@ -165,9 +165,17 @@ It talks to Keystone over newline-delimited JSON on stdin and stdout
 Which loop drives a Butler conversation is a deployment choice. The model is
 still only ever the one the Butler was assigned (ADR-W031 A2/A6).
 
-- **Turning it on:** `keystone -agent-runtime=native`, or
-  `install.sh --agent-runtime native`, which writes the flag into
-  `/etc/wildstone/keystone.env`. The default is `legacy`.
+- **Turning it on:**
+  - A **fresh install** turns it on. `install.sh` writes
+    `-agent-runtime native` into `/etc/wildstone/keystone.env` when the
+    runtime installed and passed its self-check. If it didn't, the install
+    stays on `legacy` and says so.
+  - `--agent-runtime legacy` opts a fresh install out.
+  - An **upgrade is never switched**. It keeps whatever `keystone.env`
+    already says, and an install from before this runtime has no setting,
+    so it stays on `legacy`. Pass `--agent-runtime native` to switch it.
+  - Keystone's own flag default stays `legacy`, so the choice is always
+    visible in `keystone.env`.
 - **Which Butlers use it:** Butlers on OpenAI, OpenRouter, OpenAI-compatible
   and Ollama routes. Ollama is reached through its OpenAI-compatible `/v1`
   endpoint. Anthropic routes stay on `Runner`.
