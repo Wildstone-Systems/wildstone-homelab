@@ -418,7 +418,7 @@ func (s *Server) listPackages(r *http.Request, id principal.Identity) (any, int,
 		out = append(out, packageView{
 			Name: p.Metadata.Name, Version: p.Metadata.Version,
 			Capability: p.Metadata.Capability, Profile: p.Metadata.Profile,
-			Params: resolveParams(p.Params, facts, installedParams[p.Metadata.Name]), Provides: p.Provides, Requires: p.Requires,
+			Params: resolveParams(p.Params, facts, installedParamsForPackage(installedParams, p)), Provides: p.Provides, Requires: p.Requires,
 			Publishes:       p.Publishes,
 			ProvidedSecrets: pkgspec.ProvidedSecrets(p),
 			Icon:            packageIcon(p),
@@ -433,6 +433,32 @@ func (s *Server) listPackages(r *http.Request, id principal.Identity) (any, int,
 		})
 	}
 	return out, http.StatusOK, nil
+}
+
+// installedFromPlans keys instanced packages by package#instance so two
+// profiles cannot overwrite each other's answers. The catalog endpoint has
+// one row per package, however, so expose the recorded params when there is
+// exactly one installed instance of that package. This lets the Console
+// carry the instance through removal without asking the operator to retype
+// it.
+func installedParamsForPackage(all map[string]map[string]string, p *pkgspec.Package) map[string]string {
+	if params, ok := all[p.Metadata.Name]; ok {
+		return params
+	}
+	prefix := p.Metadata.Name + "#"
+	var found map[string]string
+	for key, params := range all {
+		if !strings.HasPrefix(key, prefix) {
+			continue
+		}
+		if found != nil {
+			// One catalog row cannot represent multiple installed
+			// instances safely; leave the params unresolved.
+			return nil
+		}
+		found = params
+	}
+	return found
 }
 
 // claimedByAnotherCapability refuses an install that would re-own a

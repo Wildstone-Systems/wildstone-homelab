@@ -2001,16 +2001,23 @@ export const api = {
   // screen most people use. The catalog and the recorded install params
   // are what answer "what would the sibling still need", and only the
   // control plane has them.
-  disablePackage: (pkg: string) =>
-    call<PlanRecord>("POST", "/api/v1/capabilities/disable", { package: pkg }),
+  disablePackage: (pkg: string, instance?: string) =>
+    call<PlanRecord>("POST", "/api/v1/capabilities/disable", {
+      package: pkg,
+      ...(instance ? { instance } : {}),
+    }),
   // The same computation without proposing anything, so the preview is
   // the plan rather than a second guess at it. Filtering by package
   // stamp here still disagreed with the server: the surviving sibling's
   // needs are excluded there and cannot be known from the stamps alone,
   // so Secret/restic-books was listed as deletable and then wasn't
   // deleted.
-  previewDisablePackage: (pkg: string) =>
-    call<PlanRecord>("POST", "/api/v1/capabilities/disable", { package: pkg, dryRun: true }),
+  previewDisablePackage: (pkg: string, instance?: string) =>
+    call<PlanRecord>("POST", "/api/v1/capabilities/disable", {
+      package: pkg,
+      ...(instance ? { instance } : {}),
+      dryRun: true,
+    }),
   plan: (id: string) => call<PlanRecord>("GET", `/api/v1/plans/${encodeURIComponent(id)}`),
   approvePlan: (id: string) =>
     call<unknown>("POST", `/api/v1/plans/${encodeURIComponent(id)}/approve`),
