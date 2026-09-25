@@ -42,3 +42,9 @@ f663f34714f45f1cde50c73b37387960d5cf5ddb:keystone/redact/defectd_test.go:generic
 bdd481ab8ce3d768772ba881e1977ea9bb4cc903:keystone/api/handlers_connections_test.go:generic-api-key:208
 bdd481ab8ce3d768772ba881e1977ea9bb4cc903:keystone/api/handlers_connections_test.go:generic-api-key:210
 bdd481ab8ce3d768772ba881e1977ea9bb4cc903:keystone/api/handlers_connections_test.go:generic-api-key:235
+
+# Same class (#360). 71cabbb's Console render check passed a fake runtime
+# credential ("wst_" plus eight hex-looking characters) to the card that
+# shows a rotated secret once. Invented, never valid; the render check now
+# assembles it from fragments at run time, so only this commit carries it.
+71cabbb91b0bad5495ebdb355117b2a89413d4ea:console/scripts/render-check.tsx:generic-api-key:246
