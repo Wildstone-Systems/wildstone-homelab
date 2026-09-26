@@ -30,6 +30,7 @@ import (
 	"github.com/chickenrat17/wildstone-homelab/keystone/reconcile"
 	"github.com/chickenrat17/wildstone-homelab/keystone/redact"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
+	"github.com/chickenrat17/wildstone-homelab/keystone/speech"
 	"github.com/chickenrat17/wildstone-homelab/keystone/statefile"
 	"github.com/chickenrat17/wildstone-homelab/keystone/upkeep"
 )
@@ -55,6 +56,11 @@ type Server struct {
 	// uploads are drawn, which is what a deployment that installed no
 	// wallpaper artifact gets.
 	WallpaperDir string
+
+	// Speech transcribes voice messages and dashboard dictation
+	// (ADR-W042). nil, or a Router whose Mode is off, means voice is
+	// refused with a "please type" answer.
+	Speech *speech.Router
 
 	// trustedIngress is the exact set of remote addresses the identity
 	// proxy speaks from (ADR-W030 A8.1). It gates the household portal

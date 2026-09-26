@@ -1,0 +1,91 @@
+# Speech capability, profile "speaches": turns the household's voice
+# messages into text on its own hardware, so what was said never leaves
+# the house (ADR-W042). Speaches serves the OpenAI transcription API
+# over faster-whisper; the same container can later speak replies with
+# Kokoro, the text-to-speech engine the project already prefers.
+#
+# NO ROUTE, ON PURPOSE. Like ai-ollama, this is an API with no login of
+# its own. Its one caller is Keystone, which runs on the host rather
+# than in a container, so the port is published on 127.0.0.1 only: the
+# same machine can reach it, the network cannot. A browser never talks
+# to it — the dashboard's dictation button records in the browser and
+# posts to Keystone, which checks who is speaking before anything is
+# transcribed.
+#
+# INSTALL IT ON KEYSTONE'S OWN NODE, for that reason: a loopback port on
+# another machine is not reachable from Keystone.
+#
+# To turn voice on after installing, add to KEYSTONE_ARGS
+#   -speech-mode local -speech-url http://127.0.0.1:18000/v1
+# (with the port you chose here). Keystone asks this container to
+# download its model (-speech-model) at startup and retries until the
+# container is up; the first download is a few hundred MB.
+#
+# CPU-only as shipped: this is Speaches' CPU image, and it runs int8
+# models. A GPU build would be a separate profile with the render node
+# passed through. The default model transcribes a 30-second voice note
+# in a few seconds on a modern CPU.
+#
+# Models are large and re-downloadable, so the volume is deliberately
+# outside any BackupPlan (the ADR-W013 A4 "rip it again" posture).
+# Audio is never written here: requests are transcribed in memory.
+#
+# Image digest is REAL, resolved 2026-09-26 via the OCI registry API:
+#   ghcr.io/speaches-ai/speaches:0.8.3-cpu -> sha256:21e3df06...3ef8
+# (the same digest latest-cpu pointed at that day).
+apiVersion: wildstone.dev/v1
+kind: Package
+metadata:
+  name: speech-speaches
+  version: 1.0.0
+  capability: speech
+  profile: speaches
+requires:
+  - { trait: storage, class: bulk }
+params:
+  - { name: node, required: true, description: "Which machine to install this on.", source: node }
+  - { name: port, default: "18000", description: "Loopback port Keystone reaches the engine on (127.0.0.1 only)." }
+  # A model and its decoder in memory; small is ~1 GB, large-v3-turbo
+  # ~3 GB. The ceiling keeps a runaway request from taking the node.
+  - { name: memory, default: "4g", description: "Memory ceiling for the speech engine, e.g. 4g." }
+  # How long a model stays in memory after its last voice message. A
+  # reload costs a few seconds, which a household sending voice notes
+  # through the day would otherwise pay every time.
+  - { name: keep_loaded_seconds, default: "1800", description: "Seconds to keep the speech model in memory after its last use; -1 keeps it loaded." }
+policies:
+  classifications: [internal_only]
+  dataSensitivity: high
+templates:
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: speaches-models, node: "{{ .Params.node }}" }
+    spec: { name: speaches-models }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: speaches, node: "{{ .Params.node }}" }
+    spec:
+      image: "ghcr.io/speaches-ai/speaches@sha256:21e3df06d842fb7802ab470dd77c25f0e8c0d22950e8d8c6ae886e851af53ef8"
+      env:
+        STT_MODEL_TTL: "{{ .Params.keep_loaded_seconds }}"
+        # The Gradio web UI is a second, unauthenticated way in; nothing
+        # here needs it.
+        ENABLE_UI: "false"
+        # The default is debug, which is more than an operator wants in
+        # the container log.
+        LOG_LEVEL: "info"
+        WHISPER__INFERENCE_DEVICE: "cpu"
+        WHISPER__COMPUTE_TYPE: "int8"
+      ports:
+        - "127.0.0.1:{{ .Params.port }}:8000"
+      mounts:
+        - { source: speaches-models, target: /home/ubuntu/.cache/huggingface/hub }
+      # It needs no privilege at all: it reads audio off a socket and
+      # writes text back.
+      capDrop: [ALL]
+      noNewPrivileges: true
+      resources:
+        memory: "{{ .Params.memory }}"
+        pidsLimit: 512
+      restart: unless-stopped

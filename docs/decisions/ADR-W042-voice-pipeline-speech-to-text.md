@@ -1,10 +1,10 @@
 # ADR-W042: The voice pipeline, part one — speech to text
 
-- **Status:** proposed (research complete; not implemented)
+- **Status:** accepted; slice 1 implemented (`keystone/speech`, `packages/speech-speaches`, `-speech-*` flags); slices 2–7 not yet
 - **Governed by:** ADR-W033 where they overlap (B6 privacy chain, B7 Connections, B9 addressing).
 - **Scope:** turning a recorded voice message into the text of an ordinary Agent turn, on Telegram, Discord, Slack and Matrix, and dictation on the family dashboard (the assistant widget and the conversations page). It does not decide text-to-speech replies, wake words, live streaming audio, or shared household devices; §8 records what those will need so part one does not block them.
 - **Depends on / relates to:** [`docs/02-implementation-scope.md`](../02-implementation-scope.md) §7 ("Voice remains post-v1. Local transcription and Kokoro text-to-speech are the current preferences, using the same identity/conversation boundary"); [`docs/agent-architecture-baseline.md`](../agent-architecture-baseline.md) "Privacy gateway" and AC12 (transcription is an external processing boundary); [`docs/audit/findings/155-identity.md`](../audit/findings/155-identity.md) F-155-12 (voice ingress must establish a Person before admission); ADR-W026 G5 (a transport is its `Transport` methods and nothing else).
-- **Implementation:** none yet. §7 lists the slices and the files each one touches.
+- **Implementation:** slice 1: `keystone/speech` (Transcriber, Client, Router), `keystone/cmd/keystone/speech.go` (flags), `packages/speech-speaches`. §7 lists the remaining slices.
 
 ---
 
@@ -22,7 +22,7 @@ Every inbound path carries text only, today:
 
 Keystone's own inbound handler, `receiveChatMessage` (`keystone/api/handlers_chat_message.go`), rejects empty text and resolves the sender's binding before anything reaches an Agent. That ordering matters for voice (§2.2).
 
-The house has no audio code, no STT/TTS package, and no GPU: `ContainerSpec` has no device passthrough (ADR-W013 A2), so anything local runs on CPU, like `packages/ai-ollama`.
+The house has no audio code and no STT/TTS package. Local models ship CPU-only, like `packages/ai-ollama`; `ContainerSpec.devices` can now pass a GPU's render node through, but no shipped package uses it yet.
 
 ### 1.1 Engines considered
 
@@ -129,11 +129,30 @@ type Transcriber interface {
 }
 ```
 
-One implementation, `speech.OpenAICompatible{BaseURL, Model, Key}`, serves both Speaches (`http://speaches:8000`, no key) and OpenAI (`https://api.openai.com`, `OPENAI_API_KEY` from env, as ADR-W017 A4 requires for provider keys).
+One implementation, `speech.Client{BaseURL, Model, Key, Where, DownloadsModels}`, serves both:
+
+- Speaches: `http://127.0.0.1:18000/v1`, no key, `DownloadsModels: true`. Speaches answers 404 for a model it has not downloaded; the Client then starts `POST /v1/models/{id}` in the background and returns `ErrWarming` ("try again shortly"). Keystone also calls it at startup (`Router.Warm`), retrying until the container is up.
+- OpenAI: `https://api.openai.com/v1`. `Key` is a function, read on every call, so a key entered in the Console while Keystone runs is picked up; a missing key is `ErrUnavailable`, and no request goes out.
+
+`speech.Router` holds the mode and both engines and applies §2.2 steps 1, 4 and 5: size and format checks, the local-first choice, the cloud refusal for a turn that may not leave the house (it checks each engine's own `Processing()`, not which slot it was configured in), one transcription at a time, the timeout, and no second opinion from the cloud for a recording the local engine found empty.
 
 ### 3.3 Settings
 
-Per household, in the Console's Agent settings: `voice: off | local | local-then-cloud | cloud` (default `off` until a Speaches package is installed, then `local`), `voice_max_seconds` (120), `voice_language` (`auto`). Per Connection: voice on/off (default on for DMs). `local-then-cloud` still obeys §2.2 step 4 per turn.
+Deployment flags, the same shape as `-ntfy-url` and `-calendar-url`. No flag ever carries a credential.
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `-speech-mode` | `off` | `off`, `local`, `local-then-cloud` or `cloud`. `local-then-cloud` still obeys §2.2 step 4 on every turn. |
+| `-speech-url` | empty | The local engine, e.g. `http://127.0.0.1:18000/v1`. Empty means no local engine. |
+| `-speech-model` | `Systran/faster-whisper-small` | The local model. `Systran/faster-distil-whisper-small.en` suits an English-only house. |
+| `-speech-cloud-model` | `gpt-4o-mini-transcribe` | The OpenAI model. |
+| `-speech-language` | `auto` | Two-letter hint, e.g. `en`. |
+| `-speech-max-seconds` | 120 | Longest recording accepted (5–600). |
+| `-speech-timeout` | 60s | Longest one transcription may take (5s–10m). |
+
+A value that cannot mean anything stops Keystone at startup. An engine that is named but not usable yet (no key, container not up) is only a warning: Keystone starts, and the Router answers "not available" until it is.
+
+Moving the mode into the Console, and a per-Connection voice switch, are follow-ups once slices 2–4 show what households actually change.
 
 ---
 
@@ -141,10 +160,12 @@ Per household, in the Console's Agent settings: `voice: off | local | local-then
 
 `packages/speech-speaches/package.yaml`, modelled on `ai-ollama`:
 
-- capability `speech`, profile `speaches`; image pinned by digest (ADR-W003 A4.2) and in `packages/versions.lock`.
-- **No Route**: an unauthenticated audio API reached only as `http://speaches:8000` on the Wildstone network.
+- capability `speech`, profile `speaches`; image `ghcr.io/speaches-ai/speaches:0.8.3-cpu`, pinned by digest (ADR-W003 A4.2); recorded in `packages/versions.lock`.
+- **No Route**: an unauthenticated audio API. Keystone runs on the host, not in a container, so the port is published on `127.0.0.1` only (param `port`, default 18000). The package must therefore be installed on Keystone's own node.
+- Hardened: all capabilities dropped, no-new-privileges, a memory ceiling (param `memory`, default `4g`) and a PID limit.
 - A `speaches-models` volume outside any BackupPlan (models re-download).
-- Params: `node`, `stt_model` (default a CPU-friendly int8 faster-whisper *small*; `distil-small.en` for English-only homes; *large-v3-turbo* for a strong CPU), `keep_alive`.
+- Params: `node`, `keep_loaded_seconds` (how long the model stays in memory). The model is chosen by Keystone's `-speech-model`, which asks the container to download it, so the choice lives in one place.
+- Hardening: the Gradio web UI is off (`ENABLE_UI=false`), inference is CPU `int8`, and the log level is `info`.
 - `policies.classifications: [internal_only]`.
 - CPU only, for the same reason as Ollama. A 30-second note on a small model takes a few seconds on a modern CPU; that is acceptable for voice notes, not for live conversation (§8).
 
@@ -193,4 +214,4 @@ Slices 3, 5, 6 and 7 depend on 2; slice 4 depends on 1 only, so it can run along
 - **Spoken replies (TTS).** Speaches already serves Kokoro at `/v1/audio/speech`. `Transport.Send` needs an optional voice-reply method (Telegram `sendVoice`, Discord voice message upload, Slack file upload). Reply in voice only when the person spoke, and per a setting.
 - **Household devices and wake words.** Route through Home Assistant Assist and the Wyoming protocol (openWakeWord, `wyoming-faster-whisper`, Piper), with satellites such as the Home Assistant Voice PE talking over the network — no USB passthrough needed. `packages/home-automation` would expose an Assist conversation agent that forwards to the Wildstone Agent.
 - **Before any shared device ships**, F-155-12 must be closed: a new *ambiguous speaker* class that gets only configured basic household actions, because a kitchen speaker is not a bound Person.
-- **Live conversation** needs streaming STT and a GPU (device passthrough, ADR-W013 A2) to be pleasant; out of scope until then.
+- **Live conversation** needs streaming STT and, to be pleasant, a GPU profile of the speech package (render node via `ContainerSpec.devices`); out of scope until then.
