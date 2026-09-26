@@ -129,10 +129,6 @@ path checks, not the permission (A2).
 Agents on Homepage and over their Connections (ADR-W033 A4, B8). Homepage
 shows the Console link to Owners only.
 
-_Code not yet conformant: before the first Owner exists, `consoleForwardAuth`
-still lets `console_users` membership decide; under ADR-W033 A3 the
-installer creates the first Owner, so that window should not arise._
-
 ### The trust boundary is shared, and that is worth knowing
 
 `-household-ingress` names one proxy and gates Console sign-in along

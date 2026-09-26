@@ -1051,13 +1051,14 @@ func (s *Server) authenticate(r *http.Request) (principal.Identity, bool) {
 // of that seam, unconditionally, on the one path every authenticated
 // request passes through.
 //
-// Two deliberate limits, each matching forwardedUserMayHoldConsole:
+// Two deliberate limits:
 //
-//   - A name with no Person behind it passes. Person records are created
+//   - A token's name with no Person behind it passes. Tokens are the
+//     installer's and the host's path, and Person records are created
 //     through an API that lives behind this check, so refusing here would
-//     lock out a deployment that has provisioned none. The design closes
-//     that at §2.4 (installer creates the first Owner) and §2.6 (root CLI
-//     recovery); neither is built yet (#206).
+//     leave the installer no way to create the first Owner (§2.4). The
+//     Console's own door has no such exception: it refuses a forwarded
+//     name with no Person record (forwardedUserMayHoldConsole).
 //   - Only the CONSOLE's own role requires Owner. RoleAdmin is what
 //     consoleForwardAuth mints, so a RoleAdmin token is the Console's
 //     authority in another wrapper and is held to the Console's rule.

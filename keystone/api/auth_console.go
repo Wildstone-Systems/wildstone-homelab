@@ -41,7 +41,8 @@ const (
 // each person — which does not scale past the operator, has no expiry
 // story, and leaves a credential that outlives the directory account it
 // was minted for. Here, directory membership is what OFFERS the Console,
-// and the household's own record of the person is what can withdraw it.
+// and the household's own record of the person — an active Owner Person,
+// with no exception before the first one exists — is what decides it.
 // (An earlier version of this comment said group membership alone was
 // the permission, on the grounds that removal revokes. This deployment
 // cannot remove anyone from a group — see forwardedUserMayHoldConsole.)
@@ -119,33 +120,25 @@ func (s *Server) consoleForwardAuth(r *http.Request) (principal.Identity, bool) 
 // person costs them a screen they can be given back. Admitting the
 // wrong person costs the household its control plane.
 //
-// A forwarded name with NO Person record is refused too, once the
-// household has an Owner — which is the half that makes Wildstone, not
-// the directory, the authority on who administers it (design §3.2). A
-// directory administrator who adds an account to `console_users` is
-// otherwise handing out the whole control plane from outside Wildstone,
-// which is the arrangement this slice exists to end.
+// A forwarded name with NO Person record is refused, always — the half
+// that makes Wildstone, not the directory, the authority on who
+// administers it (design §3.2; ADR-W033 A4). A directory administrator
+// who adds an account to `console_users` would otherwise be handing out
+// the whole control plane from outside Wildstone.
 //
-// It is conditional on the household having an Owner, and that
-// condition is what avoids a lockout rather than merely postponing one.
-// Person records are created through the admin API, which lives behind
-// this very check — so on a deployment that has provisioned nobody,
-// refusing unknown names would leave no way in at all. Before the first
-// Owner, the directory group still decides, exactly as it did.
-//
-// The window closes by itself and cannot be re-entered. The Last Owner
-// invariant refuses to demote, disable or offboard the only active
-// Owner, so a household that has one keeps one, and this branch is
-// unreachable ever after. A deployment sitting in the window is not
-// trusting the directory by accident: it is a household that has not
-// been set up, and the group is the only statement anybody has made
-// about who should administer it.
+// That includes a household with no Owner yet. There used to be a
+// bootstrap window in which the directory group alone decided, because
+// Person records are created through an API behind this very check. It
+// is closed (ADR-W033 A3): the installer creates the first Owner itself,
+// with the bearer token it holds on the host, and never enters the
+// Console to do it. A household with no active Owner Person is one
+// nobody enters the Console of until the host makes one (`keystone
+// owner`, design §2.6).
 //
 // Recovery does not depend on this path. Bearer tokens authenticate
-// separately, and one acting for nobody is unaffected — so the
-// bootstrap admin token still reaches the API to create the first
-// Owner, which is what the installer (§2.4) and the root CLI (§2.6)
-// will formalise.
+// separately — for the `wild` CLI, the installer and the host, never as
+// a browser's way into the Console — and one acting for nobody is
+// unaffected.
 //
 // What this still does NOT do is require a trusted-ingress identity
 // link, which is what A2.1 would otherwise ask for and what
@@ -163,39 +156,27 @@ func (s *Server) forwardedUserMayHoldConsole(user string) bool {
 	// that reaches it may depend on spelling.
 	//
 	// Looser matching is only ever used to refuse. It cannot grant: no
-	// match at all still means the directory group decides, exactly as
-	// before.
+	// match at all is a refusal.
 	people, err := s.DB.ButlerMembersByHandleFold(user)
 	if err != nil {
 		// A lookup that failed is not a lookup that passed.
 		return false
 	}
 	if len(people) == 0 {
-		// Nobody on record under that name. On a provisioned household
-		// that is a directory account Wildstone has never been told
-		// about, and the group alone is not enough to administer a
-		// house (§3.2). Before the first Owner it is the only statement
-		// anybody has made, so it still decides.
-		provisioned, err := s.DB.HouseholdHasAnOwner()
-		if err != nil {
-			// A lookup that failed is not a lookup that passed.
-			return false
-		}
-		if provisioned {
-			// Said out loud, because this refusal is the one an operator
-			// cannot diagnose from the outside: the directory still says
-			// they may, the Console just stops. It is also the one that
-			// arrives on UPGRADE — a deployment whose forwarded name
-			// never exactly matched a recorded handle was admitted
-			// before and is not now — so the log line has to name the
-			// handle and the fix, or the first anybody knows is a blank
-			// screen.
-			s.Log.Warn("console refused: no household record for that name",
-				"user", user,
-				"fix", "add them on the Household screen, or `wild household members add`")
-			return false
-		}
-		return true
+		// Nobody on record under that name: a directory account
+		// Wildstone has never been told about, and the group alone is
+		// not enough to administer a house (§3.2) — with or without an
+		// Owner on record (ADR-W033 A3).
+		//
+		// Said out loud, because this refusal is the one an operator
+		// cannot diagnose from the outside: the directory still says
+		// they may, the Console just stops. The log line names the
+		// handle and the fix, or the first anybody knows is a blank
+		// screen.
+		s.Log.Warn("console refused: no household record for that name",
+			"user", user,
+			"fix", "add them on the Household screen or with `wild household members add`; with no Owner at all, `keystone owner` on the host")
+		return false
 	}
 	// Every match must qualify. With two records differing only by case
 	// there is no way to tell which one the proxy meant, and an
@@ -234,8 +215,8 @@ func hasGroup(header, want string) bool {
 // must not also be reachable directly. A trusted header on an open port
 // is not authentication." Nothing enforced that until now, so a
 // household that put the Console behind Authelia still served the whole
-// Console to anyone who could reach Keystone's port, where the sign-in
-// page offers a bearer token and the proxy is never consulted.
+// Console to anyone who could reach Keystone's port, bypassing the
+// proxy.
 //
 // It gates the PAGES, not the API. /api stays reachable with a token,
 // on purpose and not by omission: `wild` is an API client, the
@@ -243,14 +224,14 @@ func hasGroup(header, want string) bool {
 // proxy depends on them. Closing that too would turn a misconfigured
 // ingress into a house nobody can administer, and the recovery path
 // (`keystone owner`, design §2.6) deliberately does not go through the
-// API at all.
+// API at all. A token is never a browser's way into the Console
+// (ADR-W033 A4.1): the pages carry no token path.
 //
-// With no trusted ingress configured it serves everyone, and that is
-// the deliberate half rather than an oversight. A household with no
-// proxy in front has no other way in — the sign-in page's bearer token
-// IS the way in there — so refusing would lock out precisely the
-// deployments that cannot use Authelia. The gate arrives with the
-// proxy that makes it enforceable, and not before.
+// With no trusted ingress configured it serves everyone. That hands out
+// nothing: with no proxy there is no Console session to be had, so the
+// pages can only say how to sign in, and the house is administered
+// from the host with `wild`. The gate arrives with the proxy that makes
+// it enforceable, and not before.
 func (s *Server) ConsoleUIReachableFrom(r *http.Request) bool {
 	if len(s.TrustedIngressAddrs()) == 0 {
 		return true

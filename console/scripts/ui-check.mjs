@@ -1,34 +1,40 @@
 // End-to-end check of the Console in a real browser.
 //
 // The render check (render-check.tsx) proves the components render;
-// this proves the SCREEN works — token gate, navigation, the catalog
+// this proves the SCREEN works — Owner sign-in, navigation, the catalog
 // table, the generated install form, and the preview that names the
 // secrets only an operator can supply.
 //
-// Needs a browser AND a running Keystone with a real catalog, which is
-// why it is not part of `npm run build` or CI: there is no house in CI
-// to point it at. It is an operator's check, run against their own
-// control plane:
+// Needs a browser AND a running Keystone with a real catalog behind the
+// household's identity provider, which is why it is not part of
+// `npm run build` or CI: there is no house in CI to point it at. It is
+// an operator's check, run against their own control plane, as an Owner:
 //
 //   npx playwright install chromium     # once, for the browser itself
-//   WILD_API=http://your-node:9441/ npm run ui-check
+//   WILD_CONSOLE=https://console.your.house/ WILD_USER=you npm run ui-check
 //
 // `playwright` is a declared devDependency, so `npm install` is enough
 // to get the library; the browser binary is a separate download and the
 // preflight below says so when it is missing.
 //
-// It reads an operator token from ~/.wild_operator_token. It stops at
-// Preview and never clicks "Propose plan": a check that installs a
-// capability every time it runs is not a check.
+// It signs in the way an Owner does (ADR-W033 A4, A4.1): through the
+// household address, round the identity provider's OpenID Connect
+// sign-in, with the Owner's own username and password — read from
+// WILD_PASSWORD or ~/.wild_owner_password. There is no token path into
+// the Console to use instead: bearer tokens are for `wild`, the
+// installer and the host. It stops at Preview and never clicks "Propose
+// plan": a check that installs a capability every time it runs is not a
+// check.
 import { chromium } from "playwright";
 import { readFileSync } from "fs";
 
 // Whose deployment this runs against is the operator's to say, not this
 // script's: a hardcoded home directory and LAN address only ever matched
 // one machine, and put that machine's details in a public repository.
-const TOKEN_FILE = process.env.WILD_TOKEN_FILE
-  ?? `${process.env.HOME ?? "."}/.wild_operator_token`;
-const BASE = process.env.WILD_API ?? "http://127.0.0.1:9441/";
+const PASSWORD_FILE = process.env.WILD_PASSWORD_FILE
+  ?? `${process.env.HOME ?? "."}/.wild_owner_password`;
+const BASE = process.env.WILD_CONSOLE ?? "";
+const USER = process.env.WILD_USER ?? "";
 
 // Two different exits, because they are two different problems. A check
 // that failed (1) is a regression worth reading the diff over; a check
@@ -70,30 +76,39 @@ const at = (s) => { stage = s; };
 // step once the first one has gone wrong.
 const STEP_TIMEOUT = Number(process.env.WILD_TIMEOUT_MS ?? 10000);
 
-// The token, from the environment or the operator's own file. Absent, it
-// used to surface as an ENOENT stack trace naming a path the reader had
-// to work out the meaning of.
-function readToken() {
-  if (process.env.WILD_TOKEN) return process.env.WILD_TOKEN.trim();
+// The Owner's sign-in, from the environment or their own file. Absent,
+// it says so rather than surfacing as an ENOENT stack trace.
+function readSignIn() {
+  if (!BASE) {
+    cannotRun(
+      "no Console address: WILD_CONSOLE is not set",
+      "Pass the household's Console address, e.g. WILD_CONSOLE=https://console.your.house/ . " +
+        "The Console is entered through the identity provider, so Keystone's own port will not do.",
+    );
+  }
+  if (!USER) {
+    cannotRun("no Owner to sign in as: WILD_USER is not set", "Pass WILD_USER=<an active Owner's username> .");
+  }
+  if (process.env.WILD_PASSWORD) return process.env.WILD_PASSWORD;
   try {
-    return readFileSync(TOKEN_FILE, "utf8").trim();
+    return readFileSync(PASSWORD_FILE, "utf8").trim();
   } catch {
     return cannotRun(
-      `no operator token: ${TOKEN_FILE} could not be read`,
-      "Write the token to that file, or pass WILD_TOKEN=… / WILD_TOKEN_FILE=… .",
+      `no Owner password: ${PASSWORD_FILE} could not be read`,
+      "Write it to that file, or pass WILD_PASSWORD=… / WILD_PASSWORD_FILE=… .",
     );
   }
 }
 
 async function main() {
-  const TOKEN = readToken();
+  const PASSWORD = readSignIn();
 
   // The browser binary is downloaded separately from the library, so a
   // fresh `npm install` gets you an import that works and a launch that
   // does not.
   let browser;
   try {
-    browser = await chromium.launch();
+    browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE || undefined });
   } catch (e) {
     cannotRun(
       `chromium would not launch: ${e.message.split("\n")[0]}`,
@@ -113,14 +128,24 @@ async function main() {
     } catch (e) {
       cannotRun(
         `${BASE} did not answer: ${e.message.split("\n")[0]}`,
-        "Point WILD_API at a running Keystone, or start the one on this machine.",
+        "Point WILD_CONSOLE at the household's Console address.",
       );
     }
-    check("token gate is shown", await page.locator("text=Wildstone Console").count() > 0);
+    // With no session the Console sends the browser to sign in; it never
+    // offers a box to paste a token into (ADR-W033 A4.1).
+    check("the Console offers no token box", await page.locator('[aria-label="API token"]').count() === 0);
+    check("no session sends the browser to the identity provider",
+      new URL(page.url()).origin !== new URL(BASE).origin || await page.locator('input[type="password"]').count() > 0,
+      page.url());
 
-    at("logging in with the operator token");
-    await page.locator('input[type="password"]').fill(TOKEN);
-    await page.getByRole("button", { name: /continue|enter|go|sign|open/i }).or(page.locator("button")).first().click();
+    at("signing in as the Owner through the identity provider");
+    await page.locator('#username-textfield, input[name="username"], input[autocomplete="username"]').first().fill(USER);
+    await page.locator('#password-textfield, input[type="password"]').first().fill(PASSWORD);
+    await page.keyboard.press("Enter");
+    // The OpenID Connect client may ask for consent the first time.
+    const consent = page.getByRole("button", { name: /accept|consent|allow/i });
+    await consent.first().waitFor({ timeout: 3000 }).then(() => consent.first().click()).catch(() => {});
+    await page.waitForURL((u) => u.origin === new URL(BASE).origin, { timeout: STEP_TIMEOUT }).catch(() => {});
     await page.waitForTimeout(1500);
 
     check("logged in (rail appears)", await page.locator("nav.rail").count() > 0);

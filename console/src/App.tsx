@@ -21,14 +21,12 @@ import {
 import {
   api,
   clearStepUp,
-  clearToken,
-  getToken,
   Identity,
   pendingStepUp,
   rememberStepUp,
   setOnStepUp,
   setOnUnauthorized,
-  setToken,
+  signInURL,
 } from "./api";
 import { Confirm } from "./ui/Confirm";
 import { ago, ErrorLine } from "./lib";
@@ -112,27 +110,25 @@ const ICON = 19;
 const FULL_BLEED: ReadonlySet<View> = new Set<View>(["butler"]);
 
 export function App() {
-  // null while we find out. With no token of our own, the identity
-  // proxy may already have signed this person in (ADR-W032): ask the
-  // server who we are before offering the token gate, which is the way
-  // in only when the proxy is not the one asking.
-  const [authed, setAuthed] = useState<boolean | null>(getToken() !== null ? true : null);
+  // null while we find out. The only way in is a Console session from
+  // the identity provider's sign-in (ADR-W033 A4, A4.1): ask the server
+  // who we are, and a 401 that can be fixed by signing in sends the
+  // browser round it (api.ts). Anything else lands on SignIn.
+  const [authed, setAuthed] = useState<boolean | null>(null);
 
   useEffect(() => {
     setOnUnauthorized(() => setAuthed(false));
-    if (getToken() === null) {
-      api
-        .whoami()
-        .then(() => setAuthed(true))
-        .catch(() => setAuthed(false));
-    }
+    api
+      .whoami()
+      .then(() => setAuthed(true))
+      .catch(() => setAuthed(false));
   }, []);
 
   if (authed === null) {
     return null;
   }
   if (!authed) {
-    return <TokenGate onDone={() => setAuthed(true)} />;
+    return <SignIn />;
   }
   return (
     <ConsoleStateProvider>
@@ -305,36 +301,20 @@ function initials(name: string): string {
   return (parts[0][0] + parts[1][0]).toLowerCase();
 }
 
-// TokenGate (ADR-W016 A3): the way in when the identity proxy is not
-// the one asking. The token is verified with whoami before it is kept,
-// and kept only in sessionStorage.
+// SignIn (ADR-W033 A4, A4.1): what the Console shows with no session.
 //
-// It says BOTH ways now, because there are two and this screen only
-// ever admitted to one. The ordinary way in is the account the installer
-// created: an Owner signs in through the identity proxy, which asserts
-// who they are and never reaches this page at all. A token is the other
-// way — a deployment with no ingress yet, a recovery session, a script.
+// There is one way in: an active Owner signs in through the household's
+// identity provider, as themselves, and comes back with a Console
+// session. Usually nobody sees this screen — a 401 that a sign-in can fix
+// sends the browser round it before anything renders. It shows when that
+// could not happen: the page was reached without going through the
+// household address, sign-in is not set up on this deployment, or a
+// sign-in just came back refused.
 //
-// Naming only the token made the Console look like a machine surface
-// with a password-shaped hole, and left an operator who had just chosen
-// a username and password at install with nothing here that matched what
-// they had been given (design §2.4).
-export function TokenGate({ onDone }: { onDone: () => void }) {
-  const [input, setInput] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  const submit = () => {
-    setBusy(true);
-    setError(null);
-    setToken(input.trim());
-    api
-      .whoami()
-      .then(() => onDone())
-      .catch((e: Error) => setError(e.message))
-      .finally(() => setBusy(false));
-  };
-
+// It never offers a token box. Bearer tokens are for `wild`, the
+// installer and the host, and a pasted one could say neither who is
+// signing in nor how recently.
+export function SignIn() {
   return (
     <div className="gate">
       <div className="card">
@@ -343,28 +323,19 @@ export function TokenGate({ onDone }: { onDone: () => void }) {
           <h3 style={{ margin: 0 }}>Wildstone Console</h3>
         </div>
         <div className="muted" style={{ marginBottom: "var(--space-3)" }}>
-          If your household has a sign-in page, use it — you reach the Console as
-          yourself, with the username and password you chose when Wildstone was
-          installed. You will not see this screen.
+          The Console is for the household's Owners. Sign in through your
+          household's address as yourself, with the username and password you
+          chose when Wildstone was installed.
         </div>
         <div className="muted" style={{ marginBottom: "var(--space-4)" }}>
-          Otherwise, paste an API token (first start printed one; mint more with
-          wild).
+          If sign-in is not set up on this deployment yet — it needs the
+          identity service and the wildstone-console package — the Console
+          cannot be opened. Until then, administer the house from the host
+          with wild.
         </div>
-        <div className="row">
-          <input
-            type="password"
-            placeholder="wst_…"
-            aria-label="API token"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && input && submit()}
-          />
-        </div>
-        <button className="btn btn-primary btn-block" disabled={busy || !input} onClick={submit}>
-          {busy ? "Checking…" : "Enter"}
+        <button className="btn btn-primary btn-block" onClick={() => location.assign(signInURL())}>
+          Sign in
         </button>
-        <ErrorLine error={error} />
       </div>
     </div>
   );
@@ -372,19 +343,13 @@ export function TokenGate({ onDone }: { onDone: () => void }) {
 
 // SignOut leaves the Console (ADR-W033 A4.1).
 //
-// Signed in through the proxy, it ends the Console session and then the
-// household one at the identity provider: leaving only the Console would
-// sign the person straight back in on their next visit. With a token it
-// forgets the token, which is all a token sign-in ever was.
+// It ends the Console session and then the household one at the identity
+// provider: leaving only the Console would sign the person straight back
+// in on their next visit.
 function SignOut() {
   const [busy, setBusy] = useState(false);
   const leave = async () => {
     setBusy(true);
-    if (getToken() !== null) {
-      clearToken();
-      location.assign("/");
-      return;
-    }
     const done = await api.consoleSignout().catch(() => ({}) as { signOut?: string });
     location.assign(done.signOut ?? "/");
   };

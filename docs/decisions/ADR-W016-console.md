@@ -65,8 +65,7 @@ refused operation offers step-up and is resumed by the Owner with one
 click, never replayed (ADR-W033 A4.1).
 
 Bearer tokens are for the `wild` CLI, the installer and host recovery
-only; they are not a way into the Console. Code not yet conformant: the
-Console still offers a pasted-token gate as a fallback.
+only; they are not a way into the Console.
 
 _Changed by ADR-W033 §A4, §A4.1: a pasted token gate cannot establish who is signing in or how recently._
 
