@@ -24,7 +24,7 @@ Read these in this order:
 1. [**Agent system design**](agent-system-design.md) — the current clean design contract. This is the best description of how the Wildstone Agent/Butler system is intended to work now, including detailed end-to-end acceptance criteria.
 2. [**ADR-W033: The Wildstone agent system**](decisions/ADR-W033-the-agent-design.md) — the current architectural decision record: rationale, tradeoffs, explicit supersessions of older decisions, and the short dependency-oriented implementation order.
 3. [**ADR-W033 review**](decisions/ADR-W033-review.md) — repository/schema evidence gathered while checking W033 against the code.
-4. [**Agent architecture baseline**](agent-architecture-baseline.md) — the 10 September 2026 baseline that triggered the repository audit. It is retained as historical input, not as the current source of truth where it differs from the final W033/design contract.
+4. [**Agent architecture baseline**](agent-architecture-baseline.md) — background and still-valid foundations (events, integrations, handler engine, executors), trimmed to agree with ADR-W033. Its section numbers are cited by the audit.
 5. [`audit/`](audit/) — repository audit evidence and the [gap register](audit/gap-report.md). Each of the 121 findings now has a separate current disposition beside its historical audit status; use that and its follow-up issue for implementation planning.
 
 `Agent` and `Butler` mean the same architectural object. Product language may say Butler; technical language may say Agent.
@@ -44,9 +44,9 @@ older ADRs (edited to agree with W033)
         ↓
 decisions outside W033's scope
 
-2026-09-10 baseline
+agent-architecture-baseline.md
         ↓
-historical input only
+background; defers to the above
 ```
 
 Older ADRs have been edited to remove clauses that conflicted with ADR-W033, so no ADR states a superseded rule. ADR-W033 Part G lists what changed; git history holds the earlier wording.
