@@ -110,7 +110,7 @@ func (db *DB) InsertAgentSubscription(butlerSeq int64, matchKind, matchJSON, aud
 
 // ApproveAgentSubscription is the ONLY way a subscription is ever
 // enabled: called from the Plan-approval path once an Owner has
-// approved it (ADR-W039 §3.6 "Owner-approved lifecycle"). It refuses to
+// approved it (ADR-W039 §3.6: "takes effect only when an Owner approves it"). It refuses to
 // approve an already-approved row a second time — a changed subscription
 // is a new proposal against a new row, not a re-approval of this one.
 func (db *DB) ApproveAgentSubscription(id int64, approvedBy string) error {

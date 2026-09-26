@@ -16,7 +16,7 @@ import { IssuedCredential } from "../Butler";
 import { Say } from "./ButlerDrawer";
 
 // Attaching a runtime to an Agent, and setting its execution profile
-// (ADR-W039 §2.3, §3.3, §5; issue #350/H4). This is the Owner-only
+// (ADR-W039 §3.3, §5; issue #350/H4). This is the Owner-only
 // editor; the Butler screen's popover (RuntimeCard, in Butler.tsx) stays
 // the read/rotate/revoke view and is not duplicated here.
 //
@@ -172,7 +172,7 @@ export function TabRuntime({
     draft.executionProfileRef === "host-admin" &&
     (!runtime || (runtime.executionProfileRef || "platform-only") !== "host-admin");
   // Pull-only delivery needs no endpoint: Wildstone never dials the
-  // runtime, so there is nothing to reach it AT (§4.1 "pull fallback").
+  // runtime, so there is nothing to reach it AT (ADR-W039 §4.1 "who calls whom").
   const endpointNeeded = draft.type !== "native" && draft.delivery !== "pull";
   const endpointMissing = endpointNeeded && !draft.endpoint.trim();
   // Mirrors the server's own gate, so the Owner sees why before they

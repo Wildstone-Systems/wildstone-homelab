@@ -12,9 +12,9 @@ import (
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 )
 
-// The Work family over butlerstore.Ledger (ADR-W039 §7.2: C6 moves in
-// Phase 4, but the Wildstone-side implementation is unchanged and
-// already here, so the in-process client serves it now). Each method
+// The Work family over butlerstore.Ledger (ADR-W039 §3.2 Work: the
+// Wildstone-side implementation is unchanged and already here, so the
+// in-process client serves it). Each method
 // resolves the handle first: a checkpoint for a task the caller holds
 // no handle for is refused before the ledger hears of it.
 

@@ -1,6 +1,6 @@
 package runtimedb
 
-// H7's authority evidence (#353, ADR-W039 §5.4, ADR-W033 §6.2/§6.4):
+// H7's authority evidence (#353, ADR-W039 §5, ADR-W033 §6.2/§6.4):
 // the host.* family is opt-in, so a governed Owner Agent does not reach
 // it until it is named to that Agent by an explicit assignment — the
 // same machinery TestAnOptInToolCanStillBeAssignedByName already proves

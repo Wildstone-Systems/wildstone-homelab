@@ -266,9 +266,8 @@ func checkStartWaitCompleteLifecycle(t *testing.T, target Target) {
 	}
 }
 
-// checkHeartbeatSucceeds: ADR-W039 §4 MUST 10 ("answer a health probe")
-// — the nearest thing agentapi.Client has to that MUST is the call a
-// runtime uses to report its own liveness, which Wildstone's health
+// checkHeartbeatSucceeds: ADR-W039 §4 MUST 10 ("send heartbeats")
+// — the call a runtime uses to report its own liveness, which Wildstone's health
 // determination is built from (Heartbeat's own doc comment: "health is
 // Wildstone's own determination from when the last one arrived").
 func checkHeartbeatSucceeds(t *testing.T, target Target) {
@@ -331,8 +330,8 @@ func checkRememberRefusesHouseholdScope(t *testing.T, target Target) {
 	}
 }
 
-// checkDeliveriesLongPollReturnsThenBlocks: ADR-W039 §4 MUST 6 ("accept
-// deliveries (push) or poll (pull) and acknowledge each one") —
+// checkDeliveriesLongPollReturnsThenBlocks: ADR-W039 §4 MUST 6 ("long-poll
+// deliveries and acknowledge each one") —
 // DeliveryClient's own long-poll half. An immediate wait=0 call returns
 // right away; a longer wait with nothing new to deliver blocks close to
 // that bound rather than returning instantly (ADR-W040 §4: "an empty

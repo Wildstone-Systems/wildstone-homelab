@@ -1,5 +1,5 @@
 // Command agent-bridge runs beside an external agent runtime (Hermes
-// today; ADR-W039 §8 Phase 5/6, docs/design/hermes-capability-package-
+// today; ADR-W039 §5, docs/design/hermes-capability-package-
 // and-execution-profiles.md) and does two things (#349):
 //
 //  1. A delivery loop: long-polls Wildstone's Agent API for this Agent's

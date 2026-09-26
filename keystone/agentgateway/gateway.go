@@ -49,7 +49,7 @@ var ErrRefused = errors.New("agentgateway: refused")
 
 // Gateway is the in-process Agent Gateway. Its fields are what
 // butlerlive.Butlers holds for the same job, minus the provider: the
-// gateway never talks to a model, which is the whole line §7.1 draws.
+// gateway never talks to a model, which is the whole line ADR-W039 §0 draws.
 type Gateway struct {
 	DB     *runtimedb.DB
 	Ledger *butlerstore.Ledger
@@ -318,7 +318,7 @@ func (g *Gateway) Manifest(ctx context.Context, h agentapi.Handle) (agentapi.Man
 	if g.Clock != nil {
 		clock = g.Clock()
 	}
-	// §3.5 rule 3 (ADR §7.2 Phase 5, #345): the system prompt can carry
+	// §3.5 rule 3 (#345): the system prompt can carry
 	// a memory preamble (butlerlive.systemFor's preambler branch), and a
 	// preamble is disclosure exactly like a recall hit. It is checked
 	// under the same call-scoped turn Invoke opens for a dispatch —

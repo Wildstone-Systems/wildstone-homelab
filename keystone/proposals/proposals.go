@@ -2,7 +2,7 @@
 // out of keystone/api so that keystone/agentgateway — which cannot
 // import keystone/api without a cycle — can file a Plan for a runtime
 // exactly as the four HTTP-reachable callers do (ADR-W039 Phase 3,
-// §7.2, #339).
+// #339).
 //
 // This package holds no HTTP handler and no Server: it is handed a
 // Deps value (a database, a Statefile, a policy engine, a way to
@@ -12,8 +12,8 @@
 // it, what the caller called it FOR (the operator's POST /plans, a
 // Butler's propose_change, a capability install, an Agent's Propose)
 // — stays with the caller. keystone/api keeps thin wrappers over File
-// so its own four call sites and their tests are unchanged (§8 Phase
-// 3's own evidence bar).
+// so its own four call sites and their tests are unchanged (#339's own
+// evidence bar).
 //
 // keystone/proposals must never import keystone/api — see
 // structural_test.go — because keystone/agentgateway imports this

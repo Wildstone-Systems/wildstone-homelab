@@ -22,9 +22,8 @@ type Script func(t *testing.T, target Target) any
 // Compare runs script once against a and once against b, then asserts
 // their two results marshal to byte-identical JSON. This generalises
 // what keystone/api/handlers_agent_test.go's own byte-identical tests
-// proved by hand through Phase 4 (ADR-W039 §8's own evidence bar,
-// "the in-process and eventual HTTP clients can be asserted
-// byte-identical"): the same guarantee, for any two agentapi.Client
+// proved by hand through Phase 4 (#337's own evidence bar:
+// the in-process and HTTP clients answer byte-identically): the same guarantee, for any two agentapi.Client
 // implementations a caller wants to compare, not only Wildstone's own
 // two.
 //

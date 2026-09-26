@@ -73,8 +73,8 @@ func (e *StatusError) Error() string {
 }
 
 // httpClient returns the configured client, or a default with no
-// blanket Timeout: a long-poll delivery call (ADR-W039 §8 Phase 4, not
-// yet a method on this Client) legitimately waits up to ADR-W040 §4's
+// blanket Timeout: a long-poll delivery call (#341,
+// Deliveries below) legitimately waits up to ADR-W040 §4's
 // bound, and a client-wide deadline shorter than that would cut such a
 // call off through no fault of it. A caller bounds an individual call
 // with its own context (context.WithTimeout) instead, the discipline
@@ -263,7 +263,7 @@ type deliveriesBody struct {
 
 // Deliveries implements agentapi.DeliveryClient: GET
 // /api/v1/agent/deliveries?wait=<duration>&after=<id> (ADR-W039 §3.6,
-// §4.1 "pull fallback"; Phase 4, #341). wait travels as a Go duration
+// §4.1; Phase 4, #341). wait travels as a Go duration
 // string, which the server parses the same way; Keystone caps it
 // server-side, so a Client here need not know the cap to behave
 // correctly.

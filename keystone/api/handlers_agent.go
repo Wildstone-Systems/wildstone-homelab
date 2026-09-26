@@ -49,7 +49,7 @@ import (
 )
 
 // maxDeliveryPoll bounds the deliveries long-poll (ADR-W039 §3.6, Phase
-// 4, #341), the same "cap it" §4.1 asks for and the same shape
+// 4, #341), the same cap ADR-W040 §8 records and the same shape
 // maxAdapterPoll gives the integration adapter's own long poll.
 const maxDeliveryPoll = 30 * time.Second
 
@@ -461,7 +461,7 @@ func (s *Server) runtimeButlerSeq(id principal.Identity) (int64, error) {
 }
 
 // agentDeliveries is GET /api/v1/agent/deliveries?wait=<duration>&after=<id>
-// (ADR-W039 §3.6, §4.1 "pull fallback"; Phase 4, #341): the long-poll
+// (ADR-W039 §3.6, §4.1; Phase 4, #341): the long-poll
 // pull path every runtime can use whether or not push ever reaches it.
 // Modelled on claimIntegrationWork's own long poll (api/handlers_integrations.go):
 // wait is a parameter, capped at maxDeliveryPoll, and an empty answer

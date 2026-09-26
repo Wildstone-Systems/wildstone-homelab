@@ -11,7 +11,7 @@ import (
 	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
 )
 
-// Propose implements agentapi.Client (ADR-W039 §3.2 Proposals, §7.2,
+// Propose implements agentapi.Client (ADR-W039 §3.2 Proposals,
 // Phase 3, #339): resolve the handle, validate the document exactly as
 // the propose_change tool's own diffFromInput/Validate path does, and
 // file it through the ONE proposal pipeline under the runtime principal

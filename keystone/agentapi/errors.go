@@ -7,7 +7,7 @@ import (
 
 // ErrNotImplemented is the sentinel every NotImplementedError matches
 // through errors.Is. It is the one protocol error a runtime should
-// expect while the migration plan is in flight (ADR-W039 §8): the
+// expect while the migration plan is in flight (ADR-W039): the
 // contract names every family from Phase 0, and a Wildstone side that
 // does not yet serve one says so with this rather than with a silent
 // success or an outcome that means something else.
@@ -20,7 +20,7 @@ var ErrNotImplemented = errors.New("agentapi: not implemented on this Wildstone 
 type NotImplementedError struct {
 	// Method is the Client method's name, e.g. "Propose".
 	Method string
-	// Phase is the ADR-W039 §8 phase that serves it, e.g. "Phase 3".
+	// Phase is the ADR-W039 phase that serves it, e.g. "Phase 3".
 	Phase string
 	// Reason says what the method waits on, for a person reading a log.
 	Reason string

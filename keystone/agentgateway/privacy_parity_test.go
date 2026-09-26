@@ -4,7 +4,7 @@ package agentgateway_test
 // pins a refusal on the closure path (UseAgentGateway=false, its
 // fixture's default) that must hold identically once the provider
 // wrapper is replaced by the gateway-side disclosure filter (ADR-W039
-// §7.4, §7.2 Phase 5, #345): a Butler whose local model is unavailable
+// §7, #345): a Butler whose local model is unavailable
 // fails rather than silently reaching a cloud provider with local-only
 // content, however the turn is wired underneath. This is that SAME
 // scenario driven with UseAgentGateway=true, in an external test

@@ -1,7 +1,7 @@
 package api
 
 // The Agent's runtime record and its runtime principal (ADR-W039 §3.3,
-// §3.7, §4.1; Phase 1 of the plan in §8).
+// §3.7, §4.1; Phase 1, #336).
 //
 // Every Agent has a runtime — today always the native, in-process
 // runner — and every runtime authenticates as a real Keystone
@@ -122,8 +122,8 @@ func (s *Server) ensureNativeRuntime(b runtimedb.Butler, id principal.Identity) 
 		return nil
 	}
 
-	// The gateway-side disclosure filter (ADR-W039 §3.5 rule 3, §7.2
-	// Phase 5, #345) keys on this row's processing_class rather than
+	// The gateway-side disclosure filter (ADR-W039 §3.5 rule 3,
+	// #345) keys on this row's processing_class rather than
 	// wrapping the provider object; a native runtime declares itself
 	// from its assigned model's kind, never by asking anyone.
 	if err := s.DB.SetNativeRuntimeProcessingClass(b.Seq, b.ModelKind, by); err != nil {

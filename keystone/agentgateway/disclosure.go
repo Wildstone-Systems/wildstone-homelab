@@ -1,8 +1,8 @@
 package agentgateway
 
-// The processing-class disclosure filter (ADR-W039 §3.5 rule 3, §7.2
-// Phase 5, #345): the gateway-side replacement for
-// keystone/butlerlive.privacyProvider (C10, ADR §2.1). A model's own
+// The processing-class disclosure filter (ADR-W039 §3.5 rule 3,
+// #345): the gateway-side replacement for
+// keystone/butlerlive.privacyProvider (C10). A model's own
 // process can be wrapped; an external runtime's cannot — Wildstone has
 // no way to verify which model it calls — so instead of guarding the
 // inference boundary, this file guards every boundary the GATEWAY
@@ -12,7 +12,7 @@ package agentgateway
 // Deliveries (work.go's Gateway.Deliveries and api/handlers_agent.go's
 // agentDeliveries route) are filtered too, by the SAME per-record rule
 // and the SAME agentapi.Delivery a runtime pulls either way: FilterDelivery
-// below is the one function both readers call (ADR-W039 §7.2 Phase 5,
+// below is the one function both readers call (ADR-W039 §3.5 rule 3,
 // #345) — agentgateway cannot import keystone/api, but keystone/api may
 // import keystone/agentgateway, so this is the shared side. A withheld
 // delivery is still delivered, so it can still be acked: only its

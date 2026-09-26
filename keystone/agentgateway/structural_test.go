@@ -9,7 +9,7 @@ import (
 )
 
 // TestPackageNeverImportsTheAPIOrAnApplier is the Wildstone side's
-// structural evidence (ADR-W039 §8 Phase 2). This package MAY hold the
+// structural evidence (ADR-W039, #337). This package MAY hold the
 // runtime database, the store, the Butler surfaces and the operation
 // identity — it is the side that decides — and it must never reach:
 //
@@ -50,7 +50,7 @@ func TestPackageNeverImportsTheAPIOrAnApplier(t *testing.T) {
 			path := strings.Trim(imp.Path.Value, `"`)
 			for _, f := range forbidden {
 				if path == f || strings.HasPrefix(path, f+"/") || strings.HasSuffix(path, "/"+f) {
-					t.Errorf("%s imports %s — the Agent Gateway must reach neither its caller nor an applier (ADR-W039 §8 Phase 2)", name, path)
+					t.Errorf("%s imports %s — the Agent Gateway must reach neither its caller nor an applier (ADR-W039, #337)", name, path)
 				}
 			}
 		}

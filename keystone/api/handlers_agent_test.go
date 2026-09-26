@@ -1,8 +1,8 @@
 package api
 
 // The Agent API over HTTP (ADR-W039 Phase 2c, #337; ADR-W040): the
-// conformance evidence Phase 2's own bar asks for (§8, "the in-process
-// and eventual HTTP clients can be asserted byte-identical") plus the
+// conformance evidence Phase 2's own bar asked for (the in-process
+// and HTTP clients answer byte-identically) plus the
 // two loose ends 2a/2b left — fenceRuntimeTasks and the health flip on
 // a runtime's first authenticated call.
 
@@ -319,7 +319,7 @@ func ledgerTraceOf(t *testing.T, db *runtimedb.DB, taskID string) []ledgerTraceK
 }
 
 // TestInProcessAndHTTPAreByteIdentical is ADR-W039 Phase 2's own
-// evidence bar (§8) given to Phase 2c: the SAME script, run once
+// evidence bar given to Phase 2c: the SAME script, run once
 // through the in-process keystone/agentgateway.Gateway and once through
 // keystone/agentapi/httpclient.Client against an httptest.Server
 // running the real api.Server with a runtime bearer, must answer with
@@ -516,7 +516,7 @@ func seedRestrictedDeliveries(t *testing.T, db *runtimedb.DB, ledger *butlerstor
 // which this Agent's undeclared, fail-closed-to-cloud runtime must never
 // see — check that only the latter two came back withheld, ack the
 // first (twice, to prove idempotency) AND one of the withheld ones (to
-// prove a redacted delivery can still be acked, ADR-W039 §7.2 Phase 5,
+// prove a redacted delivery can still be acked, ADR-W039 §3.5 rule 3,
 // #345), read what is left, then prove after= the remaining one's own
 // id excludes it. ExpiresAt is zeroed before comparison — each arm is
 // its own database and calls time.Now() independently — but everything
@@ -627,7 +627,7 @@ func runDeliveryScript(t *testing.T, target conformance.Target) comparableDelive
 
 // TestDeliveryClientIsByteIdenticalInProcessAndOverHTTP is
 // agentapi.DeliveryClient's own conformance evidence (ADR-W039 §3.6,
-// §4.1 "pull fallback"; Phase 4, #341), the same in-process/HTTP shape
+// §4.1; Phase 4, #341), the same in-process/HTTP shape
 // TestInProcessAndHTTPAreByteIdentical proves for agentapi.Client,
 // covering the ONE method pair that interface deliberately leaves out
 // (see agentapi.DeliveryClient's own doc comment for why). Timestamps

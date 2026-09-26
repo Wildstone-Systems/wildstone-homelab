@@ -1,7 +1,7 @@
 // Package conformance is the ADR-W039 §4 runtime contract turned into
 // runnable checks, against ANY agentapi.Client — Wildstone's own two
 // (keystone/agentgateway.InProcess, keystone/agentapi/httpclient.Client)
-// and, unmodified, a third party's (ADR-W039 §8 Phase 5, #343).
+// and, unmodified, a third party's (#343).
 //
 // It exists so proving "this transport behaves like the in-process
 // gateway" never again means hand-copying a script between two ad hoc

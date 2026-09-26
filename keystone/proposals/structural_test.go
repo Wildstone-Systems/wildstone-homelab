@@ -39,7 +39,7 @@ func TestPackageNeverImportsTheAPI(t *testing.T) {
 			path := strings.Trim(imp.Path.Value, `"`)
 			if path == "keystone/api" || strings.HasPrefix(path, "keystone/api/") ||
 				strings.HasSuffix(path, "/keystone/api") || strings.Contains(path, "/keystone/api/") {
-				t.Errorf("%s imports %s — keystone/proposals must never import keystone/api (ADR-W039 §8 Phase 3, #339)", name, path)
+				t.Errorf("%s imports %s — keystone/proposals must never import keystone/api (ADR-W039, #339)", name, path)
 			}
 		}
 	}

@@ -22,7 +22,7 @@ type ToolCallRecord struct {
 	// proposed plan record after the session. Left unset by the Agent
 	// Gateway once it files the Plan itself at invoke time (ADR-W039
 	// Phase 3, #339); still set by the legacy single-provider path
-	// (keystone/butler.Session over a ToolGateway directly, ADR §7.3),
+	// (keystone/butler.Session over a ToolGateway directly),
 	// which files it after the session the way this always worked.
 	ResourceYAML string
 	Rejected     bool

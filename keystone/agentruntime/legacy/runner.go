@@ -6,10 +6,9 @@ package legacy
 // Session (keystone/butler) is the in-memory loop: it drives a provider,
 // runs tools through a Toolset directly, and returns a transcript. If
 // the process dies halfway through a diagnosis, everything it learned
-// dies with it. ADR-W039 §7.3 keeps that legacy, closure-driven path in
-// keystone/butler on purpose ("the legacy ButlerHost and butler.Session
-// paths ... are not migrated; they remain until no deployment lacks a
-// Butler"), so Session stays put.
+// dies with it. That legacy, closure-driven path stays in keystone/butler on
+// purpose (the ButlerHost and butler.Session paths are not migrated;
+// they remain until no deployment lacks a Butler), so Session stays put.
 //
 // Runner is the loop that gained a durable ledger under it (Phase 2 of
 // ADR-W030), and it is what this package now holds. Through Phase 2a it
@@ -17,7 +16,7 @@ package legacy
 // butlerstore.Ledger and dispatched every tool directly against a
 // butler.Toolset. Phase 2b removes both: Runner now calls Wildstone
 // exclusively through an agentapi.Client bound to one opaque task
-// Handle (ADR-W039 §7.1's "target" column) —
+// Handle (ADR-W039 §1) —
 //
 //   - Capabilities/OfferedSpecs/SystemPrompt -> one Client.Manifest per
 //     slice;
@@ -40,8 +39,8 @@ package legacy
 // ObservationTTL, which is where the observation-freshness cache lives
 // now too).
 //
-// What is NOT yet part of the Agent API surface (ADR-W039 §8 names this
-// Phase 4: "task lifecycle and checkpoints over the wire") still
+// What is NOT yet part of the Agent API surface (Phase 4, #340:
+// task lifecycle and checkpoints over the wire) still
 // reaches the ledger directly, through the narrow SliceLedger seam
 // below rather than the old full TaskLedger: the coordinator lease
 // (Fence), the task's live authority (Authorize, checked at the same
@@ -134,7 +133,7 @@ type StallNotifier = agentruntime.StallNotifier
 type Runner struct {
 	// Client is how this runner reaches Wildstone: in-process
 	// (keystone/agentgateway.InProcess) today, over a transport later,
-	// with no change to this package (ADR-W039 §7.1).
+	// with no change to this package (ADR-W039 §1).
 	Client agentapi.Client
 	// Handle names the task every call acts within. It is opaque; the
 	// only thing this package reads from it is Handle.TaskID(), the
