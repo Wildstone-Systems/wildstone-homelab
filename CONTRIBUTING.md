@@ -64,7 +64,9 @@ a PR that fails one is closed or sent back regardless of its merits.
    on a self-hosted runner inside the maintainer's network. Jobs on it
    skip pull requests from forks, and a fork's workflow only ever runs
    after the maintainer approves it, having read the `.github/` diff
-   first. A PR that touches `.github/workflows/` is reviewed for
+   first. The secret scan is the exception: it runs on a GitHub-hosted
+   runner for every pull request, forks included, because it is the
+   check that keeps a credential out of public history. A PR that touches `.github/workflows/` is reviewed for
    exactly that diff and nothing more; a change that removes the fork
    guard or references a new secret needs an issue first.
 4. **One concern, verified.** The change does one thing, says which

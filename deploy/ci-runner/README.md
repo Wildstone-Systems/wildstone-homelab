@@ -98,9 +98,10 @@ per job and disappear when it finishes.
 
 Nothing has to. Two things get simpler:
 
-- The "clear a half-written gitleaks download" step in `ci.yml` exists
-  only because a persistent runner kept `/tmp` between jobs. It is
-  harmless here and can go once the old runner is gone.
+- The secret scan runs on a GitHub-hosted runner, for every pull
+  request including forks, because a skipped required check counts as
+  passing and that is the one check a fork must not bypass. The other
+  jobs stay here and skip forks.
 - The shellcheck step no longer uses Docker (see above), so nothing in
   CI needs a Docker socket. Keep it that way: a step that needs
   `docker run` is a step that needs the host.
