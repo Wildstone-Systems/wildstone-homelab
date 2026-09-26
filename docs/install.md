@@ -323,8 +323,9 @@ the steps you redo by hand.
   shopping, chores, packing — shared by the whole household. Agents
   read and change them through `lists.*` household actions (adding,
   ticking and removing items act at once; deleting a whole list asks the
-  person first), and the dashboard's Lists card shows them to members in
-  `lists_users`. Nothing runs for it: Keystone keeps the lists in its
+  person first), and the dashboard's Lists card and the `/lists/` page
+  show them to members in `lists_users` (the page can also delete a
+  whole list, after asking). Nothing runs for it: Keystone keeps the lists in its
   runtime database, so they are backed up with the runtime state
   ([recovery.md](recovery.md)), not with the Statefile.
 - **Butler** (ADR-W017): `-butler-provider anthropic|openai|ollama`,

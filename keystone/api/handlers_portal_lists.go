@@ -11,8 +11,13 @@ package api
 // A request names a list and items, never a person: who added or ticked
 // something is the signed-in member, from the forwarded identity, exactly
 // as the Agent tools take it from the session rather than a parameter.
-// Deleting a whole list is not here on purpose — it is an Agent action
-// that asks first (lists.delete_list at the confirm tier).
+//
+// Deleting a whole list is here for the Lists page, and the page asks
+// first — naming the list and how much is on it — before it sends the
+// request. That is the confirm tier's point made by a person rather than
+// a model: an Agent's lists.delete_list asks the person, and here the
+// person is the one clicking. The card on the dashboard does not offer
+// it at all.
 
 import (
 	"errors"
@@ -137,4 +142,17 @@ func (s *Server) listsClearChecked(_ http.ResponseWriter, r *http.Request, _ str
 		return nil, code, err
 	}
 	return map[string]any{"list": name, "cleared": n}, http.StatusOK, nil
+}
+
+func (s *Server) listsDelete(_ http.ResponseWriter, r *http.Request, _ string, _ []resource.Resource) (any, int, error) {
+	req, code, err := decodeListRequest(r)
+	if err != nil {
+		return nil, code, err
+	}
+	name, n, err := s.DB.DeleteHouseholdList(req.List)
+	if err != nil {
+		code, err := listWriteStatus(err)
+		return nil, code, err
+	}
+	return map[string]any{"list": name, "items": n}, http.StatusOK, nil
 }

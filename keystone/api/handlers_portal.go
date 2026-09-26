@@ -31,7 +31,7 @@ import (
 // the Console and asked a family member for a bearer token. /agenda/
 // then did exactly the same thing, which is why the test is worth more
 // than the comment.
-var PortalPrefixes = []string{"/filedrop/", "/assistant/", "/home/", "/portal/", "/activity/", "/catalog/", "/calendar/", "/upkeep/", "/agenda/"}
+var PortalPrefixes = []string{"/filedrop/", "/assistant/", "/home/", "/portal/", "/activity/", "/catalog/", "/calendar/", "/upkeep/", "/agenda/", "/lists/"}
 
 // dashboardCapabilities are the capabilities whose Routes serve a
 // household dashboard — the pages entitled to frame a portal surface.
