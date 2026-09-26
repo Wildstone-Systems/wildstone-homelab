@@ -41,7 +41,8 @@ administers every Agent (ADR-W033 A4, B1).
 
 `RoleOperator` is a legacy machine/API principal role, separate from the
 Person's Owner or Member role and from Agent class. Its name never
-implies a human Owner; human authorization reads the Person role.
+implies a human Owner; human authorization reads the Person role
+(`TestLegacyRoleOperatorIsUntouched`).
 
 _Changed by ADR-W033 A1/A4: two human roles, and Console is Owner-only._
 
