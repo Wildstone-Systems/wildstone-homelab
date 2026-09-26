@@ -83,6 +83,10 @@ const GROUP_OF: Record<string, Group> = {
   // person looking for it is looking among the things the house runs on,
   // not among the accounts.
   calendar: "Home",
+  // The household's shared lists (lists-wildstone): shopping, chores,
+  // packing — something the house runs on, beside its calendar, even
+  // though Keystone serves it rather than a container.
+  lists: "Home",
 
   documents: "Documents",
   "pdf-tools": "Documents",
