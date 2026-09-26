@@ -779,7 +779,7 @@ What changed, and where:
 - **Surfaces and bots (ADR-W026 A1/A3/A4, W029 A7, W031 A1/A3/A7, W030 A1):** the Household/Operator/family/admin surfaces are replaced by Owner/Member Agent classes, tool classes and Connections (B2–B5, B7, B7.1). Each Agent keeps its own bot and credential. Unknown accounts get no reply (B9.1).
 - **ADR-W031 A1/A4/A10:** Agents are household-owned and administered by any Owner (B1). Memory uses the Session, Agent-local, Personal and Household scopes (C1–C11).
 - **ADR-W032, ADR-W016 A3:** exactly two human roles; the Console is Owner-only, signed in through OIDC with step-up (A1, A4, A4.1).
-- **Single model per Agent (ADR-W017 A4/A9, W030 A9, W031 A2/A6, W041):** replaced by a per-Agent ordered model/provider chain (B6). ADR-W039 amends B6 for external runtimes.
+- **Single model per Agent (ADR-W017 A4/A9, W030 A9, W031 A2/A6):** replaced by a per-Agent ordered model/provider chain (B6). ADR-W039 amends B6 for external runtimes.
 - **First administrator (ADR-W007, W014, W020 A2/A4, W023 A3):** the installer creates the first Owner; recovery is the host CLI (A3, A7).
 - **Offboarding (ADR-W020, W024, W030 A4):** Household routines survive the Person who proposed or approved them (E5, F1, F2).
 - **Agent pause and routines:** Household routines survive Agent loss; deterministic steps continue and inference steps block (E8).
