@@ -192,10 +192,13 @@ Two things do not run through it:
 
 - **Infrastructure changes.** Anything that would touch the Statefile
   stays a plan. A household rule cannot restart a container.
-- **External agents.** Hermes, Codex, or any other agent is a principal
-  with at most the `butler` role: read and propose. Only the Wildstone
-  Butler sits behind the domestic gateway, because only its sessions are
-  principal-bound, redacted, and bounded (ADR-W017 A1).
+- **External agents.** Hermes, Codex, or any other agent holding only
+  its own token and no Wildstone Agent binding is a principal with at
+  most the `butler` role: read and propose. Only a Wildstone Agent sits
+  behind the domestic gateway, because only its sessions are
+  principal-bound, redacted, and bounded (ADR-W017 A1). An external
+  runtime bound to a Wildstone Agent acts as that Agent (ADR-W039) and
+  reaches the gateway on that Agent's terms.
 
 ### A5.1. Attendance is the second axis (amendment, 2026-09-18)
 

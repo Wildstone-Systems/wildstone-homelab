@@ -1,21 +1,24 @@
-# Agent API and Hermes runtime: a QA runbook for this branch
+# Agent API and Hermes runtime: a QA runbook
 
-This is a plain-language walkthrough for testing branch
-`claude/issues-333-334-orchestration-dix2u1` before it merges. Every
-command is meant to be copy-pasted one at a time, reading the
-"Expected" line after each before moving on.
+This is a plain-language walkthrough for testing the Agent API and the
+Hermes runtime on `main`. Every command is meant to be copy-pasted one
+at a time, reading the "Expected" line after each before moving on.
 
-## 1. What this branch changes
+Runtime type `native` = Keystone-hosted; its loop is chosen per
+deployment by `-agent-runtime legacy|native`: `legacy` is
+`keystone/agentruntime/legacy.Runner`, `native` is the OpenAI Agents
+SDK sidecar (ADR-W041). Runtime types `hermes` and `openclaw` are
+external Agent API clients. Below, a "native Agent" means an Agent
+whose runtime type is `native`, whichever loop drives it.
 
-Today, a Wildstone Agent (the Console still calls it a "Butler") always
-thinks inside Keystone itself — the same process, no way to swap it
-out. This branch adds a second path: Keystone now exposes a small,
-well-defined API (`/api/v1/agent/...`) that a *runtime* — the thing
-that actually does the reasoning — talks to instead of touching
-Keystone's internals directly. The built-in ("native") Agent was moved
-onto that same API internally, so nothing about it should look or
-behave differently. On top of that path, this branch adds the pieces
-needed to attach an external runtime — specifically Hermes, a
+## 1. What this covers
+
+Keystone exposes a small, well-defined API (`/api/v1/agent/...`) that
+a *runtime* — the thing that actually does the reasoning — talks to
+instead of touching Keystone's internals directly. The Keystone-hosted
+(runtime type `native`) Agent uses that same API internally, so nothing
+about it should look or behave differently. On top of that path sit the
+pieces needed to attach an external runtime — specifically Hermes, a
 third-party agent framework — as an alternative brain for an Agent,
 running in its own container with its own credential and its own
 ceiling on what it may do.

@@ -210,6 +210,7 @@ An Agent has at least:
 - Connections
 - memory configuration
 - assigned routines/tasks
+- runtime record: runtime type (`native` = Keystone-hosted, or an external `hermes`/`openclaw` runtime), its runtime credential, and for an external runtime the Owner-declared processing class (ADR-W039 §3.3)
 
 One Agent can concurrently serve multiple people. Agent identity is shared; transient conversation state is isolated.
 
@@ -291,6 +292,8 @@ Sandy
 Fallback inside one Agent is allowed only when the task/content privacy policy permits the fallback provider.
 
 Wildstone does not automatically replace an unavailable Agent with another Agent.
+
+For an Agent served by an external runtime (ADR-W039), the model chain is the runtime's own configuration. Wildstone records the Owner-declared processing class for that runtime and applies it as a disclosure filter: `local_only` content is withheld from any runtime not declared local-only.
 
 ---
 
@@ -495,6 +498,8 @@ exact-version routine authorization
 Any change to executable behaviour **or to the secret grants a routine requires** creates a new version and needs Owner reapproval (14.4). A routine cannot acquire a secret it was not approved with by being edited around it.
 
 This covers `use` only. **Raw-value reveal to a human is unchanged** (12.5): a routine resolves a secret below inference to reach a service, and never reveals one.
+
+An Owner-approved Agent **subscription** version (ADR-W039 §3.6) is the same kind of unattended principal: every rule in this section that names an approved routine version applies to it identically.
 
 ## 10.3 Surface authority
 
@@ -907,6 +912,8 @@ Owner approval creates bounded routine authorization over the exact version, inc
 A routine can have a correct delivery destination and a wrong output audience, which is why the audience has to be approved rather than inferred from the destination.
 
 Normal runs do not ask for repeated approval.
+
+An Owner-approved Agent subscription version (ADR-W039 §3.6) is treated exactly like an approved routine version: exact-version Owner approval, reapproval on any edit, its own unattended principal, and any Owner may stop it (15.6).
 
 ## 15.3 Tool ceiling
 

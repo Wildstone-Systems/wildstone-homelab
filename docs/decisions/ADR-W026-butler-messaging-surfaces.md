@@ -281,7 +281,11 @@ made it: a Keystone principal holding at most the `butler` role, read
 and propose, going through the ONE API. It does not get a chat
 Connection, a binding, or the domestic gateway. "Wildstone's Butler, reachable from
 Telegram" and "somebody else's agent, calling Wildstone" are different
-things and stay different things.
+things and stay different things. This covers an agent holding only its
+own token and no Agent binding. An external runtime bound to a Wildstone
+Agent acts as that Agent (ADR-W039): the Agent's Connections and the
+domestic gateway apply on that Agent's terms, while the runtime itself
+holds only its runtime credential.
 
 ---
 
