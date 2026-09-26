@@ -25,14 +25,15 @@ before a fork's workflow runs.
 
 ## Where to run it
 
-**A dedicated VM, not the household host.** The runner mounts the
+**On the CI machine, which is already separate from both the household
+host and the test homelab.** Keep it that way. The runner mounts the
 Docker socket (shellcheck runs through `docker run`), so a job can do
-anything Docker on that machine can. The VM is the isolation boundary:
+anything Docker on that machine can. The machine is the isolation
+boundary, not the container:
 
-- Its own VM on Proxmox: 2 vCPU, 4 GB RAM, 40 GB disk is plenty.
-- Docker installed, nothing else on it.
+- Docker installed, nothing else that matters on it.
 - Firewall it so it can reach github.com and container registries and
-  **cannot** reach Keystone, the NAS, or anything else on the LAN.
+  **cannot** reach Keystone, the NAS, or the test homelab.
 - Snapshot it once configured; rebuild from the snapshot if in doubt.
 
 ## Install

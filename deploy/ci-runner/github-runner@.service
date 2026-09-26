@@ -18,6 +18,8 @@ Description=Ephemeral GitHub Actions runner %i (wildstone-homelab)
 After=docker.service network-online.target
 Requires=docker.service
 Wants=network-online.target
+# Never treat a fast job loop as a failure.
+StartLimitIntervalSec=0
 
 [Service]
 EnvironmentFile=/etc/wildstone/ci-runner.env
@@ -41,8 +43,6 @@ ExecStop=-/usr/bin/docker stop gh-runner-%i
 # A clean exit is the normal end of every job; restart unconditionally.
 Restart=always
 RestartSec=5
-# Never treat a fast job loop as a failure.
-StartLimitIntervalSec=0
 
 [Install]
 WantedBy=multi-user.target
