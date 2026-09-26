@@ -115,6 +115,12 @@ func candidateOnConnection(c runtimedb.SessionCandidate, current continuationCon
 }
 
 func (s *Server) chatSessionCandidates(c chatCommandCtx) ([]safeSessionCandidate, bool, error) {
+	if c.Web != nil {
+		// A built-in web chat is a trusted UI: the same candidates its
+		// own conversation list shows, and no chat thread to have been
+		// broken.
+		return s.sessionCandidates(c.Identity, c.At.Butler, trustedContinuationConnection(c.At.Transport), time.Time{})
+	}
 	broken, err := s.DB.ChatThreadBrokenAt(c.At, c.Conversation, c.Identity)
 	if err != nil {
 		return nil, false, err

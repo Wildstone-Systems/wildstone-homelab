@@ -188,6 +188,12 @@ type askResponse struct {
 	// shared pipeline then refused (e.g. standing policy) — surfaced, not
 	// swallowed, so the caller sees the Butler tried and was blocked.
 	ProposalErrors []string `json:"proposalErrors,omitempty"`
+	// Command names the slash command that answered, when one did: no
+	// model ran and nothing was recorded as a conversation turn.
+	Command string `json:"command,omitempty"`
+	// NewConversation tells a web chat to drop the conversation it is
+	// in and start its next message fresh (/new, /reset, /clear).
+	NewConversation bool `json:"newConversation,omitempty"`
 }
 
 // transcriptRecord is the persisted form of one audited tool call: only

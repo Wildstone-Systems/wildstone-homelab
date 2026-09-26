@@ -98,7 +98,9 @@
 (() => {
   const el = (id) => document.getElementById(id);
   const log = el("log"), note = el("note");
-  let session = "", agents = [];
+  // fresh: the next message starts a new conversation rather than
+  // continuing a recent one (set by /new, cleared once it has one).
+  let session = "", agents = [], fresh = false;
 
   const say = (text, bad) => { note.textContent = text || ""; note.className = bad ? "bad" : ""; };
 
@@ -190,11 +192,30 @@
       const r = await fetch("/api/v1/assistant/ask", {
         method: "POST",
         headers: { "content-type": "application/json", accept: "application/json" },
-        body: JSON.stringify({ agent: el("agent").value, session, text }),
+        body: JSON.stringify({ agent: el("agent").value, session, text, new: fresh }),
       });
       const body = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(body.error || r.statusText);
+      if (body.command) {
+        // A slash command: answered without the assistant. /new and
+        // /resume move which conversation the next message belongs to.
+        if (body.newConversation) {
+          session = "";
+          fresh = true;
+          log.replaceChildren();
+          add("assistant", body.reply || "");
+        } else {
+          if (body.session) {
+            session = body.session;
+            fresh = false;
+          }
+          waiting.classList.remove("pending");
+          waiting.textContent = body.reply || "";
+        }
+        return;
+      }
       session = body.session || session;
+      fresh = false;
       waiting.classList.remove("pending");
       waiting.textContent = body.reply || "(no answer)";
       if (body.proposals) {

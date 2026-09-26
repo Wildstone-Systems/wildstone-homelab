@@ -720,6 +720,21 @@
         thread.removeChild(working);
         mine.style.opacity = "";
         if (!res.ok) { throw new Error(res.j.error || "I couldn't answer that one"); }
+        if (res.j.command) {
+          // A slash command: answered without the assistant, and not a
+          // turn of the conversation. /new and /resume move which
+          // conversation the next message belongs to.
+          box.value = "";
+          if (res.j.newConversation) {
+            newConversation();
+            el("thread").appendChild(turn("assistant", res.j.reply || ""));
+          } else if (res.j.session) {
+            openConversation(res.j.session);
+          } else {
+            thread.appendChild(turn("assistant", res.j.reply || ""));
+          }
+          return;
+        }
         session = res.j.session || session;
         fresh = false;
         text("session-id", session);
