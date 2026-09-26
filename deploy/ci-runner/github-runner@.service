@@ -1,0 +1,48 @@
+# One ephemeral GitHub Actions runner per instance: github-runner@1,
+# github-runner@2, ... Each instance is a `docker run --rm` of the runner
+# image registered with --ephemeral, so the runner takes exactly one job,
+# deregisters, exits, and the container is deleted with everything a job
+# wrote to it. systemd then starts a fresh one. Nothing survives from one
+# job to the next: no work directory, no tool cache, no half-written
+# download, and nothing a pull request planted.
+#
+# Install on the CI VM (not on the household host):
+#   sudo install -m 0644 github-runner@.service /etc/systemd/system/
+#   sudo install -m 0600 ci-runner.env /etc/wildstone/ci-runner.env
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now github-runner@1 github-runner@2
+# See README.md alongside this file.
+
+[Unit]
+Description=Ephemeral GitHub Actions runner %i (wildstone-homelab)
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+EnvironmentFile=/etc/wildstone/ci-runner.env
+# The image is pulled before every container so a runner is never more
+# than one job behind the image's own updates. Pin by digest in
+# ci-runner.env if you want to control when that happens.
+ExecStartPre=/usr/bin/docker pull ${RUNNER_IMAGE}
+ExecStartPre=-/usr/bin/docker rm -f gh-runner-%i
+# --rm: the container is deleted when the runner exits after its one job.
+# The Docker socket is mounted because ci.yml runs shellcheck through
+# `docker run`; a job can therefore do anything Docker on this VM can,
+# which is why the VM is the isolation boundary, not the container.
+ExecStart=/usr/bin/docker run --rm --name gh-runner-%i \
+  --env-file /etc/wildstone/ci-runner.env \
+  -e RUNNER_NAME=%H-%i \
+  -e EPHEMERAL=1 \
+  -e DISABLE_AUTO_UPDATE=1 \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  ${RUNNER_IMAGE}
+ExecStop=-/usr/bin/docker stop gh-runner-%i
+# A clean exit is the normal end of every job; restart unconditionally.
+Restart=always
+RestartSec=5
+# Never treat a fast job loop as a failure.
+StartLimitIntervalSec=0
+
+[Install]
+WantedBy=multi-user.target
