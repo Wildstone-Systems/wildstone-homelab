@@ -40,8 +40,11 @@ Three details the script enforces rather than asks for:
   digest, plus a C compiler (`go test -race` needs cgo), `xz` (the
   workflows extract `.tar.xz`) and `git` (the go job runs `git diff`).
   Nothing else: every other tool a job needs it downloads itself, pinned
-  by checksum. `docker build -q` prints the image ID, a content hash,
-  and that is what goes in `ci-runner.env`.
+  by checksum. `docker build -q -t wildstone-ci-runner:current` prints
+  the image ID, a content hash, and that is what goes in
+  `ci-runner.env`. The tag is only there so the image is never
+  dangling: `docker image prune` deletes untagged images by default,
+  and a pruned runner image would leave every unit looping.
 
 The host needs `docker`, `curl` and `python3`.
 
@@ -62,7 +65,7 @@ escape exists:
 ```bash
 # On the CI VM, as root, from a checkout of this repo:
 mkdir -p /etc/wildstone /usr/local/lib/wildstone
-docker build -q deploy/ci-runner           # prints the image ID
+docker build -q -t wildstone-ci-runner:current deploy/ci-runner   # prints the image ID
 install -m 0600 deploy/ci-runner/ci-runner.env.example /etc/wildstone/ci-runner.env
 $EDITOR /etc/wildstone/ci-runner.env      # set ACCESS_TOKEN and RUNNER_IMAGE (the ID above)
 install -m 0755 deploy/ci-runner/run-one-job.sh /usr/local/lib/wildstone/run-one-job.sh

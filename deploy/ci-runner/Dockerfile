@@ -12,11 +12,14 @@
 # Everything else a job needs it downloads itself, pinned by checksum
 # (setup-go, setup-node, shellcheck in ci.yml, gh in release.yml).
 #
-# Build on the CI machine and pin the result by image ID:
-#   RUNNER_IMAGE=$(docker build -q deploy/ci-runner)
-# The ID is a content hash: the image cannot change under that name.
-# Rebuild deliberately when the base digest below moves or a package
-# needs updating, then update ci-runner.env with the new ID.
+# Build on the CI machine WITH A TAG, and pin the result by image ID:
+#   docker build -q -t wildstone-ci-runner:current deploy/ci-runner
+# The ID it prints is a content hash: the image cannot change under it,
+# and that is what goes in ci-runner.env. The tag is not what the unit
+# runs; it exists so the image is never "dangling", which is what
+# `docker image prune` deletes by default. Rebuild deliberately when the
+# base digest below moves or a package needs updating, then update
+# ci-runner.env with the new ID.
 FROM ghcr.io/actions/actions-runner@sha256:ee54ad8776606f29434f159196529b7b9c83c0cb9195c1ff5a7817e7e570dcfe
 
 USER root
