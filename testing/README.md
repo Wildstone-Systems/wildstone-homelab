@@ -12,7 +12,7 @@ only usable from inside the tailnet. See `e2e/README.md` for how to run.
 ## fixtures/
 
 Golden configs transcribed from the reference deployment
-(`chickenrat17/homelab-config`): Authelia, Caddy, LLDAP, Immich OIDC wiring,
+(the maintainer's private, hand-managed homelab repo): Authelia, Caddy, LLDAP, Immich OIDC wiring,
 Jellyfin LDAP plugin, Gluetun VPN egress.
 
 **Scrub rule (non-negotiable):** every fixture uses placeholder values —

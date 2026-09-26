@@ -13,7 +13,7 @@
 ### A1. Transcription from the reference deployment, dedicated infra
 
 Both new packages transcribe the reference deployment's proven configs
-(homelab-config `deployments/media-services/`), keeping the §5.1
+(the private reference repo's `deployments/media-services/`), keeping the §5.1
 dedicated-per-capability infra posture photos-immich set: each
 capability's DB/cache/pipeline containers are its own, never shared, so
 capabilities fail, back up, and upgrade independently. All images

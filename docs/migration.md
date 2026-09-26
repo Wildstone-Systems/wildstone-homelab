@@ -1,10 +1,10 @@
-# Dogfood migration runbook (HeadOverHalls → Wildstone)
+# Dogfood migration runbook (hand-managed host → Wildstone)
 
 The E13 dogfood migration (ADR-W018 A4): recreate the hand-managed
 infra VM's capabilities on a parallel Wildstone-managed VM, cut over
 per capability, and file every friction point in
 [friction-log.md](friction-log.md). This runbook is written for the
-HeadOverHalls deployment but is the template for any migration from a
+maintainer's own deployment but is the template for any migration from a
 hand-managed compose/Caddy/LLDAP host.
 
 ## The two-masters rule (binding)
@@ -90,7 +90,7 @@ decommission.
 
 ## Exit criteria (alpha)
 
-- Every HeadOverHalls capability serving from Wildstone.
+- Every existing capability serving from Wildstone.
 - One ingress, one identity master.
 - All BackupPlans green, exit drill green.
 - Friction log empty or every entry explicitly deferred with a reason.

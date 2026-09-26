@@ -1,0 +1,37 @@
+# One ephemeral GitHub Actions runner per instance: github-runner@1,
+# github-runner@2, ... Each instance runs run-one-job.sh, which mints a
+# single-use just-in-time runner credential on the host and starts a
+# `docker run --rm` of the official runner image with it. The runner takes
+# exactly one job, deregisters, exits, and the container is deleted with
+# everything a job wrote to it. systemd then starts a fresh one. Nothing
+# survives from one job to the next, and the repository-administration
+# token never enters a container.
+#
+# Install on the CI machine:
+#   sudo install -m 0755 run-one-job.sh /usr/local/lib/wildstone/run-one-job.sh
+#   sudo install -m 0644 github-runner@.service /etc/systemd/system/
+#   sudo install -m 0600 ci-runner.env /etc/wildstone/ci-runner.env
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now github-runner@1 github-runner@2
+# See README.md alongside this file.
+
+[Unit]
+Description=Ephemeral GitHub Actions runner %i (wildstone-homelab)
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+# Never treat a fast job loop as a failure.
+StartLimitIntervalSec=0
+
+[Service]
+# Read by run-one-job.sh on the host. Root-only, mode 0600: it holds the
+# token that mints runner credentials.
+EnvironmentFile=/etc/wildstone/ci-runner.env
+ExecStart=/usr/local/lib/wildstone/run-one-job.sh %i
+ExecStop=-/usr/bin/docker stop gh-runner-%i
+# A clean exit is the normal end of every job; restart unconditionally.
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

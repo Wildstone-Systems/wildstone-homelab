@@ -15,7 +15,7 @@ User and operator docs (E13, ADR-W018):
 - `migration.md` — dogfood migration runbook and cutover rules.
 - `friction-log.md` — dogfood friction and alpha-exit cleanup.
 
-The original design brief (`00-design-brief-v0.1.md`) and architecture proposal (`01-architecture-proposal.md`) remain in the reference deployment repo, `chickenrat17/homelab-config`, under `docs/architecture/wildstone/`.
+The original design brief (`00-design-brief-v0.1.md`) and architecture proposal (`01-architecture-proposal.md`) remain in the maintainer's private reference deployment repo and are not published.
 
 ## Agent / Butler architecture
 

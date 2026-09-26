@@ -464,7 +464,7 @@ out  : AWS_SECRET_ACCESS_KEY=[REDACTED]
 names: false  shaped: true
 ```
 
-Row two is the finding. §15's worked example is Giulia recording the
+Row two is the finding. §15's worked example is <member-a> recording the
 household Wi-Fi password. Phrased the way a person actually phrases it,
 `NamesACredential` returns **false** — `credentialWords`
 (`redact/redact.go:560-566`) contains `secret key`, `private key` and

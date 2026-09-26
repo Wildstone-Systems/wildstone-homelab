@@ -406,7 +406,7 @@ func TestABotReachesKeystoneWhereTheProxyDoes(t *testing.T) {
 	if err := h.s.State.Put(resource.Resource{
 		ApiVersion: resource.ApiVersion, Kind: resource.KindRoute,
 		Metadata: resource.Metadata{Name: "wildstone-console", Owner: "capability/console", Node: "n1"},
-		Route:    &resource.RouteSpec{Host: "console.home.test", Upstream: "100.70.0.9:9441", Auth: "authelia_oidc", Classification: "admin_tailscale"},
+		Route:    &resource.RouteSpec{Host: "console.home.test", Upstream: "100.64.0.9:9441", Auth: "authelia_oidc", Classification: "admin_tailscale"},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -416,7 +416,7 @@ func TestABotReachesKeystoneWhereTheProxyDoes(t *testing.T) {
 	current, _ := h.s.State.Load()
 	for _, r := range current {
 		if r.Kind == resource.KindContainer && r.Metadata.Name == "chat-telegram-joan" {
-			if got := r.Container.Env["KEYSTONE_API"]; got != "http://100.70.0.9:9441" {
+			if got := r.Container.Env["KEYSTONE_API"]; got != "http://100.64.0.9:9441" {
 				t.Errorf("the bot reaches Keystone at %q", got)
 			}
 			return

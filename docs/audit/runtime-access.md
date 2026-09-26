@@ -40,14 +40,14 @@ only. The same goes for anything you write into a report or an issue.
 
 **Two sessions in one clone will silently overwrite each other.** It
 happened: both host-round sessions checked out through
-`/home/user/wildstone-homelab` fifteen seconds apart, and either
+`~/wildstone-homelab` fifteen seconds apart, and either
 one's next `git checkout` would have swapped the files out from under
 the other mid-edit.
 
 If another session is already working in the clone, take your own tree:
 
 ```bash
-cd /home/user/wildstone-homelab
+cd ~/wildstone-homelab
 git worktree add ../ws-<issue> <your branch>
 cd ../ws-<issue>
 ```
@@ -76,7 +76,7 @@ mkdir -p /tmp/ksdata
         -api-listen 127.0.0.1:19441 \
         -hosts localhost,127.0.0.1 \
         -butler-provider ollama \
-        -butler-endpoint http://192.168.1.99:11434 \
+        -butler-endpoint http://<ollama-host>:11434 \
         -butler-model qwen3.5:4b &
 
 export WILD_TOKEN=$(cat /tmp/ks.token | tr -d '\n')
@@ -121,7 +121,7 @@ The ones that matter for an audit:
 | Public API | `0.0.0.0:9441` — reach it on `http://127.0.0.1:9441` |
 | Data directory | `/var/lib/wildstone/keystone` |
 | Console | served from `/usr/share/wildstone/console` |
-| Legacy Butler provider | `ollama` at `http://192.168.1.99:11434` |
+| Legacy Butler provider | `ollama` at `http://<ollama-host>:11434` (the household Ollama; the address is not published) |
 
 The node also runs `wardstoned.service`, the agent.
 

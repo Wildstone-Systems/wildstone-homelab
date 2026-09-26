@@ -93,20 +93,20 @@ Driven through `butlerstore.MemorySeams` — the only write path a
 conversation has — then read back six ways. Executed:
 
 ```
-== AC01: gift idea saved by Giulia through Butler A ==
+== AC01: gift idea saved by <member-a> through Butler A ==
   remember via Butler A: err=<nil>
-  stored seq=1 owner="giulia" audience="private" butler="alfred" label="alfred" subject="jude"
-  Giulia via Butler A (author, same butler)  retrieve=1 recall=1
-  Mika via Butler B  <-- AC01 REQUIRES a hit retrieve=0 recall=0
-  Mika via Butler A                         retrieve=0 recall=0
-  Giulia via Butler B <-- same person, other butler retrieve=0 recall=0
+  stored seq=1 owner="<member-a>" audience="private" butler="alfred" label="alfred" subject="jude"
+  <member-a> via Butler A (author, same butler)  retrieve=1 recall=1
+  <owner> via Butler B  <-- AC01 REQUIRES a hit retrieve=0 recall=0
+  <owner> via Butler A                         retrieve=0 recall=0
+  <member-a> via Butler B <-- same person, other butler retrieve=0 recall=0
   Jude via Butler B    <-- AC01 requires NO hit retrieve=0 recall=0
   Jude via Butler A    <-- AC01 requires NO hit retrieve=0 recall=0
 ```
 
 Jude is denied, and that is not a pass. Jude is denied because
 **everybody** is denied except the person who spoke, through the one
-Butler they spoke to. AC01 asks for a boundary that admits Mika and
+Butler they spoke to. AC01 asks for a boundary that admits <owner> and
 refuses Jude; what exists is a wall with one door. Recording the
 denial as satisfied would be recording the absence of a mechanism as
 the presence of one.
@@ -116,8 +116,8 @@ the presence of one.
 ```
 == AC11: concurrent conflicting writes + correction ==
   base seq=4
-  correction A (mika): seq=5 err=<nil>
-  correction B (giulia, same base): seq=0 err=runtimedb: memory 4 was already corrected or forgotten
+  correction A (<owner>): seq=5 err=<nil>
+  correction B (<member-a>, same base): seq=0 err=runtimedb: memory 4 was already corrected or forgotten
   base record now: superseded_by=5 envelope_version=1
 
 == AC11b: forget a source-derived entry ==
@@ -141,7 +141,7 @@ the presence of one.
 Confirms established finding 1 in #151, and it is worse than reported
 there. #151 says Butler B cannot read Butler A's material. It is also
 true that **the same person cannot reach their own note through a
-different Butler**: `Giulia via Butler B` returns zero. §12 says
+different Butler**: `<member-a> via Butler B` returns zero. §12 says
 "switching agents preserves access to permitted facts", and switching
 agents currently loses all of them.
 
@@ -322,7 +322,7 @@ present:
   would let the code assert. Marked partial on that distinction, not on
   a reproduced defect.
 - *"Conflicting household claims remain attributed and unresolved until
-  clarified."* The losing correction is **destroyed**. Giulia's
+  clarified."* The losing correction is **destroyed**. <member-a>'s
   competing claim came back as `err=... already corrected or forgotten`
   and left no trace: no record, no digest entry, no *disputed* status
   for the household to clarify later. A household disagreement is
@@ -336,16 +336,16 @@ present:
 - **Audit status:** missing
 - **Audit evidence:** executed, through the real gateways; `keystone/butler/household.go:223-227` (`NewHouseholdGroupGateway` sets `group = true` and registers the same tool map), `household.go:248-259` (`recall` registered unconditionally on the seam), `keystone/butlerstore/memory.go:85-88` (the seam closes over `member` alone); `runtimedb.IndexQuery` has no audience or destination field (`butlerindex.go:164-181`).
 
-Giulia states something private in a direct conversation with Alfred,
+<member-a> states something private in a direct conversation with Alfred,
 then a room asks Alfred about it:
 
 ```
 direct remember: rejected=false
-  kept as a fact, about giulia: Seeing the doctor about the back pain on Tuesday.
+  kept as a fact, about <member-a>: Seeing the doctor about the back pain on Tuesday.
 
 group gateway tools: [describe_capabilities recall remember]
 recall IN A ROOM: rejected=false
-  - Seeing the doctor about the back pain on Tuesday. [about: giulia]
+  - Seeing the doctor about the back pain on Tuesday. [about: <member-a>]
 ```
 
 §6's retrieval-authorization sentence lists four filters — person,
@@ -626,7 +626,7 @@ correct. What it replays is a journal that only ever receives rows from
 offboarding, and only for the offboarded member's own private records.
 So:
 
-1. Giulia forgets a record through the Console. It is marked, its index
+1. <member-a> forgets a record through the Console. It is marked, its index
    chunks are deleted, its source is suppressed. No journal row.
 2. The deployment is restored from a snapshot taken before step 1.
 3. `ReconcileRestore` finds nothing to replay for that record. It comes

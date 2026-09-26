@@ -180,7 +180,7 @@ proximate cause of "routines haven't turned out like I wanted".
   ```
   POST /api/v1/household/routines
     {"name":"morning-briefing","ownership":"wildstone",
-     "document":"send a briefing every morning at 07:00 to mika"}
+     "document":"send a briefing every morning at 07:00 to <owner>"}
   → {"seq":1,"note":"a new routine starts as a draft; …"}
 
   POST /api/v1/household/routines/morning-briefing/state {"state":"enabled"}
@@ -411,13 +411,13 @@ ago against unchanged state approves without anyone re-reading it.
 
 - **Audit status:** partial
 - **Audit evidence:** `IssueHouseholdReviewToken`/`RedeemHouseholdReviewToken` (`keystone/runtimedb/householdroutines.go:303-390`) store only a hash, bind one plan id, one member, one routine revision and one expiry, and are single-use — enforced by the schema trigger `household_review_tokens_single_use` as well as by the redeem path. Issuance refuses a member who is not currently admitted, and refuses any plan that is not purely Automations (`keystone/api/handlers_household_review.go:160-186`, `plan.ClassHouseholdRoutine`). Redemption requires the trusted ingress header from an exact configured peer and resolves the asserted name through the identity-link table (`:230-280`).
-- **Redemption exercised end to end**, on a local instance started with `-household-ingress 127.0.0.1`, an admitted member `mika`, and a `trusted-ingress` identity link to `mika@household`:
+- **Redemption exercised end to end**, on a local instance started with `-household-ingress 127.0.0.1`, an admitted member `<owner>`, and a `trusted-ingress` identity link to `<owner>@household`:
 
   | Request | Result |
   |---|---|
   | `Remote-User: someone-else` | `404 not found` |
   | no `Remote-User` header | `404 not found` |
-  | `Remote-User: mika@household` | `{"planId":"plan-2","state":"approved","by":"mika"}` |
+  | `Remote-User: <owner>@household` | `{"planId":"plan-2","state":"approved","by":"<owner>"}` |
   | the same token, again | `this review link does not work` |
 
   And the material-change case, which is what AC10 asks for: a token
