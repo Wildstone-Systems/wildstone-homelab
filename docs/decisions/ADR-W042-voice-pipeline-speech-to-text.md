@@ -179,12 +179,12 @@ Each slice is one PR with its own tests.
 1. **`keystone/speech` + `speech-speaches` package.** `Transcriber`, the OpenAI-compatible client, settings, audit event; the package. Tests with a fake HTTP engine (success, timeout, empty, error) and the privacy matrix.
 2. **`POST /api/v1/chat/voice`.** Multipart parsing with limits, binding-before-transcription, privacy check, handoff to the shared turn path, `source: voice` on the turn, no-command rule. Tests beside `handlers_chat_message_test.go`, including "unbound account never reaches the Transcriber" and "`/secret` by voice is not intake".
 3. **Telegram.** `voice`, `audio`, `video_note`; `getFile` download. Tests with recorded update fixtures.
-4. **Discord.** Voice-message flag and single attachment download.
-5. **Slack.** `file_share` + `slack_audio`, Bearer download, `files:read` in the package text.
-6. **Dashboard dictation.** `POST /api/v1/assistant/transcribe`; mic button in `assistant-widget.html` and `assistant.html` (MediaRecorder, a visible recording state, a stop button, a 120 s cap, clear errors when the mic is denied); mic icon on voice turns in the conversation view.
+4. **Dashboard dictation.** `POST /api/v1/assistant/transcribe`; mic button in `assistant-widget.html` and `assistant.html` (MediaRecorder, a visible recording state, a stop button, a 120 s cap, clear errors when the mic is denied); mic icon on voice turns in the conversation view.
+5. **Discord.** Voice-message flag and single attachment download.
+6. **Slack.** `file_share` + `slack_audio`, Bearer download, `files:read` in the package text.
 7. **Matrix** (not asked for, same shape): `m.audio` download via authenticated media.
 
-Slices 3–5 depend on 2; 6 depends on 1 only.
+Slices 3, 5, 6 and 7 depend on 2; slice 4 depends on 1 only, so it can run alongside 2 and 3.
 
 ---
 
