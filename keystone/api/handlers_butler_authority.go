@@ -71,14 +71,19 @@ func (s *Server) setButlerToolControl(r *http.Request, id principal.Identity) (a
 // This is where "a Member Agent cannot be configured with an Owner tool"
 // (design §18.3) is answered: the member gateway does not register an
 // owner tool, so the question comes back false and the control is stored
-// as the inert intent it is. The refusal is structural — the tool is
+// as the inert intent it is. The other direction holds too: an Owner
+// Agent's set is both gateways' (ADR-W033 B3), so a Member tool exists on
+// it. The refusal is structural — the tool is
 // absent, not switched off — which is why no list here has to be kept in
 // step with anything.
 func (s *Server) toolExistsOnClass(class, tool string) bool {
 	var manifest butler.CapabilityManifest
 	switch class {
 	case runtimedb.AgentClassOwner:
-		manifest = butler.NewToolGateway(nil, nil).ForAdministration().Capabilities(false)
+		// Owner and Member tools both: "Member tools may be granted to
+		// either Agent class" (ADR-W033 B3).
+		manifest = butler.NewOwnerToolset(butler.NewToolGateway(nil, nil).ForAdministration(),
+			butler.NewHouseholdGateway("", butler.HouseholdSeams{}).ForAdministration()).Capabilities(false)
 	case runtimedb.AgentClassMember:
 		manifest = butler.NewHouseholdGateway("", butler.HouseholdSeams{}).
 			ForAdministration().Capabilities(false)

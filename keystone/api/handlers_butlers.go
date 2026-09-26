@@ -876,7 +876,13 @@ func (s *Server) butlerTools(r *http.Request, _ principal.Identity) (any, int, e
 		if live == nil {
 			live = butler.NewToolGateway(nil, nil)
 		}
-		manifest = live.Scoped(authority).ForAdministration().Capabilities(readOnly)
+		// And the household's tools, which an Owner Agent holds too
+		// (ADR-W033 B3) — the same union its sessions are built from
+		// (butler.OwnerToolset), so this screen lists what it can
+		// actually reach and an Owner can narrow a household tool on it.
+		member := butler.NewHouseholdGateway("", s.ButlerHost.householdSeams()).ForAdministration()
+		member.SetAuthorizer(authority)
+		manifest = butler.NewOwnerToolset(live.Scoped(authority).ForAdministration(), member).Capabilities(readOnly)
 	default:
 		return nil, http.StatusBadRequest, fmt.Errorf(
 			"%s is a %s agent, which has no tool surface", b.Name, b.AgentClass)

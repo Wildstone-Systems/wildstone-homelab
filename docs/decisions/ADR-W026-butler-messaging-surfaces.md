@@ -114,6 +114,23 @@ then the whole security boundary, in one code path, and every future
 tool has to remember which audience it is for. Two gateways forget
 nothing.
 
+> **Amendment (2026-09-26): superseded for Owner Agents by ADR-W033 B3/B5.**
+> ADR-W033 made the tiers Agent classes rather than surfaces: "Member tools
+> may be granted to either Agent class. Owner tools may be granted only to
+> Owner Agents", and a new Owner Agent "receives all currently available
+> Member and Owner tools by default". The grants followed it
+> (`seedAgentTools`); session construction did not, and still chose one
+> gateway by surface, so an Owner (operator) Agent asked to add something
+> to the household's shopping list had no household tool to do it with.
+> An Owner Agent's session now holds **both** gateways — the operator's
+> and a household gateway built exactly as a household session builds it
+> (`butler.OwnerToolset`). That is a union of two gateways, not the
+> "one surface with per-caller filtering" rejected above: each gateway
+> keeps its own tool map, authorization and dispatch, and the union only
+> routes a call to the gateway that owns the tool. **A Member Agent is
+> unchanged** — its sessions are the household gateway alone, and the
+> statement that a family session holds no Keystone verbs stands.
+
 ### A2. The transport lives in a package; Keystone learns no chat API
 
 A chat integration is the sidecar shim shape ADR-W024 A10 already
