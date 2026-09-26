@@ -468,6 +468,22 @@ func (a *Adapter) settle(j *job, state agentruntime.State, reason, question, out
 	if history != nil {
 		j.history = history
 	}
+	a.mu.Unlock()
+
+	// The outcome is recorded BEFORE settled is closed. Closing it is
+	// what wakes Wait, and a caller woken by it reads the audit trail
+	// next; recording afterwards let it read a trail that did not yet end
+	// in the state it had just been told about (seen under -race in
+	// TestCompletesThroughWildstoneTools). The state itself was set above,
+	// under the lock, so a second settle still returns at once. A fresh
+	// context: the run's own may be exactly what just ended.
+	err := a.record(context.Background(), j, agentruntime.AuditEvent{
+		Type: agentruntime.AuditJobState, State: state, Detail: reason,
+	})
+	a.mu.Lock()
+	if err != nil {
+		j.status.Reason = bound(strings.TrimSpace(j.status.Reason+" (audit unavailable: "+err.Error()+")"), maxText)
+	}
 	select {
 	case <-j.settled:
 		// Already closed: a parked job being cancelled.
@@ -475,16 +491,6 @@ func (a *Adapter) settle(j *job, state agentruntime.State, reason, question, out
 		close(j.settled)
 	}
 	a.mu.Unlock()
-
-	// The outcome is recorded with a fresh context: the run's own may be
-	// exactly what just ended.
-	if err := a.record(context.Background(), j, agentruntime.AuditEvent{
-		Type: agentruntime.AuditJobState, State: state, Detail: reason,
-	}); err != nil {
-		a.mu.Lock()
-		j.status.Reason = bound(strings.TrimSpace(j.status.Reason+" (audit unavailable: "+err.Error()+")"), maxText)
-		a.mu.Unlock()
-	}
 }
 
 func (a *Adapter) setState(j *job, s agentruntime.State) {
