@@ -1,46 +1,39 @@
 # ADR-W007: Keystone core — public API, principals, runtime DB, Statefile ingestion
 
-- **Status:** accepted
+- **Status:** accepted; amended by ADR-W033
 - **Relates to:** architecture proposal §3/§6/§9.2, implementation scope E2
+- **Governed by:** ADR-W033 where they overlap.
 - **Audience:** decision record AND implementation spec for E2, written so
   implementation subagents can execute the work packages in Part C without
   the planning conversation. Parts A–B are binding; if a work package
   contradicts them, stop and report.
 
-## Conditional amendment from ADR-W030
+## Constraints from ADR-W030
 
-This amendment becomes binding when ADR-W030 is accepted. The closed role
-table adds `integration-adapter`, limited to connection-bound
-`claim-integration-work` and `report-integration-result` verbs. It receives no
-general read, act, propose, approve, or manage authority. Typed integration
-work uses its own durable queue and claim/result endpoints behind the same
-public API; it does not reuse chat tables or the chat inbound path.
-
-The table also adds a non-human `household-reviewer` service role for the
-Authelia-protected household review page. Household members receive no Keystone
-principal or token. The service acts for an explicitly linked, admitted adult
-and holds only `review-household-routine-plan`; Keystone rechecks the member,
-link generation, adult classification, and Plan revision. The route
-approves/rejects only a server-classified Plan whose every step is an approved
-household routine declaration/action at read or domestic tier. It refuses mixed
-Plans and all infrastructure, managed-file, connection/secret,
-identity/admission, tool/grant, and other standing-authority changes. It is not
-the existing general `approve` verb. Child admissions cannot be acted for on
-this route.
-
-The runtime database also becomes authoritative for task/step attempts,
-conversation turns, waiting reasons, temporary grants, immediate denials,
-identity-link projections, and delivery state. Schema migrations preserve
-correlation to the household timeline without making runtime projections a
-second authority for deterministic outcomes. All new Console, CLI, chat, and
-adapter behavior continues through the public API.
-
-V1 retains one active Keystone writer and task scheduler. A standby is a
-recovery target, not an active peer; promotion is explicit and fences the old
-coordinator before dispatch. The runtime DB adds append-only structured work
-trace events correlated to task, turn, tool attempt, policy/approval decision,
-and delivery. Trace access follows the underlying task/source permissions and
-the public API; there is no separate observability backdoor.
+- The closed role table adds `integration-adapter`, limited to
+  `claim-integration-work` and `report-integration-result` verbs bound to its
+  integration connections (an app adapter such as CalDAV, not an ADR-W033
+  Connection). It receives no general read, act, propose, approve, or manage
+  authority. Typed integration work uses its own durable queue and
+  claim/result endpoints behind the same public API; it does not reuse chat
+  tables or the chat inbound path.
+- Plans are approved only by a human Owner, at the exact version, through the
+  Owner Review Queue; no service role approves on anyone's behalf
+  (ADR-W033 §E2, §E3).
+- The runtime database is authoritative for task/step attempts, conversation
+  turns, waiting reasons, immediate denials, identity-link projections, and
+  delivery state. Task authority is derived from the request, not a stored
+  grant (ADR-W033 §A0). Schema migrations preserve correlation to the
+  household timeline without making runtime projections a second authority
+  for deterministic outcomes. All Console, CLI, chat, and adapter behavior
+  continues through the public API.
+- V1 retains one active Keystone writer and task scheduler. A standby is a
+  recovery target, not an active peer; promotion is explicit and fences the
+  old coordinator before dispatch. The runtime DB adds append-only structured
+  work trace events correlated to task, turn, tool attempt, policy/approval
+  decision, and delivery. Trace access follows the underlying task/source
+  permissions and the public API; there is no separate observability
+  backdoor.
 
 ---
 
@@ -70,13 +63,21 @@ URL prefix (`/api/v1/`).
 A **principal** is who calls the public API. Fields: `name`, `role`,
 `disabled`, `actingFor` (see below). Three roles at MVP, checked
 server-side per route (a closed table in code, mirroring the
-closed-registry philosophy):
+closed-registry philosophy).
+
+These are **API principal roles** — what a credential may call — not human
+roles. A human is an Owner or a Member and nothing else (ADR-W033 §A1); a
+principal role never makes anyone an Owner.
 
 | Role | May |
 |---|---|
-| `admin` | everything, including principal/token management and plan approval |
-| `operator` | read everything; propose plans; approve plans |
+| `admin` | everything, including principal/token management and plan approval. Held by an Owner's Console session and by host credentials. |
+| `operator` | read everything; propose plans; the `approve` verb. A machine credential: holding the verb never makes it the approver of a Plan that requires a human Owner. |
 | `butler` | read (redacted) everything; propose plans; NEVER approve |
+
+Every Plan an Agent proposes is approved only by a human Owner, at its exact
+version (ADR-W033 §E2). _Code not yet conformant: `operator` can still
+approve non-routine Plans (#210)._
 
 The Butler holding a first-class principal — not a special code path — is
 what makes §6's "authority is not in the model" auditable: its writes are
@@ -102,9 +103,12 @@ mis-verify, revocation is a DB row, and the parse surface on the
 unauthenticated path stays near zero.
 
 Bootstrap: first start with an empty principals table mints an `admin`
-principal + token and prints the token once to stdout (exactly the
-join-token pattern of ADR-W003). Everything after that goes through the
-API.
+API principal + bearer token and prints the token once to stdout (exactly
+the join-token pattern of ADR-W003). It is a host/installer credential, not
+a Person. The first human Owner is created by the installer, and lost web
+access is recovered from the host CLI (`keystone owner create`,
+`keystone owner reset-password`) (ADR-W033 §A3, §A7). Everything after that
+goes through the API.
 
 ### A4. Runtime DB
 

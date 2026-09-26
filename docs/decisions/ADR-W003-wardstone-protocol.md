@@ -1,7 +1,8 @@
 # ADR-W003: Wardstone protocol — typed no-exec surface, layout, versioning
 
-- **Status:** accepted (locked decision #1 of proposal §10, produced by Spike S1)
+- **Status:** accepted (locked decision #1 of proposal §10, produced by Spike S1); ADR-W030 constraints amended by ADR-W033
 - **Relates to:** architecture proposal §4, implementation scope S1/E1/E2
+- **Governed by:** ADR-W033 where they overlap.
 - **Audience:** this document is both the decision record AND the
   implementation specification for finishing Wardstone to production grade
   (E1). It is written so that implementation subagents can execute work
@@ -9,26 +10,26 @@
   work package contradicts Part A or B, Part A/B wins — stop and report
   the conflict instead of improvising.
 
-## Conditional amendment from ADR-W030
+## Constraints from ADR-W030
 
-This amendment becomes binding when ADR-W030 is accepted. ADR-W030's
-Operator-only log reader adds no protocol operation: it reuses the
-existing typed `ContainerLogs` arm, ownership checks, and 1 MiB tail-biased
-bound. The Butler gateway and reader narrow and redact that result; Household
-receives no log tool.
-
-Automatic adapter fallback does require verified removal of a connection
-secret from a node leaving the approved placement set. Before that feature
-ships, implementation must add one typed, idempotent, additive `RemoveSecret`
-arm carrying secret name and
-expected version and returning only whether that version existed/was removed.
-It never returns a value, refuses a version mismatch, remains admin/Plan
-mediated, and refuses while any managed container on the node still references
-that secret. Adapter placement cleanup fences the lease and
-stops/removes the container before erasure so it cannot retain or rematerialize
-the value. The operation follows A3's protocol-minor compatibility process. An
-equivalent typed erasure operation is acceptable only if it preserves those
-properties.
+- The Butler log reader adds no protocol operation: it reuses the existing
+  typed `ContainerLogs` arm, ownership checks, and 1 MiB tail-biased bound.
+  The Butler gateway and reader narrow and redact that result. The reader is
+  an Owner-class tool, grantable only to Owner Agents.
+  _Changed by ADR-W033 §B3: tool authority follows tool class, not surface._
+- Automatic adapter fallback requires verified removal of an integration
+  connection secret (an app adapter's credential, not an ADR-W033
+  Connection) from a node leaving the approved placement set. Before that
+  feature ships, implementation must add one typed, idempotent, additive
+  `RemoveSecret` arm carrying secret name and expected version and returning
+  only whether that version existed/was removed. It never returns a value,
+  refuses a version mismatch, remains Plan-mediated with human Owner
+  approval, and refuses while any managed container on the node still
+  references that secret. Adapter placement cleanup fences the lease and
+  stops/removes the container before erasure so it cannot retain or
+  rematerialize the value. The operation follows A3's protocol-minor
+  compatibility process. An equivalent typed erasure operation is acceptable
+  only if it preserves those properties.
 
 ---
 

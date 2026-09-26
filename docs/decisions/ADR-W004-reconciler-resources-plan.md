@@ -1,38 +1,41 @@
 # ADR-W004: Reconciler, resource schema, Statefile, plan artifact, external-resource pattern
 
-- **Status:** accepted (locked decisions #2 + #3 of proposal §10, produced by Spike S2)
+- **Status:** accepted (locked decisions #2 + #3 of proposal §10, produced by Spike S2); amended by ADR-W033
 - **Relates to:** architecture proposal §3, implementation scope S2
+- **Governed by:** ADR-W033 where they overlap.
 - **Audience:** decision record AND implementation spec for Spike S2, written
   so implementation subagents can execute the work packages in Part C without
   the planning conversation. Part A/B are binding; if a work package
   contradicts them, stop and report.
 
-## Conditional amendment from ADR-W030
+## Constraints from ADR-W030
 
-This amendment becomes binding when ADR-W030 is accepted. Butler admission,
-principal/member links, permanent profile tool enablement, standing routine
-authority, and native-routine declarations are intentional desired-state
-changes: represent them as typed resources and change them through Plans.
-Their exact resource schemas land with their implementation slices.
-
-Temporary task grants are bounded runtime control records rather than
-Statefile resources. A disable, unlink, or revocation is an immediate runtime
-denial and wins over older desired state. It also creates or links a Plan to
-remove the stale declaration; until that Plan completes, Console reports
-`revoked, declaration pending removal`. Reconciliation cannot lift the denial,
-and re-enabling requires a fresh approved Plan. Existing risk classification
-applies to the cleanup diff.
-
-An adapter connection's primary and ordered eligible fallback nodes are
-Plan-mediated desired state. Approval deploys and starts the adapter container
-and provisions its credential on every listed node before eligibility. During
-an outage Keystone moves only the active lease epoch among those prepared
-instances; it performs no container create/start write. The epoch fences
-concurrent work and late results. Adding a node is not complete until its
-container is running, its credential is provisioned, and readiness is verified;
-removing one immediately fences its lease, stops/removes its adapter container,
-and remains incomplete until local credential erasure and any required remote
-revocation are verified.
+- Approved routine versions and native-routine declarations are intentional
+  desired-state changes: represent them as typed resources and change them
+  through Plans a human Owner approves at the exact version. Their exact
+  resource schemas land with their implementation slices. Connection
+  admission and identity bindings are direct Owner administration, not Plans.
+  _Changed by ADR-W033 §A2, §B7.1, §E2, §E6: routine authority is an Owner-approved exact version, not a standing grant._
+- Task authority is not a resource and not a grant: it is derived from the
+  request that created the Task, re-evaluated at every boundary, and never
+  widens (ADR-W033 §A0).
+- A disable, unlink, or revocation is an immediate runtime denial and wins
+  over older desired state; reconciliation cannot lift it. It also creates or
+  links a Plan to remove the stale declaration; until that Plan completes,
+  Console reports `revoked, declaration pending removal`. Existing risk
+  classification applies to the cleanup diff. A disabled routine may be
+  re-enabled without new approval; a revoked one returns only as a new
+  approved version (ADR-W033 §E6.1).
+- An integration connection adapter's primary and ordered eligible fallback
+  nodes are Plan-mediated desired state. Approval deploys and starts the adapter container and
+  provisions its credential on every listed node before eligibility. During
+  an outage Keystone moves only the active lease epoch among those prepared
+  instances; it performs no container create/start write. The epoch fences
+  concurrent work and late results. Adding a node is not complete until its
+  container is running, its credential is provisioned, and readiness is
+  verified; removing one immediately fences its lease, stops/removes its
+  adapter container, and remains incomplete until local credential erasure
+  and any required remote revocation are verified.
 
 ---
 
@@ -120,7 +123,10 @@ PlanStep{
 Rules:
 - **No "just do it" write path.** Every intentional change produces a Plan.
   Low risk MAY auto-apply per policy; Medium/High require explicit approval
-  (`Plan.Approve()` in-process for the spike; Console/CLI later).
+  (`Plan.Approve()` in-process for the spike; Console/CLI later). Auto-apply
+  covers only infrastructure reconciliation and drift repair; a Plan an
+  Agent proposed never auto-applies, whatever its risk grade — a human Owner
+  approves its exact version (ADR-W033 §E2).
 - Risk grading (spike heuristic, pinned): data-affecting ops (Volume delete,
   mount change, Container delete with a bound volume) = **High**; service
   interruption without data risk (Container image change/restart, Route
@@ -136,7 +142,7 @@ Level-triggered, per-kind controllers in one process (proposal §3.4):
 
 ```
 observe (Wardstone + providers) → diff(spec, observed) → Plan
-   → approve (auto if Low & policy allows, else wait) → apply step-by-step
+   → approve (auto if Low & policy allows & not Agent-proposed, else wait) → apply step-by-step
    → health-gate each step (post-condition probe)
    → on gate failure: run step.Reverse (and prior steps' reverses), halt, raise incident
 ```

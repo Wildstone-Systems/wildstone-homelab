@@ -1,27 +1,23 @@
 # ADR-W009: Policy Engine — standing invariants as plan validation
 
-- **Status:** accepted
+- **Status:** accepted; amended by ADR-W033
 - **Relates to:** architecture proposal §9.2, implementation scope E4,
   ADR-W006 A3 (the S4 spike rule this generalizes), ADR-W007 A6/K3
+- **Governed by:** ADR-W033 where they overlap.
 - **Audience:** decision record AND implementation spec for E4.
 
-## Conditional amendment from ADR-W030
+## Constraints from ADR-W030
 
-This amendment becomes binding when ADR-W030 is accepted. Plans that increase
-standing Butler authority, admit/link identities, or create/change routines
-pass through the same policy engine as other desired-state changes. Temporary
-task grants remain bounded human-approved runtime records and are checked at
-dispatch. Immediate disable/revocation is a negative control that cannot be
-auto-reversed by reconciliation or policy; a separate cleanup Plan brings
-desired state back into agreement.
-
-Policy derives a `household-routine` review class only when every Plan step is
-a routine declaration/action whose tier is read or domestic. The class is
-fail-closed: mixed or unknown steps, managed files, infrastructure, credentials
-or connections, identity/admission, tools/grants, and other standing authority
-require the existing Operator/Admin path. The `household-reviewer` service
-verb cannot override this classification or act without a currently linked,
-admitted adult identity from the trusted household ingress.
+- Plans that create or change routines pass through the same policy engine
+  as other desired-state changes. Policy never makes a Plan approved: every
+  Plan an Agent proposes is approved only by a human Owner at its exact
+  version, through the Owner Review Queue (ADR-W033 §E2, §E3).
+- Task authority is derived from the request that created the Task and is
+  re-evaluated at every dispatch boundary; it is not a grant record
+  (ADR-W033 §A0).
+- Immediate disable/revocation is a negative control that cannot be
+  auto-reversed by reconciliation or policy; a separate cleanup Plan brings
+  desired state back into agreement.
 
 ---
 
@@ -64,7 +60,7 @@ Each rule has a stable ID (used by exemptions and violations):
 | `public-requires-auth` | §9.2-2 | A route that is `family_public` in the target tree — or is currently `family_public` under the same name (the S4 downgrade-laundering guard, kept) — must not have `auth: none` |
 | `admin-structural` | §9.2-1 | A route currently classified `admin_tailscale` may not be re-classified to `family_public` or `family_private`; admin surfaces never migrate onto family/public ingress by any single change |
 | `secret-values-forbidden` | §9.2-3 (Statefile half) | Container env entries whose KEY is secret-shaped (password/secret/token/api-key) must carry a `secret/<name>` reference, not a literal; any env VALUE with a secret shape (long hex/base64, shapes shared with keystone/redact) is likewise rejected. The full secrets path (encrypted store, Wardstone materialization) is E8; this rule keeps the Statefile clean NOW so E8 has nothing to migrate |
-| `butler-admin-scope` | §9.2 per-principal scoping | A `butler`-role principal may not create, modify, or delete a route that is (currently or proposedly) `admin_tailscale` — defense in depth on top of the RBAC verb table |
+| `butler-admin-scope` | §9.2 per-principal scoping | Keyed on the `butler` API principal role (ADR-W007 A2), which every Agent holds. A `butler`-role principal may not create, modify, or delete a route that is (currently or proposedly) `admin_tailscale` — defense in depth on top of the RBAC verb table |
 
 §9.2-5 (identity flows only through LLDAP/Authelia) is not
 mechanizable until the identity kinds carry flow information — recorded
@@ -84,7 +80,9 @@ exemptions fail startup loudly rather than lurking.
 
 `policy.Tier`: `low`, `medium`, `high`, and `domestic` — the approval
 table says which tiers auto-apply (`low` only) and which require human
-approval. `domestic` is defined and validated from day one (ADR-W001
+approval. `low` auto-apply covers only infrastructure reconciliation and
+drift repair; a Plan an Agent proposed never auto-applies at any tier — a
+human Owner approves its exact version (ADR-W033 §E2). `domestic` is defined and validated from day one (ADR-W001
 foundation: the concierge tier where an acting-for principal's changes
 get a distinct approval flow) but maps to require-approval and is
 otherwise UNUSED until v2 — no behavior branches on it.
