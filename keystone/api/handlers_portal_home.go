@@ -390,7 +390,8 @@ type homeSummaryResponse struct {
 	// administrative dashboard, and a Member never receives the address.
 	Console string `json:"console,omitempty"`
 	// Surfaces names which household surfaces are installed, so the
-	// page knows whether to draw the Files and Assistant cards at all.
+	// page knows whether to draw the Files, Assistant and Lists cards at
+	// all.
 	// An absent capability must not leave an empty frame on the page.
 	Surfaces map[string]bool `json:"surfaces"`
 
@@ -446,6 +447,7 @@ func (s *Server) homeSummary(_ http.ResponseWriter, r *http.Request, member stri
 			// which is the same test that admits a request to it.
 			"files":     portalSurfaceInstalled(desired, surfaceFiles),
 			"assistant": portalSurfaceInstalled(desired, surfaceAssistant),
+			"lists":     portalSurfaceInstalled(desired, surfaceLists),
 		},
 		Groups: householdGroups(),
 	}

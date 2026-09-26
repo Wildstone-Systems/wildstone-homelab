@@ -347,9 +347,40 @@
     </section>
   </div>
 
-  <!-- Notifications. The one widget with no page of its own, so it has
-       no .mlink and stays on a phone. -->
+  <!-- Lists and Notifications, side by side on a wide screen and stacked
+       on a phone (the .widgets grid decides). Neither has a page of its
+       own, so neither has a .mlink and both stay on a phone.
+
+       Lists (packages/lists-wildstone): the household's shared lists —
+       the same ones the assistant reads and changes — ticked off here
+       without a conversation. Hidden unless the capability is installed
+       and this person is in its group; the grid then gives
+       Notifications the whole row, as before. -->
   <div class="widgets" style="margin-bottom: var(--space-8)">
+    <section class="wid" id="lists-wid" hidden>
+      <div class="wid-head">
+        <span class="eyebrow">Lists</span>
+        <select id="lists-pick" class="hbtn hbtn-secondary" aria-label="Which list" hidden></select>
+        <span class="pill pill-mute tnum" id="lists-count" hidden></span>
+        <span class="fade" aria-hidden="true"></span>
+        <button class="hbtn hbtn-ghost" id="lists-clear" type="button" hidden>Clear ticked</button>
+      </div>
+      <div id="lists-note"></div>
+      <!-- Bounded, so a long list scrolls inside the card rather than
+           making it the tallest thing on the page. -->
+      <div id="lists-items" style="max-height: 240px; overflow-y: auto"></div>
+      <div class="composer">
+        <label class="sr" for="lists-new">Add to the list</label>
+        <textarea id="lists-new" rows="1" placeholder="Add to the list — milk, eggs"></textarea>
+        <button class="hbtn hbtn-primary send" id="lists-add" type="button" aria-label="Add">
+          <i class="ph ph-plus" aria-hidden="true"></i>
+        </button>
+      </div>
+      <div class="spread">
+        <span class="muted grow" id="lists-sum"></span>
+        <button class="hbtn hbtn-ghost" id="lists-newlist" type="button">New list</button>
+      </div>
+    </section>
     <section class="wid">
       <div class="wid-head">
         <button type="button" id="notif-fold" aria-expanded="true" aria-controls="notif-body"
@@ -723,6 +754,7 @@
     el("m-files").hidden = !s.files;
     el("assistant-wid").hidden = !s.assistant;
     el("m-assistant").hidden = !s.assistant;
+    el("lists-wid").hidden = !s.lists;
 
     // THE TWO ACTING SURFACES ARE NOT RE-INITIALISED ON A REFRESH, and
     // this is the line that makes polling safe. Both hold state the
@@ -737,12 +769,159 @@
     // same list and would vanish mid-progress.
     if (isRefresh) {
       if (s.files && uploadsInFlight === 0) { loadRecent(); }
+      // Not while somebody is typing an item: a refresh would redraw
+      // the card under them.
+      if (s.lists && !busyWithin("lists-wid")) { loadLists(); }
       return;
     }
     if (s.files) { loadFiles(); }
     if (s.assistant) { loadAssistant(); }
+    if (s.lists) { loadLists(); }
     startRefreshing();
   }
+
+  // ---- Lists. The household's shared lists; every value from the
+  // server is rendered as text, never as markup.
+  var lists = [], currentList = "";
+  function listsPost(path, body) {
+    return fetch(path, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body)
+    }).then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (j) {
+        if (!r.ok) { throw new Error(j.error || "that did not work"); }
+        return j;
+      });
+    });
+  }
+  function listsFailed(err) {
+    clear(el("lists-note"));
+    note(el("lists-note"), "bad", String(err.message || err));
+  }
+  function loadLists() {
+    fetch("/api/v1/lists", { headers: { accept: "application/json" } })
+      .then(function (r) {
+        // Not in the Lists group: the card is not this person's.
+        if (r.status === 403 || r.status === 404) { el("lists-wid").hidden = true; return null; }
+        return r.json().then(function (j) {
+          if (!r.ok) { throw new Error(j.error || "the lists did not load"); }
+          return j;
+        });
+      })
+      .then(function (j) {
+        if (!j) { return; }
+        clear(el("lists-note"));
+        lists = j.lists || [];
+        var names = lists.map(function (l) { return l.name; });
+        var keep = names.filter(function (n) { return n.toLowerCase() === currentList.toLowerCase(); })[0];
+        currentList = keep || names[0] || currentList || "Shopping";
+        paintLists();
+      })
+      .catch(listsFailed);
+  }
+  function paintLists() {
+    var pick = el("lists-pick");
+    clear(pick);
+    lists.forEach(function (l) {
+      var o = make("option", null, l.name + (l.open ? " · " + l.open : ""));
+      o.value = l.name;
+      pick.appendChild(o);
+    });
+    var known = lists.some(function (l) { return l.name === currentList; });
+    if (!known) {
+      // A list that exists only once its first item is added.
+      var o = make("option", null, currentList + " (new)");
+      o.value = currentList;
+      pick.appendChild(o);
+    }
+    pick.value = currentList;
+    pick.hidden = pick.options.length < 2;
+
+    var list = lists.filter(function (l) { return l.name === currentList; })[0] ||
+      { name: currentList, items: [], open: 0, done: 0 };
+    var box = el("lists-items");
+    clear(box);
+    if (!list.items || !list.items.length) {
+      box.appendChild(make("div", "muted", lists.length
+        ? currentList + " is empty. Add something below, or ask the assistant."
+        : "No lists yet. Add something below, or ask the assistant to."));
+    }
+    (list.items || []).forEach(function (it) {
+      var row = make("label", "frow");
+      row.style.cursor = "pointer";
+      var box2 = document.createElement("input");
+      box2.type = "checkbox";
+      box2.checked = !!it.checked;
+      box2.addEventListener("change", function () {
+        listsPost("/api/v1/lists/check", { list: list.name, items: [it.text], checked: box2.checked })
+          .then(loadLists).catch(function (err) { box2.checked = !box2.checked; listsFailed(err); });
+      });
+      row.appendChild(box2);
+      var nm = make("span", "nm", it.text);
+      if (it.checked) { nm.style.textDecoration = "line-through"; nm.className = "nm muted"; }
+      nm.title = (it.addedBy ? "Added by " + it.addedBy : "") +
+        (it.checked && it.checkedBy ? " · ticked by " + it.checkedBy : "");
+      row.appendChild(nm);
+      var rm = make("button", "hbtn hbtn-ghost");
+      rm.type = "button";
+      rm.setAttribute("aria-label", "Remove " + it.text);
+      rm.appendChild(icon("x"));
+      rm.addEventListener("click", function (e) {
+        e.preventDefault();
+        listsPost("/api/v1/lists/remove", { list: list.name, items: [it.text] })
+          .then(loadLists).catch(listsFailed);
+      });
+      row.appendChild(rm);
+      box.appendChild(row);
+    });
+    var count = el("lists-count");
+    count.hidden = !list.open;
+    count.textContent = list.open ? list.open + " left" : "";
+    el("lists-clear").hidden = !list.done;
+    text("lists-sum", list.done ? list.done + " ticked off" : "");
+  }
+  el("lists-pick").addEventListener("change", function () {
+    currentList = el("lists-pick").value;
+    clear(el("lists-note"));
+    paintLists();
+  });
+  function addToList() {
+    var box = el("lists-new"), raw = box.value.trim();
+    if (!raw) { return; }
+    var items = raw.split(/[,\n;]+/).map(function (x) { return x.trim(); })
+      .filter(function (x) { return x; });
+    el("lists-add").disabled = true;
+    listsPost("/api/v1/lists/items", { list: currentList, items: items })
+      .then(function () { box.value = ""; loadLists(); })
+      .catch(listsFailed)
+      .then(function () { el("lists-add").disabled = false; box.focus(); });
+  }
+  el("lists-add").addEventListener("click", addToList);
+  el("lists-new").addEventListener("keydown", function (e) {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); addToList(); }
+  });
+  el("lists-clear").addEventListener("click", function () {
+    listsPost("/api/v1/lists/clear", { list: currentList }).then(loadLists).catch(listsFailed);
+  });
+  el("lists-newlist").addEventListener("click", function () {
+    // No dialog: the name is typed where items are, and the list is made
+    // by its first item — the same as asking the assistant.
+    var box = el("lists-new");
+    var name = box.value.trim();
+    if (!name) {
+      clear(el("lists-note"));
+      note(el("lists-note"), "warn", "Type the new list's name in the box, then press New list.");
+      box.focus();
+      return;
+    }
+    currentList = name.slice(0, 60);
+    box.value = "";
+    clear(el("lists-note"));
+    paintLists();
+    box.placeholder = "Add the first thing to " + currentList;
+    box.focus();
+  });
 
   function initialsOf(name) {
     if (!name) { return "?"; }
@@ -2018,6 +2197,9 @@
         }
         session = res.j.session || session;
         fresh = false;
+        // The assistant may just have changed a list ("add milk",
+        // "I got the eggs"): show it now rather than at the next poll.
+        if (!el("lists-wid").hidden) { loadLists(); }
         // Model output is untrusted display content: rendered as text,
         // never as markup.
         var t = turn("assistant", res.j.reply || "");

@@ -520,8 +520,8 @@ func TestNoFlagIsResetAfterParsing(t *testing.T) {
 	}
 }
 
-// The homepage arrives with its two widgets, and the first Owner can see
-// both. Neither needs configuring to be installed: files creates its
+// The homepage arrives with its widgets — files, the assistant and the
+// household lists — and the first Owner can see all three. Neither needs configuring to be installed: files creates its
 // folder on first use, and the assistant's card says how to give it a
 // model. A dashboard that never offered them left the household nothing
 // to find.
@@ -531,6 +531,7 @@ func TestTheHomepageArrivesWithItsWidgets(t *testing.T) {
 	for _, w := range []struct{ pkg, group string }{
 		{"filedrop-wildstone", "filedrop_users"},
 		{"assistant-wildstone", "assistant_users"},
+		{"lists-wildstone", "lists_users"},
 	} {
 		at := strings.Index(src, "enable_capability "+w.pkg)
 		if at < 0 {

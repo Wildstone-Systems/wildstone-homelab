@@ -632,6 +632,12 @@ var Columns = []Column{
 		"the name of the meter whose threshold decided the state"},
 	{"commitment_state", "changed_at", NotAPerson,
 		"an RFC3339 timestamp: when the household was last told"},
+	{"household_lists", "name_key", NotAPerson,
+		"the case-folded list name the store matches on ('shopping'), migration 0088"},
+	{"household_list_items", "text_key", NotAPerson,
+		"the case-folded item text the store matches on ('milk'), migration 0088"},
+	{"household_list_items", "checked_at", NotAPerson,
+		"an RFC3339 timestamp: when the item was ticked off, empty while it is open"},
 
 	// ---- Actor: a person on one path, a machine principal on another ----
 	{"meter_readings", "recorded_by", Actor,
@@ -642,6 +648,12 @@ var Columns = []Column{
 		"whoever made the appointment; the same principal text as the rest of this family until the Person/principal split"},
 	{"commitment_bookings", "cancelled_by", Actor,
 		"whoever cancelled it, empty while the booking stands"},
+	{"household_lists", "created_by", Actor,
+		"the member whose first item made the list: the signed-in member on the Lists card, the session's member for an Agent (domestic.Call.Subject), empty for a rule with no subject — recorded for display, never an access rule (migration 0088)"},
+	{"household_list_items", "added_by", Actor,
+		"who put the item on the list, by the same path as household_lists.created_by"},
+	{"household_list_items", "checked_by", Actor,
+		"who ticked the item off, by the same path as household_lists.created_by; empty while it is open"},
 
 	// 0084 (ADR-W039 Phase 3, #339): agent_deliveries, the Events
 	// family's outbound record. "kind", "payload", "created_at" and

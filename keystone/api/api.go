@@ -773,6 +773,12 @@ func (s *Server) Handler() http.Handler {
 
 	mux.Handle("GET /assistant/{$}", s.portal(surfaceAssistant, s.portalPage("assistant")))
 	mux.Handle("GET /assistant/widget", s.portal(surfaceAssistant, s.portalPage("assistant-widget")))
+	// The Home dashboard's Lists card (packages/lists-wildstone).
+	mux.Handle("GET /api/v1/lists", s.portal(surfaceLists, s.listsRead))
+	mux.Handle("POST /api/v1/lists/items", s.portal(surfaceLists, s.listsAdd))
+	mux.Handle("POST /api/v1/lists/check", s.portal(surfaceLists, s.listsCheck))
+	mux.Handle("POST /api/v1/lists/remove", s.portal(surfaceLists, s.listsRemove))
+	mux.Handle("POST /api/v1/lists/clear", s.portal(surfaceLists, s.listsClearChecked))
 	mux.Handle("GET /api/v1/assistant/agents", s.portal(surfaceAssistant, s.assistantAgents))
 	mux.Handle("GET /api/v1/assistant/scope", s.portal(surfaceAssistant, s.assistantScope))
 	mux.Handle("GET /api/v1/assistant/conversations", s.portal(surfaceAssistant, s.assistantConversations))

@@ -1,0 +1,64 @@
+# Household lists — shopping, chores, packing — kept by Wildstone itself.
+#
+# WHAT IT IS. Lists the household shares: any member who can open the
+# Lists card on the Home dashboard, and any household Agent a member
+# talks to, reads and changes the same lists. There are no per-person
+# lists; who added or ticked an item is shown, not enforced.
+#
+# NOTHING RUNS. Like the drop box, this package installs no container:
+# Keystone keeps the lists in its runtime database (migration 0088) and
+# serves both the Agent tools and the dashboard card. The runtime
+# database, and so the lists, fall under the runtime state's own recovery
+# input (ADR-W030; docs/recovery.md), not the Statefile.
+#
+# WHY THE GROUP. `lists_users` is what grants the Lists card on the Home
+# dashboard, checked on every request, exactly as `filedrop_users` grants
+# the drop box. It is also the resource that makes this capability
+# installed: remove the package and the card and the tools stop at once.
+apiVersion: wildstone.dev/v1
+kind: Package
+metadata:
+  name: lists-wildstone
+  version: 1.0.0
+  capability: lists
+  profile: wildstone
+  # One set of household lists. A second profile would be a second place
+  # to keep the same shopping list.
+  exclusive: true
+requires:
+  # The group is created by the identity capability's provisioning job.
+  - { trait: identity, mode: oidc }
+params:
+  - { name: node, required: true, description: "Which machine runs the control plane.", source: node }
+  # Node running the identity provider, whose managed config the
+  # LdapGroup is rendered into. Defaults to this package's own node.
+  - { name: identity_node, default: "", description: "Which machine runs the login service. Leave empty to use the same machine." }
+accessGroups: [family]
+policies:
+  classifications: [family_private]
+  dataSensitivity: medium
+templates:
+  # The group that grants a person the Lists card.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: LdapGroup
+    metadata: { name: lists-users, node: "{{ or .Params.identity_node .Params.node }}" }
+    spec:
+      name: lists_users
+# The household actions this capability offers (ADR-W001, ADR-W024 A5).
+# keystone/domestic.ListsTools is the other half of this list, and
+# TestListsToolsAreDeclaredByThePackage fails if the two ever drift.
+#
+# Adding, ticking and removing items are `domestic`: small, visible
+# changes the same tools can undo. Deleting a whole list takes everything
+# on it at once, so it is `confirm` (ADR-W024 A5.1): a person in chat is
+# asked, naming the list and how much is on it, and a rule firing on its
+# own cannot carry it at all.
+agentTools:
+  - { name: show_lists, risk: read }
+  - { name: show_list, risk: read }
+  - { name: add_items, risk: domestic }
+  - { name: check_items, risk: domestic }
+  - { name: remove_items, risk: domestic }
+  - { name: clear_checked, risk: domestic }
+  - { name: delete_list, risk: confirm }
