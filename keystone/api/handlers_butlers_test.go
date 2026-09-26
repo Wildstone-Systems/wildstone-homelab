@@ -297,10 +297,11 @@ func TestButlerToolsComeFromTheGatewayNotTheClient(t *testing.T) {
 	}
 }
 
-// An operator Butler is answered with the operator surface's tools, and
-// a household one is not. The ceiling is what the Butler was created
-// against (A3), so this endpoint must never let a screen render the
-// wrong surface's list beside the right surface's name.
+// An operator (Owner) Butler is answered with the operator surface's
+// tools AND the household's, and a household (Member) one with the
+// household's alone. ADR-W033 B3: Member tools may be granted to either
+// class, Owner tools only to Owner Agents — so the list may widen in one
+// direction and never the other.
 func TestButlerToolsAreTheSurfacesOwn(t *testing.T) {
 	h := butlerConsole(t)
 	for _, b := range []map[string]any{
@@ -337,8 +338,15 @@ func TestButlerToolsAreTheSurfacesOwn(t *testing.T) {
 	if !household["get_household_events"] {
 		t.Fatalf("the household surface lost get_household_events: %v", household)
 	}
-	if operator["get_household_events"] {
-		t.Fatalf("an operator Butler was offered the family surface's reads: %v", operator)
+	for _, tool := range []string{"get_household_events", "do_household_action", "list_household_actions"} {
+		if !operator[tool] {
+			t.Fatalf("an operator Butler is not offered the household tool %s it holds (ADR-W033 B3): %v", tool, operator)
+		}
+	}
+	for _, tool := range []string{"get_system_overview", "diagnose", "get_container_logs"} {
+		if household[tool] {
+			t.Fatalf("a household Butler was offered the operator tool %s: %v", tool, household)
+		}
 	}
 }
 

@@ -1817,7 +1817,21 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 						// isolation A4 is about. The tool map is built
 						// once and never written, so sharing it is safe.
 						perSession := *bgw
-						return &perSession, nil
+						// An Owner Agent holds the household's tools
+						// as well as the operator's (ADR-W033 B3/B5):
+						// the household gateway is built exactly as a
+						// household session builds it — bound to the
+						// person being answered, memory bound to this
+						// Agent and that person — and joined to the
+						// operator's. Each keeps its own authorization;
+						// OwnerToolset only routes.
+						if household.Events == nil && household.Actions == nil {
+							return butler.NewOwnerToolset(&perSession, nil), nil
+						}
+						mine := household
+						mine.ProposeRoutine = apiSrv.RoutineProposalSeam(b.Name)
+						mine.Memory = butlerstore.MemorySeams(db, b.Name, t.Member, t.MemoryDestination(), log)
+						return butler.NewOwnerToolset(&perSession, butler.NewHouseholdGateway(t.Member, mine)), nil
 					default:
 						return nil, fmt.Errorf("unknown butler surface %q", b.Surface)
 					}

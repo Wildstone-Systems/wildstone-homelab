@@ -209,6 +209,8 @@ Member tools may be granted to either Agent class. Owner tools may be granted on
 
 A tool may additionally be marked `opt-in`, meaning it is excluded from broad default grants even when its class otherwise matches.
 
+> **As built (2026-09-26).** Two tiers of Agent: a **Member** (household) Agent holds the household's tools; an **Owner** (operator) Agent holds the operator's tools **and** the household's. An Owner Agent's session is `butler.OwnerToolset` — the operator gateway joined to a household gateway built for the same person — and its tool screen and grant checks (`toolExistsOnClass`) use the same union. This supersedes ADR-W026 A1's one-gateway-per-surface for Owner Agents; see the amendment there.
+
 ## B4. Tool grants support dynamic service bundles and explicit selections
 
 An Owner can grant a whole service/class bundle or individual tools.
