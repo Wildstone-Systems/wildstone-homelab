@@ -47,7 +47,19 @@ const server = createServer(async (req, res) => {
   for await (const part of req) body += part;
   requests.push({ path: req.url, method: req.method, body });
   res.setHeader("Content-Type", "application/json");
-  if (req.method === "GET") res.end(JSON.stringify({ secrets: objects }));
+  if (req.method === "GET")
+    res.end(
+      JSON.stringify({
+        secrets: objects,
+        // An operator Agent that sorts first, and a household one: the
+        // page must default to the household Agent and refuse a reveal
+        // through the operator one without asking the server.
+        agents: [
+          { name: "aaa-ops", agentClass: "owner" },
+          { name: "shared", agentClass: "member" },
+        ],
+      }),
+    );
   else if (req.url.endsWith("/reveal")) res.end(JSON.stringify({ value }));
   else res.end("{}");
 });
@@ -77,7 +89,16 @@ try {
     await personal.getByRole("button", { name: /Reveal/ }).count(),
     0,
   );
-  await page.fill("#agent", "shared");
+  // The Agent is a choice, defaulting to a household Agent.
+  assert.equal(await page.locator("#agent").inputValue(), "shared");
+  // An operator Agent cannot reveal on this page: refused here, with no
+  // request sent.
+  await page.selectOption("#agent", "aaa-ops");
+  const before = requests.length;
+  await page.getByRole("button", { name: "Reveal Household value" }).click();
+  assert.match(await page.locator("#error").innerText(), /household Agent/);
+  assert.equal(requests.length, before, "a reveal through an operator Agent was sent");
+  await page.selectOption("#agent", "shared");
   await page.getByRole("button", { name: "Reveal Household value" }).click();
   await page.waitForFunction(
     () => document.querySelector("#revealed").textContent.length > 0,
@@ -87,6 +108,13 @@ try {
   assert.equal(await page.locator("#revealed").innerText(), "");
   await page.fill("#label", "Calendar");
   await page.fill("#value", value);
+  // What was typed can be checked before it is stored, and is concealed
+  // again when the window loses focus.
+  assert.equal(await page.locator("#value").getAttribute("type"), "password");
+  await page.getByRole("button", { name: "Show what I typed" }).click();
+  assert.equal(await page.locator("#value").getAttribute("type"), "text");
+  await page.evaluate(() => window.dispatchEvent(new Event("blur")));
+  assert.equal(await page.locator("#value").getAttribute("type"), "password");
   await page.getByRole("button", { name: "Store securely" }).click();
   await page.waitForFunction(
     () => document.querySelector("#value").value === "",
@@ -106,7 +134,7 @@ try {
       fullPage: true,
     });
   console.log(
-    "PASS: protected reveal, no Personal reveal, blur clearing, secure intake, no browser errors",
+    "PASS: protected reveal, no Personal reveal, Agent choice (household default, operator refused), typed-value reveal, blur clearing, secure intake, no browser errors",
   );
 } finally {
   await browser.close();
