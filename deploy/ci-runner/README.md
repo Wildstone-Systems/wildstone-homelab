@@ -98,10 +98,11 @@ per job and disappear when it finishes.
 
 Nothing has to. Two things get simpler:
 
-- The secret scan runs on a GitHub-hosted runner, for every pull
-  request including forks, because a skipped required check counts as
-  passing and that is the one check a fork must not bypass. The other
-  jobs stay here and skip forks.
+- The secret scan runs for every pull request including forks, on a
+  GitHub-hosted runner once the repository is public (free there,
+  metered while private, so it stays here until the flip), because a
+  skipped required check counts as passing and that is the one check a
+  fork must not bypass. The other jobs stay here and skip forks.
 - The shellcheck step no longer uses Docker (see above), so nothing in
   CI needs a Docker socket. Keep it that way: a step that needs
   `docker run` is a step that needs the host.

@@ -14,15 +14,24 @@ permissions:
 jobs:
   secrets-scan:
     name: secret scan (gitleaks)
-    # Deliberately NOT on the self-hosted runner, and deliberately NOT
-    # guarded against forks: this is the check that keeps a credential
-    # out of public history, so it must run on every pull request,
-    # including one from a fork. A GitHub-hosted runner needs nothing
-    # from the maintainer's network and holds nothing worth protecting,
-    # so a fork's code running here is fine. (A skipped required check
-    # counts as passing, which is why guarding this job would be worse
-    # than useless.)
-    runs-on: ubuntu-latest
+    # This is the check that keeps a credential out of public history,
+    # so it must run on EVERY pull request, including one from a fork,
+    # and it is deliberately not guarded: a skipped required check
+    # counts as passing, which would make a guard worse than useless.
+    #
+    # Where it runs follows the repository's visibility, automatically:
+    #   private  -> the self-hosted runner. Hosted minutes are metered on
+    #               a private repository (the reason CI moved to
+    #               self-hosted in the first place), and nobody outside
+    #               the repository can open a fork PR against it, so
+    #               running unguarded here is safe.
+    #   public   -> a GitHub-hosted runner, free for public repositories.
+    #               It needs nothing from the maintainer's network and
+    #               holds nothing worth protecting, so a fork's code
+    #               running there is fine.
+    # Nothing has to be edited on flip day; the expression re-evaluates
+    # on every run.
+    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted", "dev-services"]') || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
         with:
