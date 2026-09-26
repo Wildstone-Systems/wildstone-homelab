@@ -35,13 +35,15 @@ Three details the script enforces rather than asks for:
   `no-new-privileges`) and nothing else. `ci.yml` was changed to need
   no Docker: shellcheck is a checksum-verified release tarball rather
   than an image.
-- **The image is pinned by digest**, and the script refuses to start on
-  a tag. `ci-runner.env.example` carries the reviewed digest and the two
-  commands that resolve a new one when you choose to move.
+- **The image is an immutable reference**, and the script refuses a
+  tag. It is built here from `Dockerfile`: the official runner pinned by
+  digest, plus a C compiler (`go test -race` needs cgo), `xz` (the
+  workflows extract `.tar.xz`) and `git` (the go job runs `git diff`).
+  Nothing else: every other tool a job needs it downloads itself, pinned
+  by checksum. `docker build -q` prints the image ID, a content hash,
+  and that is what goes in `ci-runner.env`.
 
-The host needs `docker`, `curl` and `python3`. The container is
-`ghcr.io/actions/actions-runner`; `setup-go` and `setup-node` fetch
-their toolchains inside the job as they do on a hosted runner.
+The host needs `docker`, `curl` and `python3`.
 
 ## Where to run it
 
@@ -60,8 +62,9 @@ escape exists:
 ```bash
 # On the CI VM, as root, from a checkout of this repo:
 mkdir -p /etc/wildstone /usr/local/lib/wildstone
+docker build -q deploy/ci-runner           # prints the image ID
 install -m 0600 deploy/ci-runner/ci-runner.env.example /etc/wildstone/ci-runner.env
-$EDITOR /etc/wildstone/ci-runner.env      # set ACCESS_TOKEN; keep RUNNER_IMAGE pinned
+$EDITOR /etc/wildstone/ci-runner.env      # set ACCESS_TOKEN and RUNNER_IMAGE (the ID above)
 install -m 0755 deploy/ci-runner/run-one-job.sh /usr/local/lib/wildstone/run-one-job.sh
 install -m 0644 deploy/ci-runner/github-runner@.service /etc/systemd/system/
 systemctl daemon-reload
@@ -98,12 +101,12 @@ Nothing has to. Two things get simpler:
 - The shellcheck step no longer uses Docker (see above), so nothing in
   CI needs a Docker socket. Keep it that way: a step that needs
   `docker run` is a step that needs the host.
-- The image is the stock runner: no GitHub CLI, no shellcheck, nothing a
-  hosted runner happens to have. A workflow that needs a tool downloads
-  it pinned by checksum (`release.yml` does this for `gh`, `ci.yml` for
-  shellcheck) rather than relying on the image. Adding tools to a
-  derived image is the alternative; this keeps the image reviewable as
-  one digest.
+- The image is the stock runner plus a compiler, `xz` and `git`, and
+  nothing else a hosted runner happens to have. A workflow that needs a
+  tool downloads it pinned by checksum (`release.yml` does this for
+  `gh`, `ci.yml` for shellcheck) rather than growing the image. If a
+  job needs something that cannot be fetched that way, it goes in the
+  `Dockerfile` with a line saying which job needs it.
 - `runner.tool_cache` is empty on every job, so `setup-go` and
   `setup-node` download toolchains each time. Jobs are slower by that
   much and never wrong because of a stale cache.

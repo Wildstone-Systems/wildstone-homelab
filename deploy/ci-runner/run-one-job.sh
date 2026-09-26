@@ -28,18 +28,27 @@ LABELS="${LABELS:-self-hosted,dev-services}"
 RUNNER_NAME_PREFIX="${RUNNER_NAME_PREFIX:-ci-vm}"
 RUNNER_GROUP_ID="${RUNNER_GROUP_ID:-1}"
 
-# The image must be pinned by digest. It receives the Docker socket, so a
-# mutable tag would hand the CI machine to whoever controls the tag.
+# The image must be an immutable reference: a registry digest
+# (name@sha256:...) or the ID of an image built locally from the
+# Dockerfile next to this script (sha256:<64 hex>). A mutable tag would
+# let whoever controls the tag change what runs the jobs. Refuse it.
+pull=yes
 case "$RUNNER_IMAGE" in
   *@sha256:*) ;;
-  *) echo "RUNNER_IMAGE must be pinned by digest (image@sha256:...), got: $RUNNER_IMAGE" >&2; exit 1 ;;
+  sha256:[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*) pull=no ;;
+  *) echo "RUNNER_IMAGE must be a digest (image@sha256:...) or a local image ID (sha256:...), got: $RUNNER_IMAGE" >&2; exit 1 ;;
 esac
 
 name="gh-runner-${instance}"
 runner_name="${RUNNER_NAME_PREFIX}-${instance}-$(date +%s)"
 
 docker rm -f "$name" >/dev/null 2>&1 || true
-docker pull "$RUNNER_IMAGE"
+if [ "$pull" = yes ]; then
+  docker pull "$RUNNER_IMAGE"
+elif ! docker image inspect "$RUNNER_IMAGE" >/dev/null 2>&1; then
+  echo "RUNNER_IMAGE $RUNNER_IMAGE is not present locally; build it: docker build -q deploy/ci-runner" >&2
+  exit 1
+fi
 
 # Mint the single-use JIT config. This is the only call that uses the
 # token, and the token stays in this process's environment on the host.
