@@ -1,5 +1,6 @@
-// The Console's ONLY fetch path (ADR-W016 A3): base URL + bearer token,
-// JSON in/out, wire shapes typed by hand against the API (whose tests
+// The Console's ONLY fetch path (ADR-W016 A3): same-origin requests that
+// carry the Console session cookie and nothing else — the browser holds
+// no bearer token (ADR-W033 A4.1) — JSON in/out, wire shapes typed by hand against the API (whose tests
 // pin them server-side). Resource specs come typed from the generated
 // schema (ADR-W007 A7).
 
@@ -150,16 +151,14 @@ export interface JoinTokenResponse {
 
 // ---------------------------------------------------------------- client
 
-const TOKEN_KEY = "wildstone-token";
+// Where a Console sign-in starts (keystone/api auth_console_session.go).
+// It is a round trip through the identity provider's OpenID Connect
+// sign-in, and comes back to the page it was sent from.
+export const SIGNIN_PATH = "/api/v1/console/signin";
 
-export function getToken(): string | null {
-  return sessionStorage.getItem(TOKEN_KEY);
-}
-export function setToken(token: string) {
-  sessionStorage.setItem(TOKEN_KEY, token);
-}
-export function clearToken() {
-  sessionStorage.removeItem(TOKEN_KEY);
+export function signInURL(): string {
+  const here = location.pathname + location.search + location.hash;
+  return `${SIGNIN_PATH}?return=${encodeURIComponent(here)}`;
 }
 
 const SIGNIN_KEY = "wst.console.signin-at";
@@ -235,7 +234,7 @@ export function clearStepUp() {
 }
 
 // onUnauthorized is installed by the app shell: a 401 anywhere returns
-// to the token gate (ADR-W016 A3).
+// to the sign-in screen (ADR-W016 A3, ADR-W033 A4.1).
 export let onUnauthorized: () => void = () => {};
 export function setOnUnauthorized(fn: () => void) {
   onUnauthorized = fn;
@@ -251,31 +250,30 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
   const raw = body instanceof Blob;
   const res = await fetch(path, {
     method,
+    // The Console session cookie is the only credential the browser
+    // sends. No Authorization header, ever: bearer tokens are for `wild`,
+    // the installer and the host, never a browser's way in (ADR-W033
+    // A4.1), and the server lets any Bearer header decide on its own.
+    credentials: "same-origin",
     headers: {
-      // Only when there IS a token. The server lets any Bearer header
-      // decide, an empty one included, so sending "Bearer " with no token
-      // refused every Owner who arrived signed in through the identity
-      // proxy — their forwarded identity was never consulted.
-      ...(getToken() ? { Authorization: `Bearer ${getToken()}` } : {}),
       ...(body !== undefined && !raw ? { "Content-Type": "application/json" } : {}),
     },
     body: body === undefined ? undefined : raw ? (body as Blob) : JSON.stringify(body),
   });
   if (res.status === 401) {
     const refused = (await res.json().catch(() => ({}))) as { signIn?: string };
-    // Signed in to the household but not recently enough to the Console
-    // (ADR-W033 A4.1): go round the sign-in and come back to this page.
-    // Never with a token of our own — a token decides for itself — and
-    // never twice in quick succession, so a sign-in that cannot succeed
-    // ends at the gate rather than bouncing the browser forever.
-    if (refused.signIn && getToken() === null && !recentlySentToSignIn()) {
+    // Signed in to the household but not (recently enough) to the
+    // Console (ADR-W033 A4.1): go round the sign-in and come back to this
+    // page. Never twice in quick succession, so a sign-in that cannot
+    // succeed ends at the sign-in screen rather than bouncing the browser
+    // forever.
+    if (refused.signIn && !recentlySentToSignIn()) {
       sessionStorage.setItem(SIGNIN_KEY, String(Date.now()));
       const here = location.pathname + location.search + location.hash;
       location.assign(`${refused.signIn}?return=${encodeURIComponent(here)}`);
       // The page is leaving; nothing after this should render a refusal.
       return new Promise<T>(() => {});
     }
-    clearToken();
     onUnauthorized();
     throw new ApiError(401, "unauthenticated");
   }

@@ -43,12 +43,14 @@ func (h *harness) forwarded(method, path, user, groups string) *http.Response {
 	return resp
 }
 
-// The group is the permission. A directory account in it reaches the
-// Console with no token minted for them by hand, which is the whole
-// point: membership is managed where every other service's is.
+// The group OFFERS the Console to an active Owner Person. An Owner in it,
+// signed in freshly through the identity provider, reaches the Console
+// with no token minted for them by hand, which is the whole point:
+// membership is managed where every other service's is.
 func TestTheConsoleGroupIsWhatGrantsTheConsole(t *testing.T) {
 	h := newHarness(t)
 	h.s.SetTrustedIngress([]string{"127.0.0.1", "::1"})
+	h.owner("giulia")
 
 	if res := h.forwarded(http.MethodGet, "/api/v1/butlers", "giulia", ConsoleGroup); res.StatusCode != http.StatusOK {
 		t.Fatalf("a person in %s was refused the Console: %d", ConsoleGroup, res.StatusCode)
@@ -65,6 +67,9 @@ func TestTheConsoleGroupIsWhatGrantsTheConsole(t *testing.T) {
 func TestTheConsoleForwardAuthRefusesEverythingElse(t *testing.T) {
 	h := newHarness(t)
 	h.s.SetTrustedIngress([]string{"127.0.0.1", "::1"})
+	// An active Owner, so each refusal below is for the condition it
+	// names and not for want of a household record.
+	h.owner("mika")
 
 	for _, c := range []struct {
 		what, user, groups string
@@ -98,6 +103,7 @@ func TestTheConsoleForwardAuthIsOffUntilTheProxyIsNamed(t *testing.T) {
 	if len(h.s.TrustedIngressAddrs()) != 0 {
 		t.Fatal("TrustedIngress is set by default; the header path would be live on a fresh install")
 	}
+	h.owner("attacker")
 	if res := h.forwarded(http.MethodGet, "/api/v1/butlers", "attacker", ConsoleGroup); res.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("with no trusted ingress configured the header path answered %d, want 401", res.StatusCode)
 	}
@@ -111,6 +117,7 @@ func TestTheConsoleForwardAuthIsOffUntilTheProxyIsNamed(t *testing.T) {
 func TestTheConsoleGroupIsMatchedExactly(t *testing.T) {
 	h := newHarness(t)
 	h.s.SetTrustedIngress([]string{"127.0.0.1", "::1"})
+	h.owner("mika")
 
 	for _, groups := range []string{"console_users_readonly", "not_console_users", "console_user", "console_userss"} {
 		if res := h.forwarded(http.MethodGet, "/api/v1/butlers", "mika", groups); res.StatusCode != http.StatusUnauthorized {
@@ -158,6 +165,7 @@ func TestABadTokenDoesNotFallThroughToTheHeaders(t *testing.T) {
 func TestAForwardedRequestIsAuditedUnderTheirOwnName(t *testing.T) {
 	h := newHarness(t)
 	h.s.SetTrustedIngress([]string{"127.0.0.1", "::1"})
+	h.owner("giulia")
 
 	if res := h.forwarded(http.MethodGet, "/api/v1/butlers", "giulia", ConsoleGroup); res.StatusCode != http.StatusOK {
 		t.Fatalf("setup: %d", res.StatusCode)
@@ -251,13 +259,12 @@ func TestForwardedConsoleAuthRefusesAPersonWhoMayNotAdminister(t *testing.T) {
 			want: http.StatusUnauthorized,
 		},
 		{
-			name: "a name the household has no record of passes while it has no owner",
-			// The bootstrap window. Person records are created through
-			// an API behind this check, so before the first Owner the
-			// directory group is the only statement anybody has made
-			// about who administers this house.
+			name: "a name the household has no record of is refused while it has no owner",
+			// No bootstrap window (ADR-W033 A3): the installer creates
+			// the first Owner with its bearer token, so the directory
+			// group alone never decides, not even before then.
 			setup: func(t *testing.T, h *harness) {},
-			want:  http.StatusOK,
+			want:  http.StatusUnauthorized,
 		},
 		{
 			name: "a name the household has no record of is refused once it has an owner",
@@ -543,52 +550,61 @@ func TestACredentialActingForNobodyIsUnaffected(t *testing.T) {
 	}
 }
 
-// Refusing an unknown name must not be a way to lock a household out of
-// its own control plane.
+// Only an active Owner Person enters the Console, and there is no
+// bootstrap window before the first one (ADR-W033 A3, A4).
 //
-// This is the test that makes the refusal above safe to ship rather than
-// merely correct. Person records are created through an API that lives
-// behind the Console check, so a rule that refused unknown names
-// unconditionally would leave a fresh deployment with no way in and no
-// way to fix it. Two properties keep that from happening, and both are
-// asserted here: before the first Owner the group still decides, and a
-// bearer token acting for nobody is unaffected either way — which is the
-// bootstrap credential the installer (§2.4) and the root CLI (§2.6) will
-// formalise.
-func TestTheBootstrapPathSurvivesRefusingUnknownNames(t *testing.T) {
+// The installer creates the first Owner itself, over the API, with the
+// bearer token it holds on the host — it never enters the Console to do
+// it. So a household with no Owner yet is one whose Console nobody may
+// enter, even somebody the directory put in console_users, while the
+// bearer path the installer, `wild` and the host use keeps working.
+func TestTheConsoleNeedsAnOwnerAndTheBootstrapTokenDoesNot(t *testing.T) {
 	h := newHarness(t)
 	h.s.SetTrustedIngress([]string{"127.0.0.1", "::1"})
 
-	// Nothing provisioned: the group decides, so somebody can get in and
-	// create the first Owner.
-	if res := h.forwarded(http.MethodGet, "/api/v1/butlers", "installer", ConsoleGroup); res.StatusCode != http.StatusOK {
-		t.Fatalf("an un-provisioned household refused its own installer: %d", res.StatusCode)
-	}
-
-	// They create it. From here the window is shut.
-	if err := h.s.DB.RecordButlerMember("first-owner", runtimedb.RoleOwner, "", ""); err != nil {
-		t.Fatal(err)
-	}
-	if err := h.s.DB.AdmitButlerMember("first-owner", "root-admin"); err != nil {
-		t.Fatal(err)
-	}
+	// No Owner on record: a console_users member signed in freshly
+	// through the identity provider is still refused.
 	if res := h.forwarded(http.MethodGet, "/api/v1/butlers", "installer", ConsoleGroup); res.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("the window did not close: %d", res.StatusCode)
-	}
-	// And the Owner they created can still get in, which is the point of
-	// closing it rather than the cost of it.
-	if res := h.forwarded(http.MethodGet, "/api/v1/butlers", "first-owner", ConsoleGroup); res.StatusCode != http.StatusOK {
-		t.Fatalf("the owner was refused: %d", res.StatusCode)
+		t.Fatalf("with no Owner, a console_users member entered the Console: %d", res.StatusCode)
 	}
 
-	// The bootstrap token is the break-glass and is untouched by any of
-	// it: it acts for nobody, so there is nothing to re-derive.
+	// The bootstrap token is how the installer reaches the API, and it
+	// is untouched: it acts for nobody, so there is nothing to
+	// re-derive. It creates the first Owner exactly as install.sh does.
 	token, err := h.s.Principals.Mint("root-admin", "", 0)
 	if err != nil {
 		t.Fatalf("minting: %v", err)
 	}
 	if res := h.bearer(t, token, http.MethodGet, "/api/v1/butlers"); res.StatusCode != http.StatusOK {
 		t.Fatalf("the bootstrap token was refused: %d", res.StatusCode)
+	}
+	h.owner("first-owner")
+
+	// The Owner, with a fresh Console session, is admitted.
+	if res := h.forwarded(http.MethodGet, "/api/v1/butlers", "first-owner", ConsoleGroup); res.StatusCode != http.StatusOK {
+		t.Fatalf("the owner was refused: %d", res.StatusCode)
+	}
+	// Somebody the household has no record of still is not.
+	if res := h.forwarded(http.MethodGet, "/api/v1/butlers", "installer", ConsoleGroup); res.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("an unknown name entered once there was an Owner: %d", res.StatusCode)
+	}
+
+	// Headers alone never grant a session: the same Owner, the same
+	// forwarded headers from the trusted ingress, but no Console
+	// session from a verified ID token.
+	req, err := http.NewRequest(http.MethodGet, h.srv.URL+"/api/v1/butlers", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set(TrustedIngressHeader, "first-owner")
+	req.Header.Set(ConsoleGroupsHeader, ConsoleGroup)
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if res.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("forwarded headers without a Console session were admitted: %d", res.StatusCode)
 	}
 }
 
@@ -631,16 +647,15 @@ func TestAConsoleRefusalIsNotADegradedIdentity(t *testing.T) {
 
 // The pages gate opens when there is no proxy to gate on.
 //
-// This is the half that prevents a lockout rather than creating one,
-// and it is asserted separately because it is the branch nobody would
-// think to write a test for: a household with no identity proxy has no
-// way in but the bearer token on the sign-in page, so refusing direct
-// access there would lock out precisely the deployments that cannot
-// use Authelia at all.
+// Asserted separately because it is the branch nobody would think to
+// write a test for. With no identity proxy the pages hold no way in
+// (there is no token path in the Console, ADR-W033 A4.1) — they can only
+// tell the person how to sign in — so serving them gives nothing away,
+// and a household that has not installed a proxy yet still sees why.
 //
 // Both directions, because each alone is a different defect. Gating
-// with nothing configured is a lockout; not gating with a proxy
-// configured is the open port the whole slice exists to close.
+// with nothing configured hides that explanation; not gating with a
+// proxy configured is the open port the whole slice exists to close.
 func TestTheConsolePagesGateFollowsTheProxy(t *testing.T) {
 	h := newHarness(t)
 
@@ -653,14 +668,13 @@ func TestTheConsolePagesGateFollowsTheProxy(t *testing.T) {
 	h.s.SetTrustedIngress(nil)
 	if !h.s.ConsoleUIReachableFrom(req) {
 		t.Error("the Console's pages are gated with no identity proxy configured, " +
-			"which locks out every household that has none — the bearer token on " +
-			"the sign-in page is their only way in")
+			"so a household that has none is not even told how to sign in")
 	}
 
 	h.s.SetTrustedIngress([]string{"172.18.0.4"})
 	if h.s.ConsoleUIReachableFrom(req) {
 		t.Error("the Console's pages are served to a peer that is not the proxy " +
-			"even though one is configured; the token path goes around Authelia")
+			"even though one is configured; that port goes around Authelia")
 	}
 	req.RemoteAddr = "172.18.0.4:5555" // the proxy
 	if !h.s.ConsoleUIReachableFrom(req) {

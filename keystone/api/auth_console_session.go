@@ -214,7 +214,7 @@ func (s *Server) consoleProvider() (*consoleauth.Provider, error) {
 
 var errConsoleSignInUnavailable = errors.New("the Console's sign-in is not set up on this deployment: " +
 	"it needs the identity capability and a wildstone-console new enough to register its sign-in client " +
-	"(re-propose wildstone-console, or use a token from the host)")
+	"(re-propose wildstone-console; until then, administer the house from the host with `wild`)")
 
 // consoleSignin starts a Console sign-in: GET /api/v1/console/signin
 // ?return=<console path>[&stepup=1].

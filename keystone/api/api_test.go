@@ -314,14 +314,14 @@ func TestProposeApproveFlow(t *testing.T) {
 		t.Fatalf("plan step = %+v", step)
 	}
 
-	// Approve as operator: statefile gains the resource with a structured
+	// Approve as the host credential: statefile gains the resource with a structured
 	// commit, head marker advances, plan record resolves.
 	var approved runtimedb.PlanRecord
-	resp = h.do(runtimedb.RoleOperator, "POST", "/api/v1/plans/"+rec.ID+"/approve", nil, &approved)
+	resp = h.do(runtimedb.RoleAdmin, "POST", "/api/v1/plans/"+rec.ID+"/approve", nil, &approved)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("approve = %d", resp.StatusCode)
 	}
-	if approved.State != runtimedb.PlanApproved || approved.ResolvedBy != "op" {
+	if approved.State != runtimedb.PlanApproved || approved.ResolvedBy != "root-admin" {
 		t.Fatalf("approved record = %+v", approved)
 	}
 	resources, err := h.s.State.Load()

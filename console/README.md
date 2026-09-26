@@ -26,5 +26,6 @@ Neither needs a browser or a running control plane, and both run in CI:
 
 `npm run ui-check` drives the real screen in a real browser against a live
 Keystone. It needs `npx playwright install --with-deps chromium`, `npm i -D
-playwright`, and a control plane at the BASE in the script — so it is
-deliberately not part of the build or of CI.
+playwright`, and a control plane behind the household's identity provider
+(`WILD_CONSOLE`), signed in to as an Owner (`WILD_USER`, `WILD_PASSWORD`) —
+so it is deliberately not part of the build or of CI.

@@ -3,7 +3,6 @@ package runtimedb
 import (
 	"errors"
 	"testing"
-	"time"
 )
 
 // Demotion must retain every Member-level resource. These assertions come
@@ -78,23 +77,6 @@ func TestDemotionPreservesMemberResourcesAndDoesNotOffboard(t *testing.T) {
 	}
 	if journalAfter != journalBefore || offboardingAfter != offboardingBefore {
 		t.Fatalf("demotion entered offboarding: journal %d->%d, records %d->%d", journalBefore, journalAfter, offboardingBefore, offboardingAfter)
-	}
-}
-
-func TestDemotionRevokesUnusedOwnerReviewToken(t *testing.T) {
-	db := soleOwner(t)
-	if err := db.SetButlerMemberRole("sam", RoleOwner, "mika"); err != nil {
-		t.Fatal(err)
-	}
-	token, err := db.IssueHouseholdReviewToken("plan-1", "sam", "mika", 0, 0, time.Hour)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.SetButlerMemberRole("sam", RoleMember, "mika"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.RedeemHouseholdReviewToken(token, "sam"); !errors.Is(err, ErrReviewToken) {
-		t.Fatalf("demoted Owner redeemed a pending approval: %v", err)
 	}
 }
 

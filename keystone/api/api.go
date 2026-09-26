@@ -57,8 +57,8 @@ type Server struct {
 	WallpaperDir string
 
 	// trustedIngress is the exact set of remote addresses the identity
-	// proxy speaks from (ADR-W030 A8.1). It gates the household review
-	// route, the household portal and the Console — all of which trust
+	// proxy speaks from (ADR-W030 A8.1). It gates the household portal
+	// and the Console — both of which trust
 	// an identity header, and a header anyone can set is not an
 	// authentication. Empty means those paths are unavailable rather
 	// than open: an unconfigured trust boundary must fail closed.
@@ -546,15 +546,6 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/household/routines/{name}/purge", s.handle(principal.VerbManage, s.consequential(s.purgeDeletedRoutine)))
 	mux.Handle("GET /api/v1/household/execution-stop", s.handle(principal.VerbRead, s.getHouseholdExecutionStop))
 	mux.Handle("POST /api/v1/household/execution-stop", s.handle(principal.VerbApprove, s.changeHouseholdExecutionStop))
-	mux.Handle("POST /api/v1/household/review/token", s.handle(principal.VerbApprove, s.issueHouseholdReviewToken))
-	// The narrow acting-for service route (ADR-W030 A8.1). It carries no
-	// API verb: identity comes from the trusted ingress in front of it,
-	// and authority comes entirely from a single-use, proposal-bound
-	// token. A request without both gets nothing.
-	mux.HandleFunc("POST /api/v1/household/review", s.householdReview)
-	// The chat callback path. It needs `converse` — the adapter's only
-	// verb — because the adapter relays a tap; the identity comes from
-	// the binding a human redeemed, and the authority from the token.
 	mux.Handle("GET /api/v1/butler/tools", s.handle(principal.VerbRead, s.listButlerToolControls))
 	mux.Handle("PUT /api/v1/butler/tools", s.handle(principal.VerbManage, s.setButlerToolControl))
 	mux.Handle("GET /api/v1/butler/grants", s.handle(principal.VerbRead, s.listButlerGrants))
@@ -1051,13 +1042,14 @@ func (s *Server) authenticate(r *http.Request) (principal.Identity, bool) {
 // of that seam, unconditionally, on the one path every authenticated
 // request passes through.
 //
-// Two deliberate limits, each matching forwardedUserMayHoldConsole:
+// Two deliberate limits:
 //
-//   - A name with no Person behind it passes. Person records are created
+//   - A token's name with no Person behind it passes. Tokens are the
+//     installer's and the host's path, and Person records are created
 //     through an API that lives behind this check, so refusing here would
-//     lock out a deployment that has provisioned none. The design closes
-//     that at §2.4 (installer creates the first Owner) and §2.6 (root CLI
-//     recovery); neither is built yet (#206).
+//     leave the installer no way to create the first Owner (§2.4). The
+//     Console's own door has no such exception: it refuses a forwarded
+//     name with no Person record (forwardedUserMayHoldConsole).
 //   - Only the CONSOLE's own role requires Owner. RoleAdmin is what
 //     consoleForwardAuth mints, so a RoleAdmin token is the Console's
 //     authority in another wrapper and is held to the Console's rule.
@@ -1065,8 +1057,8 @@ func (s *Server) authenticate(r *http.Request) (principal.Identity, bool) {
 //     holds approve, and it is the legacy MACHINE axis that decision 6
 //     of #201 keeps explicitly separate from Owner/Member — keying an
 //     Owner requirement off its verbs would merge the two axes this
-//     epic is taking apart. Narrowing the legacy role is its own slice
-//     (#210).
+//     epic is taking apart. An operator holds the verb for machine
+//     operations only; it never decides a Plan (planDecider).
 //
 // Lifecycle applies to EVERY acting credential, elevated or not.
 // Offboarding somebody stops their chat reach as surely as their
@@ -1147,7 +1139,7 @@ func (s *Server) writeJSON(w http.ResponseWriter, status int, body any) {
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("Pragma", "no-cache")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
-	case mintResponse, joinTokenResponse, reviewTokenResponse, runtimeCredentialResponse:
+	case mintResponse, joinTokenResponse, runtimeCredentialResponse:
 		// The deliberate carve-outs (ADR-W007 A3, ADR-W014 A3, ADR-W039
 		// §4.1): a newly minted API token, join token or runtime
 		// credential, each in the only moment it ever exists in a

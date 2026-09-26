@@ -72,12 +72,13 @@ principal role never makes anyone an Owner.
 | Role | May |
 |---|---|
 | `admin` | everything, including principal/token management and plan approval. Held by an Owner's Console session and by host credentials. |
-| `operator` | read everything; propose plans; the `approve` verb. A machine credential: holding the verb never makes it the approver of a Plan that requires a human Owner. |
+| `operator` | read everything; propose plans; the `approve` verb for machine operations. A machine credential: it never approves or rejects a Plan. |
 | `butler` | read (redacted) everything; propose plans; NEVER approve |
 
-Every Plan an Agent proposes is approved only by a human Owner, at its exact
-version (ADR-W033 §E2). _Code not yet conformant: `operator` can still
-approve non-routine Plans (#210)._
+Every Plan is approved only by a human Owner, at its exact version (ADR-W033
+§E2): an `admin` credential, which is an Owner's Console session or the host
+credential the installer and `wild plan approve` use. A routine Plan further
+requires a fresh Owner Console session.
 
 The Butler holding a first-class principal — not a special code path — is
 what makes §6's "authority is not in the model" auditable: its writes are

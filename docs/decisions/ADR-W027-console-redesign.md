@@ -54,9 +54,9 @@ Still binding, unchanged:
 
 - No UI framework, no component library, no state manager. React's own
   state, hand-written CSS, one typed client.
-- `src/api.ts` stays the only fetch path (A3), the token stays in
-  sessionStorage, and a 401 anywhere still returns to the gate. How the
-  Console signs in and when it steps up is ADR-W033 A4.1.
+- `src/api.ts` stays the only fetch path (A3), and a 401 anywhere
+  still returns to sign-in. The Console holds no token; how it signs in
+  and when it steps up is ADR-W033 A4.1.
 - No console-only endpoints. Anything the redesign needs from the API
   is public API that `wild` and the Butler can use too. Where the API
   cannot answer yet, the console derives an honest approximation and

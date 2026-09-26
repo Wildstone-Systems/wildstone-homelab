@@ -721,19 +721,18 @@ func roughly(d time.Duration) string {
 // is that a message does not establish who typed it or what they read.
 // A group thread makes agreement and silence look identical, and a
 // forwarded message makes anyone's words look like the author's. So
-// approval happens where an identity was established: the Console for
-// infrastructure, and the Authelia-authenticated household page for a
-// pure routine change.
+// approval happens where an identity was established: a human Owner, in
+// the Console's Owner Review Queue (ADR-W033 E2/E3). No Member and no
+// Agent approves a Plan, routine or otherwise.
 //
-// The reply is different per surface because the alternative is
-// different: an operator has a Console and a CLI, and a household member
-// has a link somebody sends them.
+// The reply is different per surface because the person is: an Owner
+// has a Console and a CLI, and a household member has an Owner to ask.
 func (s *Server) chatApprove(c chatCommandCtx) (string, error) {
 	if c.At.Surface == runtimedb.ButlerSurfaceFamily {
 		return "I can't take an approval here — a message doesn't show who typed it or what they read, " +
-			"and in a group chat agreement and silence look the same. If this is a change to one of " +
-			"the house's routines, ask for a review link: it opens a page that signs you in, shows " +
-			"you exactly what changes, and works once.", nil
+			"and in a group chat agreement and silence look the same. Changes, including to the " +
+			"house's routines, are approved by an Owner in the Console, where they see exactly what " +
+			"changes.", nil
 	}
 	if c.Web != nil {
 		// Already in the Console: the place to approve is its Plans

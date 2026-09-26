@@ -84,7 +84,7 @@ func TestDriftPlanIsApprovableThroughTheAPI(t *testing.T) {
 
 	// The head has not moved since the proposal, so approval must be
 	// accepted. Before the fix this was 409 every time, forever.
-	resp := h.do(runtimedb.RoleOperator, "POST", "/api/v1/plans/"+out.DriftProposed+"/approve", nil, nil)
+	resp := h.do(runtimedb.RoleAdmin, "POST", "/api/v1/plans/"+out.DriftProposed+"/approve", nil, nil)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("approve drift plan = %d, want 200 (the F28 conflict is back)", resp.StatusCode)
 	}
@@ -123,7 +123,7 @@ func TestDriftPlanSupersededWhenStatefileActuallyMoves(t *testing.T) {
 	if err := h.s.State.Commit("test", "unrelated", "move the head"); err != nil {
 		t.Fatal(err)
 	}
-	resp := h.do(runtimedb.RoleOperator, "POST", "/api/v1/plans/"+out.DriftProposed+"/approve", nil, nil)
+	resp := h.do(runtimedb.RoleAdmin, "POST", "/api/v1/plans/"+out.DriftProposed+"/approve", nil, nil)
 	if resp.StatusCode != http.StatusConflict {
 		t.Fatalf("approve after the statefile moved = %d, want 409", resp.StatusCode)
 	}

@@ -19,7 +19,7 @@ import { Services, InstallForm } from "../src/views/Services";
 import { Butler, bucket, ConversationRail, EmptyState, IssuedCredential, RuntimeCard, StatusCard, SURFACES, Thread, ThreadBar, ToolTrace, Turn } from "../src/views/Butler";
 import type { RuntimeRecord } from "../src/api";
 import { BotList, Chat, ConnectForm } from "../src/views/Chat";
-import { Freshness, Shell, TokenGate } from "../src/App";
+import { Freshness, Shell, SignIn } from "../src/App";
 import { HomeView, buildProblems } from "../src/views/Home";
 import { ServicesView, InstalledTile, CatalogCard, InstalledDetail, AppLogo, tileKind, matching, RemoveForm, ownerCounts, ownedByPackage } from "../src/views/Services";
 import { groupServices, upstreamContainer , healthOf, GROUPS, groupOf, mappedCapabilities } from "../src/services";
@@ -55,8 +55,8 @@ import { ProblemCard } from "../src/ui/ProblemCard";
 import { ServiceTile } from "../src/ui/ServiceTile";
 import { Rail } from "../src/ui/Rail";
 
-// The shell reads the token from sessionStorage before it renders
-// anything, and node has none. A two-line shim is cheaper than
+// Screens read sessionStorage (the step-up a sign-in interrupted, the
+// last sign-in round trip) while they render, and node has none. A two-line shim is cheaper than
 // threading storage through the component.
 const store = new Map<string, string>();
 (globalThis as unknown as { sessionStorage: Storage }).sessionStorage = {
@@ -597,14 +597,18 @@ check("rail draws the divider it was asked for", rail.includes("divider"));
 // ------------------------------------------------------ shell states
 // Unauthorised is the state a fresh install sees first, and the one
 // screen that has to work before anything else does.
-const gate = renderToString(h(TokenGate, { onDone: () => {} }));
-check("gate asks for a token", gate.includes("paste an API token"));
-// Two ways in, and the screen used to name one. An operator who chose a
-// username and password at install found nothing here that matched what
-// they had been given.
-check("gate names signing in as yourself first", gate.includes("username and password you chose"), gate.slice(0, 700));
-check("gate names the tool that mints more", gate.includes("wild"));
-check("gate labels its input", gate.includes('aria-label="API token"'), gate);
+// One way in (ADR-W033 A4, A4.1): an Owner signing in as themselves
+// through the identity provider. A bearer token is never a browser's way
+// into the Console, so this screen must not offer a box to paste one.
+const gate = renderToString(h(SignIn));
+check("sign-in screen offers the sign-in", gate.includes("Sign in"), gate.slice(0, 700));
+// An operator who chose a username and password at install must find
+// here what matches what they were given.
+check("sign-in names signing in as yourself", gate.includes("username and password you chose"), gate.slice(0, 700));
+check("sign-in says who the Console is for", gate.includes("Owners"), gate.slice(0, 700));
+check("sign-in explains a deployment where it is not set up", gate.includes("not set up"), gate.slice(0, 900));
+check("sign-in names the tool that still works from the host", gate.includes("wild"));
+check("sign-in offers no token box", !gate.includes("<input") && !/token/i.test(gate), gate);
 
 // Loading: useEffect does not run under renderToString, so this is the
 // shell with no snapshot yet — the state every screen starts in.

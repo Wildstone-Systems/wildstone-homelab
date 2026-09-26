@@ -13,19 +13,13 @@ package runtimedb
 // something it cannot, or two systems both firing on one departure —
 // so ownership is immutable at the schema.
 //
-// Approval and authentication. The household review page sits behind
-// Authelia, which establishes WHO someone is. A review token establishes
-// WHAT that person may do: approve one named proposal, at one revision,
-// once, before one expiry. It is not a session, it does not
-// authenticate, and it approves nothing else. Slice 17 additionally requires
-// fresh Owner Console authentication at the review boundary.
+// Approval. Activating a routine version is a Plan, and only a human
+// Owner approves it, at its exact version, in the Console (ADR-W033
+// E2/E3). The household_review_tokens table from 0028 remains in the
+// schema for its history; nothing issues or redeems a token any more.
 
 import (
-	"crypto/rand"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -46,19 +40,6 @@ const (
 	RoutineEnabled  = "enabled"
 	RoutineDisabled = "disabled"
 )
-
-// DefaultReviewTokenTTL bounds a review link. Long enough to walk to a
-// phone and read it, short enough that a link in a chat backlog is not
-// an approval waiting to be found.
-const DefaultReviewTokenTTL = 30 * time.Minute
-
-// ErrReviewToken is returned when a presented token cannot approve.
-//
-// Its reasons collapse deliberately: unknown, expired, already used,
-// wrong person, and superseded revision are all "this link does not
-// work" to whoever is holding it, and telling them which would help
-// someone guessing.
-var ErrReviewToken = errors.New("runtimedb: this review link does not work")
 
 // HouseholdRoutine is one routine, native or Wildstone-run.
 type HouseholdRoutine struct {
@@ -163,7 +144,7 @@ func (db *DB) CreateHouseholdRoutine(r HouseholdRoutine) (int64, error) {
 }
 
 // EditHouseholdRoutine records a new revision. The old document stays,
-// so a review token pinned to a revision means something and "what did
+// so an approval pinned to a revision means something and "what did
 // it do last week" is answerable.
 func (db *DB) EditHouseholdRoutine(name, document, author, note string) (int, error) {
 	if document == "" || author == "" {
@@ -400,111 +381,4 @@ func (db *DB) HouseholdRoutineRevisionDocuments(name string) ([]string, error) {
 		out = append(out, doc)
 	}
 	return out, rows.Err()
-}
-
-// IssueHouseholdReviewToken mints a single-use, proposal-bound approval
-// capability and returns the secret ONCE.
-//
-// Everything about it is a narrowing: one plan, one member, one
-// revision, one expiry, one use. It is not a session and does not
-// authenticate — Authelia does that in front of the review page — so a
-// stolen link is useless to anyone who is not the person it was issued
-// to.
-func (db *DB) IssueHouseholdReviewToken(planID, member, issuedBy string, routineSeq int64, revision int, ttl time.Duration) (string, error) {
-	if planID == "" || member == "" || issuedBy == "" {
-		return "", fmt.Errorf("runtimedb: a review token needs a plan, the member it is for, and who issued it")
-	}
-	if ttl <= 0 {
-		ttl = DefaultReviewTokenTTL
-	}
-	raw := make([]byte, 32)
-	if _, err := rand.Read(raw); err != nil {
-		return "", fmt.Errorf("runtimedb: generating a review token: %w", err)
-	}
-	secret := base64.RawURLEncoding.EncodeToString(raw)
-	var routine any
-	if routineSeq != 0 {
-		routine = routineSeq
-	}
-	// The token names the person it was issued to, by identity. A token
-	// that stops resolving because its holder was renamed is nearly as
-	// useless as one that works for whoever holds it.
-	person, err := resolvePersonID(db.sql, member)
-	if err != nil {
-		return "", fmt.Errorf("runtimedb: issuing a review token: %w", err)
-	}
-	if _, err := db.sql.Exec(
-		`INSERT INTO household_review_tokens (hash, plan_id, routine, revision, person_id,
-		     created_at, created_by, expires_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		hashReviewToken(secret), planID, routine, revision, person, now(), issuedBy,
-		time.Now().UTC().Add(ttl).Format(time.RFC3339Nano)); err != nil {
-		return "", fmt.Errorf("runtimedb: issuing a review token: %w", err)
-	}
-	return secret, nil
-}
-
-func hashReviewToken(secret string) string {
-	sum := sha256.Sum256([]byte(secret))
-	return hex.EncodeToString(sum[:])
-}
-
-// RedeemHouseholdReviewToken checks and consumes a token for member,
-// returning the plan it approves.
-//
-// The member is the one AUTHENTICATED at the review page, not one named
-// in the request: a token that works for whoever presents it is a
-// password, and this is deliberately not one.
-func (db *DB) RedeemHouseholdReviewToken(secret, member string) (planID string, err error) {
-	if secret == "" || member == "" {
-		return "", ErrReviewToken
-	}
-	tx, err := db.sql.Begin()
-	if err != nil {
-		return "", fmt.Errorf("runtimedb: redeeming a review token: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	var tokenMember, expires, used string
-	var routine sql.NullInt64
-	var revision int
-	err = tx.QueryRow(
-		`SELECT k.plan_id, p.member, k.routine, k.revision, k.expires_at, k.used_at
-		 FROM household_review_tokens k JOIN butler_members p ON p.person_id = k.person_id
-		 WHERE k.hash = ?`, hashReviewToken(secret)).
-		Scan(&planID, &tokenMember, &routine, &revision, &expires, &used)
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", ErrReviewToken
-	}
-	if err != nil {
-		return "", fmt.Errorf("runtimedb: redeeming a review token: %w", err)
-	}
-	if used != "" || tokenMember != member {
-		return "", ErrReviewToken
-	}
-	expiry, perr := time.Parse(time.RFC3339Nano, expires)
-	if perr != nil || time.Now().After(expiry) {
-		return "", ErrReviewToken
-	}
-	if routine.Valid && revision > 0 {
-		// The routine has been edited since this was proposed. Approving
-		// it would approve something nobody read.
-		var current int
-		if err := tx.QueryRow(`SELECT revision FROM household_routines WHERE seq = ?`, routine.Int64).
-			Scan(&current); err != nil {
-			return "", ErrReviewToken
-		}
-		if current != revision {
-			return "", ErrReviewToken
-		}
-	}
-	if _, err := tx.Exec(
-		`UPDATE household_review_tokens SET used_at = ?, used_by = ? WHERE hash = ? AND used_at = ''`,
-		now(), member, hashReviewToken(secret)); err != nil {
-		return "", fmt.Errorf("runtimedb: redeeming a review token: %w", err)
-	}
-	if err := tx.Commit(); err != nil {
-		return "", fmt.Errorf("runtimedb: redeeming a review token: %w", err)
-	}
-	return planID, nil
 }

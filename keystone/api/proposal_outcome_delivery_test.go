@@ -50,7 +50,7 @@ func TestApprovingARuntimeFiledPlanRecordsAProposalOutcomeDelivery(t *testing.T)
 	}
 
 	var approved runtimedb.PlanRecord
-	if res := h.do(runtimedb.RoleOperator, http.MethodPost, "/api/v1/plans/"+rec.ID+"/approve", nil, &approved); res.StatusCode != http.StatusOK {
+	if res := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/plans/"+rec.ID+"/approve", nil, &approved); res.StatusCode != http.StatusOK {
 		t.Fatalf("approve = %d", res.StatusCode)
 	}
 
@@ -93,7 +93,7 @@ func TestRejectingARuntimeFiledPlanRecordsAProposalOutcomeDelivery(t *testing.T)
 	rec := body.(planView)
 
 	var rejected runtimedb.PlanRecord
-	if res := h.do(runtimedb.RoleOperator, http.MethodPost, "/api/v1/plans/"+rec.ID+"/reject", nil, &rejected); res.StatusCode != http.StatusOK {
+	if res := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/plans/"+rec.ID+"/reject", nil, &rejected); res.StatusCode != http.StatusOK {
 		t.Fatalf("reject = %d", res.StatusCode)
 	}
 	deliveries, err := h.s.DB.ListAgentDeliveries(b.Seq, 10)
@@ -116,7 +116,7 @@ func TestApprovingAHumanFiledPlanRecordsNoDelivery(t *testing.T) {
 		proposalRequest{Summary: "deploy immich", Put: []string{doc}}, &rec); res.StatusCode != http.StatusCreated {
 		t.Fatalf("propose = %d", res.StatusCode)
 	}
-	if res := h.do(runtimedb.RoleOperator, http.MethodPost, "/api/v1/plans/"+rec.ID+"/approve", nil, nil); res.StatusCode != http.StatusOK {
+	if res := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/plans/"+rec.ID+"/approve", nil, nil); res.StatusCode != http.StatusOK {
 		t.Fatalf("approve = %d", res.StatusCode)
 	}
 	// "butler" (the RoleButler test token's own name) is not bound to
