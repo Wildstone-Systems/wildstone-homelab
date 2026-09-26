@@ -7,6 +7,10 @@
   ADR-W024 (household events and automations), ADR-W029 (a package is
   checked against the app it configures), ADR-W030 A5/A5.1 (scoped
   integrations and the adapter contract), ADR-W031 (Butlers).
+- **Governed by:** ADR-W033 where they overlap.
+- **Terminology:** "connection" here means an integration connection
+  (ADR-W030 A5), not an ADR-W033 Connection (how a Person reaches an
+  Agent).
 - **Audience:** decision record for the `calendar` capability, and the
   brief for whoever builds the phases that are not here yet.
 
@@ -125,14 +129,16 @@ the first, for the same reason `keystone/domestic` keeps its own copy of
 the tier rule: a call that arrived some other way still cannot write.
 
 **The in-process road** (Keystone's own action gateway, for the calendar
-this household runs) is gated by the deployment: the six tools are
-registered only when Keystone is started with `-calendar-url`,
-`-calendar-user` and `CALENDAR_PASSWORD`. That is the same gate
-`-ntfy-url` is, and it is the operator saying "the household's agents may
-use this calendar."
+this household runs) is made available by the deployment: the six tools
+are registered only when Keystone is started with `-calendar-url`,
+`-calendar-user` and `CALENDAR_PASSWORD`, the same way `-ntfy-url` is.
+Wiring makes the tools available; it grants them to no Agent. Each Agent
+uses them only under an Owner's grant to that Agent, by tool class,
+bundle or explicit selection, with opt-in tools excluded from broad grants
+(ADR-W033 A0, B3–B5).
 
-What is NOT a gate on either road is a per-call confirmation, because
-there is no such mechanism. See A10.
+On either road, deleting an event is additionally gated per call by the
+`confirm` tier (A10).
 
 RSVPing to an invitation stays out. It is a different act with a
 different blast radius — it sends mail, to people, as the household —
@@ -389,14 +395,15 @@ the calendar the day the capability is installed:
 | `calendar.check_availability` | read | is that window free, and what is in it |
 | `calendar.create_event` | domestic | add one |
 | `calendar.update_event` | domestic | change one |
-| `calendar.delete_event` | domestic | remove one |
+| `calendar.delete_event` | confirm | remove one, after the person says yes (A10) |
 
 No new agent surface was needed. `butler.list_household_actions` and
 `butler.do_household_action` already route to the domestic gateway, which
 dispatches any tool a package declares *and* a deployment has wired — so
-these six are discoverable and callable through the path
-`notifications.notify` already uses, and household automation rules can
-name them too.
+these six are reachable through the path `notifications.notify` already
+uses, and household automation rules can name them too. Wiring is not a
+grant: an Agent discovers and calls them only once an Owner has granted
+them to that Agent (ADR-W033 B3–B5).
 
 Three things about the executors are worth recording because they are not
 obvious from the tool list:
@@ -496,8 +503,8 @@ collections — which is exactly the thing A9 refuses to make a default —
 or a per-member credential Keystone can act with, which is a real design
 problem: a household member's calendar password is theirs.
 
-The permissions this wants, riding the existing member/operator model
-rather than a new one: `calendar.read.own`, `calendar.write.own`,
+The permissions this wants, riding the existing Owner/Member model
+(ADR-W033 A1, B3) rather than a new one: `calendar.read.own`, `calendar.write.own`,
 `calendar.read.household`, `calendar.write.household`, `calendar.admin`.
 
 **A confirmation tier.** The policy this capability wants is:
@@ -512,11 +519,9 @@ rather than a new one: `calendar.read.own`, `calendar.write.own`,
 | touch another member's calendar | per policy; deny by default |
 | bulk operations | confirm |
 
-Four of those rows say **confirm**, and ADR-W024 A5's tier set has no
-such value — a household action is `read` or `domestic`, and both mean
-"do it". A10 records what stands in for it here. The tier belongs in
-ADR-W024, where every capability's actions can use it, not in a calendar
-executor.
+Three of those rows say **confirm**. The tier exists in ADR-W024 A5.1,
+where every capability's actions can use it, and `calendar.delete_event`
+is declared at it (A10). The other confirm rows are not built.
 
 ### C2a. The adapter runtime has no runner
 

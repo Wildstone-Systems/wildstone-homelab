@@ -58,7 +58,8 @@ type CommitmentSpec struct {
 	// metadata.owner says who it is ABOUT. MayComplete says who may
 	// satisfy, book or waive it — what the household homepage renders as
 	// `decidable`. Notify says who hears about a state change. Empty
-	// MayComplete means the household's adults; empty Notify means
+	// MayComplete means anyone in the household on household scope, and
+	// the subject or their guardian on personal scope; empty Notify means
 	// whoever may complete it.
 	MayComplete []string `yaml:"mayComplete,omitempty" json:"mayComplete,omitempty"`
 	Notify      []string `yaml:"notify,omitempty" json:"notify,omitempty"`

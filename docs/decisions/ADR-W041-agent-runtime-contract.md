@@ -2,7 +2,8 @@
 
 > **Numbering and as-built note (2026-09-25).** This ADR was first filed as ADR-W039, a number already taken by *Canonical Agent API and pluggable agent runtimes* (#333), which has its own follow-up ADR-W040. It was renumbered W041 when the two lines of work were merged. As merged, the loop this ADR calls `Runner` lives in `keystone/agentruntime/legacy` (it moved out of `keystone/butler` under ADR-W039 Phase 2b and reaches Wildstone only through `agentapi.Client`), and `butler.Slice` below is `legacy.Slice`, built on that same client. `keystone/butler/runner.go` and `butler/slice.go` no longer exist; references to them below describe the design as proposed.
 
-Status: proposed (#357)
+- **Status:** implemented (#357); the native runtime is the fresh-install default
+- **Governed by:** ADR-W033 where they overlap.
 
 ## Decision
 
@@ -103,7 +104,8 @@ It talks to Keystone over newline-delimited JSON on stdin and stdout
 - **The model stays behind the adapter.** `native.Model` is an
   OpenAI-compatible endpoint: Chat Completions by default, so it works with
   Ollama and other local servers, or the Responses API. The contract names no
-  provider.
+  provider. Which endpoint a job gets is decided by Keystone from the Butler's
+  ordered model/provider chain (ADR-W033 B6), not by the runtime.
 
 ## Why a sidecar
 
@@ -165,7 +167,11 @@ It talks to Keystone over newline-delimited JSON on stdin and stdout
 ## Butler conversations
 
 Which loop drives a Butler conversation is a deployment choice. The model is
-still only ever the one the Butler was assigned (ADR-W031 A2/A6).
+not: it comes from the Butler's own ordered model/provider chain (ADR-W033
+B6), with no global fallback, no substitution of another Butler, and a
+local-only task failing rather than falling through to a cloud model. Choosing
+the loop never changes which model may be used. Code not yet conformant: today
+a Butler has a single assigned route rather than a chain.
 
 - **Turning it on:**
   - A **fresh install** turns it on. `install.sh` writes
@@ -180,7 +186,9 @@ still only ever the one the Butler was assigned (ADR-W031 A2/A6).
     visible in `keystone.env`.
 - **Which Butlers use it:** Butlers on OpenAI, OpenRouter, OpenAI-compatible
   and Ollama routes. Ollama is reached through its OpenAI-compatible `/v1`
-  endpoint. Anthropic routes stay on `Runner`.
+  endpoint. Anthropic routes stay on `Runner`. The loop is chosen per route,
+  and the route is taken from the Butler's B6 chain in order: the runtime
+  follows the chain, it never picks a route of its own.
 - **If the runtime is missing or fails its self-check:** Keystone logs an
   error at startup and every conversation stays on `Runner`. A broken
   sidecar never stops the control plane.

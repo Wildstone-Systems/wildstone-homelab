@@ -1,11 +1,12 @@
 # ADR-W040: Agent API transport — REST and long-poll first, MCP second
 
 - **Status:** accepted (#342)
+- **Governed by:** ADR-W033 where they overlap.
 - **Scope:** the wire transport for the `agentapi` contract (ADR-W039 §3–§4): how a runtime authenticates, carries a task handle, fetches a manifest, invokes a capability, moves memory, checkpoints work and receives deliveries, over HTTP. It does not reopen the resource families, runtime record, memory boundary or migration plan; those are ADR-W039's and stand.
 - **Depends on / relates to:** [`ADR-W039`](ADR-W039-canonical-agent-api-and-pluggable-runtimes.md) §3.2, §3.4, §3.6–§3.8, §4, §4.1 (the contract this ADR gives a wire form); [`docs/design/hermes-capability-package-and-execution-profiles.md`](../design/hermes-capability-package-and-execution-profiles.md) §2.1, §3.3, §6 (the first external consumer); `keystone/agentapi` (`types.go`, `client.go`), unchanged; ADR-W039 Phase 0–2a, already implemented and not redone here.
 - **Implementation:** the candidate follow-up issues in §6 and §8; this ADR authorises none of them directly.
 
-`Agent` and `Butler` mean the same architectural object. `Runtime` means whatever turns a turn or a delivery into model calls and capability calls: the native `butler.Runner` today, an external process such as Hermes tomorrow.
+`Agent` and `Butler` mean the same architectural object. `Runtime` means whatever turns a turn or a delivery into model calls and capability calls: the in-process loop (`keystone/agentruntime/legacy.Runner`) or the native Agents SDK runtime (ADR-W041) today, an external process such as Hermes tomorrow.
 
 ---
 

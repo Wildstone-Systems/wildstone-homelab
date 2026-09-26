@@ -1,21 +1,18 @@
 # ADR-W035: Commitments and meters — the household keeps track of what it owes itself
 
-- **Status:** proposed, and built. K1 through K7 are implemented:
+- **Status:** accepted, and built. K1 through K7 are implemented:
   `Meter` and `Commitment` resource kinds, the readings store and its
   four doors, the occurrence ledger, the daily pass, the household
   homepage's rows and answer paths, the Console screen, and the agent's
   two read tools. Every decision in Part A is made.
-- **Number:** W035. Renumbered from W034 when the calendar ADR landed on
-  main first and took that number (#245's merge, and the calendar work
-  alongside it). The earlier `WXXX` placeholder existed because W032 and
-  W033 were then unmerged, and this is the same hazard arriving a second
-  time: a number claimed on a branch is not a number until it merges.
+- **Number:** W035.
+- **Governed by:** ADR-W033 where they overlap.
 - **Relates to:** ADR-W024 (household events, the `Automation` resource,
   the domestic gateway — this builds directly on it), ADR-W033 A1/A4
   (Owner and Member, Console and the household plane), E2/E3 (Agents
   propose, Owners activate), E5/E6 (what a routine is, and so what a
   commitment is not), E8 (deterministic steps and inference steps),
-  ADR-W032 (who may open the Console), ADR-W004 (plans are the only write
+  A9/A10 (guardian and agenda standing), B3–B5 (tool grants), ADR-W004 (plans are the only write
   path), ADR-W007 (one API, one event stream), ADR-W009 (policy tiers),
   ADR-W030 A4 (durable work, completion requires evidence), ADR-W011 A4
   (scheduled duty belongs to Keystone, not cron). Surface decisions are
@@ -59,7 +56,7 @@ each, and what counts as having done it.
 
 Both are Statefile resources, Keystone-owned, applied at no node — the
 same arrangement `Automation` already has (`keystone/reconcile/
-reconcile.go:459`). Creating or changing one is a plan a human approves;
+reconcile.go:459`). Creating or changing one is a plan a human Owner approves;
 after that, code runs it. This is ADR-W024 A1's rule, unchanged: the
 *definition* is what gets approved, never each firing.
 
@@ -100,7 +97,7 @@ A meter reading may therefore be written four ways, all equal:
 | Door | Requires an installed capability? |
 |---|---|
 | Console — a field on the commitment's card | no, but Console is Owner-only |
-| `wild meter read f150-odometer 84210` | no, but it is an operator tool |
+| `wild meter read f150-odometer 84210` | no, but the `wild` CLI is an Owner's tool |
 | Household chat — "truck's at 84,210" | **yes** — a chat capability. Built as `record_meter_reading` (A13). |
 | A family-facing web surface | **yes** today — see the correction below |
 | A household event from a publisher | **yes — and this is the optional one** |
@@ -376,7 +373,7 @@ deterministic steps and inference steps:
 
 - The Butler may **draft** a `Commitment` or `Meter` from a sentence
   ("track the truck's oil every five thousand miles"), dry-run it, and
-  propose it. A human approves the plan.
+  propose it. A human Owner approves the plan (W033 E2).
 - The Butler may **phrase** a nudge, through an automation's declared
   escalation, replacing exactly one action param with the author's own
   wording as the fallback.
@@ -384,7 +381,7 @@ deterministic steps and inference steps:
   tools, to answer "what's coming up on the truck".
 
 - The Butler may **write down a reading it was given** — "truck's at
-  84,210" — through `record_meter_reading` on the family surface. A3
+  84,210" — through `record_meter_reading` on a Member Agent. A3
   lists household chat as one of the four doors, and this is it. The
   tool takes a number and nothing else: it cannot derive, estimate, or
   look one up, a value it cannot parse whole is refused rather than
@@ -404,11 +401,11 @@ acknowledgement and nothing written down. The line is between
 transcribing a number a person said and deciding what it means. The
 agent does the first; the engine does the second.
 
-`record_meter_reading` is on by default and an Owner may turn it off per
-agent, through the ordinary tool control (ADR-W030 A7/A8, where disabled
-beats a tool's default). On by default because A4 says the tracker works
-without anything being switched on; per-agent because not every agent in
-a household needs to be able to write.
+`record_meter_reading` is a Member-class tool and not opt-in, so a
+household tool bundle includes it; an Owner withholds it from an Agent
+through that Agent's grants (W033 B3–B5). Not opt-in because A4 says the
+tracker works without anything being switched on; per-Agent because not
+every Agent in a household needs to be able to write.
 
 A household whose Butler is switched off loses the phrasing and the
 drafting. It keeps the tracker.
@@ -419,12 +416,14 @@ A commitment carries an owner in the existing vocabulary
 (`household`, `household/<member>`, `capability/<name>` — see
 `resource.AutomationOwnerAllowed`). Kai's checkup is owned by
 `household/kai`; it is booked and recorded by a parent. So "whom it is
-about" and "who may act on it" are separate fields, and the second
-defaults to the adults rather than to the subject.
+about" and "who may act on it" are separate fields: A21's `owner` and
+`mayComplete`, with A21's defaults.
 
-Per-member visibility follows whatever the identity layer says at the
-time — which is precisely what W032 and W033 are rewriting, so this
-decision is deliberately thin and is flagged below for re-reading.
+Who sees a commitment follows W033's standing rules, not a vocabulary of
+adults and children (there is none: W033 A1 makes `child` a Member
+profile). A household-scope commitment is visible to anyone who can open
+the household surface; a personal-scope one to its subject, anyone it
+names, and the subject's recorded guardian (W033 A9, A10).
 
 ### A15. Daily is fast enough
 
@@ -442,16 +441,14 @@ Keystone, not to cron on a host.
 ### A16. Risk and policy
 
 - Creating or changing a `Commitment` or `Meter`: **Medium**, for
-  ADR-W024's reason — it will act on its own once approved.
+  ADR-W024's reason — it will act on its own once approved. Only a human
+  Owner approves it (W033 E2/E3, A20).
 - Deleting one: **Low** — it stops; nothing else changes. Occurrence
   history is retained, not purged with the definition.
 - Recording a reading or a completion is **not a plan**. It is an
   ordinary authenticated write, the way emitting a household event is.
   Requiring a plan to write down a mileage would mean nobody ever writes
   down a mileage.
-- A plan containing only commitment and meter steps classifies as
-  `ClassHouseholdRoutine` (`keystone/plan/household.go`), so an admitted
-  adult can approve "track the water filter" without Console credentials.
 
 ### A17. Backup and restore
 
@@ -552,10 +549,6 @@ Three weights of write, and conflating any two of them breaks something:
 | Record a reading, mark done, book, waive | ordinary member write, under the portal ceiling | **a reading is evidence, not authority**: it changes no rule and grants nothing |
 | Propose a definition | any member → Owner Review Queue (W033 E3) | members are blocked from activating, never from starting |
 
-Where ADR-W030 A6 said any trusted admitted adult could change a shared
-routine without an owner veto, **W033 E2 supersedes it**: it is the later
-and more specific decision, and this ADR follows it without reopening it.
-
 The middle row is the one a literal reading of W033 E2 gets wrong.
 Requiring a Plan to write down a mileage means nobody writes down a
 mileage, and a tracker nobody answers is worse than no tracker, because
@@ -570,7 +563,10 @@ should be nagged about it. So:
 - **`owner`** — who it is about. The existing vocabulary
   (`household`, `household/<member>`, `capability/<name>`).
 - **`mayComplete`** — who may satisfy, book or waive it. This is what the
-  homepage renders as `Decidable`.
+  homepage renders as `Decidable`. Left empty, a household-scope
+  commitment is anybody's through the household door; a personal-scope
+  one is its subject's, or their recorded guardian's (W033 A9), so a
+  child's item is never answerable by nobody.
 - **`notify`** — who hears about a state change. Separate again, because
   the person who must act and the person who should be told are not
   always the same.
@@ -578,10 +574,10 @@ should be nagged about it. So:
   scopes rather than inventing a parallel vocabulary. The furnace filter
   is household; a medication refill is personal and opt-in.
 
-The earlier sketch's `mayComplete: [adults]` is withdrawn: W033 A1 makes
-`child` a constrained Member profile rather than a role, so "adults" is
-not a thing to name. These fields carry Person, Group and role-class
-references from W033's one namespace.
+There is no `adults` value: W033 A1 makes `child` a constrained Member
+profile rather than a role. These fields carry Person, Group and
+role-class references from W033's one namespace (B8.1); a Group answers
+only for its members.
 
 ### A22. What A4 costs, stated exactly
 
@@ -655,7 +651,7 @@ spec:
   satisfiedBy:
     eventType: health.visit_completed
     subject: kai
-  mayComplete: [adults]
+  scope: personal               # mayComplete unset: Kai or Kai's guardian answers it (A21)
 ```
 
 ```yaml
@@ -859,20 +855,10 @@ A5 is now written.
 
 ## What landed, and what it settled
 
-This ADR was drafted against a `main` that did not yet have the agent
-system, and deferred four decisions to it. They are now made.
+**ADR-W033 landed** on main in #228, together with the Person core
+(#202). That settles:
 
-**ADR-W032 and ADR-W033 landed** on main in #228, together with the
-Person core (#202). That settles:
-
-- **Whether a commitment is a W033 routine.** It is not — A18, and the
-  reasoning is now against landed text rather than a branch.
-- **A20 and A21**, which replace what A14 and A16 said thinly. Console is
-  Owner-only (W033 A4), Plans go to an Owner Review Queue (E2, E3), and
-  `child` is a Member profile rather than a role, so the earlier
-  `[adults]` shorthand is withdrawn.
-- **The number.** W035, taken once W032 and W033 were no longer in
-  flight.
+- **Whether a commitment is a W033 routine.** It is not — A18.
 
 **The household homepage merged** as #238. A19, A20 and A22 were written
 against it in review, so each was re-checked against the merged tree
@@ -883,7 +869,7 @@ rather than assumed to have survived: `needsYouItem` still carries
 page is `capability: dashboard, profile: wildstone, exclusive: true`,
 gated by the `LdapGroup` only that profile declares.
 
-**Both questions this ADR left open are now closed.**
+**The open question this ADR left is closed.**
 
 - **One-off obligations** are a `Commitment` whose rollover is `once`
   (A9), with the A6 exception for how they finish. Prototyped and
@@ -891,9 +877,6 @@ gated by the `LdapGroup` only that profile declares.
   because it would have split one household concept across two schemas,
   two surfaces and two review paths on the strength of a difference that
   turns out to be one field.
-- **Whether a Member's proposal needs Owner approval** is settled by
-  W033 E2 superseding ADR-W030 A6, per A20. The later ADR governs;
-  reconciling the older text is not this ADR's work.
 
 K1 through K7 are built (#244), and what review found of them is below.
 
