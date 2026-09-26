@@ -1,40 +1,22 @@
 package api
 
-// The household routine review path (ADR-W030 A6/A8/A8.1, work package
-// P13).
+// Household routines (ADR-W030 A6, as changed by ADR-W033 E2/E3).
 //
-// An admitted adult should be able to approve "the morning routine now
-// also checks the calendar" without holding Console credentials, and
-// should be able to approve nothing else that way. Two mechanisms do
-// that, and they answer different questions:
-//
-//   Authelia, in front of the review page, establishes WHO the person
-//   is. This handler trusts the identity header only from the trusted
-//   ingress and maps it to an admitted member through the same link
-//   table everything else uses — equal names are not proof of identity.
-//
-//   A review token establishes WHAT they may do: approve one named
-//   proposal, at one revision, once, before one expiry. It is not a
-//   session. A stolen link is useless to anyone else, and useless to
-//   its owner for anything but that one plan.
-//
-// Chat cannot approve. A Telegram callback carries a token bound to a
-// proposal and is redeemed through this same path; a chat MESSAGE
-// saying "yes" approves nothing, because silence and agreement in a
-// group thread are indistinguishable and because the person typing it
-// has not been authenticated.
+// Anyone the household admits may draft, edit, trial or disable a
+// routine; activating a version is a Plan, and only a human Owner
+// approves it, at its exact version, through the Owner Review Queue in
+// the Console (handlers_plans.go, freshOwnerReview). There is no second
+// approval surface here: no review link, no household page, and chat
+// cannot approve.
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/automation"
-	"github.com/chickenrat17/wildstone-homelab/keystone/plan"
 	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
 	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
@@ -404,7 +386,7 @@ func (s *Server) routineAfterEdit(name string, before runtimedb.HouseholdRoutine
 	if err != nil {
 		return runtimedb.RoutineDraft, "The edited version needs Owner review."
 	}
-	return current.State, "This version needs a new Owner approval before it runs. An earlier review link approves nothing."
+	return current.State, "This version needs a new Owner approval before it runs. An earlier approval does not carry over."
 }
 
 // setHouseholdRoutineState moves a routine between draft, trial and
@@ -444,187 +426,6 @@ func (s *Server) setHouseholdRoutineState(r *http.Request, id principal.Identity
 	}, http.StatusOK, nil
 }
 
-// issueHouseholdReviewToken mints a review link for one proposal.
-//
-// It refuses anything that is not a pure household-routine plan. That
-// refusal is the load-bearing one: "mostly routines" is exactly the
-// shape an escalation would take, so a plan that adds a routine and
-// opens a route goes back to the Console where a route change belongs.
-func (s *Server) issueHouseholdReviewToken(r *http.Request, id principal.Identity) (any, int, error) {
-	var req struct {
-		PlanID  string `json:"planId"`
-		Member  string `json:"member"`
-		Routine string `json:"routine"`
-		TTLMins int    `json:"ttlMinutes"`
-	}
-	if code, err := decodeStrict(r, &req); err != nil {
-		return nil, code, err
-	}
-	record, err := s.DB.GetPlan(req.PlanID)
-	if err != nil {
-		return nil, http.StatusNotFound, fmt.Errorf("no such plan")
-	}
-	var proposal plan.StoredProposal
-	if err := json.Unmarshal([]byte(record.PlanJSON), &proposal); err != nil {
-		return nil, http.StatusInternalServerError, fmt.Errorf("reading the plan: %w", err)
-	}
-	var parsed plan.Plan
-	_ = json.Unmarshal([]byte(record.PlanJSON), &parsed)
-	class := plan.Classify(&parsed)
-	if proposal.Routine != nil {
-		if body, code, err := s.freshOwnerReview(r, id); err != nil {
-			return body, code, err
-		}
-		if len(proposal.Put) > 0 || len(proposal.Delete) > 0 || proposal.Setting != nil || proposal.Plan != nil {
-			return nil, http.StatusBadRequest, fmt.Errorf("mixed routine Plan")
-		}
-		if req.Routine != "" && req.Routine != proposal.Routine.Name {
-			return nil, http.StatusBadRequest, fmt.Errorf("routine does not match the submitted Plan")
-		}
-		req.Routine = proposal.Routine.Name
-	}
-	if proposal.Routine == nil && class != plan.ClassHouseholdRoutine {
-		return nil, http.StatusBadRequest, fmt.Errorf(
-			"plan %s is %s, not a pure household-routine change, so it is reviewed in the Console — "+
-				"a plan that also touches infrastructure or identity is an infrastructure change with a "+
-				"routine in it", req.PlanID, class)
-	}
-	if proposal.Routine == nil {
-		return nil, http.StatusBadRequest, fmt.Errorf("resubmit this legacy routine Plan in Console as an exact-version proposal before issuing a review link")
-	}
-	// The member must actually be admitted, now. A link issued to
-	// someone who has since been disabled must not work.
-	member, err := s.DB.GetButlerMember(req.Member)
-	if err != nil || !member.Active() {
-		return nil, http.StatusBadRequest,
-			fmt.Errorf("%q is not currently admitted to the Butler", req.Member)
-	}
-
-	if member.Role != runtimedb.RoleOwner {
-		return nil, http.StatusBadRequest, fmt.Errorf("routine review links require an active Owner recipient")
-	}
-
-	var routineSeq int64
-	var revision int
-	if req.Routine != "" {
-		routine, err := s.DB.GetHouseholdRoutine(req.Routine)
-		if err != nil {
-			return nil, http.StatusNotFound, fmt.Errorf("no routine named %q", req.Routine)
-		}
-		routineSeq, revision = routine.Seq, routine.Revision
-		if proposal.Routine != nil && proposal.Routine.Revision != revision {
-			return nil, http.StatusConflict, fmt.Errorf("submit the current routine version before issuing review links")
-		}
-	}
-	secret, err := s.DB.IssueHouseholdReviewToken(req.PlanID, req.Member, actingMember(id),
-		routineSeq, revision, time.Duration(req.TTLMins)*time.Minute)
-	if err != nil {
-		return nil, http.StatusInternalServerError, err
-	}
-	return reviewTokenResponse{
-		Token: secret, PlanID: req.PlanID, Member: req.Member,
-		Note: "single use, for this plan at this revision, for this person, and it expires. " +
-			"It is not a login: the review page authenticates separately",
-	}, http.StatusOK, nil
-}
-
-// reviewTokenResponse is the third body shape allowed to carry a secret,
-// alongside a minted API token and a join token: the review link, in the
-// only moment it ever exists in a response. Without the carve-out the
-// redaction pass would strip the very thing the caller asked for, and
-// the failure would look like an empty field rather than a refusal.
-type reviewTokenResponse struct {
-	Token  string `json:"token"`
-	PlanID string `json:"planId"`
-	Member string `json:"member"`
-	Note   string `json:"note"`
-}
-
-// householdReview redeems a revision-pinned token only inside a fresh Owner Console session.
-//
-// It sits behind Authelia and holds NO API verb of its own — it is
-// registered unauthenticated because the identity comes from the
-// trusted ingress, and the authority comes entirely from the token. A
-// request without both gets nothing.
-func (s *Server) householdReview(w http.ResponseWriter, r *http.Request) {
-	member, ok := s.trustedIngressUser(r)
-	if !ok {
-		s.writeError(w, http.StatusNotFound, "not found")
-		return
-	}
-	identity, ok := s.consoleForwardAuth(r)
-	if !ok {
-		s.writeError(w, http.StatusForbidden, "review this Plan in Console with a fresh Owner sign-in")
-		return
-	}
-	identity.ActingFor = member
-	if _, code, err := s.freshOwnerReview(r, identity); err != nil {
-		s.writeError(w, code, err.Error())
-		return
-	}
-	var req struct {
-		Token   string `json:"token"`
-		Approve bool   `json:"approve"`
-	}
-	if code, err := decodeStrict(r, &req); err != nil {
-		s.writeError(w, code, err.Error())
-		return
-	}
-	id, err := s.DB.RedeemHouseholdReviewToken(req.Token, member)
-	if err != nil {
-		s.writeError(w, http.StatusForbidden, "this review link does not work")
-		return
-	}
-	if req.Approve {
-		record, readErr := s.DB.GetPlan(id)
-		if readErr != nil {
-			s.writeError(w, http.StatusInternalServerError, "reading the reviewed Plan")
-			return
-		}
-		var proposal plan.StoredProposal
-		if decodeErr := json.Unmarshal([]byte(record.PlanJSON), &proposal); decodeErr != nil || proposal.Routine == nil {
-			s.writeError(w, http.StatusConflict, "resubmit this legacy routine Plan in Console as an exact-version proposal")
-			return
-		}
-	}
-	r.SetPathValue("id", id)
-	var body any
-	var code int
-	if req.Approve {
-		body, code, err = s.approvePlan(r, identity)
-	} else {
-		body, code, err = s.rejectPlan(r, identity)
-	}
-	if err != nil {
-		s.writeError(w, code, err.Error())
-		return
-	}
-	s.writeJSON(w, code, body)
-}
-
-// trustedIngressUser resolves the identity the proxy asserted, and only
-// from the proxy.
-//
-// Two checks, and both are necessary. The peer must be the trusted
-// ingress, because a header anyone can set is not an authentication.
-// And the asserted name must resolve through the identity-link table to
-// an admitted member, because equal names are not proof of identity
-// (ADR-W030 A2.1).
-func (s *Server) trustedIngressUser(r *http.Request) (string, bool) {
-	asserted := strings.TrimSpace(r.Header.Get(TrustedIngressHeader))
-	if asserted == "" {
-		return "", false
-	}
-	if !s.peerIsTrustedIngress(r) {
-		return "", false
-	}
-	member, err := s.DB.ResolveSurfaceIdentity(runtimedb.LinkTrustedIngress, asserted)
-	if err != nil {
-		return "", false
-	}
-	return member.Member, true
-}
-
 // peerIsTrustedIngress reports whether this request arrived through the
 // configured identity proxy.
 //
@@ -634,8 +435,8 @@ func (s *Server) trustedIngressUser(r *http.Request) (string, bool) {
 // DNS answer.
 func (s *Server) peerIsTrustedIngress(r *http.Request) bool {
 	if len(s.TrustedIngressAddrs()) == 0 {
-		// Nothing configured means the household review path is not
-		// available, rather than available to everyone. An unconfigured
+		// Nothing configured means the paths that trust the proxy are
+		// not available, rather than available to everyone. An unconfigured
 		// trust boundary must fail closed.
 		return false
 	}

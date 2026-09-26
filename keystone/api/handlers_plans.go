@@ -137,6 +137,9 @@ func (s *Server) submitProposalOpts(id principal.Identity, req proposalRequest, 
 // statefile_head marker advances (ADR-W007 A6). The reconciler (E3)
 // converges reality from there.
 func (s *Server) approvePlan(r *http.Request, id principal.Identity) (any, int, error) {
+	if code, err := planDecider(id); err != nil {
+		return nil, code, err
+	}
 	planID := r.PathValue("id")
 	rec, err := s.DB.GetPlan(planID)
 	if errors.Is(err, runtimedb.ErrNotFound) {
@@ -257,7 +260,30 @@ func (s *Server) approvePlan(r *http.Request, id principal.Identity) (any, int, 
 	return viewPlan(rec), http.StatusOK, nil
 }
 
+// planDecider is who may decide a Plan (ADR-W033 E2/E3, ADR-W007 A2):
+// a human Owner, and nothing else.
+//
+// That is the admin role and only the admin role. An admin credential
+// is either an Owner's Console session — the door has already required
+// an active Owner behind it (actingPersonMayStillHold) — or a host
+// credential used by the Owner at the host: the installer and `wild plan
+// approve`. The verb table cannot say this on its own: `operator` holds
+// `approve` for the machine operations that share the verb, and holding
+// it never makes a machine credential the approver of a Plan. `butler`,
+// chat adapters and every other service principal hold no approve verb
+// at all. A routine Plan narrows this further to a fresh Owner Console
+// session (freshOwnerReview).
+func planDecider(id principal.Identity) (int, error) {
+	if id.Role != runtimedb.RoleAdmin {
+		return http.StatusForbidden, fmt.Errorf("only a human Owner decides a Plan: review it in Console, or with `wild plan approve` at the host")
+	}
+	return 0, nil
+}
+
 func (s *Server) rejectPlan(r *http.Request, id principal.Identity) (any, int, error) {
+	if code, err := planDecider(id); err != nil {
+		return nil, code, err
+	}
 	planID := r.PathValue("id")
 	rec, err := s.DB.GetPlan(planID)
 	if errors.Is(err, runtimedb.ErrNotFound) {

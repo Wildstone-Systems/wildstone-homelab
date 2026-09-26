@@ -13,7 +13,10 @@ const (
 	// VerbPropose covers plan proposal — the ONLY way any principal
 	// initiates a write (ground rule 4).
 	VerbPropose Verb = "propose"
-	// VerbApprove covers plan approval/rejection.
+	// VerbApprove covers plan approval/rejection and the review-class
+	// operations that share it. Deciding a Plan additionally requires a
+	// human Owner (api planDecider): holding the verb is necessary, not
+	// sufficient.
 	VerbApprove Verb = "approve"
 	// VerbManage covers principal/token administration and audit reads.
 	VerbManage Verb = "manage"
@@ -51,7 +54,9 @@ var roleVerbs = map[runtimedb.Role]map[Verb]bool{
 	// A MACHINE credential, not an Owner and not an Owner Agent. See the
 	// constant's own comment in runtimedb/principals.go for the three
 	// axes this is not: nothing here says anything about what a person
-	// may do, or about which gateway an Agent reaches.
+	// may do, or about which gateway an Agent reaches. Its approve verb
+	// covers machine operations that share the verb; it never decides a
+	// Plan — only a human Owner does (api planDecider, ADR-W033 E2).
 	runtimedb.RoleOperator: {
 		VerbRead: true, VerbPropose: true, VerbApprove: true, VerbConverse: true,
 	},

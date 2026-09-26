@@ -54,9 +54,9 @@ Both adult profiles may need local and cloud models. Local processing is attract
 
 Shared adult household access avoids a complex adult role hierarchy. It does not erase private-source restrictions or the stronger tool boundary around Operator.
 
-Trusted adults can correct shared household memory and change or disable shared routines without asking the original author. Butler keeps the author/editor history, tells the owner when another adult changes routine behavior, and includes another adult's shared-memory correction or forget action in the next learning digest. Removal of safety information such as an allergy is auditable and surfaced immediately; the record keeps visible source and scope. A person and the configured homelab administrator control that person's private memory.
+Trusted adults can correct shared household memory without asking the original author. Routines are household-owned: anyone may propose a change, and a human Owner approves it (ADR-W033 E2–E5). Butler keeps the author/editor history and includes another adult's shared-memory correction or forget action in the next learning digest. Removal of safety information such as an allergy is auditable and surfaced immediately; the record keeps visible source and scope. A person and the configured homelab administrator control that person's private memory.
 
-Butler may draft and preview a shared routine in Telegram, then provide a direct link to an Authelia-authenticated household review page. Any admitted adult can approve that narrowly classified household-routine Plan there without receiving an admin Console credential or gaining access to infrastructure Plans. Telegram cannot approve activation or edits, but an authenticated adult can immediately disable an exact routine because that only removes future authority.
+Butler may draft and preview a shared routine in Telegram and submit it as a Plan. A human Owner approves it in the Console; nobody approves over chat, and any Owner can stop a routine at once without a Plan (ADR-W033 E2, E3, E6.1).
 
 Personal service connections start personal, read-only, live-query-only, and local-processing-only. Explicit household-service connections start household-shared and read-only. Indexing, cloud use, and actions are clear setup choices rather than side effects of connecting an account.
 
