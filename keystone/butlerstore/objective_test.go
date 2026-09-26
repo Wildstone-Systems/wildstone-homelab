@@ -49,13 +49,107 @@ func TestRunnerVerifiesObjectiveWithoutAcceptingSelfReportedEffects(t *testing.T
 			if (task.State == runtimedb.ButlerTaskCompleted) != tc.completed {
 				t.Fatalf("state %s", task.State)
 			}
-			if !tc.completed && (task.State != runtimedb.ButlerTaskWaiting || strings.Contains(tr.FinalText, "I did it")) {
+			// No tool ran, so nothing can have happened: the task ends
+			// not done (failed) rather than waiting on a review of an
+			// outcome that is not uncertain — and the unproven claim is
+			// still never shown.
+			if !tc.completed && (task.State != runtimedb.ButlerTaskFailed || strings.Contains(tr.FinalText, "I did it")) {
 				t.Fatalf("unverified success exposed: %s %s", task.State, tr.FinalText)
 			}
 			if p.rounds != 2 {
 				t.Fatalf("verification calls=%d", p.rounds)
 			}
 		})
+	}
+}
+
+// An effectful request with nothing that could change anything behind it
+// is not an uncertain outcome. The runner ends the task not done, shows
+// the model's own answer when it only declines, and replaces it when it
+// claims the effect — or when the claim cannot be judged.
+func TestAnEffectNeverAttemptedEndsNotDone(t *testing.T) {
+	const decline = "I can't add things to a shopping list — there isn't one I can reach."
+	for _, tc := range []struct {
+		name, answer, verdict, want string
+	}{
+		{"honest decline shown", decline,
+			`{"kind":"effectful","effects":[{"description":"add milk to the shopping list","sourceKey":""}],"answerClaimsEffect":false}`, decline},
+		{"false claim replaced", "Done — milk is on the list.",
+			`{"kind":"effectful","effects":[{"description":"add milk to the shopping list","sourceKey":""}],"answerClaimsEffect":true}`, "I wasn't able to do that — nothing was changed."},
+		{"unjudged claim replaced", decline,
+			`{"kind":"effectful","effects":[{"description":"add milk to the shopping list","sourceKey":""}]}`, "I wasn't able to do that — nothing was changed."},
+		{"read then decline", decline,
+			`{"kind":"effectful","effects":[{"description":"add milk to the shopping list","sourceKey":""}],"answerClaimsEffect":false}`, decline},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db, l := testLedger(t, filepath.Join(t.TempDir(), "runtime.db"))
+			defer db.Close()
+			id := newTask(t, db)
+			r := newRunner(t, newCountingToolset(), l, id)
+			r.VerifyObjective = true
+			steps := []*provider.ChatResponse{{Text: tc.answer}, {Text: tc.verdict}}
+			if tc.name == "read then decline" {
+				// A read-only tool ran first: still nothing changed.
+				steps = append([]*provider.ChatResponse{readsFor("n1")}, steps...)
+			}
+			r.Provider = &scriptedProvider{dieAt: -1, steps: steps}
+			tr, err := r.Run(context.Background(), "add milk to the shopping list")
+			if err != nil {
+				t.Fatal(err)
+			}
+			task, err := db.GetButlerTask(id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if task.State != runtimedb.ButlerTaskFailed {
+				t.Fatalf("state %s, want failed (not done)", task.State)
+			}
+			if tr.FinalText != tc.want {
+				t.Fatalf("answer %q, want %q", tr.FinalText, tc.want)
+			}
+		})
+	}
+}
+
+// mutatingToolset declares its one tool as changing something, and the
+// tool reports no effect: the case a receipt exists to settle.
+type mutatingToolset struct{ *countingToolset }
+
+func (ts mutatingToolset) Capabilities(readOnly bool) butler.CapabilityManifest {
+	m := ts.countingToolset.Capabilities(readOnly)
+	for i := range m.Tools {
+		m.Tools[i].Mutating = true
+	}
+	return m
+}
+
+// When a tool that can change something ran and nothing proves what it
+// did, the outcome really is uncertain: the task still waits for review,
+// whatever the answer says.
+func TestAMutatingToolWithoutReceiptStillWaits(t *testing.T) {
+	db, l := testLedger(t, filepath.Join(t.TempDir(), "runtime.db"))
+	defer db.Close()
+	id := newTask(t, db)
+	r := newRunner(t, mutatingToolset{newCountingToolset()}, l, id)
+	r.VerifyObjective = true
+	r.Provider = &scriptedProvider{dieAt: -1, steps: []*provider.ChatResponse{
+		readsFor("n1"),
+		{Text: "I couldn't do it."},
+		{Text: `{"kind":"effectful","effects":[{"description":"restart n1","sourceKey":""}],"answerClaimsEffect":false}`},
+	}}
+	tr, err := r.Run(context.Background(), "restart n1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := db.GetButlerTask(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.State != runtimedb.ButlerTaskWaiting {
+		t.Fatalf("state %s: a mutating call with no receipt must stay an uncertain outcome", task.State)
+	}
+	if !strings.Contains(tr.FinalText, "couldn't verify") {
+		t.Fatalf("answer %q", tr.FinalText)
 	}
 }
 

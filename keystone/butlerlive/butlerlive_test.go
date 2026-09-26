@@ -916,7 +916,9 @@ func TestEffectfulObjectiveWithNoToolReceiptDoesNotComplete(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if task.State != runtimedb.ButlerTaskWaiting {
+	// No tool ran, so the task ends not done rather than completing on
+	// the model's word — and the claim is not what the person sees.
+	if task.State != runtimedb.ButlerTaskFailed {
 		t.Fatalf("self-reported effect completed: %s", task.State)
 	}
 	if strings.Contains(answer.FinalText, "I've restarted") {
@@ -926,6 +928,39 @@ func TestEffectfulObjectiveWithNoToolReceiptDoesNotComplete(t *testing.T) {
 		t.Fatal("actual serving path did not verify objective")
 	}
 }
+
+// A request no tool can serve, answered honestly, ends the turn with that
+// answer and leaves the conversation usable. Before, it parked as an
+// uncertain outcome, and that held the whole conversation: every later
+// tool call in it was refused until somebody reviewed a task in which
+// nothing had happened.
+func TestADeclinedRequestDoesNotHoldTheConversation(t *testing.T) {
+	f := newFixture(t)
+	f.local.reply = "I can't add to a shopping list — there isn't one I can reach."
+	f.local.objectiveVerdict = `{"kind":"effectful","effects":[{"description":"add milk to the shopping list","sourceKey":""}],"answerClaimsEffect":false}`
+	answer, err := f.butlers.Serve(context.Background(), f.turn("alfred", "add milk to the shopping list"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if answer.FinalText != f.local.reply {
+		t.Fatalf("the honest decline was not shown: %q", answer.FinalText)
+	}
+	task, err := f.db.GetButlerTask(answer.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.State != runtimedb.ButlerTaskFailed {
+		t.Fatalf("state %s, want failed (not done)", task.State)
+	}
+	work, err := f.db.ConversationWorkForTask(answer.TaskID)
+	if err != nil {
+		t.Fatalf("the turn has no conversation work to check: %v", err)
+	}
+	if work.UncertainOutcome {
+		t.Fatal("a request that was never attempted held the conversation as an uncertain outcome")
+	}
+}
+
 func TestOrdinaryAnsweredQuestionCompletesOnTheServingPath(t *testing.T) {
 	f := newFixture(t)
 	f.local.reply = "A byte contains eight bits."

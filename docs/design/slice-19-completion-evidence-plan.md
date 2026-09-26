@@ -41,6 +41,22 @@ this slice does not invent delivery confirmation from queue acceptance.
 The real serving path verifies classification before completion. When an action
 has no successful receipt, the task waits and the person receives an explicit
 unverified-action message instead of the model's unsupported success claim.
+
+> **Amendment (2026-09-25).** "The task waits" is right only when something
+> *might* have happened. Waiting records an uncertain outcome, and that holds
+> the whole conversation (`conversation_work.uncertain_outcome`) until a person
+> reviews it, so every later tool call in the conversation is refused. When no
+> tool that can change anything ran in the task — every tool step, if any,
+> names a tool the manifest marks read-only (the capability's own `Mutating`
+> declaration) and reported no effect — the outcome is not uncertain: the
+> request was not done. The task then ends `failed` ("not done"), the
+> conversation is not held, and the person sees the model's own answer when
+> the verifier says it only declines, asks or explains
+> (`answerClaimsEffect: false`), or a fixed "I wasn't able to do that — nothing
+> was changed." when it claims the effect or the claim cannot be judged. The
+> receipt rule is unchanged: an effectful objective still never *completes*
+> without one.
+
 The Console distinguishes action confirmation receipts from delivery/observation
 evidence. Existing trusted task factories may explicitly classify informational
 work; omitted classifications remain effectful.
