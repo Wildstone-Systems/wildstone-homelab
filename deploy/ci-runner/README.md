@@ -18,6 +18,20 @@ a `docker run --rm` that registers with `--ephemeral`, takes exactly one
 job, deregisters and exits, and the container is deleted with it.
 systemd starts a fresh one. There is no state to poison.
 
+Two details the unit enforces rather than asks for:
+
+- **The image is pinned by digest**, and the unit refuses to start on a
+  tag. The container holds the registration token and the Docker
+  socket; a mutable tag would hand the machine to whoever controls it.
+  `ci-runner.env.example` carries the reviewed digest and the two
+  commands that resolve a new one when you choose to move.
+- **The job's work directory is a host directory bound into the
+  container at the same path** (`/srv/ci-work/<n>`), wiped before and
+  after every container. `ci.yml` runs shellcheck as
+  `docker run -v "$PWD:/mnt"`, and Docker resolves that path on the
+  host, so the checkout has to exist there too. Same path on both sides
+  keeps `$PWD` true for both.
+
 This is the third lock, after the two that keep strangers off the
 runner in the first place: `ci.yml` skips pull requests from forks, and
 the repository's Actions settings require the maintainer's approval
@@ -42,7 +56,7 @@ boundary, not the container:
 # On the CI VM, as root, from a checkout of this repo:
 mkdir -p /etc/wildstone
 install -m 0600 deploy/ci-runner/ci-runner.env.example /etc/wildstone/ci-runner.env
-$EDITOR /etc/wildstone/ci-runner.env      # set ACCESS_TOKEN
+$EDITOR /etc/wildstone/ci-runner.env      # set ACCESS_TOKEN; keep RUNNER_IMAGE pinned
 install -m 0644 deploy/ci-runner/github-runner@.service /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable --now github-runner@1 github-runner@2

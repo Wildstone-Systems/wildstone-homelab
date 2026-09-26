@@ -76,7 +76,7 @@ mkdir -p /tmp/ksdata
         -api-listen 127.0.0.1:19441 \
         -hosts localhost,127.0.0.1 \
         -butler-provider ollama \
-        -butler-endpoint http://192.0.2.99:11434 \
+        -butler-endpoint http://<ollama-host>:11434 \
         -butler-model qwen3.5:4b &
 
 export WILD_TOKEN=$(cat /tmp/ks.token | tr -d '\n')
@@ -121,7 +121,7 @@ The ones that matter for an audit:
 | Public API | `0.0.0.0:9441` — reach it on `http://127.0.0.1:9441` |
 | Data directory | `/var/lib/wildstone/keystone` |
 | Console | served from `/usr/share/wildstone/console` |
-| Legacy Butler provider | `ollama` at `http://192.0.2.99:11434` |
+| Legacy Butler provider | `ollama` at `http://<ollama-host>:11434` (the household Ollama; the address is not published) |
 
 The node also runs `wardstoned.service`, the agent.
 

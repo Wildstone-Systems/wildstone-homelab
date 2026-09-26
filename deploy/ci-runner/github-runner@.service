@@ -23,23 +23,37 @@ StartLimitIntervalSec=0
 
 [Service]
 EnvironmentFile=/etc/wildstone/ci-runner.env
-# The image is pulled before every container so a runner is never more
-# than one job behind the image's own updates. Pin by digest in
-# ci-runner.env if you want to control when that happens.
+# The image must be pinned by digest. It receives the registration token
+# and the Docker socket, so a mutable tag would hand the CI machine to
+# whoever controls the tag. Refuse to start otherwise.
+ExecStartPre=/bin/sh -c 'case "$RUNNER_IMAGE" in *@sha256:*) ;; *) echo "RUNNER_IMAGE must be pinned by digest (image@sha256:...), got: $RUNNER_IMAGE" >&2; exit 1;; esac'
 ExecStartPre=/usr/bin/docker pull ${RUNNER_IMAGE}
 ExecStartPre=-/usr/bin/docker rm -f gh-runner-%i
+# The job's work directory lives on the host and is bound into the
+# container AT THE SAME PATH. ci.yml runs shellcheck as
+# `docker run -v "$PWD:/mnt"`, and Docker resolves that bind source on
+# the daemon's host, not inside the runner container: a checkout that
+# exists only inside the container is invisible to it. Same path on both
+# sides makes $PWD mean the same thing to both. It is wiped before every
+# container and after, so it is as ephemeral as the container.
+ExecStartPre=/bin/rm -rf /srv/ci-work/%i
+ExecStartPre=/bin/mkdir -p /srv/ci-work/%i
 # --rm: the container is deleted when the runner exits after its one job.
 # The Docker socket is mounted because ci.yml runs shellcheck through
-# `docker run`; a job can therefore do anything Docker on this VM can,
-# which is why the VM is the isolation boundary, not the container.
+# `docker run`; a job can therefore do anything Docker on this machine
+# can, which is why the machine is the isolation boundary, not the
+# container.
 ExecStart=/usr/bin/docker run --rm --name gh-runner-%i \
   --env-file /etc/wildstone/ci-runner.env \
   -e RUNNER_NAME=%H-%i \
   -e EPHEMERAL=1 \
   -e DISABLE_AUTO_UPDATE=1 \
+  -e RUNNER_WORKDIR=/srv/ci-work/%i \
+  -v /srv/ci-work/%i:/srv/ci-work/%i \
   -v /var/run/docker.sock:/var/run/docker.sock \
   ${RUNNER_IMAGE}
 ExecStop=-/usr/bin/docker stop gh-runner-%i
+ExecStopPost=/bin/rm -rf /srv/ci-work/%i
 # A clean exit is the normal end of every job; restart unconditionally.
 Restart=always
 RestartSec=5
