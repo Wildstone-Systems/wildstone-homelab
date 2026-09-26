@@ -2499,6 +2499,7 @@ check("and the other is not", activityTabs.includes('tabindex="-1"'));
 import { ServiceAccessView } from "../src/views/ServiceAccess";
 import { PersonGroupsView } from "../src/views/PersonGroups";
 import type { PersonGroup, ServiceAccess } from "../src/api";
+import { SecretInput } from "../src/ui/SecretInput";
 
 const groupsFixture: PersonGroup[] = [
   { id: "grp_1", name: "Family", seedKey: "family", members: ["tom", "sam"] },
@@ -2564,6 +2565,16 @@ check("a seeded group shows the role its rules reference",
 check("a household's own group shows no role",
   !groupsOut.includes("role: media"));
 check("membership is a toggle per person", groupsOut.includes('aria-pressed="true"'));
+
+// A secret field starts concealed, with a named Show control beside it,
+// so a person can check what they typed before it is stored — and the
+// field itself never carries spell-checking, which can send visible text
+// to a spelling service.
+const secretOut = renderToString(h(SecretInput, { "aria-label": "secret value", value: "typed", onChange: () => {} }));
+check("a secret field starts concealed", secretOut.includes('type="password"') && !secretOut.includes('type="text"'));
+check("a secret field has a named Show control", secretOut.includes('aria-label="Show secret value"') &&
+  secretOut.includes('aria-pressed="false"') && secretOut.includes('type="button"'));
+check("a secret field is never spell-checked", secretOut.includes('spellCheck="false"') || secretOut.includes('spellcheck="false"'));
 
 console.log(failures === 0 ? "\nALL CHECKS PASSED" : `\n${failures} CHECK(S) FAILED`);
 process.exit(failures === 0 ? 0 : 1);

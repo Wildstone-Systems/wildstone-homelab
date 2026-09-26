@@ -56,7 +56,24 @@ func (s *Server) secretOperation(w http.ResponseWriter, r *http.Request, actor s
 		if err != nil {
 			return nil, http.StatusForbidden, runtimedb.ErrSecretDenied
 		}
-		return map[string]any{"secrets": out}, 200, nil
+		resp := map[string]any{"secrets": out}
+		if !console && s.DB != nil {
+			// The Agents this person may name in a grant or a Household
+			// reveal, so the page offers a choice rather than a text box
+			// a mistyped name silently fails in. ButlersFor is the same
+			// rule AgentGrant enforces — enabled, not retired, and granted
+			// to this person — so the list cannot offer one it refuses.
+			// Its class rides along because a reveal on this page is a
+			// Member Agent's (ADR-W033 D4).
+			agents := []map[string]string{}
+			if bs, err := s.DB.ButlersFor(actor); err == nil {
+				for _, b := range bs {
+					agents = append(agents, map[string]string{"name": b.Name, "agentClass": b.AgentClass})
+				}
+			}
+			resp["agents"] = agents
+		}
+		return resp, 200, nil
 	}
 	req, err := secretDecode(w, r)
 	if err != nil {
