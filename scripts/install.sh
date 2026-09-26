@@ -337,10 +337,21 @@ CONSOLE_BEHIND_PROXY=0
 # value.
 KEYSTONE_API_ADDR=""
 step_admin() {
+  # A re-run already knows who the first Owner is: the name and address
+  # are in the answers file (the password never is). Asking again made
+  # every upgrade re-type an account that already existed — and then
+  # discard what was typed, because create_first_owner leaves a declared
+  # account alone (#362). The password is asked for later, and only if
+  # the account still has to be created (ask_owner_password).
+  if [ -n "${ADMIN_USER:-}" ] && [ -n "${ADMIN_EMAIL:-}" ]; then
+    log "first owner chosen previously: $ADMIN_USER ($ADMIN_EMAIL); not asking again"
+    log "  (to change the account, use the Console's Household screen)"
+    return 0
+  fi
   echo
   echo "Now an account for you. This is what you will log in with, and"
   echo "what you will use to add everyone else later."
-  local u p1 p2
+  local u
   while :; do
     printf 'Username: ' >&2
     read -r u </dev/tty || u=""
@@ -385,6 +396,19 @@ step_admin() {
   done
   ADMIN_EMAIL="$e"
   answers_save ADMIN_EMAIL "$e"
+  ADMIN_USER="$u"
+  answers_save ADMIN_USER "$u"   # the NAME is a choice; the password is not stored
+  ask_owner_password
+}
+
+# ask_owner_password asks for the first Owner's password. Asked with the
+# account on a first install; on a re-run only when the account still has
+# to be created (an earlier run saved the name and stopped before
+# creating it), because a password is never stored and never reset on an
+# account that exists.
+ask_owner_password() {
+  local p1 p2
+  echo "A password for '$ADMIN_USER'."
   while :; do
     printf 'Password: ' >&2; read -rs p1 </dev/tty; echo >&2
     printf 'Again:    ' >&2; read -rs p2 </dev/tty; echo >&2
@@ -392,8 +416,7 @@ step_admin() {
     if [ "${#p1}" -lt 8 ]; then echo "at least 8 characters, please" >&2; continue; fi
     break
   done
-  ADMIN_USER="$u"; ADMIN_PASS="$p1"
-  answers_save ADMIN_USER "$u"   # the NAME is a choice; the password is not stored
+  ADMIN_PASS="$p1"
 }
 
 # Step 5b: where the household lives, in time (ADR-W033; #269).
@@ -1381,6 +1404,9 @@ create_first_owner() {
       if [ "$CONSOLE_BEHIND_PROXY" = 1 ]; then
         groups=",\"groups\":[$OWNER_GROUPS]"
       fi
+      # A re-run that saved the name but never created the account
+      # has no password yet: ask for it now, the one time it is needed.
+      [ -n "$ADMIN_PASS" ] || ask_owner_password
       [ -n "$LLDAP_ADMIN_PASS" ] || set_admin_password
       wait_agent
       r="$(api POST /api/v1/household/members \
