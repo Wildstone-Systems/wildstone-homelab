@@ -98,6 +98,12 @@ Nothing has to. Two things get simpler:
 - The shellcheck step no longer uses Docker (see above), so nothing in
   CI needs a Docker socket. Keep it that way: a step that needs
   `docker run` is a step that needs the host.
+- The image is the stock runner: no GitHub CLI, no shellcheck, nothing a
+  hosted runner happens to have. A workflow that needs a tool downloads
+  it pinned by checksum (`release.yml` does this for `gh`, `ci.yml` for
+  shellcheck) rather than relying on the image. Adding tools to a
+  derived image is the alternative; this keeps the image reviewable as
+  one digest.
 - `runner.tool_cache` is empty on every job, so `setup-go` and
   `setup-node` download toolchains each time. Jobs are slower by that
   much and never wrong because of a stale cache.

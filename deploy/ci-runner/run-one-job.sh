@@ -57,8 +57,11 @@ jit=$(curl -fsS -X POST \
 # and its work directory with it. The runner runs as uid 1001 ("runner")
 # with every capability dropped and no way to gain one; the job gets a
 # checkout, a toolchain it downloads itself, and nothing of this host.
+# --entrypoint is explicit so this does not depend on what the image
+# declares: the JIT flag goes to run.sh and nothing else.
 exec docker run --rm --name "$name" \
   --cap-drop ALL \
   --security-opt no-new-privileges \
+  --entrypoint /home/runner/run.sh \
   "$RUNNER_IMAGE" \
-  ./run.sh --jitconfig "$jit"
+  --jitconfig "$jit"
