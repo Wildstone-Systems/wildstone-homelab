@@ -3,6 +3,7 @@ import { X } from "@phosphor-icons/react";
 import { api, type Model, type OfferedModel, type ProviderKind } from "../../api";
 import { ErrorLine, useLoad } from "../../lib";
 import { Dot, type Kind } from "../../ui/status";
+import { SecretInput } from "../../ui/SecretInput";
 
 // ProvidersDrawer is where the house says which model servers it has,
 // and which of their models its Butlers may use.
@@ -108,10 +109,8 @@ function KeyControl({ kind, onChanged }: { kind: ProviderKind; onChanged: () => 
   return (
     <div className="stack" style={{ gap: "var(--space-1)" }}>
       <div className="row" style={{ display: "flex", gap: "var(--space-2)" }}>
-        <input
-          type="password"
+        <SecretInput
           autoComplete="off"
-          spellCheck={false}
           aria-label={`${kind.label} API key`}
           value={value}
           onChange={(e) => setValue(e.target.value)}

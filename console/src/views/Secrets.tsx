@@ -4,6 +4,7 @@ import { api, PackageView, SecretInfo } from "../api";
 import { ErrorLine, useAction, useLoad, when } from "../lib";
 import { useConsoleState } from "../state";
 import { StatusPill } from "../ui/status";
+import { SecretInput } from "../ui/SecretInput";
 
 // Secrets (ADR-W016 A2 / ADR-W012 / ADR-W027): name-level only — the API
 // cannot read a value back, so neither can this screen.
@@ -124,9 +125,8 @@ export function SecretsView({
             value={name}
             onChange={(e) => setName(e.target.value)}
           />
-          <input
+          <SecretInput
             id="secret-value"
-            type="password"
             placeholder="value (empty = generate on the node)"
             aria-label="secret value"
             value={value}
@@ -346,9 +346,9 @@ function HouseholdSecrets() {
         </label>
         <label>
           Value{" "}
-          <input
-            type="password"
+          <SecretInput
             autoComplete="new-password"
+            aria-label="household secret value"
             value={value}
             onChange={(e) => setValue(e.target.value)}
           />

@@ -12,6 +12,7 @@ import { ErrorLine, useAction, useLoad } from "../lib";
 import { Group, GROUPS, groupOf, hostOf, RANK } from "../services";
 import { Dot, Kind, StatusPill } from "../ui/status";
 import { Drawer } from "../ui/Drawer";
+import { SecretInput } from "../ui/SecretInput";
 import { ServiceAccessPanel } from "./ServiceAccess";
 
 // Services (ADR-W021 A5, ADR-W027): the catalog, and installing from it.
@@ -1105,9 +1106,9 @@ export function InstallForm({ pkg, onDone }: { pkg: PackageView; onDone: () => v
                       <code>{s}</code>
                       {preview.secretPurposes?.[s] && <div className="muted">{preview.secretPurposes[s]}</div>}
                     </label>
-                    <input
+                    <SecretInput
                       id={`secret-${s}`}
-                      type="password"
+                      aria-label={`${s} value`}
                       autoComplete="new-password"
                       value={secretValues[s] ?? ""}
                       placeholder={have ? "already set — leave blank to keep it" : ""}
