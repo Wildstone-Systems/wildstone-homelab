@@ -25,8 +25,12 @@
   .lists-grid { display: grid; grid-template-columns: minmax(0, 240px) minmax(0, 1fr);
                 gap: var(--space-6); align-items: start; }
   .lists-rail { display: flex; flex-direction: column; gap: var(--space-2); }
-  .lists-rail .hbtn { justify-content: space-between; width: 100%; }
-  .lists-rail .hbtn.on { border-color: var(--color-accent); }
+  /* The list buttons only — #rail, not the whole column: the New list
+     composer's round + is an .hbtn too, and a column-wide rule stretched
+     it across the field. */
+  #rail { display: flex; flex-direction: column; gap: var(--space-2); }
+  #rail .hbtn { justify-content: space-between; width: 100%; }
+  #rail .hbtn.on { border-color: var(--color-accent); }
   .lists-panel { display: flex; flex-direction: column; gap: var(--space-4); }
   .lists-done { text-decoration: line-through; }
   @media (max-width: 720px) {
