@@ -264,6 +264,19 @@ func (s *Server) assistantAsk(_ http.ResponseWriter, r *http.Request, member str
 		return nil, http.StatusNotFound, fmt.Errorf("no assistant answers there for you")
 	}
 
+	// Slash commands answer here, after the ceiling and before anything
+	// else: deterministically, with no model, and whether or not this
+	// deployment's Butlers are running (the deterministic backbone).
+	if resp, handled := s.runWebChatCommand(b, member, portal.Connection, text); handled {
+		return map[string]any{
+			"session":         resp.SessionID,
+			"agent":           agent,
+			"reply":           resp.FinalText,
+			"command":         resp.Command,
+			"newConversation": resp.NewConversation,
+		}, http.StatusOK, nil
+	}
+
 	// Whether this deployment has any Butler at all is asked AFTER the
 	// ceiling, not before. Both answers are true facts about the
 	// deployment, and the one a refused caller is entitled to is the

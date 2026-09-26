@@ -147,6 +147,10 @@ export function Butler({
   const [reloads, setReloads] = useState(0);
   const [busy, setBusy] = useState(false);
   const [askError, setAskError] = useState<string | null>(null);
+  // A slash command's answer. It is not a turn of the conversation (no
+  // model ran, nothing was recorded), so it cannot come back with the
+  // thread and is shown beside it until the next message.
+  const [commandReply, setCommandReply] = useState<string | null>(null);
   const [proposals, setProposals] = useState<PlanRecord[]>([]);
 
   const configured = status.data?.configured === true;
@@ -196,6 +200,7 @@ export function Butler({
     if (!current || !current.reachable) return;
     setBusy(true);
     setAskError(null);
+    setCommandReply(null);
     setPending(message);
     // Keyed on openID rather than on the loaded thread, and the
     // difference is a race with real consequences. openID is set the
@@ -218,6 +223,17 @@ export function Butler({
       // plans they proposed; the effect above does both, so there is
       // one path that assembles a thread rather than two.
       .then((res) => {
+        if (res.command) {
+          // /new drops this conversation; /resume opens the one it
+          // names; any other command leaves the conversation as it is.
+          if (res.newConversation) startNew();
+          else if (res.sessionId) {
+            setOpenID(res.sessionId);
+            setReloads((n) => n + 1);
+          }
+          setCommandReply(res.finalText);
+          return;
+        }
         setOpenID(res.sessionId);
         setReloads((n) => n + 1);
       })
@@ -276,6 +292,7 @@ export function Butler({
     setThread(null);
     setProposals([]);
     setAskError(null);
+    setCommandReply(null);
     setStatusOpen(false);
     if (narrow()) setRailOpen(false);
   };
@@ -306,6 +323,7 @@ export function Butler({
             onPick={(id) => {
               setAskError(null);
               setOpenID(id);
+              setCommandReply(null);
               setStatusOpen(false);
               if (narrow()) setRailOpen(false);
             }}
@@ -375,7 +393,7 @@ export function Butler({
             <StatusCard status={status.data} loading={status.loading} />
           </div>
         ) : thread === null && pending === null ? (
-          <EmptyState row={current} busy={busy} onSend={send} error={askError} />
+          <EmptyState row={current} busy={busy} onSend={send} error={askError} notice={commandReply} />
         ) : (
           <>
             <Thread
@@ -390,6 +408,7 @@ export function Butler({
                 <ErrorLine error={askError} />
               </div>
             )}
+            {commandReply && <CommandReply text={commandReply} />}
             <Composer surface={surface} busy={busy} onSend={send} />
           </>
         )}
@@ -625,6 +644,17 @@ export function BlockedStrip({ row, onManage }: { row: ButlerRow; onManage: () =
   );
 }
 
+// A slash command's reply. Plain text in a pre-wrapped block, because the
+// command answers are multi-line lists, and text rather than markup like
+// every other answer on this screen.
+function CommandReply({ text }: { text: string }) {
+  return (
+    <div className="thread-error" role="status" style={{ whiteSpace: "pre-wrap" }}>
+      {text}
+    </div>
+  );
+}
+
 // The opening: the composer IS the screen, and the asks sit under it as
 // chips. They belong here rather than above every composer — a suggested
 // question is a way to start, not a control you need mid-conversation.
@@ -633,11 +663,14 @@ export function EmptyState({
   busy,
   onSend,
   error,
+  notice,
 }: {
   row?: ButlerRow;
   busy: boolean;
   onSend: (text: string) => void;
   error?: string | null;
+  // A slash command's reply, shown where the conversation would be.
+  notice?: string | null;
 }) {
   const [text, setText] = useState("");
   // Every string on this screen is the selected Butler's, derived from
@@ -693,6 +726,7 @@ export function EmptyState({
             </button>
           ))}
         </div>
+        {notice && <CommandReply text={notice} />}
         <ErrorLine error={error ?? null} />
         <div className="muted">⌘/Ctrl + Enter sends</div>
       </div>
