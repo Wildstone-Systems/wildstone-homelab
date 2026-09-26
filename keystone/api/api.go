@@ -779,6 +779,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/lists/check", s.portal(surfaceLists, s.listsCheck))
 	mux.Handle("POST /api/v1/lists/remove", s.portal(surfaceLists, s.listsRemove))
 	mux.Handle("POST /api/v1/lists/clear", s.portal(surfaceLists, s.listsClearChecked))
+	mux.Handle("POST /api/v1/lists/delete", s.portal(surfaceLists, s.listsDelete))
+	mux.Handle("GET /lists/{$}", s.portal(surfaceLists, s.portalPage("lists")))
 	mux.Handle("GET /api/v1/assistant/agents", s.portal(surfaceAssistant, s.assistantAgents))
 	mux.Handle("GET /api/v1/assistant/scope", s.portal(surfaceAssistant, s.assistantScope))
 	mux.Handle("GET /api/v1/assistant/conversations", s.portal(surfaceAssistant, s.assistantConversations))

@@ -18,7 +18,7 @@ import (
 )
 
 // pages are the surfaces Page serves.
-var pages = []string{"home", "files", "assistant", "activity", "upkeep", "calendar", "files-widget", "assistant-widget"}
+var pages = []string{"home", "files", "assistant", "activity", "upkeep", "calendar", "files-widget", "assistant-widget", "lists"}
 
 func TestPersonalBannerIsNotShipped(t *testing.T) {
 	if _, err := web.ReadFile("web/assets/banner-default.webp"); err == nil {

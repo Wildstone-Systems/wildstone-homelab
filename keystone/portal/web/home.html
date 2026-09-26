@@ -379,6 +379,8 @@
       <div class="spread">
         <span class="muted grow" id="lists-sum"></span>
         <button class="hbtn hbtn-ghost" id="lists-newlist" type="button">New list</button>
+        <a class="hbtn hbtn-ghost" id="lists-open" href="/lists/">All lists
+          <i class="ph ph-arrow-right" aria-hidden="true"></i></a>
       </div>
     </section>
     <section class="wid">
@@ -836,7 +838,11 @@
       pick.appendChild(o);
     }
     pick.value = currentList;
-    pick.hidden = pick.options.length < 2;
+    // Always shown, even with one list: it is also the card's answer to
+    // "which list is this?". Hiding it when only one option was left
+    // (a list deleted, or the household's first) left the card showing
+    // items with no name above them and no way to tell what they were.
+    pick.hidden = pick.options.length === 0;
 
     var list = lists.filter(function (l) { return l.name === currentList; })[0] ||
       { name: currentList, items: [], open: 0, done: 0 };
@@ -879,6 +885,7 @@
     count.hidden = !list.open;
     count.textContent = list.open ? list.open + " left" : "";
     el("lists-clear").hidden = !list.done;
+    el("lists-open").href = "/lists/?list=" + encodeURIComponent(list.name);
     text("lists-sum", list.done ? list.done + " ticked off" : "");
   }
   el("lists-pick").addEventListener("change", function () {

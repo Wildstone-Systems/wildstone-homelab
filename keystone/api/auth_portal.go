@@ -350,7 +350,7 @@ const portalPrincipal = "portal"
 // portalSurfaces is every household surface this file knows about, which
 // is what lets a shared resource ask "is this person entitled to ANY of
 // them" without naming one.
-var portalSurfaces = []portalSurface{surfaceHome, surfaceFiles, surfaceAssistant}
+var portalSurfaces = []portalSurface{surfaceHome, surfaceFiles, surfaceAssistant, surfaceLists}
 
 // portalAsset builds the chain for the portal's static design files —
 // the stylesheet, the two fonts, and the app icon set.

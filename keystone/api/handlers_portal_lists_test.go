@@ -141,3 +141,50 @@ func TestTheHomeSummaryNamesTheListsSurface(t *testing.T) {
 		t.Fatal("the Lists card is not offered once the package is installed")
 	}
 }
+
+// The Lists page is behind the same door as the card, and deleting a
+// whole list — which the page asks about first — is too.
+func TestTheListsPageAndDeletingAList(t *testing.T) {
+	h, _ := portalHarness(t)
+	page := func(groups string) int {
+		res := h.member(http.MethodGet, "/lists/", "sam", groups, nil, "")
+		res.Body.Close()
+		return res.StatusCode
+	}
+	if code := page("lists_users"); code != http.StatusNotFound {
+		t.Fatalf("the page before install = %d, want 404", code)
+	}
+	installLists(t, h)
+	if code := page("homepage_users"); code != http.StatusForbidden {
+		t.Fatalf("the page outside the group = %d, want 403", code)
+	}
+	if code := page("lists_users"); code != http.StatusOK {
+		t.Fatalf("the page = %d", code)
+	}
+
+	const groups = "lists_users"
+	if code := listsDo(t, h, http.MethodPost, "/api/v1/lists/items", "sam", groups,
+		map[string]any{"list": "Packing", "items": []string{"passport", "charger"}}, nil); code != http.StatusOK {
+		t.Fatalf("add = %d", code)
+	}
+	if code := listsDo(t, h, http.MethodPost, "/api/v1/lists/delete", "sam", "homepage_users",
+		map[string]any{"list": "packing"}, nil); code != http.StatusForbidden {
+		t.Fatalf("a delete outside the group = %d, want 403", code)
+	}
+	var out struct {
+		List  string `json:"list"`
+		Items int    `json:"items"`
+	}
+	if code := listsDo(t, h, http.MethodPost, "/api/v1/lists/delete", "sam", groups,
+		map[string]any{"list": "packing"}, &out); code != http.StatusOK || out.List != "Packing" || out.Items != 2 {
+		t.Fatalf("delete = %d %+v", code, out)
+	}
+	if code := listsDo(t, h, http.MethodPost, "/api/v1/lists/delete", "sam", groups,
+		map[string]any{"list": "packing"}, nil); code != http.StatusNotFound {
+		t.Fatalf("deleting it again = %d, want 404", code)
+	}
+	var card listsCard
+	if listsDo(t, h, http.MethodGet, "/api/v1/lists", "sam", groups, nil, &card); len(card.Lists) != 0 {
+		t.Fatalf("after delete = %+v", card)
+	}
+}
