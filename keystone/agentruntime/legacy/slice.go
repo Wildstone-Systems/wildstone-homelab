@@ -18,7 +18,7 @@ package legacy
 // (which rechecks authority, spends the aggregate budget and serves a
 // still-verified read from the ledger), and every way the slice can end
 // is Client.Complete or Client.Wait. An SDK-driven Butler is therefore
-// held to exactly the contract an external runtime is (ADR-W039 §2).
+// held to exactly the contract an external runtime is (ADR-W039 §3.1).
 //
 // It adds nothing Run does not do. The one new piece of vocabulary is
 // Blocked, for an agent that says it cannot continue; it parks the task

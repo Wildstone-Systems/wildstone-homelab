@@ -1,6 +1,6 @@
 package butler
 
-// The host.* tool declarations (ADR-W039 §3.4, §5.4; H7, #353) — the
+// The host.* tool declarations (ADR-W039 §3.4, §5; H7, #353) — the
 // Owner-class operator surface's half of Tier 3 "host administration".
 //
 // This file declares exactly the seven toolEntry values, each OptIn:

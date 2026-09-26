@@ -1,6 +1,6 @@
 package agentgateway
 
-// The Proposals family (ADR-W039 §3.2, §7.2, Phase 3, #339): a Plan a
+// The Proposals family (ADR-W039 §3.2, Phase 3, #339): a Plan a
 // runtime's propose_change call, or its own Propose call, produces is
 // filed inside the gateway, attributed to the RUNTIME PRINCIPAL acting
 // for the Person on the handle — never the credential the runtime holds

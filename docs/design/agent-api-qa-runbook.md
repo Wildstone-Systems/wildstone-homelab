@@ -1,21 +1,24 @@
-# Agent API and Hermes runtime: a QA runbook for this branch
+# Agent API and Hermes runtime: a QA runbook
 
-This is a plain-language walkthrough for testing branch
-`claude/issues-333-334-orchestration-dix2u1` before it merges. Every
-command is meant to be copy-pasted one at a time, reading the
-"Expected" line after each before moving on.
+This is a plain-language walkthrough for testing the Agent API and the
+Hermes runtime on `main`. Every command is meant to be copy-pasted one
+at a time, reading the "Expected" line after each before moving on.
 
-## 1. What this branch changes
+Runtime type `native` = Keystone-hosted; its loop is chosen per
+deployment by `-agent-runtime legacy|native`: `legacy` is
+`keystone/agentruntime/legacy.Runner`, `native` is the OpenAI Agents
+SDK sidecar (ADR-W041). Runtime types `hermes` and `openclaw` are
+external Agent API clients. Below, a "native Agent" means an Agent
+whose runtime type is `native`, whichever loop drives it.
 
-Today, a Wildstone Agent (the Console still calls it a "Butler") always
-thinks inside Keystone itself — the same process, no way to swap it
-out. This branch adds a second path: Keystone now exposes a small,
-well-defined API (`/api/v1/agent/...`) that a *runtime* — the thing
-that actually does the reasoning — talks to instead of touching
-Keystone's internals directly. The built-in ("native") Agent was moved
-onto that same API internally, so nothing about it should look or
-behave differently. On top of that path, this branch adds the pieces
-needed to attach an external runtime — specifically Hermes, a
+## 1. What this covers
+
+Keystone exposes a small, well-defined API (`/api/v1/agent/...`) that
+a *runtime* — the thing that actually does the reasoning — talks to
+instead of touching Keystone's internals directly. The Keystone-hosted
+(runtime type `native`) Agent uses that same API internally, so nothing
+about it should look or behave differently. On top of that path sit the
+pieces needed to attach an external runtime — specifically Hermes, a
 third-party agent framework — as an alternative brain for an Agent,
 running in its own container with its own credential and its own
 ceiling on what it may do.
@@ -36,14 +39,15 @@ ceiling on what it may do.
 **Branch and checkout.**
 
 ```sh
-git fetch origin claude/issues-333-334-orchestration-dix2u1
-git checkout claude/issues-333-334-orchestration-dix2u1
-git log --oneline -1
+git fetch origin main
+git checkout main
+git pull --ff-only
+git log --oneline --grep 'ADR-W039 Phase 6/H6' -1
 ```
 Expected: the last line names a commit whose message starts with
 `feat(api): re-render a packaged runtime as a reviewed Plan`.
 
-**Tool versions.** CI builds this branch with Go 1.25 and Node 22.
+**Tool versions.** CI builds `main` with Go 1.25 and Node 22.
 Check yours match closely enough:
 
 ```sh
@@ -54,10 +58,10 @@ Expected: `go1.25.x` and `v22.x`. A different patch version is fine; a
 different major version is not — install the right one before
 continuing.
 
-**Never use your real household database for this.** This branch adds
-seven new database migrations (`0081` through `0087`, listed in
+**Never use your real household database for this.** The Agent API work adds
+seven database migrations (`0081` through `0087`, listed in
 `keystone/runtimedb/migrations/`). The moment any `keystone` binary
-built from this branch opens a data directory, those migrations run
+built from `main` opens a data directory, those migrations run
 automatically and only go forward — there is no "undo migration"
 command. Do every check in this runbook against a **scratch**
 Keystone: either a spare machine/VM installed fresh from
@@ -67,7 +71,7 @@ different ports, shown in step 4 below. This mirrors the project's own
 rule for testing risky changes: "no scratch test mutates the household
 database" (`docs/design/slice-24-audit-rollout-plan.md`).
 
-If you ever do end up pointing a build of this branch at your **real**
+If you ever do end up pointing a build of `main` at your **real**
 `/var/lib/wildstone/keystone` — you should not, but just in case —
 stop the service and copy the database file first.
 [`docs/recovery.md`](../recovery.md) is explicit that the runtime
@@ -136,7 +140,7 @@ for f in scripts/*.sh; do bash -n "$f"; done
 docker run --rm -v "$PWD:/mnt" koalaman/shellcheck:v0.9.0 scripts/*.sh
 ```
 Expected: no output from `bash -n`; shellcheck prints nothing (a clean
-run) or only pre-existing warnings unrelated to this branch.
+run) or only pre-existing warnings unrelated to the Agent API work.
 
 If every one of the above is clean, move on to manual QA. If something
 here fails, don't attempt the manual scenarios — fix or report the
@@ -176,7 +180,7 @@ empty database.
 Expected: it answers normally. The Runtime card shows `type: native`,
 a green **connected** pill, and `credential: runtime-<name>-1`. Every
 ledger row for the conversation (visible via the Agent's task/audit
-view) looks exactly like it did before this branch — the runtime
+view) looks exactly like it did before the Agent API work — the runtime
 principal name is new, everything else about the row is not.
 
 ### b. Rotate and revoke the runtime credential
@@ -422,9 +426,9 @@ shape.
   `host.*` tools to exist at all; without it they are absent from
   every manifest, not merely refused.
 - **Comparing against the old path**: `UseAgentGateway` in
-  `keystone/cmd/keystone/main.go` is hardcoded `true` on this branch.
+  `keystone/cmd/keystone/main.go` is hardcoded `true` on `main`.
   Setting it `false` and rebuilding routes the native Agent back
-  through the pre-branch closure wiring, kept one release as a
+  through the older closure wiring, kept one release as a
   fallback — a side-by-side comparison, not a runtime flag.
 - **Which test maps to which area**: `keystone/agentapi` (contract
   types), `keystone/agentgateway` (the gateway, incl.

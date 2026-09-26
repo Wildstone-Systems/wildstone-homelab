@@ -1,5 +1,5 @@
 // Package agentgateway is the Wildstone side of the Agent API
-// (ADR-W039 §3.4, §7.1): the thing a runtime calls when it wants a
+// (ADR-W039 §0, §3.4): the thing a runtime calls when it wants a
 // capability, a memory, a checkpoint or a proposal, and the thing that
 // decides — from a Wildstone-issued task handle and nothing the
 // runtime says — whether it may have it.

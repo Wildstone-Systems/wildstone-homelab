@@ -382,7 +382,7 @@ func (s *Server) Handler() http.Handler {
 	// fingerprint for a node install.
 	mux.Handle("POST /api/v1/join-tokens", s.handle(principal.VerbManage, s.consequential(s.mintJoinToken)))
 
-	// Household/Personal secrets (ADR-W033 §12) are separate from the
+	// Household/Personal secrets (ADR-W033 D1–D5) are separate from the
 	// write-only node credential endpoints below (ADR-W012 W2).
 	mux.Handle("GET /api/v1/household/secrets", s.handle(principal.VerbManage, s.householdSecretConsole))
 	mux.Handle("POST /api/v1/household/secrets", s.handle(principal.VerbManage, s.consequential(s.householdSecretConsole)))

@@ -111,7 +111,7 @@ func scanButlerRuntime(s interface{ Scan(...any) error }) (ButlerRuntime, error)
 
 // DeriveNativeProcessingClass maps a native runtime's assigned model
 // kind onto the Owner-declared processing class the gateway-side
-// disclosure filter keys on (ADR-W039 §3.3, §7.2 Phase 5, #345). The
+// disclosure filter keys on (ADR-W039 §3.3, #345). The
 // native runtime is never asked to declare itself the way an external
 // one is (§3.5 rule 3): Wildstone already knows which model it calls
 // (A2), so the class is derived, not registered — ModelLocal maps to

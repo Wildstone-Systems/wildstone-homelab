@@ -6,11 +6,12 @@
 // platform, not an agent framework. Wildstone owns everything on this
 // side of the line — job lifecycle, identity, tool authorization, audit,
 // timeouts, cancellation and runtime selection — and a runtime owns only
-// the model's reasoning loop on the other side. A runtime is an adapter
-// that implements AgentRuntime. The native adapter
-// (keystone/agentruntime/native) delegates the loop to the OpenAI Agents
-// SDK; Hermes and OpenClaw adapters implement the same interface.
-// Nothing in this package names a model provider or an SDK type, and
+// the model's reasoning loop on the other side. The native adapter
+// (keystone/agentruntime/native) is the only implementation of
+// AgentRuntime; it delegates the loop to the OpenAI Agents SDK. External
+// runtimes (Hermes, OpenClaw) do not implement this interface: they are
+// Agent API clients (ADR-W039, ADR-W040), bounded at the gateway by task
+// handle, budget, attempt fencing and heartbeat TTL. Nothing in this package names a model provider or an SDK type, and
 // nothing may: an adapter that needs one keeps it behind its own
 // boundary.
 //

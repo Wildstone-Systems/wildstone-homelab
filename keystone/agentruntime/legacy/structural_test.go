@@ -9,7 +9,7 @@ import (
 )
 
 // TestPackageNeverReachesWildstoneDirectly is the strict half of
-// ADR-W039 Phase 2's split (§7.1, §8 Phase 2): the native reasoning
+// ADR-W039 Phase 2's split (§1, #337): the native reasoning
 // loop reaches Wildstone state only through keystone/agentapi's Client
 // interface, never by importing the database, the tool gateways, or
 // anything that could hand it one. keystone/butler keeps ToolGateway
@@ -71,7 +71,7 @@ func TestPackageNeverReachesWildstoneDirectly(t *testing.T) {
 		for _, imp := range file.Imports {
 			path := strings.Trim(imp.Path.Value, `"`)
 			if forbidden[path] {
-				t.Errorf("%s imports %q — the native reasoning loop must reach Wildstone only through keystone/agentapi (ADR-W039 §7.1, §8 Phase 2)", name, path)
+				t.Errorf("%s imports %q — the native reasoning loop must reach Wildstone only through keystone/agentapi (ADR-W039 §1)", name, path)
 			}
 		}
 	}

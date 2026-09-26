@@ -27,7 +27,7 @@
 // relies on it: the in-process native client and an HTTP client are
 // interchangeable only while nothing here knows which one it is.
 //
-// Phase 0 (ADR-W039 §8) names the contract and wires nothing. Every
+// Phase 0 (ADR-W039) names the contract and wires nothing. Every
 // type mirrors something that already exists — the Toolset's offered
 // specs, the ledger's steps and attempts, the memory store's scopes —
 // so the later phases adapt rather than redesign.

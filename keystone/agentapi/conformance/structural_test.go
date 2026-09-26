@@ -2,7 +2,7 @@ package conformance
 
 // TestPackageImportsOnlyAgentapi is this package's own version of
 // keystone/agentapi's and keystone/agentapi/httpclient's structural
-// tests, one layer further out (ADR-W039 §8 Phase 5, #343): a
+// tests, one layer further out (#343): a
 // conformance suite runnable against ANY agentapi.Client must not itself
 // depend on Wildstone's own implementation of one. If this package ever
 // imported keystone/agentgateway, keystone/api or any other Wildstone
@@ -54,7 +54,7 @@ func TestPackageImportsOnlyAgentapi(t *testing.T) {
 				continue
 			}
 			if strings.HasPrefix(path, "github.com/chickenrat17/wildstone-homelab/") {
-				t.Errorf("%s imports %s — a conformance suite runnable against any agentapi.Client must import nothing under keystone except agentapi itself (ADR-W039 §8 Phase 5, #343)", name, path)
+				t.Errorf("%s imports %s — a conformance suite runnable against any agentapi.Client must import nothing under keystone except agentapi itself (#343)", name, path)
 				continue
 			}
 			if strings.Contains(path, ".") && !strings.HasPrefix(path, "golang.org/x/") {

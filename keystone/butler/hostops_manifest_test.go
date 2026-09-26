@@ -1,6 +1,6 @@
 package butler
 
-// The manifest-level half of H7's authority claim (#353, ADR-W039 §5.4):
+// The manifest-level half of H7's authority claim (#353, ADR-W039 §5):
 // a Member-class Agent's manifest never lists host.* at all, and an
 // Owner-class Agent's does, marked OptIn, only once the family is
 // actually wired.

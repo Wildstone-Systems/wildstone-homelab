@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// TestPackageNeverImportsWildstoneInternals is ADR-W039 §8 Phase 0's
+// TestPackageNeverImportsWildstoneInternals is ADR-W039 §10's
 // evidence: the contract compiles with no dependency on the packages it
 // is the boundary for. It is the counterpart of keystone/butler's
 // no-reconcile test — the same guarantee, one layer further out.
@@ -55,7 +55,7 @@ func TestPackageNeverImportsWildstoneInternals(t *testing.T) {
 			path := strings.Trim(imp.Path.Value, `"`)
 			for _, f := range forbidden {
 				if path == f || strings.HasSuffix(path, "/"+f) {
-					t.Errorf("%s imports %s — the Agent API contract must not reach a Wildstone internal (ADR-W039 §8 Phase 0)", name, path)
+					t.Errorf("%s imports %s — the Agent API contract must not reach a Wildstone internal (ADR-W039 §10)", name, path)
 				}
 			}
 		}

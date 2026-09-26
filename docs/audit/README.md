@@ -35,20 +35,11 @@ its old evidence.
    [`ADR-W033`](../decisions/ADR-W033-the-agent-design.md) — **the current
    authority.** Audit against these.
 3. [`docs/agent-architecture-baseline.md`](../agent-architecture-baseline.md)
-   — **historical input, not the current source of truth.** It triggered
-   this audit and its section numbers are what the issues cite, so read
-   the sections your issue names. But where it differs from the design
-   contract, the contract wins.
-
-   > **The baseline no longer supersedes ADR language.** That instruction
-   > stood here while the baseline was the accepted statement of intent,
-   > and it is now wrong in a way that changes findings. The clearest
-   > example: baseline §8 lets an Agent activate a sufficiently specified
-   > routine on its own, while the design contract requires human Owner
-   > approval for activation. An auditor following the old order would
-   > record conformance to a superseded architecture as a pass, and the
-   > contract's requirement as a gap. See
-   > [`docs/README.md`](../README.md) for the full precedence.
+   — background and still-valid foundations, trimmed to agree with the
+   contract. Its section numbers are what the issues cite, so read the
+   sections your issue names. Where it is silent or differs, the design
+   contract and ADR-W033 win. See [`docs/README.md`](../README.md) for
+   the full precedence.
 4. [#151](https://github.com/chickenrat17/wildstone-homelab/issues/151)
    — the ground rules and the findings already established, so you do
    not spend the session rediscovering them.

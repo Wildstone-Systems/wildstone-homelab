@@ -5,9 +5,9 @@ import (
 	"time"
 )
 
-// Client is what a runtime calls Wildstone through: every call with
-// authority goes this way, and Wildstone calls back only to deliver and
-// to probe (ADR-W039 §4.1 "who calls whom"). The native runner holds an
+// Client is what a runtime calls Wildstone through: every call goes
+// this way, deliveries included (long-polled), and Wildstone never
+// dials a runtime (ADR-W039 §4.1 "who calls whom"). The native runner holds an
 // in-process implementation; an external runtime holds one over the
 // chosen transport (§3.8). Neither can tell which it has, which is the
 // property Phase 2's byte-identical-manifest test pins.
@@ -132,8 +132,8 @@ type Client interface {
 	Heartbeat(ctx context.Context, hb Heartbeat) error
 }
 
-// DeliveryClient is the pull side of the Events family (§3.6, §4.1
-// "pull fallback"; Phase 4, #341): long-poll for unacked deliveries,
+// DeliveryClient is the pull side of the Events family (§3.6, §4.1;
+// Phase 4, #341): long-poll for unacked deliveries,
 // and acknowledge one. It is deliberately its OWN interface rather than
 // two more methods on Client: ADR-W040's documented surface has no Ack
 // (TestClientSurfaceIsTheDocumentedOne pins Client to exactly the

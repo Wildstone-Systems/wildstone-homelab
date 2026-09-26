@@ -84,7 +84,7 @@ func MatchesSubscription(sub runtimedb.AgentSubscription, ev runtimedb.Household
 // subscriptionGrants is what a matched Task's GrantsJSON carries: which
 // subscription it originated from, so agentgateway can re-check its
 // LIVE capability set — never a snapshot — at every tool call the Task
-// makes (ADR-W039 §3.6 "may only narrow").
+// makes (ADR-W039 §3.6 "can only narrow").
 type subscriptionGrants struct {
 	Subscription int64 `json:"subscription"`
 }
@@ -158,8 +158,8 @@ type SubscriptionTickOutcome struct {
 // Tick advances every enabled subscription's cursor against the
 // household stream, opening a bounded Task and recording a
 // `subscription` delivery for each match. Call it after
-// automation.Engine.Tick in the same loop (ADR-W039 §3.6 "after the
-// deterministic engine").
+// automation.Engine.Tick in the same loop (ADR-W039 §3.1 principle 5,
+// "deterministic first"; §3.6).
 func (e *SubscriptionEngine) Tick(ctx context.Context) (SubscriptionTickOutcome, error) {
 	var out SubscriptionTickOutcome
 	subs, err := e.DB.ListEnabledAgentSubscriptions()

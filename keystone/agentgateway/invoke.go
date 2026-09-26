@@ -159,7 +159,7 @@ func (g *Gateway) Invoke(ctx context.Context, req agentapi.InvokeRequest) (agent
 	// name as the permission label, the task's admitted audience.
 	//
 	// The dispatch runs under a call-scoped disclosure turn (§3.5 rule
-	// 3, ADR §7.2 Phase 5, #345): whatever the Toolset reads through it
+	// 3, #345): whatever the Toolset reads through it
 	// — today, the "recall" tool's memory seams — is tracked exactly as
 	// butlerlive.Serve tracked a whole conversation for the provider
 	// wrapper, but scoped to this one call rather than the task's
@@ -216,7 +216,7 @@ func (g *Gateway) Invoke(ctx context.Context, req agentapi.InvokeRequest) (agent
 	// File an accepted propose_change's Plan right here, under the
 	// runtime principal, rather than leaving it for the caller to read
 	// ResourceYAML back off the ToolCallRecord after the whole turn
-	// (ADR-W039 §3.2 Proposals, §7.2, Phase 3, #339 — replacing C9).
+	// (ADR-W039 §3.2 Proposals, Phase 3, #339 — replacing C9).
 	// Gated on g.Proposals being wired at all: an unwired gateway (most
 	// existing fixtures and the conformance harness) keeps exactly the
 	// pre-Phase-3 behaviour of returning the Plan for a caller to file

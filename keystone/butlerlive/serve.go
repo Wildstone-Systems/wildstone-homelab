@@ -76,13 +76,13 @@ func (bs *Butlers) Serve(ctx context.Context, t Turn) (Answer, error) {
 	if err = privacy.Check(); err != nil {
 		return bs.blank(b), err
 	}
-	// The provider wrapper (C10, ADR-W039 §2.1) is the closure path's
+	// The provider wrapper (C10, ADR-W039 §3.5 rule 3) is the closure path's
 	// OWN enforcement of local_only at the inference boundary. On the
 	// gateway path it is replaced, not duplicated: keystone/agentgateway
 	// applies the SAME rule and the SAME runtimedb.ErrPrivacy at every
 	// boundary IT controls — Manifest, Invoke, Recall, deliveries — by
 	// declared processing class rather than by wrapping the model client
-	// (§3.5 rule 3, §7.2 Phase 5, #345), which is the form the guarantee
+	// (§3.5 rule 3, #345), which is the form the guarantee
 	// must take for a runtime whose model Wildstone cannot see at all.
 	// Wrapping p here too would only re-check the SAME native provider
 	// call the gateway already governed on its way in.

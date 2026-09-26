@@ -1,96 +1,108 @@
 # ADR-W020: Identity onboarding — the first admin, and how a household gets accounts
 
-- **Status:** proposed; A4 superseded in part by ADR-W033 (see the note
-  on A4 — the first Owner's password is set directly by the installer)
-- **Relates to:** ADR-W033 (the agent design, which supersedes this
-  where they conflict), ADR-W007 (principals, bootstrap token), ADR-W012
+- **Status:** proposed; A1, A2 and A4 amended by ADR-W033
+- **Governed by:** ADR-W033 where they overlap.
+- **Relates to:** ADR-W007 (principals, bootstrap token), ADR-W012
   (secrets never read back), ADR-W016 (Console IA), ADR-W019 A5
   (legibility over scheduling), ADR-W005 A2 (`.Resolved` stays small)
 - **Audience:** decision record AND implementation spec for the identity
   work package's human half.
 
-## Conditional amendment from ADR-W030
+## Constraints from ADR-W030 and ADR-W033
 
-This amendment becomes binding when ADR-W030 is accepted. Household identity
-requires an explicit authenticated-surface-to-member link; API principals,
-chat bindings, and trusted-ingress identities are distinct link types, and
-equal names or LDAP group membership are not identity proof. An administrator
-creates or changes the link and Butler admission through a human-approved Plan
-in Console/CLI. The runtime projection carries a generation checked on every
-retrieval and dispatch. Unlink/disable immediately denies access, invalidates
-derived grants, and pauses affected work while preserving immutable historical
-attribution.
-
-Offboarding is one audited administrator operation whose runtime denial takes
-effect first: disable Butler admission, revoke bindings/sessions and temporary
-grants, fence connections, and stop retrieval/ingestion/delivery. Linked Plans
-then remove standing declarations. A sole guardian must be replaced or the
-Child admission disabled before offboarding completes. Shared records retain
-original authorship; personal records move to inaccessible retention quarantine.
-
-While still admitted, a person may export their own conversations, personal
-memory/preferences/procedures, and task history with provenance/permissions.
-The export follows current read policy and excludes credentials, hidden
-Operator context, and other people's private data.
-
-An admitted adult authenticates through Authelia to a narrow household-routine
-review page served by the household ingress, not Console. A dedicated
-`household-reviewer` service principal calls Keystone acting for the member
-identified by Authelia; the member receives no Keystone principal or token.
-Keystone rechecks the explicit trusted-ingress/member link, admission, adult
-classification, Plan revision, and W030's server-side household-routine
-classifier. The chat deep link contains no credential. Operator/Admin
-onboarding and approval remain separate.
-
-A future Child surface adds explicit child classification and member-to-
-guardian mappings through the same Plan-mediated admission path. It is not
-inferred from an LDAP group.
-
-Personal CalDAV/IMAP connections use authenticated member-scoped secret input,
-following the existing claim/onboarding and node secret paths. Credentials are
-linked to member, connection, requesting principal, and revocation state;
-adapters receive scoped references/materialized values, while chat, model
-context, and work queues never receive the secret. Revocation immediately
-blocks future ingestion and dispatch.
+- **Links are explicit.** Every authenticated binding — directory login,
+  API principal, chat binding, trusted-ingress identity — attaches to
+  exactly one canonical Person (ADR-W033 A2). These are distinct binding
+  types, and equal names or LDAP group membership are not identity proof.
+  The runtime projection carries a generation checked on every retrieval
+  and dispatch.
+- **An Owner administers identity directly**, in Console or the host
+  CLI, not through a Plan. Admission is an ordinary operation; changing
+  a Person's role, disabling or offboarding a Person are consequential
+  and need a fresh Owner session (ADR-W033 A4.1). Chat bindings are made
+  only by the Person's own invite-key enrolment (ADR-W033 B7.1).
+- **Unlink, disable and offboarding take effect first.** Active
+  authority is removed immediately: sessions and bindings revoked,
+  admission withdrawn, unconsumed Person-bound approvals invalidated,
+  queued and in-flight work stopped at its next boundary. Immutable
+  historical attribution is preserved. Household routines keep running;
+  only a routine that delivers to the departed Person, or needs an
+  admission only they held, pauses for Owner resolution (ADR-W033 F1).
+- **Offboarding resolves durable resources explicitly.** Owners see the
+  Person's inventory and choose transfer, retain, export, retire, block
+  or delete for each (ADR-W033 F2). Shared records retain original
+  authorship. The Person is soft-deleted until an Owner purges them
+  (ADR-W033 F6).
+- **Children are never admitted.** A child is a Member profile recorded
+  on a Person with an explicit guardian, as an un-admitted scheduled
+  subject with no authentication binding (ADR-W033 A8, A9). Child
+  classification and guardian mapping are explicit records, never
+  inferred from an LDAP group. A sole guardian cannot be removed while
+  the child record is active. The ADR-W030 A2.1 Child-surface gate
+  stands.
+- **Only a human Owner approves Plans**, including household routines,
+  through the Owner Review Queue (ADR-W033 E2, E3). There is no Member
+  review page and no review service principal.
+- **Export.** While still admitted, a person may export their own
+  conversations, personal memory/preferences/procedures, and task
+  history with provenance/permissions. The export follows current read
+  policy and excludes credentials, Owner-only context, and other
+  people's private data.
+- **Personal integration-connection credentials** (CalDAV, IMAP) are
+  Personal-scope secrets in the Household/user secret store, not the
+  node secret store (ADR-W033 D1). In MVP a Member proposes them and
+  uses authorized ones through tools (D5). Adapters receive scoped
+  references or materialized values below inference; chat, model
+  context and work queues never receive the secret (D2), and unattended
+  routines cannot use it (D1). Revocation immediately blocks future
+  ingestion and dispatch.
 
 ---
 
 # Part A — Decisions (binding)
 
-### A1. There are two identity systems and the product says so
+### A1. One Person, two kinds of access, and the product says so
 
-A **Keystone principal** (`admin`/`operator`/`butler`) is who may drive
-Wildstone. An **LLDAP user** is who may log into the household's apps.
-On day one they are the same person; they are never the same record, and
-they have different lifetimes, different stores and different blast
-radii.
+Every human is one canonical Person with one of two roles, Owner or
+Member (ADR-W033 A1, A2). An LLDAP account, an API principal and a chat
+binding are bindings attached to that Person, never separate people.
+
+What a Person may do still comes from two different places, with
+different lifetimes and blast radii: **service entitlement** — which
+household apps they may log into — comes from access groups projected
+into the directory (ADR-W033 A5); **Console authority** comes only from
+the Owner role (ADR-W033 A4).
 
 Presenting them as one thing is the tempting simplification and it is
 wrong in a way that surfaces late: revoking a family member's photo
 access would revoke their ability to administer the house, or — far
 worse the other way — adding a teenager to the media group would hand
-them an approval verb. The Console shows two surfaces and names them.
+them an approval verb. The Console shows role and entitlements
+separately and names them.
 
-### A2. First-run claim replaces the bootstrap token in the journal
+_Changed by ADR-W033 §A1–A2: human roles are Owner/Member on one Person; API principals are bindings, not a second identity._
 
-Today the admin token is minted once, printed to stdout, and thereafter
-exists only in the journal; `Store.Bootstrap()` returns `""` whenever
-principals exist, and there is no offline mint. `docs/install.md`
-recommends scrubbing the journal — do that a beat early and admin access
-is unrecoverable short of destroying the runtime DB. This blocked
-automated setup three separate times during v0.1.6-alpha VM testing
-(friction log F44), and it is the first thing a new operator touches.
+### A2. The installer creates the first Owner; the host mints bearer tokens offline
 
-First start therefore writes a **claim secret** to a root-readable file
-in the data dir, and `keystone claim-code --data-dir` regenerates one on
-demand. The Console's first-run screen accepts it, and the operator sets
-an admin username and password there. The token in the journal stops
-being the mechanism.
+The installer asks for a username and password and creates the first
+Owner and their directory identity before setup completes (ADR-W033
+A3). There is no Console first-run screen and no first-visitor claim.
 
-The claim file is deleted once claimed. Possession of a file readable
-only by root is the same proof of physical access the join-token pattern
-already relies on (ADR-W003), so this adds no new trust assumption — it
-only makes the existing one recoverable.
+A token printed once to the journal is not a recovery path: scrubbing
+the journal loses it, and a journal that outlives a reinstall returns
+tokens from installs that no longer exist (friction log F44, F66). So
+`keystone claim-code --data-dir` is a root-only host tool: with Keystone
+stopped, it mints a bearer token into a root-readable file in the data
+dir, optionally with a TTL. The installer uses it to drive the install
+and deletes the file when done; host recovery uses it or
+`keystone owner` (ADR-W033 A7). It is never a way into the Console.
+
+Possession of a file readable only by root is the same proof of
+physical access the join-token pattern already relies on (ADR-W003),
+so this adds no new trust assumption — it only makes the existing one
+recoverable.
+
+_Changed by ADR-W033 §A3, §A7: the first Owner is created by the installer, not claimed in a browser._
 
 ### A3. Users are a resource kind: `LdapUser`
 
@@ -108,43 +120,21 @@ about destroying things a control plane cannot recreate.
 
 ### A4. Credentials are never declarative
 
-> **Superseded in part by ADR-W033, for the FIRST OWNER only.**
->
-> The second paragraph below is wrong as a universal rule, and the
-> installer is where it was wrong. A4 says the first credential is always
-> a claim code the person exchanges for a password of their own. Applied
-> to the first Owner that is circular: the claim surface is served by the
-> ingress, the ingress is installed by a control plane that has no Owner
-> yet, and §2.4 of the agent-system design requires an active Owner
-> before installation can complete. A rule that cannot be satisfied at
-> bootstrap is not a rule, and what the installer actually did instead
-> was worse than either option — it collected a password, set it on
-> LLDAP's built-in `admin`, and told the operator it had created an
-> account under the name they typed. No such account existed.
->
-> So for the first Owner, the installer collects a username and a
-> password, creates the directory user, and sets that password on it
-> directly. The password is held for the length of the run and never
-> written to the answers file or to a spec.
->
-> The FIRST paragraph stands unchanged and is the part that mattered: a
-> password still cannot live in a spec, and `LdapUser` still carries
-> existence and membership and never a credential. Nothing about this
-> puts a credential in the Statefile.
->
-> Everyone after the first Owner is unchanged: they get a claim code, and
-> A5–A7 describe their path exactly as written.
->
-> Per ADR-W033, which supersedes every earlier ADR it conflicts with.
-
 A password cannot live in a spec, because specs live in the Statefile
 and the Statefile is replicated, restored and read. `LdapUser` therefore
 carries existence and membership and never a credential.
 
-The first credential is a **single-use claim code**, generated on the
-node and stored as a `Secret` — the same path every other secret takes,
-so it inherits ADR-W012's guarantee that Keystone cannot read it back.
-The person exchanges it for a password they choose.
+The first Owner's password is collected by the installer, set directly
+on their directory user, held only for the length of the run, and never
+written to the answers file or a spec (A2).
+
+Everyone else's first credential is a **single-use claim code**,
+generated on the node and stored as a `Secret` — the same path every
+other secret takes, so it inherits ADR-W012's guarantee that Keystone
+cannot read it back. The person exchanges it for a password they
+choose (A5–A7).
+
+_Changed by ADR-W033 §A3: a claim code cannot bootstrap the first Owner, because the claim surface needs an Owner to exist first._
 
 ### A5. The claim surface is the ingress, not the Console
 
@@ -190,8 +180,8 @@ household's security actually rests on.
 Per ADR-W019 A5, ordering across capabilities stays convergent. The
 claim page must therefore state plainly that identity is not yet serving
 rather than presenting a login that fails or a spinner that never ends.
-A first-run screen is exactly where an unhelpful failure costs the most
-trust, because the operator has nothing working yet to reason from.
+A claim page is exactly where an unhelpful failure costs the most
+trust, because the person has nothing working yet to reason from.
 
 ---
 

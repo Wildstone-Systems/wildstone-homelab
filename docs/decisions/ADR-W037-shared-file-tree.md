@@ -1,22 +1,18 @@
 # ADR-W037: File trees in Shared and Mine
 
-Status: proposed for local-stack pilot (#275)
+- **Status:** accepted; implemented (`keystone/portal/files_tree*.go`, `files_mount.go`)
+- **Governed by:** ADR-W033 where they overlap.
 
-## Context and scope
+## Scope
 
-[Issue #275's updated implementation slice](https://github.com/chickenrat17/wildstone-homelab/issues/275#issuecomment-5783022779)
-allows a native file manager inside the existing Shared namespace. This slice
-adds that tree and, at the owner’s request, the same operations in Mine. Photos remains flat. A Store resource, mount
-orchestration, capacity cards, bulk package binding, remote backup repositories,
-read-only grants (#278), destination grants (#281), and a text editor are
-separate work. The recent-files widget and domestic agent tools retain their
-flat view; no recursive filename feed is added to the agent. This does not claim to complete the wider attached-storage issue.
+Shared and Mine are browsable file trees; Photos remains flat. The Owner
+chooses the host root. A signed-in Person may select only a bounded relative
+path beneath Shared or their own Mine root; os.Root confinement is the
+filesystem boundary, and there is no API for a host path or another Person's
+Mine. The recent-files widget and domestic agent tools keep their flat view.
 
-The earlier #197 prohibition on browsing must no longer be used to reject this
-explicitly collaborative Shared tree. The Owner still chooses the host root.
-A member may select only a bounded relative path beneath Shared or their own identity-resolved Mine root. The existing
-namespace identity and os.Root confinement remain the filesystem boundary;
-there is no API for a host path or another person's personal namespace.
+Shared and Mine are file namespaces, not ADR-W033 memory scopes: Mine is not
+Personal memory, and Shared is not Household memory.
 
 ## Decisions
 
@@ -50,11 +46,13 @@ there is no API for a host path or another person's personal namespace.
   Streamed uploads recheck after receiving the body. Staging cleanup remains
   allowed after a refusal. The existing portal identity, group and same-origin
   checks protect the new endpoints too.
-* Operator events identify the member, operation and relative path. Household
+* Operator events identify the Person, operation and relative path. Household
   events contain no filename, including in their event ID. Rename, move and
   mkdir do not add household activity noise.
-* Mine uses the authenticated member to resolve its root; requests cannot select
-  another member. Nested operations preserve the existing personal-space isolation.
+* Mine uses the authenticated Person to resolve its root (`Members/<username>`,
+  lower-cased); requests cannot select another Person. Nested operations preserve
+  personal-space isolation. _Code not yet conformant: keyed by directory handle,
+  not the canonical Person (ADR-W033 A2); a rename detaches it._
 * The page states that everyone with filedrop access can change shared content.
   This is a collaborative folder, not a per-folder/read-only permission system.
   URLs carry namespace and directory, with breadcrumbs and browser history.
@@ -73,8 +71,8 @@ mount, not a new Store resource or a mount operation.
 
 Mount presence is not reachability or write permission. Root-squashed exports
 must permit actual create, chmod, write, link and delete under Keystone's mapped
-identity. Personal-space privacy remains governed by the pre-existing deployment's
-export permissions; this change does not introduce a new privacy promise.
+identity. Personal-space privacy remains governed by the deployment's
+export permissions; this ADR makes no further privacy promise.
 
 Linux NFS rejects nonzero rename flags in
 [`nfs_rename`](https://github.com/torvalds/linux/blob/master/fs/nfs/dir.c).
@@ -85,18 +83,13 @@ There is deliberately no check-then-rename fallback. Any future NFS copy/move or
 cooperative-lock protocol needs a separate contract for other NAS writers and
 crash recovery. Filesystems lacking hard links also refuse the new upload path.
 
-A hard NFS mount can still block filesystem I/O. This slice neither changes
+A hard NFS mount can still block filesystem I/O. Wildstone neither changes
 host mount options nor promises an HTTP timeout can cancel a kernel syscall.
-The pilot must validate the deployment's mount timeout policy separately.
+Each deployment must validate its mount timeout policy separately.
 Permission, unavailable/stale/timeout, collision, full-storage and cross-device
 errors receive actionable responses without exposing host paths.
 
 ## Verification
 
-Store tests cover validation, nested operations, symlinks and replacement races,
-FIFOs, concurrent collisions, late authority refusal, stream cancellation and
-absent mounts. API tests cover all path-taking endpoints, portal auth/CSRF,
-structured bodies, attachment headers, auditing and household-event privacy.
-`console/scripts/filedrop-check.mjs` exercises the actual page in Chromium at
-1280px and 390px with deterministic API fixtures. An opt-in NFS test checks an
-existing disposable fixture under the service's actual effective identity.
+Store and API tests, `console/scripts/filedrop-check.mjs` (Chromium, 1280px and
+390px) and an opt-in NFS fixture test cover these rules.

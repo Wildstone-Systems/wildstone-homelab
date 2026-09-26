@@ -64,7 +64,7 @@ Normative:
 - A child record MUST name a guardian and MUST NOT hold any role but Member.
 - A child record MUST NOT be admitted to Butler membership. `AdmitButlerMember` refuses it by every path, including a direct `INSERT`.
 - A scheduled subject MUST carry no authentication binding: no directory account, no API principal, no chat binding, no session. Recording a Person as a child, or converting one, MUST remove any that exist; a deployment that cannot MUST refuse the conversion. **Admission state does not imply this** — `admitted` governs Butler membership only, and directory and principal authentication do not consult the profile.
-- None of the above authorizes the Child surface, which ADR-W030 Part C gates separately on credentials, principal, endpoint, gateway and transport eligibility.
+- None of the above authorizes the Child surface, which ADR-W030 A2.1 gates separately on credentials, principal, endpoint, gateway and transport eligibility.
 
 Acceptance: a child record cannot be admitted by any path; a child with an authentication binding is refused or has it removed at the point of recording; a household feature can name, schedule and display a child that has never signed in.
 
@@ -210,6 +210,7 @@ An Agent has at least:
 - Connections
 - memory configuration
 - assigned routines/tasks
+- runtime record: runtime type (`native` = Keystone-hosted, or an external `hermes`/`openclaw` runtime), its runtime credential, and for an external runtime the Owner-declared processing class (ADR-W039 §3.3)
 
 One Agent can concurrently serve multiple people. Agent identity is shared; transient conversation state is isolated.
 
@@ -292,6 +293,8 @@ Fallback inside one Agent is allowed only when the task/content privacy policy p
 
 Wildstone does not automatically replace an unavailable Agent with another Agent.
 
+For an Agent served by an external runtime (ADR-W039), the model chain is the runtime's own configuration. Wildstone records the Owner-declared processing class for that runtime and applies it as a disclosure filter: `local_only` content is withheld from any runtime not declared local-only.
+
 ---
 
 # 8. Connections
@@ -342,9 +345,9 @@ MVP uses Person admission. Group support exists as a seam for future group conve
 
 Unknown/unbound external identities are refused before model inference.
 
-**Group and multi-recipient destinations fail closed in MVP.** Person admission authenticates the **speaker**, not everyone who will receive the reply. Until audience admission exists, a recognised Person addressing an Agent from a group room is refused, and the Agent directs them to a one-to-one Connection.
+**In a group or multi-recipient destination, only a message addressed to the bot reaches the Agent** (a mention or a reply; ADR-W033 B9.1). Everything else said in the room never leaves the adapter, and Keystone refuses an unaddressed group message as a backstop. The sender must still be a bound, admitted Person, and the Agent is told it is speaking in front of a shared audience. Owner Agents answer in direct messages only.
 
-This is deliberate and it is the reason group support is only a seam: without it, a recognised Person could pull their own Personal memory into a room of unadmitted participants, and every disclosure rule below would be enforced against the wrong set of people. "The sender is known" is not "the audience is known".
+Person admission authenticates the **speaker**, not everyone who will receive the reply — "the sender is known" is not "the audience is known". So disclosure in a group is judged against the room, not the sender, and full group semantics (speaker-aware disclosure, per-destination policy) remain future work.
 
 Owner-Agent Connections admit Owners only.
 
@@ -495,6 +498,8 @@ exact-version routine authorization
 Any change to executable behaviour **or to the secret grants a routine requires** creates a new version and needs Owner reapproval (14.4). A routine cannot acquire a secret it was not approved with by being edited around it.
 
 This covers `use` only. **Raw-value reveal to a human is unchanged** (12.5): a routine resolves a secret below inference to reach a service, and never reveals one.
+
+An Owner-approved Agent **subscription** version (ADR-W039 §3.6) is the same kind of unattended principal: every rule in this section that names an approved routine version applies to it identically.
 
 ## 10.3 Surface authority
 
@@ -908,6 +913,8 @@ A routine can have a correct delivery destination and a wrong output audience, w
 
 Normal runs do not ask for repeated approval.
 
+An Owner-approved Agent subscription version (ADR-W039 §3.6) is treated exactly like an approved routine version: exact-version Owner approval, reapproval on any edit, its own unattended principal, and any Owner may stop it (15.6).
+
 ## 15.3 Tool ceiling
 
 Member-class routines contain only Member tools.
@@ -1119,7 +1126,7 @@ These are end-to-end design gates. Implementations may add more tests, but must 
 - `/new` starts a distinct session.
 - Cross-Connection delivery fallback occurs only when explicitly configured.
 - Homepage exposes admitted Member Agents and never Owner Agents.
-- A **recognised** Person addressing an Agent from a group or multi-recipient destination is refused in MVP, and is directed to a one-to-one Connection.
+- In a group or multi-recipient destination, only a message that addresses the bot reaches a Member Agent; an Owner Agent answers in direct messages only (ADR-W033 B9.1).
 - No Personal or Household memory reaches a group destination in MVP.
 
 ## 18.5 Memory

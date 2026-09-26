@@ -5,7 +5,7 @@
 // encoding/json.
 //
 // It exists to be exactly what an external runtime — a Hermes bridge, an
-// OpenClaw gateway, anything else ADR-W039 §5 names — actually has: a
+// OpenClaw gateway, anything else ADR-W039 §5–§6 name — actually has: a
 // base URL, a bearer token, and the keystone/agentapi wire shapes. It
 // must never import a Wildstone internal (the runtime database, the
 // store, the API, a driver), because the moment it did it would no

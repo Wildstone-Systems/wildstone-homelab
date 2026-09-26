@@ -3,7 +3,7 @@ package conformance_test
 // A minimal, wholly in-memory agentapi.Client/DeliveryClient — not
 // keystone/agentgateway's, not keystone/agentapi/httpclient's — proving
 // this suite runs against ANY implementation of the contract, which is
-// the whole point of the package (ADR-W039 §8 Phase 5, #343). It is
+// the whole point of the package (#343). It is
 // deliberately small: just enough of each family to make every named
 // check exercise something real, never a stub that always answers ok.
 

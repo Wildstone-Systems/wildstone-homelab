@@ -1,27 +1,31 @@
 # ADR-W005: Package format, capability engine, identity wiring (Spike S3)
 
-- **Status:** accepted (locked decision #4 of proposal §10, produced by Spike S3)
+- **Status:** accepted (locked decision #4 of proposal §10, produced by Spike S3); amended by ADR-W033
 - **Relates to:** architecture proposal §5, implementation scope S3, ADR-W004
+- **Governed by:** ADR-W033 where they overlap.
 - **Audience:** decision record AND implementation spec for Spike S3, written so
   implementation subagents execute Part C without the planning conversation.
   Part A/B binding; contradictions → stop and report.
 
-## Conditional amendment from ADR-W030
+## Constraints from ADR-W030
 
-This amendment becomes binding when ADR-W030 is accepted. `agentTools` remains
-a declaration, never an executor or grant, but its validated metadata expands
-to include purpose, input schema, data/action scope, mutating behavior, and
-approval requirements. The manifest shown to a model is generated from the
-active gateway and resource-kind registry, narrowed by effective authority;
-tests pin both advertised coverage and exclusions so descriptions cannot drift
-from executable capability.
-
-`publishes` gains a validated audience policy. Declared household events
-default to household-shared unless the package declares a narrower audience;
-the resolved policy and provenance are stored at intake. Migration explicitly
-maps existing registered package events and trusted Keystone-owned automation
-and household-answer event paths. Unknown or invalid event types fail closed,
-and a caller-supplied internal source name never establishes trusted origin.
+- `agentTools` remains a declaration, never an executor or grant. Its
+  validated metadata includes purpose, input schema, data/action scope,
+  mutating behavior, approval requirements, the tool's authority class
+  (`member` or `owner`), and whether it is `opt-in`. An Owner-class tool can be
+  granted only to Owner Agents, and an opt-in tool is excluded from broad
+  default and bundle grants (ADR-W033 §B3-B5).
+- The manifest shown to a model is generated from the active gateway and
+  resource-kind registry, narrowed by effective authority; tests pin both
+  advertised coverage and exclusions so descriptions cannot drift from
+  executable capability.
+- `publishes` carries a validated audience policy. Declared household events
+  default to household-shared unless the package declares a narrower
+  audience; the resolved policy and provenance are stored at intake.
+  Migration explicitly maps existing registered package events and trusted
+  Keystone-owned automation and household-answer event paths. Unknown or
+  invalid event types fail closed, and a caller-supplied internal source name
+  never establishes trusted origin.
 
 ## Why S3 is the go/no-go gate
 

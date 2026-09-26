@@ -1,6 +1,7 @@
 # ADR-W014: Installer bootstrap — releases, install.sh, pairing
 
-- **Status:** accepted
+- **Status:** accepted; A2 and A3 amended by ADR-W033
+- **Governed by:** ADR-W033 where they overlap.
 - **Relates to:** ADR-W003 (join tokens, CA pinning), ADR-W007 (API),
   implementation scope E9
 - **Audience:** decision record AND implementation spec for E9's
@@ -30,10 +31,14 @@ the post-launch nicety the scope doc says it is.
 root, systemd) serves both machines:
 
 - `--role keystone`: installs the `keystone` binary and `wild`, a
-  systemd unit, and DataDir `/var/lib/wildstone/keystone`; first start
-  prints the one-time admin API token (stdout of the service — the
-  installer tells the operator where to find it) and the CA
-  fingerprint.
+  systemd unit, and DataDir `/var/lib/wildstone/keystone`, and reports
+  the CA fingerprint. It asks for a username and password and creates
+  the first Owner and their directory identity before setup completes
+  (ADR-W033 A3); there is no first-visitor or token-to-Console path.
+  The installer drives the install with a short-lived bearer token
+  minted offline by `keystone claim-code` (ADR-W020 A2) and deletes it
+  when done. Any bootstrap token Keystone mints is only a host/installer
+  bearer credential; recovery is the host CLI (ADR-W033 A7).
 - `--role node --keystone <host:port> --join-token <tok>`: installs
   `wardstoned` and its unit; `--node-id` defaults to the hostname;
   `--ca-fingerprint` is accepted and STRONGLY recommended (the pairing
@@ -47,7 +52,8 @@ least parse-clean (`bash -n`).
 
 ### A3. Pairing is an API concern
 
-`POST /api/v1/join-tokens` (admin `manage` verb) mints a single-use
+`POST /api/v1/join-tokens` (Owner `manage` verb; consequential for a
+browser session, ADR-W033 A4.1) mints a single-use
 join token via the gateway (default TTL 15 minutes, capped at 24h) and
 returns it TOGETHER with the CA fingerprint and a ready-to-run install
 command — the "pairing code" of the scope doc is this one response.

@@ -460,7 +460,7 @@ func TestReplacingTheRuntimeRevokesTheOldCredentialAndKeepsTheAgent(t *testing.T
 	if res.StatusCode != http.StatusOK {
 		t.Fatalf("PUT hermes→native = %d", res.StatusCode)
 	}
-	// ADR-W039 §7.2 Phase 5, #345: moving back to native re-derives the
+	// ADR-W039 §3.5 rule 3, #345: moving back to native re-derives the
 	// processing class from the Agent's own assigned model (kitchen-box
 	// is local) rather than leaving hermes's declared "local_only"
 	// sitting there by coincidence or resetting to undeclared — a native

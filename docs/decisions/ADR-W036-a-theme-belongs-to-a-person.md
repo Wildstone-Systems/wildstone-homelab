@@ -4,10 +4,11 @@
   `keystone/theme`, migrations 0060 and 0061, `handlers_appearance.go`,
   the Console's rail picker and the household dashboard's.
 - **Number:** W036.
+- **Governed by:** ADR-W033 where they overlap.
 - **Relates to:** ADR-W027 (the Console redesign, and the token block
   this depends on existing), ADR-W016 A1/A3 (one fetch path, no
-  console-only endpoints), ADR-W032 and ADR-W033 A1 (who opens the
-  Console; Owner and Member), #197/#198 (the household portal's door),
+  console-only endpoints), ADR-W033 A1 and A4/A4.1 (Owner and Member;
+  only Owners open the Console), #197/#198 (the household portal's door),
   migration 0043 (a person is a `person_id`, not a handle).
 - **Audience:** decision record AND implementation spec.
 
@@ -191,8 +192,8 @@ resolved, so the token block is injected into the document at a marker
 Nothing is fetched and there is no flash of the default palette on a
 wall tablet somebody is standing in front of.
 
-The Console's bundle is served *before* anyone authenticates — the
-static files go to a browser that has not yet sent its bearer token — so
+The Console's bundle is served *before* sign-in — the static files go to
+a browser that has not yet completed OIDC sign-in (ADR-W033 A4.1) — so
 there is no request at which a per-person sheet could be injected. It
 applies the tokens as inline custom properties on the root element
 instead, which outranks every rule in `styles.css` with no selector to
@@ -211,7 +212,7 @@ dashboard sets. A person's theme there would fight the panel it sits on.
 
 ## A9. Choosing is a Member's act, on the surface a Member has
 
-A household Member has no Console — that is ADR-W032 and ADR-W033 A1,
+A household Member has no Console — that is ADR-W033 A4/A4.1,
 and nothing here changes it. So the picker is on the **household
 dashboard**, reachable through the portal door, which holds no RBAC verb
 at all: a Member switches theme from the page they already use, with no

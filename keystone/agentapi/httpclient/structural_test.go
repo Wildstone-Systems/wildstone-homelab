@@ -2,7 +2,7 @@ package httpclient
 
 // TestPackageNeverImportsWildstoneInternals is this package's own
 // evidence, one layer out from keystone/agentapi's own structural test
-// (ADR-W039 §8 Phase 0, extended to the transport by ADR-W040): a
+// (ADR-W039 §10, extended to the transport by ADR-W040): a
 // runtime built on this Client reaches Keystone the way any process
 // outside it does, over net/http and encoding/json, never by following
 // a Go import into the runtime database, the store, the domestic

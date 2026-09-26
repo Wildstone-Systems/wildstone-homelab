@@ -1,6 +1,6 @@
 package agentgateway
 
-// FilterDelivery/FilterDeliveries (disclosure.go, ADR-W039 §7.2 Phase 5,
+// FilterDelivery/FilterDeliveries (disclosure.go, ADR-W039 §3.5 rule 3,
 // #345): the same processing-class disclosure filter
 // disclosure_test.go's Recall/Invoke/Manifest tables cover, now proven
 // at the delivery boundary — the ONE function both work.go's

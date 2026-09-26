@@ -1,6 +1,7 @@
 # ADR-W016: Console — information architecture and MVP implementation
 
-- **Status:** accepted
+- **Status:** accepted; A2 and A3 amended by ADR-W033
+- **Governed by:** ADR-W033 where they overlap.
 - **Relates to:** ADR-W007 (one public API, TS codegen), ADR-W014
   (pairing), ADR-W015 (endpoint families the views consume),
   implementation scope E10
@@ -32,26 +33,42 @@ One left nav, six views:
   whole architecture funnels through.
 - **Events** — the operational stream, live via cursor polling (A4).
 - **Backups** — the run ledger, with on-demand run/restore buttons
-  (approve verb; the API refuses the Butler already).
+  (approve verb; the API refuses the Butler already). Restore is
+  consequential (ADR-W033 A4.1).
 - **Nodes** — pairing: mint a join token and show the ready-to-run
-  install command (ADR-W014 A3). This is the first slice of the §7.2
+  install command (ADR-W014 A3); minting is consequential (ADR-W033
+  A4.1). This is the first slice of the §7.2
   onboarding flow; the storage/DNS/tunnel probes and the Restore
   branch remain E10's later work package, NOT silently dropped.
 - **Secrets** — per-node secret names/versions with generate/set/
-  rotate (admin-only; the API enforces).
+  rotate (Owner-only; the API enforces; rotation is consequential,
+  ADR-W033 A4.1).
 
-Family-member management (LLDAP CRUD) needs API surface that does not
-exist yet — deferred to the LLDAP provider work, noted here rather
-than faked.
+Administering Persons — roles, admission, disabling and offboarding —
+is Console work (ADR-W033 A2, A6, F1, F2). Changing a role, disabling
+or offboarding is consequential; admission is ordinary (ADR-W033 A4.1).
 
-### A3. One typed client, token in memory
+### A3. One typed client; Owners sign in through the identity provider
 
-`src/api.ts` is the only fetch path: base URL + bearer token,
-JSON in/out, typed by hand against the API's wire shapes (which tests
-pin server-side). The token is pasted at a gate screen and kept in
-sessionStorage — surviving a reload but not the browser session; a
-401 anywhere returns to the gate. No cookies, no OAuth at MVP: the
-Console is an API client like `wild`, not a second auth system.
+`src/api.ts` is the only fetch path: JSON in/out, typed by hand against
+the API's wire shapes (which tests pin server-side).
+
+Only Owners may enter the Console (ADR-W033 A4). It signs in as a public
+OpenID Connect client of Authelia with PKCE, holding no client secret,
+and Wildstone reads `auth_time` from the verified ID token; no request
+header can grant or refresh a session. Staying in the Console needs an
+authentication no older than 12 hours; a consequential operation —
+restore, minting a join token or any other bearer credential, node
+secret rotation, Household-secret `manage` and `reveal`, role change,
+disable, offboarding, purge — needs one no older than 15 minutes. A
+refused operation offers step-up and is resumed by the Owner with one
+click, never replayed (ADR-W033 A4.1).
+
+Bearer tokens are for the `wild` CLI, the installer and host recovery
+only; they are not a way into the Console. Code not yet conformant: the
+Console still offers a pasted-token gate as a fallback.
+
+_Changed by ADR-W033 §A4, §A4.1: a pasted token gate cannot establish who is signing in or how recently._
 
 ### A4. Live updates: cursor polling, not websockets
 

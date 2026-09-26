@@ -6,8 +6,8 @@ import (
 	"testing"
 )
 
-// The three historical ADRs must identify what the shipped slices actually
-// settled and what remains open. This is a documentation contract; the named
+// ADR-W030, W031 and W032 must identify what the shipped slices actually
+// settled and what remains open, in terms of ADR-W033. This is a documentation contract; the named
 // implementation tests are run in Keystone's own suite.
 func TestNoADRClaimsAnUnimplementedProperty(t *testing.T) {
 	cases := []struct {
@@ -20,11 +20,11 @@ func TestNoADRClaimsAnUnimplementedProperty(t *testing.T) {
 		},
 		{
 			file:     "../../docs/decisions/ADR-W031-butlers-are-user-created-specialists.md",
-			required: []string{"Amended by ADR-W033 baseline section 11, slice 13 (#214)", "retroactively"},
+			required: []string{"ADR-W033 C1–C8", "Existing records were classified"},
 		},
 		{
 			file:     "../../docs/decisions/ADR-W032-who-may-open-the-console.md",
-			required: []string{"A3 is not fully", "listButlers", "butlerScope", "TestLegacyRoleOperatorIsUntouched"},
+			required: []string{"member-name normalisation (A4) is not", "What is still open", "TestLegacyRoleOperatorIsUntouched"},
 		},
 	}
 	for _, tc := range cases {

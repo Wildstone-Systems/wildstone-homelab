@@ -1,8 +1,9 @@
 # ADR-W041: The AgentRuntime contract and the native runtime
 
-> **Numbering and as-built note (2026-09-25).** This ADR was first filed as ADR-W039, a number already taken by *Canonical Agent API and pluggable agent runtimes* (#333), which has its own follow-up ADR-W040. It was renumbered W041 when the two lines of work were merged. As merged, the loop this ADR calls `Runner` lives in `keystone/agentruntime/legacy` (it moved out of `keystone/butler` under ADR-W039 Phase 2b and reaches Wildstone only through `agentapi.Client`), and `butler.Slice` below is `legacy.Slice`, built on that same client. `keystone/butler/runner.go` and `butler/slice.go` no longer exist; references to them below describe the design as proposed.
+- **Status:** accepted; implemented (fresh-install default) (#357)
+- **Governed by:** ADR-W033 where they overlap.
 
-Status: proposed (#357)
+Runtime type `native` = Keystone-hosted; its loop is chosen per deployment by `-agent-runtime legacy|native`: `legacy` is `keystone/agentruntime/legacy.Runner`, `native` is the OpenAI Agents SDK sidecar (this ADR). Runtime types `hermes` and `openclaw` are external Agent API clients.
 
 ## Decision
 
@@ -17,26 +18,17 @@ Wait(job) · Capabilities() · Health()
 ```
 
 - The native runtime delegates its loop to the official OpenAI Agents SDK
-  (TypeScript, `@openai/agents-core`). Its adapter is `NativeAgentAdapter`
-  (`keystone/agentruntime/native`).
-- Hermes and OpenClaw become further adapters of the same interface.
-- Choosing a runtime is configuration, not a fork in the architecture.
+  (TypeScript, `@openai/agents-core`). Its adapter is `native.Adapter`
+  (`keystone/agentruntime/native`), the only implementation of
+  `AgentRuntime`.
+- External runtimes (Hermes, OpenClaw) do not implement `AgentRuntime`.
+  They are Agent API clients (ADR-W039, ADR-W040), bounded at the gateway
+  by the task handle, budget, attempt fencing and heartbeat TTL.
+- Choosing the loop is configuration, not a fork in the architecture.
 
-## Where the loop was
-
-Before this change the Butler's loop was written by hand, in Go.
-
-- `keystone/butler/session.go` `Session.Run` is the in-memory loop.
-- `keystone/butler/runner.go` `Runner.Run` is the durable loop, with a
-  checkpointed ledger (ADR-W030).
-- `keystone/butlerlive/serve.go` drives it for live traffic.
-- The model is called through `butler/provider.Provider`, which has
-  hand-written HTTP clients for Anthropic, OpenAI-compatible servers and
-  Ollama.
-
-This ADR does not remove that code. `Runner` stays the default loop, and
-still serves every route the native runtime cannot speak (see Butler
-conversations).
+The other Keystone-hosted loop is `keystone/agentruntime/legacy.Runner`,
+Keystone's own loop over `butler/provider.Provider`. It serves every route
+the native runtime cannot speak (see Butler conversations).
 
 ## States
 
@@ -88,7 +80,7 @@ It talks to Keystone over newline-delimited JSON on stdin and stdout
   that sends the call back to Keystone. Keystone checks the arguments, applies
   the guard, writes the audit record, and dispatches through
   `agentruntime.ToolHost`.
-  - `ButlerTools` serves the existing Butler gateways as a `ToolHost`, so
+  - `butler.RuntimeTools` serves the existing Butler gateways as a `ToolHost`, so
     authorization, redaction, untrusted-content envelopes and size bounds
     are the same code every other Butler path uses.
 - **Audit fails closed.** If `tool.requested` cannot be recorded, the tool
@@ -103,7 +95,8 @@ It talks to Keystone over newline-delimited JSON on stdin and stdout
 - **The model stays behind the adapter.** `native.Model` is an
   OpenAI-compatible endpoint: Chat Completions by default, so it works with
   Ollama and other local servers, or the Responses API. The contract names no
-  provider.
+  provider. Which endpoint a job gets is decided by Keystone from the Butler's
+  ordered model/provider chain (ADR-W033 B6), not by the runtime.
 
 ## Why a sidecar
 
@@ -131,7 +124,7 @@ It talks to Keystone over newline-delimited JSON on stdin and stdout
   - It installs into a staging directory and renames it into place, so a
     sidecar that is mid-job keeps running.
   - It then runs the self-check (`--health`). A failure is reported but does
-    not fail the install, because nothing depends on the runtime yet.
+    not fail the install, because Keystone falls back to `legacy`.
   - It is skipped for releases that predate the asset.
 - `uninstall.sh` removes it.
 - A control-plane host still needs no Node of its own (#34).
@@ -146,9 +139,9 @@ It talks to Keystone over newline-delimited JSON on stdin and stdout
   (running, mid-tool, parked), resume, crash, and audit failure.
 - `runtimes/native-agent/test` covers the SDK loop itself.
 - `native/sidecar_e2e_test.go` runs the real sidecar with the real SDK and a
-  scripted model. It includes the formerly stalling case: a model that keeps
-  calling the same tool now ends `BLOCKED`.
-- `butlerstore/slice_test.go` runs `butler.Slice` against the real ledger:
+  scripted model. It includes a model that keeps calling the same tool, which
+  ends `BLOCKED`.
+- `butlerstore/slice_test.go` runs `legacy.Slice` against the real ledger:
   - evidence;
   - verified-read reuse;
   - the budget park;
@@ -165,7 +158,11 @@ It talks to Keystone over newline-delimited JSON on stdin and stdout
 ## Butler conversations
 
 Which loop drives a Butler conversation is a deployment choice. The model is
-still only ever the one the Butler was assigned (ADR-W031 A2/A6).
+not: it comes from the Butler's own ordered model/provider chain (ADR-W033
+B6), with no global fallback, no substitution of another Butler, and a
+local-only task failing rather than falling through to a cloud model. Choosing
+the loop never changes which model may be used. Code not yet conformant: today
+a Butler has a single assigned route rather than a chain.
 
 - **Turning it on:**
   - A **fresh install** turns it on. `install.sh` writes
@@ -180,17 +177,20 @@ still only ever the one the Butler was assigned (ADR-W031 A2/A6).
     visible in `keystone.env`.
 - **Which Butlers use it:** Butlers on OpenAI, OpenRouter, OpenAI-compatible
   and Ollama routes. Ollama is reached through its OpenAI-compatible `/v1`
-  endpoint. Anthropic routes stay on `Runner`.
+  endpoint. Anthropic routes stay on `legacy`. The loop is chosen per route,
+  and the route is taken from the Butler's B6 chain in order: the runtime
+  follows the chain, it never picks a route of its own.
 - **If the runtime is missing or fails its self-check:** Keystone logs an
-  error at startup and every conversation stays on `Runner`. A broken
+  error at startup and every conversation stays on `legacy`. A broken
   sidecar never stops the control plane.
 
 ### What does not change
 
 Moving the loop does not change the ledger, authority, privacy or the tools.
-`butler.Slice` is the Runner's own code with the loop taken out. `Runner.Run`
-and `Slice` share the slice start (`begin`), final-answer acceptance
-(`finish`), the budget park and the pause. `butlerlive/native.go` wires them
+`legacy.Slice` is the Runner's own code with the loop taken out, running
+over `agentapi.Client`. `Runner.Run` and `Slice` share the slice start
+(`Runner.BeginSlice`), final-answer acceptance (`Slice.Finish`, over the
+unexported `Runner.finish`), the budget park and the pause. `butlerlive/native.go` wires them
 to the runtime:
 
 - **Before every model attempt, retries included,** the runtime's
@@ -232,8 +232,3 @@ to the runtime:
 Conversations are sent as a fresh job each turn: the earlier turns' text
 travels in `Job.Conversation`, as `Runner.History` does, and a parked task
 resumes on the next message exactly as it does on `Runner`.
-
-## Follow-up
-
-- Hermes and OpenClaw adapters implement `AgentRuntime`, reusing
-  `agentruntime.Guard` so every runtime stops for the same reasons.

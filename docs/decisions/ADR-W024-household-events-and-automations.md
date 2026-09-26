@@ -1,12 +1,16 @@
 # ADR-W024: Household events and automations — the family's butler, deterministic first
 
-- **Status:** proposed; A5 amended by A5.1 (2026-09-18), which adds the
-  attendance axis and the `confirm` tier.
+- **Status:** implemented (H1–H7); A5 amended by A5.1 (2026-09-18),
+  which adds the attendance axis and the `confirm` tier; amended by
+  ADR-W033.
+- **Governed by:** ADR-W033 where they overlap. An `Automation` is an
+  ADR-W033 routine: Household-owned, approved by a human Owner as an
+  exact version, and run as its own principal (E5, E6, E6.0).
 - **Relates to:** ADR-W001 (concierge, acting identity), ADR-W004 (plans
   are the only write path), ADR-W005 A1 (`agentTools` parsed, not run),
   ADR-W006/W017 (the Butler's ceiling), ADR-W007 (one API, one event
   stream), ADR-W009 (policy, the `domestic` tier), implementation scope
-  §7 (concierge epics C1–C5), `docs/vision.md` (the two-butler arc)
+  §7 (concierge epics C1–C5), `docs/vision.md`
 - **Source:** an external design synthesis ("Wildstone Home Lab Agent
   Architecture Summary", 2026-09-05), reconciled here against as-built.
   Where that document and this ADR disagree, this ADR wins.
@@ -14,55 +18,54 @@
   Part B is the build order. Not an implementation spec yet — each work
   package in Part B gets its own spec when it is scheduled.
 
-## Conditional amendment from ADR-W030
+## Constraints from ADR-W030
 
-This amendment becomes binding when ADR-W030 is accepted. The deterministic
-household timeline remains authoritative for rule decisions and action
-outcomes. Durable task rows add agent steps, waits, attempts, and completion
-evidence linked by occurrence/action IDs; they do not duplicate deterministic
-truth. `automation.acted` remains a dispatch claim rather than proof that an
-external effect succeeded.
+The deterministic household timeline remains authoritative for rule
+decisions and action outcomes. Durable task rows add agent steps, waits,
+attempts, and completion evidence linked by occurrence/action IDs; they do
+not duplicate deterministic truth. `automation.acted` remains a dispatch
+claim rather than proof that an external effect succeeded.
 
-The service-package integration lifecycle expands in two ways. A managed app
-keeps its package-owned adapter; a connection-only package manages a named
-connection to an externally hosted app without claiming ownership of that app.
-V1 adapters are package-managed containers on Wildstone nodes and exchange
-typed query/action work through the connection-bound adapter queue in W030.
-Event intake, live queries, and optional memory indexing remain separate.
+The service-package integration lifecycle expands in two ways. A managed
+app keeps its package-owned adapter; an integration-connection-only
+package manages a named integration connection to an externally hosted app
+without claiming ownership of that app. (An integration connection is not
+an ADR-W033 Connection, which is how a Person reaches an Agent.) V1
+adapters are package-managed containers on Wildstone nodes and exchange
+typed query/action work through the integration-connection-bound adapter
+queue in W030. Event intake, live queries, and optional memory indexing
+remain separate.
 
-Native routines stay in the application that owns them and are declared and
-changed through Plans. Wildstone owns cross-application routines. Removing a
-connection never silently deletes a remote routine. Local disable immediately
-stops new Wildstone dispatch; stopping native execution requires an explicitly
-authorized adapter operation or a Plan.
+Native routines stay in the application that owns them and are declared
+and changed through Plans. Wildstone owns cross-application routines.
+Removing an integration connection never silently deletes a remote
+routine. Local disable immediately stops new Wildstone dispatch; stopping
+native execution requires an explicitly authorized adapter operation or a
+Plan.
 
-Any trusted admitted adult may create, change, disable, or request deletion of
-a shared household routine without an owner veto. Preserve author, last editor,
-version, and audit history; notify the routine owner of another adult's
-behavioral change. Normal Plan/exact-action review still applies, and concurrent
-edits require a fresh preview against the current version.
+Household routines are Household-owned (ADR-W033 E5). Agents propose;
+only a human Owner approves the exact version, and any edit is a new
+version needing reapproval (E2, E4). Any Owner may disable or revoke a
+routine immediately, without a Plan (E6.1). Author, last editor, version,
+and audit history are preserved, and concurrent edits require a fresh
+preview against the current version.
 
-Offboarding does not delete shared routines or household facts. Original
-authorship remains immutable, while operational ownership transfers to the
-configured homelab administrator. Shared tasks/routines pause when they depend
-on the departing member's credential or grant and resume only after review and
-reauthorization.
+When a Person leaves, their authority stops at the next boundary, but
+Household routines and household facts survive and original authorship
+stays immutable. Only a routine that delivers to the departed Person, or
+depends on an admission only they held, pauses for Owner resolution
+(ADR-W033 F1).
 
-An admitted adult can approve/reject a server-classified household-routine Plan
-through W030's Authelia-authenticated household ingress page. Its dedicated
-service principal acts for the linked member and receives only the narrow
-review verb; the person receives no Console credential or general Plan or
-infrastructure authority. Household chat may immediately disable an exact
-routine/version as a runtime denial, but chat cannot activate, edit, delete, or
-approve its Plan.
+Chat cannot activate, edit, delete, or approve a routine or its Plan.
 
 Publication declarations gain the audience policy specified by the W005
-amendment. Consequential household actions use exact, expiring, single-use
-proposals bound to an authenticated person. Infrastructure writes remain Plans
-and cannot be approved through chat. General durable agent steps run behind a
-distinct grant/context boundary and do not widen the restricted Phraser.
-Low-impact versus consequential actions follow W030 A8's criteria; adapters
-cannot declare a weaker class than platform policy allows.
+amendment. Consequential household actions use exact, expiring,
+single-use proposals bound to an authenticated person. Infrastructure
+writes remain Plans and cannot be approved through chat. General durable
+agent steps run behind a distinct grant/context boundary and do not widen
+the restricted Phraser. Low-impact versus consequential actions follow
+W030 A8's criteria; adapters cannot declare a weaker class than platform
+policy allows.
 
 ---
 
@@ -85,9 +88,9 @@ Four ideas sit under that sentence:
   or an app goes through a typed, permissioned action. Never free-form
   model control.
 
-This is the "family's butler" the vision doc describes, built on the
-operator's butler that exists. Nothing here loosens the operator
-butler's ceiling; everything here reuses its machinery.
+This is the household's Butler the vision doc describes, built on the
+Owner Agent machinery that exists. Nothing here loosens an Owner Agent's
+ceiling; everything here reuses its machinery.
 
 # Part A — Decisions (binding)
 
@@ -100,12 +103,15 @@ A household rule cannot go to the approval queue every time it fires —
 So the **rule itself** is what gets approved. An `Automation` is a new
 Statefile resource kind: trigger, conditions, the context it may read,
 the action it may take, and an optional escalation to the Butler.
-Creating or changing one is a plan, proposed by a human or by the
-Butler, approved by a human. Once approved, the automation engine runs
-it without asking again.
+Creating or changing one is a plan, proposed by a person or by an
+Agent, and approved by a human Owner as that exact version; any edit is
+a new version that needs approving again (ADR-W033 E2, E4). Approval
+binds the rule's output audience, its assigned Agent, and the
+per-resource grants it requires (E6). Once approved, the automation
+engine runs it without asking again.
 
 This is what "agent-authored does not mean agent-executed" means in
-Wildstone terms: the Butler may draft a rule; a human signs it; code
+Wildstone terms: an Agent may draft a rule; an Owner signs it; code
 runs it. Every plan-path guarantee (policy validation, audit, the
 Butler's no-approve ceiling) applies to rules for free.
 
@@ -177,16 +183,22 @@ a typed operation — send a notification, call a first-party app's API,
 set a Home Assistant entity — declared by a package in its `agentTools`
 block (ADR-W005 A1) with an explicit risk grade, input schema, and
 timeout. The gateway checks that the automation was approved with that
-action, that the acting member is allowed it, and audits the call.
+action and audits the call. An unattended automation acts as its own
+exact approved version (ADR-W033 E6.0, C7), never as its proposer or
+approver, and may use Household secrets only — never Personal ones (D1).
+An attended call is checked against the Person in the session.
 
 Two things do not run through it:
 
 - **Infrastructure changes.** Anything that would touch the Statefile
   stays a plan. A household rule cannot restart a container.
-- **External agents.** Hermes, Codex, or any other agent is a principal
-  with at most the `butler` role: read and propose. Only the Wildstone
-  Butler sits behind the domestic gateway, because only its sessions are
-  principal-bound, redacted, and bounded (ADR-W017 A1).
+- **External agents.** Hermes, Codex, or any other agent holding only
+  its own token and no Wildstone Agent binding is a principal with at
+  most the `butler` role: read and propose. Only a Wildstone Agent sits
+  behind the domestic gateway, because only its sessions are
+  principal-bound, redacted, and bounded (ADR-W017 A1). An external
+  runtime bound to a Wildstone Agent acts as that Agent (ADR-W039) and
+  reaches the gateway on that Agent's terms.
 
 ### A5.1. Attendance is the second axis (amendment, 2026-09-18)
 
@@ -196,8 +208,8 @@ one caller.**
 
 The automation engine fired rules on a schedule and that was the whole
 of the household layer, so "may this action run" was entirely a
-statement about the action. Then the Butler's family surface arrived
-(ADR-W026, ADR-W030) and reused the same gateway — and a second kind of
+statement about the action. Then Butler conversations over chat and
+Homepage arrived (ADR-W026, ADR-W030) and reused the same gateway — and a second kind of
 caller appeared without the model growing a dimension for it.
 
 The two situations a tier cannot tell apart:
@@ -214,10 +226,10 @@ in the room could not.
 **So a call carries whether a person is attending it, and a tool carries
 whether it needs one.**
 
-- `Call.Attended` is set by the SURFACE, not derived here from a rule
-  name. A surface asserting that somebody is present should have to say
+- `Call.Attended` is set by the CALLER, not derived here from a rule
+  name. A caller asserting that somebody is present should have to say
   so, rather than the gateway guessing from a string every future
-  surface would have to know.
+  caller would have to know.
 - `confirm` joins `read` and `domestic` as a declarable tier. It means:
   acts, only with a person in the loop, and only after that person has
   said yes to **this specific call**.
@@ -382,7 +394,7 @@ No real Home Assistant, PantryOS, or LLM in CI.
 | **H3** | Automation engine: trigger matching, condition evaluation, `fired`/`suppressed` events, dry-run and replay (`wild automation replay`). No escalation, no actions yet | The deterministic half works end to end and can be tested against history |
 | **H4** | First action, through the domestic gateway: notify via the existing ntfy package, with a per-notification reply token. ntfy's action buttons post the reply back to H1's intake as `household.answered` | A rule can ask a human a question and hear the answer, with no chat surface built |
 | **H5** | First adapter: Home Assistant → intake, declared in the home-automation package per A10 (config-only or sidecar), with the A8 person mapping | A third-party app plugs in through the one contract |
-| **H6** | Escalation: a fired rule hands the Butler its context packet and gets back the wording of ONE declared action param, with the rule's own wording as the fallback; the call carries no tools. Red-team case per A4 | The "left home without breakfast" flow, end to end |
+| **H6** | Escalation: a fired rule hands the Butler its context packet and gets back the wording of ONE declared action param; the call carries no tools. If the Butler does not answer, the rule's own wording is used and the fallback is recorded visibly (`automation.escalation_failed` / `_skipped`). A reviewed routine version never substitutes: its inference step blocks or fails with visible status (ADR-W033 E8). Red-team case per A4 | The "left home without breakfast" flow, end to end |
 | **H7** | Natural-language authoring: two READ tools — a schema description read from the validator and this deployment's own vocabularies, and a dry run sharing one implementation with the API's replay — then `propose_change` as for any resource | The AI writes rules the engine already understands; no second execution path |
 
 **Status:** H1 through H7 are implemented — the work packages below are
@@ -423,7 +435,7 @@ authoring — `get_automation_schema` (the closed grammar read from the
 validator plus this deployment's real event types and actions) and
 `dry_run_automation` (the same replay the API endpoint runs, shared as
 `automation.ReplayDraft`), both read tools; the Butler drafts, dry-runs
-and proposes, a human approves, and the deterministic engine then runs
+and proposes, a human Owner approves, and the deterministic engine then runs
 what it wrote through the same path a hand-written rule takes. See
 `docs/concepts.md`, "Household events".
 

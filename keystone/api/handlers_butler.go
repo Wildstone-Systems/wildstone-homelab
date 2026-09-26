@@ -583,7 +583,7 @@ func (s *Server) submitSessionProposalsWithCalls(butlerID principal.Identity, ca
 		}
 		switch {
 		// The Agent Gateway files an accepted propose_change itself, at
-		// invoke time, under the runtime principal (ADR-W039 §3.2, §7.2,
+		// invoke time, under the runtime principal (ADR-W039 §3.2,
 		// Phase 3, #339) — this call already carries the filed Plan's
 		// id, and filing it again here would both duplicate the Plan
 		// and attribute the duplicate to "butler" instead. This branch
@@ -594,7 +594,7 @@ func (s *Server) submitSessionProposalsWithCalls(butlerID principal.Identity, ca
 		case call.ProposalError != "":
 			proposalErrs = append(proposalErrs, call.ProposalError)
 		// The legacy single-provider path (ButlerHost/butler.Session
-		// over a ToolGateway, ADR-W039 §7.3) never reaches the Agent
+		// over a ToolGateway) never reaches the Agent
 		// Gateway at all, so its propose_change calls still arrive here
 		// with ResourceYAML unset-until-now and are filed here, exactly
 		// as every call was before Phase 3.

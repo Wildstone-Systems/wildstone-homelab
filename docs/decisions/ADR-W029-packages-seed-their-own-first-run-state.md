@@ -5,6 +5,9 @@
   ADR-W005 (packages own their app's config), ADR-W021 (capability
   install), ADR-W010 (lint is the package contract test), ADR-W028 (a
   capability waiting is not a node failing)
+- **Numbering:** two ADRs share W029 — this one and
+  [ADR-W029-a-package-is-checked-against-the-app-it-configures](ADR-W029-a-package-is-checked-against-the-app-it-configures.md).
+  Cite by file name.
 - **Audience:** decision record.
 
 ---

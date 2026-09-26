@@ -1,45 +1,56 @@
 # ADR-W012: Secrets path — node-side store, materializer, rotation
 
-- **Status:** accepted
+- **Status:** accepted; retained and scoped by ADR-W033
 - **Relates to:** ADR-W003 (closed op surface), ADR-W005 A2 (`secret/`
   references), ADR-W008 (level-triggered reconcile), implementation
   scope E8
+- **Governed by:** ADR-W033 where they overlap.
 - **Audience:** decision record AND implementation spec for E8.
 
-## Conditional amendment from ADR-W030
+## Scope under ADR-W033
 
-This amendment becomes binding when ADR-W030 is accepted. ADR-W030's
-member-scoped application credentials keep this write-only value
-path, with one narrow change to A1: one connection credential may exist in the
-encrypted Wardstone stores of its explicitly approved primary and fallback
-nodes. It exists nowhere else at rest. Keystone stores member, connection,
-purpose, eligible nodes, reference/version, and revocation metadata, never the
-value. The authenticated setup request may fan the value directly over mTLS to
-those nodes without persistence. A package-managed adapter receives it only
-through normal container materialization. Chat, models, integration work
-queues, events, memory, and audit never receive the value.
+This store is the infrastructure/node secret store, retained by ADR-W033
+§D1 and §G. Its write-only rules apply to infrastructure and integration
+provisioning credentials. Household and Personal secrets are a separate
+domain with their own ownership, use, reveal, and recovery rules (ADR-W033
+§D1-D5; [`agent-system-design.md`](../agent-system-design.md) §12): Keystone
+stores only authenticated ciphertext for them under a dedicated local key,
+authorized Household reveal and Household-submission review use a
+protected, non-cacheable UI response, and ordinary API responses, chat and
+model tool output keep redaction. Models receive references, never values
+(ADR-W033 §D2). No node-secret read operation is added. Personal values have
+no reveal path.
 
-Adding an eligible node requires an approved placement Plan and successful
-adapter deployment/readiness and secret provisioning. Removing one immediately
-fences adapter work, stops/removes the adapter container, and then uses the
-typed, version-matched erasure operation permitted by the W003 amendment. That
-operation refuses while any managed container still references the secret.
-When the remote service supports per-client credentials, revoke that node's
-remote credential too. Until container removal, local erasure, and required
-remote revocation are proven, the desired-state removal remains incomplete and
-visible as degraded. Immediate connection revocation blocks all copies even
-before cleanup completes.
+## Constraints from ADR-W030
 
-Member offboarding applies that connection revocation and erasure workflow to
-every eligible node before any personal connection can be considered removed.
-A household-shared connection that used the member's credential remains fenced
-until a current owner supplies or reauthorizes replacement credentials.
+- Member-scoped application credentials for an integration connection (an
+  app adapter such as CalDAV, not an ADR-W033 Connection) keep this
+  write-only value path, with one narrow change to A1: one credential may
+  exist in the encrypted Wardstone stores of its explicitly approved primary
+  and fallback nodes. It exists nowhere else at rest. Keystone stores member,
+  integration connection, purpose, eligible nodes, reference/version, and
+  revocation metadata, never the value. The authenticated setup request may
+  fan the value directly over mTLS to those nodes without persistence. A
+  package-managed adapter receives it only through normal container
+  materialization. Chat, models, integration work queues, events, memory,
+  and audit never receive the value.
+- Adding an eligible node requires an approved placement Plan and successful
+  adapter deployment/readiness and secret provisioning. Removing one
+  immediately fences adapter work, stops/removes the adapter container, and
+  then uses the typed, version-matched erasure operation permitted by the
+  ADR-W003 constraints. That operation refuses while any managed container
+  still references the secret. When the remote service supports per-client
+  credentials, revoke that node's remote credential too. Until container
+  removal, local erasure, and required remote revocation are proven, the
+  desired-state removal remains incomplete and visible as degraded.
+  Immediate revocation blocks all copies even before cleanup completes.
+- Revoking a Person applies that revocation and erasure workflow to every
+  eligible node before any personal integration connection can be considered
+  removed. A household-shared integration connection that used their
+  credential stays fenced until an Owner supplies or reauthorizes a
+  replacement (ADR-W033 §F1).
 
 ---
-
-## Household-domain clarification (ADR-W033 §12, slice 15)
-
-The write-only node-secret rules below continue to apply to infrastructure and integration provisioning credentials. The separate Household/Personal product domain introduced by slice 15 stores only authenticated ciphertext in Keystone under a dedicated local key. Its authorized Household reveal and explicit Household-submission review use a protected, non-cacheable UI response; ordinary API responses, chat and model tool output retain redaction. No node-secret read operation is added. Personal values have no reveal path.
 
 # Part A — Decisions (binding)
 
@@ -81,7 +92,7 @@ the Butler can exfiltrate one through the protocol.
   creates the secret with a random value (default 32 bytes, URL-safe
   base64) if absent; `rotate: true` regenerates even when present.
   Returns `{existed, version}` only. The value never crosses the wire.
-- `PutSecret{name, value}` — for operator-supplied values (a Cloudflare
+- `PutSecret{name, value}` — for Owner-supplied values (a Cloudflare
   tunnel token). The value transits once, over the existing mTLS agent
   plane, and Keystone forwards without persisting. Returns `{version}`.
 - `ListSecrets{}` — names, versions, created/rotated timestamps. Never
@@ -117,6 +128,8 @@ than restarts; risk grades Medium (service interruption, no data).
 - **W1 (agent):** the encrypted store; the three ops; env
   materialization in ensureContainer; protocol minor 7; audit-path
   check that PutSecret values never reach the agent audit log.
-- **W2 (keystone):** admin-only API for secret set/generate/list per
-  node (dispatch through the gateway, never persist values); rotation
-  plan composition (A5); `wild secret` subcommands.
+- **W2 (keystone):** Owner-only API for secret set/generate/list per
+  node (dispatch through the gateway, never persist values); rotating a
+  node secret is a consequential operation requiring a fresh Owner session
+  (ADR-W033 §A4.1); rotation plan composition (A5); `wild secret`
+  subcommands.

@@ -1,7 +1,7 @@
 package agentgateway
 
-// The processing-class disclosure filter (ADR-W039 §3.5 rule 3, §7.2
-// Phase 5, #345): the gateway-side replacement for
+// The processing-class disclosure filter (ADR-W039 §3.5 rule 3,
+// #345): the gateway-side replacement for
 // keystone/butlerlive.privacyProvider (C10). A runtime declared
 // local_only receives local-only content at every boundary the gateway
 // hands it something; a runtime declared cloud, or one with no

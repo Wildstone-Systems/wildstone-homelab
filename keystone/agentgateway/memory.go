@@ -28,8 +28,8 @@ import (
 //
 // Processing-class filtering (§3.5 rule 3: withholding local_only
 // records from a runtime not declared local_only) is Phase 5's
-// gateway-side filter (ADR-W039 §8 Phase 5, "gateway-side local_only
-// filtering by declared processing class", #345): Recall applies it
+// gateway-side filter (ADR-W039 §3.5 rule 3,
+// #345): Recall applies it
 // below, per hit; disclosure.go documents the rest.
 
 // Recall implements agentapi.Client: a structured search of Wildstone
