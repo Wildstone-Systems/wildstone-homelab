@@ -1,31 +1,10 @@
 # ADR-W018: Hardening, docs, alpha release (E13)
 
-- **Status:** accepted
+- **Status:** accepted; A2 amended by ADR-W033
+- **Governed by:** ADR-W033 where they overlap.
 - **Relates to:** ADR-W002 (e2e boundary), ADR-W011 (backup engine),
   ADR-W012 (secrets path), ADR-W014 (installer), implementation scope E13
 - **Audience:** decision record AND implementation spec for E13.
-
-## Conditional amendment from ADR-W030
-
-This amendment becomes binding when ADR-W030 is accepted and applies before
-durable Butler state ships. The exit drill expands from the three current
-off-host inputs to a fourth recoverable category: Butler tasks/steps,
-conversations and memory, bindings and identity links, grants and denials,
-routines/procedures, access policy, and delivery state. Replication lag is an
-explicit recovery-point limit rather than proof of zero loss.
-
-Structured work traces, feedback labels, evaluator/configuration versions, and
-sanitized regression fixtures are included under the same source-derived
-permissions and retention. The drill proves a restored trace cannot expose
-content whose source was later deleted or revoked.
-
-The expanded drill restores an older snapshot that predates a deletion and a
-revocation. Butler starts quarantined: retrieval, dispatch, ingestion, and
-proactive delivery remain blocked until later authority/deletion information is
-reconciled. Where current permission cannot be established, data stays
-unavailable and pending actions do not resume. The current three-input drill
-remains the as-built contract until this fourth category is implemented and
-the expanded drill passes.
 
 ---
 
@@ -62,15 +41,38 @@ The drill pins the recovery contract the docs teach:
 
 1. **The restic repository** (per BackupPlan) — holds the data.
 2. **The Statefile git repo** — holds the desired state.
-3. **The operator's secret values** (in their password manager) —
-   secrets are deliberately NOT backed up by Wildstone (ADR-W012:
+3. **The operator's node secret values** (in their password manager) —
+   node secrets are deliberately NOT backed up by Wildstone (ADR-W012:
    write-only path, values never leave the node), so recovery re-enters
-   them via `wild secret set`.
+   them via `wild secret set`. Household/user secrets are a separate
+   store whose recovery follows ADR-W033 D1, not this rule.
+4. **The runtime DB**, as an encrypted off-host backup or replica — it
+   is not rebuildable. It holds Persons and their bindings, conversations
+   and memory, task ledgers, Plans and approved routine versions,
+   grants and denials, soft-deleted records awaiting Owner purge, and
+   the forgetting journal (ADR-W033 C10, E5, F6), together with
+   structured work traces, feedback labels and evaluator/configuration
+   versions under the same source-derived permissions and retention.
+   Its measured recovery point is published; replication lag is possible
+   data loss, not proof of zero loss.
 
-Everything else — runtime DB, CA and op-signing keys, node identity,
-containers, volumes — is rebuilt from those three. A new CA on rebirth
-is correct behavior, not a defect: nodes re-join with fresh join
-tokens.
+Everything else — CA and op-signing keys, node identity, containers,
+volumes — is rebuilt from those four. A new CA on rebirth is correct
+behavior, not a defect: nodes re-join with fresh join tokens.
+
+**Restore never resurrects what was forgotten or revoked.** Forgetting
+survives restore (ADR-W033 C10). A restored runtime DB starts
+quarantined: memory retrieval, task and routine dispatch, ingestion and
+proactive delivery stay blocked until later authority and deletion
+information is reconciled. Where current permission cannot be
+established, data stays unavailable and pending actions do not resume;
+a restored trace cannot expose content whose source was later deleted
+or revoked. The drill proves this by restoring an older snapshot that
+predates a deletion and a revocation.
+
+_Changed by ADR-W033 §C10, §E5, §F6: the runtime DB now holds household state that cannot be rebuilt._
+The current drill and `docs/recovery.md` still exercise the three-input
+contract; code not yet conformant.
 
 ### A3. Docs are part of the deliverable, refreshed against as-built
 
