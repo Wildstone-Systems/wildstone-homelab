@@ -1,23 +1,21 @@
 # ADR-W027: Console — the redesign, and what ADR-W016 A1 still holds
 
-- **Status:** accepted
+- **Status:** accepted; amended by ADR-W033
+- **Governed by:** ADR-W033 where they overlap.
 - **Supersedes:** ADR-W016 A1 on the visual axis only; A2's screen list
   is extended, not replaced
-- **Relates to:** ADR-W016 (console IA and MVP), ADR-W026 (chat
-  bindings — the Chat screen this ADR places in the nav), F75 (a plan
+- **Relates to:** ADR-W016 (console IA and MVP), ADR-W033 B7/B7.1 (chat
+  Connections — the Chat screen this ADR places in the nav), F75 (a plan
   waiting for a human is not a fault)
 - **Audience:** decision record AND implementation spec for the
   redesign.
 
-## Conditional amendment from ADR-W030
+## Constraints from ADR-W030
 
-This amendment becomes binding when ADR-W030 is accepted. A session remains a
-principal-bound conversation, while multiple conversations participate in one
-permission-filtered logical history across explicit Household/Operator
-handoffs. The current surface is derived from the destination endpoint and
-stored task/conversation state, never model-selected. Retrieval rechecks
-person, profile, audience, admission, and current denials before constructing
-each model context.
+A session is `Person + Agent + session_id` (ADR-W033 B10); the Agent a
+conversation is with comes from stored session state, never from the
+model. Retrieval rechecks person, profile, audience, admission, and
+current denials before constructing each model context.
 
 Historical tool traffic still does not replay as fresh truth. Durable work
 resumes from its validated step ledger and refreshes stale observations.
@@ -34,12 +32,8 @@ create a sanitized regression candidate; the screen never presents hidden
 chain-of-thought or raw unredacted provider/tool payloads.
 
 Console remains the administrative surface and does not issue a household
-member session. The household-routine review page is a separate
-Authelia-authenticated ingress surface; it renders only the routine preview,
-behavior diff, effects/audience, version, and approve/reject controls for a
-Plan already classified server-side as household-routine. Its service
-principal acts for the linked member and cannot reveal the general Plans
-screen, infrastructure state, credentials, or administrative navigation.
+member session. Only a human Owner approves a Plan, in the Console
+(ADR-W033 E2/E3).
 
 ---
 
@@ -61,7 +55,8 @@ Still binding, unchanged:
 - No UI framework, no component library, no state manager. React's own
   state, hand-written CSS, one typed client.
 - `src/api.ts` stays the only fetch path (A3), the token stays in
-  sessionStorage, and a 401 anywhere still returns to the gate.
+  sessionStorage, and a 401 anywhere still returns to the gate. How the
+  Console signs in and when it steps up is ADR-W033 A4.1.
 - No console-only endpoints. Anything the redesign needs from the API
   is public API that `wild` and the Butler can use too. Where the API
   cannot answer yet, the console derives an honest approximation and
@@ -164,25 +159,17 @@ nothing else changes.
 
 ### A10. Navigation is an icon rail, and Chat sits with the Butler
 
-Twelve screens, in this order:
+The rail groups the Butler's own screens together — Butler, Butlers,
+Work, Butler access, Memory, Integrations, Routines, Commitments, Chat,
+Household — ahead of Plans, Activity, Backups and Nodes. Below the
+divider are the screens you visit when something specific needs doing:
+Secrets and Identity.
 
-    Home · Services · Butler · Chat · Household · Connect chat ·
-    Plans · Activity · Backups · Nodes
-    ─────
-    Secrets · Identity
-
-Events is renamed Activity. Chat (ADR-W026 A4) is placed immediately
-after Butler because it answers "who may talk to the Butler, and as
-whom" — it is read as part of the Butler's surface, not as another
-piece of infrastructure. Household and Connect chat (ADR-W026 A2/A3)
-follow it for the same reason: the three of them are one subject.
-The rule below the divider stays what it was: the screens you visit
-when something specific needs doing.
-
-Twelve is a lot for one rail, and it is worth revisiting. Connect chat
-is a setup flow run once per adapter, which is the argument for moving
-it below the divider; it stays above for now because it is the screen
-Chat sends you to when no adapter is installed.
+Events is renamed Activity. Chat is read as part of the Butler's
+surface, not as another piece of infrastructure: it is the one screen
+for chat Connections — the bots each Agent has, connecting a Person, the
+people bound, and waiting invites (ADR-W033 B7.1). It issues no key; the
+Person collects their own.
 
 Icons carry the nav, so every item keeps its label as both a `title`
 and an `aria-label`, and a pip appears only when that screen has
@@ -209,15 +196,13 @@ Migration 0014 backfills existing sessions with their answer alone —
 a conversation that opens with an answer, which is true, rather than an
 invented question.
 
-**One endpoint, not one per surface.** ADR-W026 A1 gave each surface its
-own ask endpoint so the Console could not send a household question to
-the operator's Butler. That separation is preserved and in fact
-strengthened here: the surface comes from the STORED session, so it is
-decided by the endpoint the conversation started on and cannot be named
-by the follow-up request at all.
+**One endpoint, and the session decides the Agent.** A session is
+`Person + Agent + session_id` (ADR-W033 B10), so which Agent a follow-up
+reaches comes from the STORED session and cannot be named by the
+follow-up request at all.
 
 **Only the person a session was recorded for may continue it.** An
-operator can still read anyone's session — that is what the audit is
+Owner can still read anyone's session — that is what the audit is
 for — but reading a conversation and speaking into it are different
 acts, and the second one is not an audit.
 

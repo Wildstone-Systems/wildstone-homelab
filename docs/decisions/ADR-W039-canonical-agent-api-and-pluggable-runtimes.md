@@ -479,7 +479,7 @@ Dependency-ordered. Each phase names what stays unchanged, what is new, and the 
 
 ## 9. Amendments and what is kept
 
-Following the ADR-W033 Part G convention, older ADRs remain historical records; this ADR amends where it conflicts and keeps everything else.
+This ADR amends ADR-W033 only where listed below and keeps everything else.
 
 - **ADR-W024 A5, "Actions run through the `domestic` tier gateway", its "External agents" bullet (amended).** Retained for an external agent that merely holds a `butler` token: read and propose, no domestic gateway. Amended for an external *runtime bound to a Wildstone Agent*: it acts as that Agent, whose sessions are principal-bound, redacted and bounded by the gateway rather than by the runtime, so the Agent sits behind the domestic gateway on exactly the native runtime's terms. A5's reason ("only its sessions are principal-bound, redacted, and bounded") is preserved by moving that property into the gateway.
 - **ADR-W026 A10, "External agents are not surfaces" (amended).** Retained: a runtime never gets a surface, a chat binding or a chat credential, and "somebody else's agent, calling Wildstone" stays distinct from "Wildstone's Butler, reachable from Telegram". Added: a third thing, "Wildstone's Butler whose cognition runs in Hermes", which has the Butler's surface, bindings and Connections because the *Agent* has them, while the runtime holds only the runtime principal. The reasoning at ADR-W026 lines 158-166 for keeping `converse` off the `butler` row stands.

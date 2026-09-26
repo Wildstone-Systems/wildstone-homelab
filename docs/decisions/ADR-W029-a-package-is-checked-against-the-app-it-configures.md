@@ -5,6 +5,9 @@
   toolchain), ADR-W019 A10 (a Route is not always served at the host it
   declares), ADR-W021 A2/A5 (params and the install form), ADR-W025
   (traits), ADR-W008 A3 (the reconcile loop's health gate)
+- **Numbering:** two ADRs share W029 — this one and
+  [ADR-W029-packages-seed-their-own-first-run-state](ADR-W029-packages-seed-their-own-first-run-state.md).
+  Cite by file name.
 - **Audience:** decision record, and the standing brief for anyone —
   person or model — writing an integration package.
 
@@ -66,11 +69,12 @@ Twenty-four packages ask for a timezone. A household has one clock.
 Asking per-package is how one service ends up an hour off from the rest,
 and it is twenty-four chances to type an abbreviation instead of a zone.
 
-`source: timezone` joins `node`, `domain`, `keystone_url`,
-`directory` and `chat_adapter_image` in `pkgspec.ParamSources`. Keystone
-already keeps the household's zone for the automation engine's
-`timeOfDay` rules, so the install form offers it rather than presenting
-a blank box.
+`source: timezone` joins `node`, `domain`, `keystone_url`, `directory`
+and `household_intake_url` in `pkgspec.ParamSources`. The household's
+zone is a live household setting (ADR-W033 E2.1): the installer asks for
+it, the `-household-timezone` flag only seeds it while it has never been
+set, an Agent may propose a change and an Owner approves it or sets it
+directly. The install form offers it rather than presenting a blank box.
 
 The shape check in A2 stays regardless. Sourcing removes the question;
 it does not make the answer unnecessary to check, because an operator
@@ -172,13 +176,10 @@ Three changes make it possible:
   (`BackupPlan/books-calibre-web`), and
   `TestSiblingProfilesDoNotCollide` keeps it that way.
 
-The chat packages had already escaped this by other means — each sets
-`capability: chat-telegram-admin`, `chat-telegram-family` and so on, one
-capability per package, which is why those four coexist today while the
-book apps could not. Their `profile:` field is decorative as a result.
-They can be folded back onto a shared `chat` capability now, but doing
-so re-owns live resources, so it is left for a deliberate migration
-rather than bundled here.
+The chat packages are outside this case: there is one instanced package
+per platform (`chat-telegram`, `chat-matrix`, `chat-discord`,
+`chat-slack`), installed once per bot, and there are no admin or family
+bots (ADR-W033 B7.1).
 
 ### A8. Removing an app names the app, and never removes data
 
@@ -272,7 +273,7 @@ Two things made that unreachable without a terminal.
 `SecretSpec.Purpose` did not exist, so the Secrets screen could show a
 name, a version, and what rotating it would restart, and nothing about
 what any of it meant. `davis-admin-password` does not tell a household
-admin that it is the calendar service's admin login, that the username
+Owner that it is the calendar service's admin login, that the username
 beside it is `admin`, or that the value cannot be read back. Packages
 now declare that sentence and the screen shows it, joined from the
 package because the node holds values and knows nothing about what they

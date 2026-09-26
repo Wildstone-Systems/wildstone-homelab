@@ -1,8 +1,9 @@
 # ADR-W023: The install is a conversation
 
-- **Status:** proposed
+- **Status:** accepted; amended by ADR-W033 (A3, A7)
+- **Governed by:** ADR-W033 where they overlap.
 - **Relates to:** ADR-W014 (installer bootstrap), ADR-W020 (identity
-  onboarding; A2 first-run claim, A3 `LdapUser`, A4 credentials are never
+  onboarding; A3 `LdapUser`, A4 credentials are never
   declarative, A7 reuse Authelia's reset flow), ADR-W021 (installing a
   capability; A5 the generated form, A7 the approval gate),
   ADR-W022 (the addressing ladder)
@@ -32,7 +33,7 @@ smaller script. It is a conversation that ends with a working household.
 ### A1. The install is interactive, and it is the whole setup
 
 One command, run once, produces a household that works: Docker present,
-the host on a tailnet if wanted, an admin who can log in, an ingress
+the host on a tailnet if wanted, a first Owner who can log in, an ingress
 serving trusted TLS, and the chosen services installed and reachable.
 
 The nine steps, in order, because the order is a constraint and not a
@@ -44,7 +45,7 @@ preference:
    piping a remote script to a shell with no consent and no mention.
 4. **Remote access** — offer Tailscale; print the auth URL; wait for the
    join. Signup is a link, not an automation.
-5. **Admin account** — username and password, captured here (A3).
+5. **Owner account** — username and password, captured here (A3).
 6. **Services** — choose from the catalog.
 7. **Summary and confirm** — everything about to happen, one answer (A2).
 8. **Install** — Docker, Tailscale, keystone, pair the node, ingress,
@@ -61,25 +62,27 @@ they have not yet seen.
 The confirmation at step 7 is a human approving a described change while
 present at the machine, which is exactly what the gate exists to
 require. The installer therefore approves the plans it proposes, and the
-audit trail records that they were approved by the installing operator.
+audit trail records that they were approved by the installing Owner.
 
 **Rejected: proposing without approving**, leaving a fresh install with
-six pending plans and a Console the operator cannot reach until identity
+six pending plans and a Console the Owner cannot reach until identity
 is up — which is one of those plans. The gate would be satisfied and the
 household would be broken.
 
-### A3. The admin credential is captured during the install
+### A3. The first Owner is created during the install
 
-ADR-W020 A2 put this on a Console first-run screen, replacing the token
-in the journal. Better than the journal, still worse than necessary: it
-requires reaching the Console before an admin exists, which means the
-claim file, which means a terminal again.
+A fresh install does not complete without an active Owner (ADR-W033
+A3). The installer already has the person's attention and a terminal. It
+asks for a username and password, creates the first Owner and their
+directory account together, and never prints a token anybody has to
+find. There is no Console first-run screen and no "first browser visitor
+becomes admin".
 
-The installer already has the operator's attention and a terminal. It
-asks for a username and password, creates the Wildstone admin principal
-and the directory account together, and never prints a token anybody has
-to find. `keystone claim-code --data-dir` remains the recovery path
-(F44), and the journal stops being a mechanism.
+If web sign-in is lost, recovery is the audited host CLI run as root
+(`keystone owner create|reset-password`, ADR-W033 A7).
+`keystone claim-code --data-dir` is a root-only host tool that mints a
+bearer token from the data directory; it is not a sign-in path. The
+journal is not a mechanism.
 
 ### A4. Interactive only on a TTY with no role flag
 
@@ -100,7 +103,7 @@ loses ten answers to a failure is worse than the script it replaced.
 Answers are persisted as they are given, and every step is idempotent
 and skippable when already satisfied. Re-running after a failure
 continues from the first unsatisfied step and asks nothing already
-answered. The persisted answers hold no credential — the admin password
+answered. The persisted answers hold no credential — the Owner's password
 is used and discarded, never written down (A3, and ADR-W020 A4's rule
 that credentials do not live in state).
 
@@ -113,23 +116,23 @@ role, and waits for the agent to connect before any capability is
 proposed — because a capability proposed before the agent connects fails
 and leaves a poisoned plan (F60).
 
-### A7. Family members are added by the admin, as declared resources
+### A7. Household members are added by an Owner, as declared resources
 
-The admin adds people from the Console, which declares `LdapUser`
+An Owner adds people from the Console, which declares `LdapUser`
 resources (ADR-W020 A3). Their accounts are in the Statefile, in plans,
 in approval and in audit, like everything else.
 
-**Rejected: handing the admin LLDAP's own UI.** It is the shortest path
+**Rejected: handing the Owner LLDAP's own UI.** It is the shortest path
 and it puts the household's account list outside the Statefile, which
 A3 rejects for a reason that has not changed: a Statefile restore would
 bring back every group with nobody in them, and read as a working system
 while being an empty one.
 
 The first credential does not travel in the spec (ADR-W020 A4). For this
-version the admin hands the person a one-time credential and Authelia's
+version the Owner hands the person a one-time credential and Authelia's
 own reset flow takes it from there (ADR-W020 A7), rather than building a
 second password surface. The QR claim page (A5/A6 of that ADR) remains
-the intended end state and is not required to add a family member.
+the intended end state and is not required to add a household member.
 
 ### A8. Linux and a terminal, deliberately, for now
 
@@ -148,7 +151,7 @@ nothing here should make it harder, and nothing here should wait for it.
   `tailnet_name` and `listen_addr` come from `tailscale status`;
   `public_domain` is a logical identifier under the tailnet posture
   (ADR-W022 A1). The genuine questions are: accept the licence, install
-  Docker, use Tailscale, admin username and password, which services.
+  Docker, use Tailscale, Owner username and password, which services.
 - **B2. The first-target catalog needs no operator secrets.** Only
   `documents-paperless` (an OIDC providers block) and the two Cloudflare
   profiles declare `provided: true` secrets. Jellyfin, Immich, identity
