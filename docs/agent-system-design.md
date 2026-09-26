@@ -345,9 +345,9 @@ MVP uses Person admission. Group support exists as a seam for future group conve
 
 Unknown/unbound external identities are refused before model inference.
 
-**Group and multi-recipient destinations fail closed in MVP.** Person admission authenticates the **speaker**, not everyone who will receive the reply. Until audience admission exists, a recognised Person addressing an Agent from a group room is refused, and the Agent directs them to a one-to-one Connection.
+**In a group or multi-recipient destination, only a message addressed to the bot reaches the Agent** (a mention or a reply; ADR-W033 B9.1). Everything else said in the room never leaves the adapter, and Keystone refuses an unaddressed group message as a backstop. The sender must still be a bound, admitted Person, and the Agent is told it is speaking in front of a shared audience. Owner Agents answer in direct messages only.
 
-This is deliberate and it is the reason group support is only a seam: without it, a recognised Person could pull their own Personal memory into a room of unadmitted participants, and every disclosure rule below would be enforced against the wrong set of people. "The sender is known" is not "the audience is known".
+Person admission authenticates the **speaker**, not everyone who will receive the reply — "the sender is known" is not "the audience is known". So disclosure in a group is judged against the room, not the sender, and full group semantics (speaker-aware disclosure, per-destination policy) remain future work.
 
 Owner-Agent Connections admit Owners only.
 
@@ -1126,7 +1126,7 @@ These are end-to-end design gates. Implementations may add more tests, but must 
 - `/new` starts a distinct session.
 - Cross-Connection delivery fallback occurs only when explicitly configured.
 - Homepage exposes admitted Member Agents and never Owner Agents.
-- A **recognised** Person addressing an Agent from a group or multi-recipient destination is refused in MVP, and is directed to a one-to-one Connection.
+- In a group or multi-recipient destination, only a message that addresses the bot reaches a Member Agent; an Owner Agent answers in direct messages only (ADR-W033 B9.1).
 - No Personal or Household memory reaches a group destination in MVP.
 
 ## 18.5 Memory
