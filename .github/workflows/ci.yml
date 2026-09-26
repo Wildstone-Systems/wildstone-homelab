@@ -79,7 +79,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: syntax
         run: for f in scripts/*.sh; do bash -n "$f"; done
-      # Pinned by digest, like every other image this project runs
+      # Pinned by checksum, like every other artifact this project runs
       # (ADR-W003 A4.2's reasoning, applied to CI). ubuntu-latest's
       # shellcheck is whatever GitHub last put in the runner image, and
       # it silently differs from any modern dev machine: 0.9.0 here
@@ -88,16 +88,33 @@ jobs:
       # locally and fail here, or — worse — stop being checked at all
       # the day GitHub bumps the runner.
       #
+      # This used to be `docker run koalaman/shellcheck@sha256:...`. It
+      # is a verified release tarball now so that the self-hosted runner
+      # needs no Docker socket at all: a job that can reach the host's
+      # Docker daemon can reach everything on that host, which is the
+      # one thing deploy/ci-runner/ exists to prevent.
+      #
       # Run the identical check before pushing:
       #   docker run --rm -v "$PWD:/mnt" koalaman/shellcheck:v0.9.0 scripts/*.sh
       #
       # Bumping the version is a deliberate, reviewed change, which is
-      # the whole point of pinning it.
+      # the whole point of pinning it: change the version and both
+      # checksums together.
       - name: shellcheck
         run: |
-          docker run --rm -v "$PWD:/mnt" \
-            koalaman/shellcheck@sha256:f35e8987b02760d4e76fc99a68ad5c42cc10bb32f3dd2143a3cf92f1e5446a45 \
-            scripts/*.sh
+          set -euo pipefail
+          v=v0.9.0
+          case "$(uname -m)" in
+            x86_64)  arch=x86_64;  sum=700324c6dd0ebea0117591c6cc9d7350d9c7c5c287acbad7630fa17b1d4d9e2f ;;
+            aarch64) arch=aarch64; sum=179c579ef3481317d130adebede74a34dbbc2df961a70916dd4039ebf0735fae ;;
+            *) echo "no pinned shellcheck for $(uname -m)"; exit 1 ;;
+          esac
+          curl -fsSL -o "$RUNNER_TEMP/shellcheck.tar.xz" \
+            "https://github.com/koalaman/shellcheck/releases/download/$v/shellcheck-$v.linux.$arch.tar.xz"
+          echo "$sum  $RUNNER_TEMP/shellcheck.tar.xz" | sha256sum -c -
+          tar -xJf "$RUNNER_TEMP/shellcheck.tar.xz" -C "$RUNNER_TEMP"
+          "$RUNNER_TEMP/shellcheck-$v/shellcheck" --version | head -3
+          "$RUNNER_TEMP/shellcheck-$v/shellcheck" scripts/*.sh
       # The Console asset's name lives in two files that never see each
       # other: release.yml produces it, install.sh fetches it. A rename
       # in one would not fail anything until a release was cut and an

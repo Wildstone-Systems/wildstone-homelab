@@ -8,11 +8,16 @@
 #
 # What the container gets instead is a just-in-time (JIT) runner config:
 # a single-use credential minted from the GitHub API for one runner
-# registration, consumed the moment the runner starts. It is visible in
-# `docker inspect` afterwards, as any container argument is, and that is
-# fine: by then it has been spent and registers nothing. The runner it
-# produced is ephemeral by definition, deregisters itself when its one
-# job ends, and this container is deleted with it.
+# registration, consumed the moment the runner starts. The runner it
+# produces is ephemeral by definition, deregisters itself when its one
+# job ends, and the container is deleted with it.
+#
+# The container gets NO Docker socket. A job that can reach the host's
+# daemon can start a privileged container, read this file, and leave
+# images, volumes and detached containers behind for the next job: no
+# token handling or cleanup survives that. So the job runs inside one
+# unprivileged container and nothing else; ci.yml was changed to need no
+# Docker (shellcheck is a verified release tarball, not an image).
 set -euo pipefail
 
 instance="${1:?instance number required}"
@@ -31,17 +36,7 @@ case "$RUNNER_IMAGE" in
 esac
 
 name="gh-runner-${instance}"
-work="/srv/ci-work/${instance}"
 runner_name="${RUNNER_NAME_PREFIX}-${instance}-$(date +%s)"
-
-# The job's work directory is a host path bound into the container at the
-# SAME path. ci.yml runs shellcheck as `docker run -v "$PWD:/mnt"`, and
-# Docker resolves that bind source on the daemon's host, so the checkout
-# has to exist there too. Wiped before every job; ExecStopPost wipes it
-# after. The official runner image runs as uid 1001 ("runner").
-rm -rf "$work"
-mkdir -p "$work"
-chown 1001:1001 "$work"
 
 docker rm -f "$name" >/dev/null 2>&1 || true
 docker pull "$RUNNER_IMAGE"
@@ -49,8 +44,8 @@ docker pull "$RUNNER_IMAGE"
 # Mint the single-use JIT config. This is the only call that uses the
 # token, and the token stays in this process's environment on the host.
 labels_json=$(printf '%s' "$LABELS" | python3 -c 'import sys,json; print(json.dumps([l.strip() for l in sys.stdin.read().split(",") if l.strip()]))')
-body=$(python3 -c 'import sys,json; print(json.dumps({"name": sys.argv[1], "runner_group_id": int(sys.argv[2]), "labels": json.loads(sys.argv[3]), "work_folder": sys.argv[4]}))' \
-  "$runner_name" "$RUNNER_GROUP_ID" "$labels_json" "$work")
+body=$(python3 -c 'import sys,json; print(json.dumps({"name": sys.argv[1], "runner_group_id": int(sys.argv[2]), "labels": json.loads(sys.argv[3])}))' \
+  "$runner_name" "$RUNNER_GROUP_ID" "$labels_json")
 jit=$(curl -fsS -X POST \
   -H "Authorization: Bearer ${ACCESS_TOKEN}" \
   -H "Accept: application/vnd.github+json" \
@@ -58,13 +53,12 @@ jit=$(curl -fsS -X POST \
   "https://api.github.com/repos/${GITHUB_REPO}/actions/runners/generate-jitconfig" \
   -d "$body" | python3 -c 'import sys,json; print(json.load(sys.stdin)["encoded_jit_config"])')
 
-# --rm: the container is deleted when the runner exits after its one job.
-# --group-add: the runner user needs the socket's group to talk to Docker.
-# The socket is what lets a job do anything Docker on this machine can,
-# which is why the machine is the isolation boundary, not the container.
+# --rm: the container is deleted when the runner exits after its one job,
+# and its work directory with it. The runner runs as uid 1001 ("runner")
+# with every capability dropped and no way to gain one; the job gets a
+# checkout, a toolchain it downloads itself, and nothing of this host.
 exec docker run --rm --name "$name" \
-  --group-add "$(stat -c %g /var/run/docker.sock)" \
-  -v "${work}:${work}" \
-  -v /var/run/docker.sock:/var/run/docker.sock \
+  --cap-drop ALL \
+  --security-opt no-new-privileges \
   "$RUNNER_IMAGE" \
   ./run.sh --jitconfig "$jit"

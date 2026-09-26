@@ -29,7 +29,6 @@ StartLimitIntervalSec=0
 EnvironmentFile=/etc/wildstone/ci-runner.env
 ExecStart=/usr/local/lib/wildstone/run-one-job.sh %i
 ExecStop=-/usr/bin/docker stop gh-runner-%i
-ExecStopPost=/bin/rm -rf /srv/ci-work/%i
 # A clean exit is the normal end of every job; restart unconditionally.
 Restart=always
 RestartSec=5

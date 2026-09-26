@@ -25,39 +25,30 @@ Three details the script enforces rather than asks for:
 - **The repository-administration token never enters a container.**
   It is read by the script on the host and used for one API call, to
   mint the JIT credential. Only that credential reaches `docker run`,
-  and it is spent the moment the runner starts, so a job that runs
-  `docker inspect` through the socket finds a used credential and no
-  token. (The previous design passed the whole env file into the
-  container, which the socket made readable from any job.)
+  and it is spent the moment the runner starts.
+- **The container gets no Docker socket, no host mounts, and no
+  capabilities.** A job that could reach the host's Docker daemon could
+  start a privileged container, read the token file, and leave images,
+  volumes and detached containers behind for the next job; no amount of
+  token handling or cleanup survives that. So the job runs inside one
+  unprivileged container (uid 1001, `--cap-drop ALL`,
+  `no-new-privileges`) and nothing else. `ci.yml` was changed to need
+  no Docker: shellcheck is a checksum-verified release tarball rather
+  than an image.
 - **The image is pinned by digest**, and the script refuses to start on
-  a tag. The container holds the Docker socket; a mutable tag would
-  hand the machine to whoever controls it. `ci-runner.env.example`
-  carries the reviewed digest and the two commands that resolve a new
-  one when you choose to move.
-- **The job's work directory is a host directory bound into the
-  container at the same path** (`/srv/ci-work/<n>`), wiped before and
-  after every container. `ci.yml` runs shellcheck as
-  `docker run -v "$PWD:/mnt"`, and Docker resolves that path on the
-  host, so the checkout has to exist there too. Same path on both sides
-  keeps `$PWD` true for both.
+  a tag. `ci-runner.env.example` carries the reviewed digest and the two
+  commands that resolve a new one when you choose to move.
 
 The host needs `docker`, `curl` and `python3`. The container is
-`ghcr.io/actions/actions-runner`, which ships the Docker CLI the
-shellcheck step needs; `setup-go` and `setup-node` fetch their
-toolchains inside the job as they do on a hosted runner.
-
-This is the third lock, after the two that keep strangers off the
-runner in the first place: `ci.yml` skips pull requests from forks, and
-the repository's Actions settings require the maintainer's approval
-before a fork's workflow runs.
+`ghcr.io/actions/actions-runner`; `setup-go` and `setup-node` fetch
+their toolchains inside the job as they do on a hosted runner.
 
 ## Where to run it
 
 **On the CI machine, which is already separate from both the household
-host and the test homelab.** Keep it that way. The runner mounts the
-Docker socket (shellcheck runs through `docker run`), so a job can do
-anything Docker on that machine can. The machine is the isolation
-boundary, not the container:
+host and the test homelab.** Keep it that way. The container is the
+first boundary; the machine is the second, for the day a container
+escape exists:
 
 - Docker installed, nothing else that matters on it.
 - Firewall it so it can reach github.com and container registries and
@@ -104,6 +95,9 @@ Nothing has to. Two things get simpler:
 - The "clear a half-written gitleaks download" step in `ci.yml` exists
   only because a persistent runner kept `/tmp` between jobs. It is
   harmless here and can go once the old runner is gone.
+- The shellcheck step no longer uses Docker (see above), so nothing in
+  CI needs a Docker socket. Keep it that way: a step that needs
+  `docker run` is a step that needs the host.
 - `runner.tool_cache` is empty on every job, so `setup-go` and
   `setup-node` download toolchains each time. Jobs are slower by that
   much and never wrong because of a stale cache.
