@@ -64,7 +64,7 @@ Normative:
 - A child record MUST name a guardian and MUST NOT hold any role but Member.
 - A child record MUST NOT be admitted to Butler membership. `AdmitButlerMember` refuses it by every path, including a direct `INSERT`.
 - A scheduled subject MUST carry no authentication binding: no directory account, no API principal, no chat binding, no session. Recording a Person as a child, or converting one, MUST remove any that exist; a deployment that cannot MUST refuse the conversion. **Admission state does not imply this** — `admitted` governs Butler membership only, and directory and principal authentication do not consult the profile.
-- None of the above authorizes the Child surface, which ADR-W030 Part C gates separately on credentials, principal, endpoint, gateway and transport eligibility.
+- None of the above authorizes the Child surface, which ADR-W030 A2.1 gates separately on credentials, principal, endpoint, gateway and transport eligibility.
 
 Acceptance: a child record cannot be admitted by any path; a child with an authentication binding is refused or has it removed at the point of recording; a household feature can name, schedule and display a child that has never signed in.
 

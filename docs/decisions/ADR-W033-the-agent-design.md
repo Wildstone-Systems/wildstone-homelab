@@ -16,7 +16,7 @@ The agent audit surfaced many individual findings, but most of them shared a sma
 
 The governing principle is that identity, authority, knowledge, work, and external reach stay separate. Models may interpret requests and propose work, but they do not create identity, manufacture authority, widen memory audiences, or approve their own durable automation.
 
-Older ADRs remain historical records. Where this ADR conflicts with an older clause, this ADR explicitly supersedes or amends it rather than rewriting history.
+Where this ADR conflicts with an older ADR, this ADR governs. Older ADRs have been edited so they no longer state conflicting rules; Part G lists what changed.
 
 ---
 
@@ -142,7 +142,7 @@ So it is required here rather than assumed. **A scheduled subject carries no aut
 
 Nothing enforces that today. `RecordButlerMember` checks the guardian and the role and looks at no identity link, so this is a decision with an open implementation, and the gap is named here so it is closed deliberately rather than discovered.
 
-**THIS IS NOT THE CHILD SURFACE, AND DOES NOT OPEN IT.** ADR-W030 Part C gates a future Child surface on its own bot credentials, principal and role, endpoint, structurally limited gateway, transport eligibility, and boundary tests, and states that no child deployment is authorized there. Every one of those is a requirement on a child **acting** — talking to an Agent, holding a credential, reaching a gateway. A child who is scheduled does none of them. The gate stands exactly as written, `AdmitButlerMember` keeps refusing, and nothing in this section may be read as evidence for that surface.
+**THIS IS NOT THE CHILD SURFACE, AND DOES NOT OPEN IT.** ADR-W030 A2.1 gates a future Child surface on its own bot credentials, principal and role, endpoint, structurally limited gateway, transport eligibility, and boundary tests, and states that no child deployment is authorized there. Every one of those is a requirement on a child **acting** — talking to an Agent, holding a credential, reaching a gateway. A child who is scheduled does none of them. The gate stands exactly as written, `AdmitButlerMember` keeps refusing, and nothing in this section may be read as evidence for that surface.
 
 What a scheduled-but-unadmitted Person explicitly does not get: a login, a chat binding, an Agent, a session, memory of their own, a Connection, or any cloud routing (ADR-W030's Child cloud-routing clause is untouched).
 
@@ -247,6 +247,8 @@ Sandy
 Model fallback stays within the assigned Agent. Wildstone does not automatically substitute another Agent when one Agent cannot perform an inference step.
 
 Privacy requirements still constrain the model chain. A local-only task must fail rather than silently fall through to a cloud model.
+
+For an Agent served by an external runtime (ADR-W039), the model chain is the runtime's own configuration. Wildstone records the Owner-declared processing class for that runtime and applies it as a disclosure filter: `local_only` content is withheld from any runtime not declared local-only.
 
 ## B7. Connection is the common reach abstraction
 
@@ -586,7 +588,7 @@ Owner Agents may draft and submit Member- or Owner-class Plans.
 
 No Agent may approve or activate its own Plan. A human Owner must approve the exact executable version.
 
-This supersedes the previous standing-grant design that allowed some Agent-created routines to self-activate.
+There is no standing grant under which an Agent may activate a routine itself.
 
 ### E2.1 Amendment (2026-09-19, #269): household settings an Agent can propose
 
@@ -642,6 +644,8 @@ A scheduled routine runs unattended: no active Person, and by E6 it does not kee
 So an approved routine is a principal in its own right, **bounded to its exact approved version**, and a Household secret may grant `use` to that routine version as it would to a Person or Group. Effective unattended `use` intersects the exact-version routine authorization, the routine/version secret-use grant, the assigned Agent/tool capability, current service capability, and current privacy and safety policy.
 
 Any change to executable behaviour **or to the secret grants a routine requires** creates a new version needing Owner reapproval: a routine cannot acquire a secret it was not approved with by being edited around it. This covers `use` only — raw-value reveal to a human is unchanged, since a routine resolves a secret below inference to reach a service and never reveals one.
+
+An Owner-approved Agent **subscription** version (ADR-W039 §3.6) is the same kind of unattended principal: every rule here and in C7, D3, E6 and E6.1 that names an approved routine version applies to it identically.
 
 ## E6.1 Any Owner can stop a routine immediately
 
@@ -766,22 +770,24 @@ There is no automatic retention timer required for MVP.
 
 # G. Amendments and supersessions
 
-This ADR is authoritative where it conflicts with earlier decisions. Older ADRs remain untouched as historical records.
+This ADR is authoritative where it conflicts with earlier decisions. The older ADRs have been edited to remove the conflicting clauses and now state the rules below directly; git history holds their earlier wording.
 
-The major changes are:
+What changed, and where:
 
-- **ADR-W030 A6 / prior routine activation:** superseded where it allowed an Agent to self-activate routine work under a standing grant. Under this ADR, Agents propose and a human Owner activates the exact version.
-- **ADR-W030 A7/A8:** authority remains an intersection but now uses the Person, Agent, Connection, and Task/routine authorization as distinct required legs.
-- **ADR-W031 A4 / prior per-Butler-memory framing:** superseded by explicit Session, Agent-local, Personal, and Household memory scopes. Agent-local durable memory is a real concept.
-- **ADR-W031 A7 and ADR-W026 A3:** retained in substance where they require independent Agent credentials, generalized through the Connection abstraction.
-- **ADR-W032 role/profile assumptions:** superseded by exactly two fundamental human roles, Owner and Member; Child is a constrained Member profile.
-- **Prior single-model Agent definition:** superseded by a per-Agent ordered model/provider chain.
-- **Prior Agent-pause/routine coupling:** superseded. Household routines survive Agent loss; deterministic steps continue and inference steps block.
-- **ADR-W012 infrastructure secret-store properties:** intentionally retained; Household/user secrets remain a separate store/domain.
-- **ADR-W030 Part C / the Child surface:** **not** superseded, and deliberately not reopened. A8 states that a Person can be a scheduled subject without being admitted; Part C continues to gate a child *acting* — credentials, principal, endpoint, gateway, transport eligibility — and no child deployment is authorized by this ADR either. `AdmitButlerMember` still refuses a child record by every path.
-- **ADR-W030 A2.1 / guardian mappings:** retained and given meaning. The guardian a child record has always required now confers standing over that child's household records (A9), still as an explicit recorded relationship rather than anything inferred from a group.
+- **Routine approval (ADR-W030 A1/A6, and the clauses copied from it into W007, W009, W020, W024–W027, W035):** no Agent activates a routine, and there is no Member or "admitted adult" approval or household-reviewer page. A human Owner approves the exact version (E2–E4); any Owner stops a routine without a Plan (E6.1).
+- **ADR-W030 A7/A8:** authority remains an intersection but now uses the Person, Agent, Connection, and Task/routine authorization as distinct required legs (A0). Task authority is derived, not an issued grant.
+- **Surfaces and bots (ADR-W026 A1/A3/A4, W029 A7, W031 A1/A3/A7, W030 A1):** the Household/Operator/family/admin surfaces are replaced by Owner/Member Agent classes, tool classes and Connections (B2–B5, B7, B7.1). Each Agent keeps its own bot and credential. Unknown accounts get no reply (B9.1).
+- **ADR-W031 A1/A4/A10:** Agents are household-owned and administered by any Owner (B1). Memory uses the Session, Agent-local, Personal and Household scopes (C1–C11).
+- **ADR-W032, ADR-W016 A3:** exactly two human roles; the Console is Owner-only, signed in through OIDC with step-up (A1, A4, A4.1).
+- **Single model per Agent (ADR-W017 A4/A9, W030 A9, W031 A2/A6, W041):** replaced by a per-Agent ordered model/provider chain (B6). ADR-W039 amends B6 for external runtimes.
+- **First administrator (ADR-W007, W014, W020 A2/A4, W023 A3):** the installer creates the first Owner; recovery is the host CLI (A3, A7).
+- **Offboarding (ADR-W020, W024, W030 A4):** Household routines survive the Person who proposed or approved them (E5, F1, F2).
+- **Agent pause and routines:** Household routines survive Agent loss; deterministic steps continue and inference steps block (E8).
+- **ADR-W012 infrastructure secret-store properties:** retained; Household/user secrets are a separate store (D1).
+- **ADR-W030 A2.1 / the Child surface:** **not** superseded. A8 states that a Person can be a scheduled subject without being admitted; A2.1 continues to gate a child *acting* — credentials, principal, endpoint, gateway, transport eligibility — and no child deployment is authorized by this ADR either. `AdmitButlerMember` still refuses a child record by every path. Guardian records are retained and given meaning by A9.
+- **ADR-W039 (later amendment of this ADR):** external runtimes own their model chain, gated by the Owner-declared processing class (B6); an approved subscription version is an unattended principal like a routine version (E6.0).
 
-Detailed finding-by-finding coverage remains in the review/audit documents rather than this ADR.
+Detailed finding-by-finding coverage remains in the audit documents.
 
 ---
 

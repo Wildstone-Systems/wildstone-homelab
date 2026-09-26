@@ -1,11 +1,11 @@
-# Historical review of the first ADR-W033 draft
+# ADR-W033 repository review
 
 - **Reviewed:** 16 September 2026
 - **Repository/branch reviewed:** `claude/ecstatic-wright-czl9v4`
 - **Purpose:** repository/schema review of the first W033 draft before implementation
 - **Current authority:** [`ADR-W033`](ADR-W033-the-agent-design.md) and [`../agent-system-design.md`](../agent-system-design.md)
 
-> **Historical-review notice.** This document records what the repository review found while checking the *first* W033 draft against the schema and code. After that review, the Owner and assistant performed a broader architectural re-baselining. Several design conclusions recorded in the original review were intentionally superseded — notably the three-role `owner/member/child` ladder, the no-Agent-local-memory model, explicit memory-grant-by-default behavior, Agent self-activation under standing grants, and routine pause coupling to Agent pause. The repository/schema observations below remain useful implementation evidence; where a design conclusion conflicts with the final W033, the final W033 and design contract govern.
+> Repository and schema evidence gathered while checking W033 against the code. For decisions, [ADR-W033](ADR-W033-the-agent-design.md) and [`agent-system-design.md`](../agent-system-design.md) govern.
 
 The detailed finding evidence remains in [`../audit/`](../audit/) and the per-slice finding files. This review is a synthesis of the important cross-cutting repository discoveries, not a replacement for those finding records.
 
@@ -15,14 +15,11 @@ The detailed finding evidence remains in [`../audit/`](../audit/) and the per-sl
 
 The first W033 draft was coherent enough that it was easy to mistake internal consistency for repository compatibility. The review therefore checked the decisions against the actual schema and code rather than only against the issue discussions that produced them.
 
-That review found two kinds of information:
-
-1. **Repository facts that remain relevant.** Examples include forward-only migrations, where authorization seams actually sit, duplicated audience constraints, and provider construction chokepoints.
-2. **Design conclusions from the first draft.** Some of these were later deliberately changed during the final owner review. They are historical context, not current requirements.
+What it found are repository facts: forward-only migrations, where authorization seams actually sit, duplicated audience constraints, and provider construction chokepoints.
 
 ---
 
-# Repository/schema findings from the first review
+# Repository/schema findings
 
 ## 1. The audit counts in the first draft were wrong
 
@@ -113,7 +110,7 @@ Final W033 resolves the product behavior as:
 - cached/private prepared context is invalidated where needed
 - durable household resources are not blindly destroyed; they are resolved explicitly
 
-The old first-draft rule that simply paused routines owned by the departing Person is **not** the final design, because final routines are Household-owned.
+Routines are Household-owned, so a departing Person's routines are not paused wholesale (F1).
 
 ## Completion evidence and coordinator gating require verification
 
@@ -130,69 +127,6 @@ Neither is solved by prose in W033. They require repository/runtime verification
 
 ---
 
-# First-draft conclusions that were superseded later that day
-
-The following are preserved here specifically so implementation work does **not** accidentally resurrect them from old review text.
-
-## Three human roles
-
-**First draft:** `owner > member > child` as three fundamental human roles.
-
-**Final W033:** exactly two fundamental human roles, `owner` and `member`. `child` is a constrained Member profile/policy preset.
-
-## No Agent-local memory
-
-**First draft:** ordinary durable facts belonged only to people/household; there was no Agent-local durable-memory concept.
-
-**Final W033:** four memory scopes exist — Session, Agent-local, Personal, Household. Agent-local memory is real, isolated by default, and may be transferred/exported/promoted at Agent deletion.
-
-## Separate explicit Personal-memory grant for every Agent
-
-**First draft:** conversation admission did not imply memory access; a new Butler started knowing nothing until separately granted memory.
-
-**Final W033:** admitting a Person to an Agent grants that Agent access to that Person's Personal memory by default, with explicit restriction available. Member Agents receive Household memory by default, also restrictable.
-
-## Agent self-activation through a narrow standing grant
-
-**First draft:** some read-only/notification routines could be created and activated by an Agent without a human signature under a narrow standing grant.
-
-**Final W033:** no Agent self-activates a durable routine. Member and Owner Agents may propose Plans; a human Owner approves the exact executable version. Approved routines then run repeatedly without per-run approval.
-
-## Agent pause automatically pauses routines
-
-**First draft:** pausing/retiring an Agent paused its routines.
-
-**Final W033:** routines are Household-owned. Deterministic steps continue through Agent loss; inference-dependent steps block/fail visibly. Agent reassignment requires a newly approved version.
-
-## One selected model
-
-**First draft/baseline language:** an Agent had one selected model plus generic fallback policy.
-
-**Final W033:** each Agent has its own ordered provider/model chain. Privacy policy can block fallback. There is no global model fallback order and no automatic Agent substitution.
-
-## Address/surface-special-case framing
-
-**First draft:** much of Reach was expressed in terms of addresses and fixed surfaces.
-
-**Final W033:** Homepage, Telegram, Discord, Slack, voice, etc. use a common first-class `Connection` abstraction with independent admission, credentials, lifecycle, and disclosure policy. Conversation continuity follows Person + Agent + session rather than transport.
-
----
-
-# Historical ADR handling
-
-The first review added inline amendment text to several older ADRs. After the final owner review, that approach became misleading because the first-draft W033 assumptions had changed again.
-
-The cleanup strategy is therefore:
-
-- preserve older ADR bodies as historical records
-- centralize current supersessions/amendments in final ADR-W033 Part G
-- use `agent-system-design.md` as the clean current design contract
-- keep repository evidence in the audit finding files and this historical review
-
-This avoids rewriting history while also preventing stale inline amendment banners from presenting superseded first-draft decisions as current architecture.
-
----
-
 # What to use during implementation
 
 For implementation/remediation work, use:
@@ -201,6 +135,6 @@ For implementation/remediation work, use:
 2. [`ADR-W033`](ADR-W033-the-agent-design.md) for current architectural decisions, rationale, supersessions, and dependency order.
 3. [`../audit/`](../audit/) and the per-slice findings for repository evidence.
 4. This document for repository/schema lessons from the first design review.
-5. Older ADRs/baseline only as historical context unless final W033 explicitly retains a property.
+5. Older ADRs, which have been edited to agree with W033.
 
 Nothing in this review itself establishes that the repository implements the final architecture.
