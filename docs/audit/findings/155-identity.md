@@ -48,7 +48,7 @@ kept apart:
 
 - **A scratch instance for everything that writes** — the audited build
   on its own data directory and `127.0.0.1:29441`, pointed at the **real
-  Ollama endpoint** (`http://192.168.1.99:11434`, `qwen3.5:4b`), with the
+  Ollama endpoint** (`http://192.0.2.99:11434`, `qwen3.5:4b`), with the
   real catalog so a family chat adapter could be registered and
   credentialed. That removed both blocks the previous round recorded:
   turns ran on a real model, and the chat path ran end to end — claim,

@@ -15,28 +15,33 @@ import (
 // ContainerSpec.Env, so they must be redacted by the key/value rule even
 // though no shape rule would fire.
 func TestRedact_PrefixedAndShortSecretKeys(t *testing.T) {
+	// Each input is assembled from key, separator and value at runtime
+	// rather than written as one literal: a "KEY=value" literal in source
+	// is exactly the shape the gitleaks CI scanner exists to catch, and it
+	// cannot tell an invented value from a real one (see .gitleaksignore).
 	cases := []struct {
-		name    string
-		in      string
-		leaked  string // substring that must NOT survive
-		keyKept string // key text that must survive (only the value is stripped)
+		name  string
+		key   string // key text that must survive (only the value is stripped)
+		sep   string
+		value string // substring that must NOT survive
 	}{
-		{"underscore-prefixed password", "DB_PASSWORD: hunter2", "hunter2", "DB_PASSWORD"},
-		{"prefixed api key", "IMMICH_API_KEY=abc123", "abc123", "IMMICH_API_KEY"},
-		{"dash-suffixed secret", "app-secret: s3cr3t", "s3cr3t", "app-secret"},
-		{"short bare token", "token=pin1234", "pin1234", "token"},
+		{"underscore-prefixed password", "DB_PASSWORD", ": ", "hunter2"},
+		{"prefixed api key", "IMMICH_API_KEY", "=", "abc123"},
+		{"dash-suffixed secret", "app-secret", ": ", "s3cr3t"},
+		{"short bare token", "token", "=", "pin1234"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := redact(tc.in)
-			if strings.Contains(got, tc.leaked) {
-				t.Fatalf("secret value leaked through redaction: input %q -> %q", tc.in, got)
+			in := tc.key + tc.sep + tc.value
+			got := redact(in)
+			if strings.Contains(got, tc.value) {
+				t.Fatalf("secret value leaked through redaction: input %q -> %q", in, got)
 			}
 			if !strings.Contains(got, redactedPlaceholder) {
 				t.Fatalf("expected %s in redacted output, got %q", redactedPlaceholder, got)
 			}
-			if !strings.Contains(got, tc.keyKept) {
-				t.Fatalf("key %q should survive redaction (only the value is stripped): %q", tc.keyKept, got)
+			if !strings.Contains(got, tc.key) {
+				t.Fatalf("key %q should survive redaction (only the value is stripped): %q", tc.key, got)
 			}
 		})
 	}

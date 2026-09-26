@@ -40,5 +40,5 @@ escape, DoS beyond rate limiting).
 
 ## Supported versions
 
-Until a first tagged release exists, only the tip of `main` is
-supported. After tagging begins, only the latest release.
+Only the latest tagged release and the tip of `main` are supported.
+Earlier tags receive no fixes.

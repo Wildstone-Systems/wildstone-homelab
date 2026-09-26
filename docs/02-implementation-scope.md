@@ -7,8 +7,8 @@
 **Inputs:** `00-design-brief-v0.1.md`, `01-architecture-proposal.md` (merged)
 
 > Provenance: authored 2026-07-30 alongside the architecture proposal in the
-> reference repo (`chickenrat17/homelab-config`, session archive committed to
-> this repo at `ac88281`); it never landed as a file in either repo's tree.
+> reference repo (the maintainer's private, hand-managed homelab repo); it
+> never landed as a file in either repo's tree.
 > Migrated here verbatim (status header updated) because it defines the
 > E-milestone numbering (E0–E13) the ADRs and commit history reference.
 
@@ -37,8 +37,8 @@ with the plan.
    near-fully delegable to coding agents with review, vs ▲ where they need
    sustained human judgment.
 3. **The reference deployment (this repo) is the test oracle.** Every epic's
-   acceptance test is ultimately "does it reproduce something HeadOverHalls
-   Home already does by hand?"
+   acceptance test is ultimately "does it reproduce something the maintainer's
+   existing homelab already does by hand?"
 4. **Product code lives in a new repo** (`wildstone`, monorepo — see §1).
    This repo stays what it is: the reference deployment, and progressively
    the dogfood target.
@@ -50,7 +50,7 @@ with the plan.
 | # | Decision | Call | Scope impact |
 |---|---|---|---|
 | D1 | MVP target | **Full MVP as scoped** (E1–E13 complete: Photos+Media+Documents, Butler write tools, public ingress). The §3 cut line remains the pre-agreed descope order if slipping — it is a contingency, not the plan. | Calendar: ~72 fw ≈ 9–16 months depending on pace |
-| D2 | Audience year one | **You-first.** Dogfood target is HeadOverHalls; distribution = GitHub releases only. No `get.wildstone.dev` domain, hosted install script, or public docs site until a second user exists. | E0.1 shrinks ~0.5 fw; E9 bootstrap installs from a GitHub release URL; signing kept (cheap now, painful to retrofit) |
+| D2 | Audience year one | **You-first.** Dogfood target is the maintainer's own homelab; distribution = GitHub releases only. No `get.wildstone.dev` domain, hosted install script, or public docs site until a second user exists. | E0.1 shrinks ~0.5 fw; E9 bootstrap installs from a GitHub release URL; signing kept (cheap now, painful to retrofit) |
 | D3 | Repo & name | **`chickenrat17/wildstone-homelab` (created 2026-07-30), "Wildstone" name locked.** Accepted rename risk; module paths (`github.com/chickenrat17/wildstone-homelab/...`) and binary names (`wardstoned`, `keystone`, `wild`) may harden immediately. | Unblocks E0.1 today |
 | D4 | Butler dev LLM | **One cloud (Anthropic API) + one local (Ollama) from day one.** Tool-reliability probe and degraded modes developed against both in parallel. | S4/E12 as scoped |
 
@@ -227,7 +227,7 @@ enable/disable, logs, audit replay, backup run/restore. Shares client lib.
   harness — run weekly in CI from the moment E6-backups lands.
 - ◆ User docs (install, concepts, recovery), operator runbook, threat-model
   doc refresh against as-built.
-- ▲ Dogfood migration: HeadOverHalls infra VM capabilities recreated by
+- ▲ Dogfood migration: The existing infra VM's capabilities recreated by
   Wildstone on a parallel VM; each friction filed and burned down.
   **Cutover rule (two-masters problem):** hand-managed and
   Wildstone-managed resources may coexist for workloads (the drift
@@ -300,7 +300,7 @@ artifact (E3) gate everything. Two practical rules fall out:
 | **M1** | Spike gate | S3 demo: blank VM → OIDC-authenticated Immich in <30 min unattended; 5 locked-decision ADRs merged | +3 months |
 | **M2** | Skeleton | `wild` + Console can: install identity+ingress capabilities on a fresh VM via plans, show drift, auto-repair a killed container | +5.5 months |
 | **M3** | Backbone | Backups land: nightly restic + restore-alongside + first automated restore drill passes; secrets path live; Photos capability e2e green | +7.5 months |
-| **M4** | **MVP / private alpha** | Onboarding §7.2 end-to-end incl. validation; **total-host-loss drill passes unattended**; Butler diagnoses the 8 failure fixtures correctly; HeadOverHalls infra-VM equivalent recreated by Wildstone | +9–11 months |
+| **M4** | **MVP / private alpha** | Onboarding §7.2 end-to-end incl. validation; **total-host-loss drill passes unattended**; Butler diagnoses the 8 failure fixtures correctly; existing infra-VM equivalent recreated by Wildstone | +9–11 months |
 | **M5** | Dogfood cutover | This repo's homelab runs *on* Wildstone (capability-by-capability migration complete for infra + 3 apps); v1 scoping doc written from friction log | +MVP+2 months |
 
 ## 6. Top risks to the plan (not the product)

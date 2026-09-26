@@ -87,7 +87,7 @@ aspirational features.
 
 ### A4. Dogfood migration is a runbook with a hard cutover rule
 
-`docs/migration.md` captures the HeadOverHalls parallel-VM migration:
+`docs/migration.md` captures the dogfood parallel-VM migration:
 hand-managed and Wildstone-managed workloads may coexist (the drift
 classifier's never-delete-foreign rule protects foreign resources), but
 **ingress and identity are singular**. Apps cut over per-capability via

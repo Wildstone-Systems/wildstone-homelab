@@ -15,6 +15,12 @@ jobs:
   secrets-scan:
     name: secret scan (gitleaks)
     runs-on: [self-hosted, dev-services]
+    # These jobs run on a self-hosted runner inside the maintainer's own
+    # network, and that runner is persistent (see the gitleaks note below).
+    # On a public repository a pull request from a fork would otherwise
+    # execute its workflow changes on that machine. So a fork's PR is
+    # skipped here; push the branch into this repository to run CI on it.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - uses: actions/checkout@v4
         with:
@@ -61,6 +67,12 @@ jobs:
   installer:
     name: shell scripts (ADR-W014/W018)
     runs-on: [self-hosted, dev-services]
+    # These jobs run on a self-hosted runner inside the maintainer's own
+    # network, and that runner is persistent (see the gitleaks note below).
+    # On a public repository a pull request from a fork would otherwise
+    # execute its workflow changes on that machine. So a fork's PR is
+    # skipped here; push the branch into this repository to run CI on it.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - uses: actions/checkout@v4
       - name: syntax
@@ -118,6 +130,12 @@ jobs:
   console:
     name: console (typecheck + build + checks, ADR-W016/W027)
     runs-on: [self-hosted, dev-services]
+    # These jobs run on a self-hosted runner inside the maintainer's own
+    # network, and that runner is persistent (see the gitleaks note below).
+    # On a public repository a pull request from a fork would otherwise
+    # execute its workflow changes on that machine. So a fork's PR is
+    # skipped here; push the branch into this repository to run CI on it.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     # `playwright` is a devDependency for scripts/ui-check.mjs, which is an
     # operator's check against their own control plane and never runs here.
     # Without this, every install in this job downloads a browser nothing
@@ -147,6 +165,12 @@ jobs:
   native-agent:
     name: native agent runtime (OpenAI Agents SDK sidecar, #357)
     runs-on: [self-hosted, dev-services]
+    # These jobs run on a self-hosted runner inside the maintainer's own
+    # network, and that runner is persistent (see the gitleaks note below).
+    # On a public repository a pull request from a fork would otherwise
+    # execute its workflow changes on that machine. So a fork's PR is
+    # skipped here; push the branch into this repository to run CI on it.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -193,6 +217,12 @@ jobs:
   go:
     name: go (${{ matrix.goarch }})
     runs-on: [self-hosted, dev-services]
+    # These jobs run on a self-hosted runner inside the maintainer's own
+    # network, and that runner is persistent (see the gitleaks note below).
+    # On a public repository a pull request from a fork would otherwise
+    # execute its workflow changes on that machine. So a fork's PR is
+    # skipped here; push the branch into this repository to run CI on it.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     strategy:
       matrix:
         goarch: [amd64, arm64]

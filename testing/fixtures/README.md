@@ -1,8 +1,8 @@
 # Fixture library (E0.3)
 
 Golden configs transcribed from the reference deployment
-(`chickenrat17/homelab-config`, branch
-`claude/wildstone-homelab-architecture-8owgkg`, 2026-07-30). These are the
+(the maintainer's private, hand-managed homelab repo; snapshot of
+2026-07-30). These are the
 test oracle for the capability engine and reconciler: a package that claims
 to produce "Authelia protecting an app behind forward-auth" should converge
 to configs shaped like these.

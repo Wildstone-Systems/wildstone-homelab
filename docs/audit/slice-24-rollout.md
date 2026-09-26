@@ -42,7 +42,7 @@ source for unresolved product behavior.
 
 ## Household rollout gate
 
-The first rollout attempt treated `192.168.1.99` as the household host, but
+The first rollout attempt treated `192.0.2.99` as the household host, but
 [`runtime-access.md`](runtime-access.md) documents that address as the Ollama
 endpoint. A later readiness pass found the Linux production and scratch hosts
 as `hall-fam-homelab-1` and `wildstone-test-homelab` over Tailscale. Both
