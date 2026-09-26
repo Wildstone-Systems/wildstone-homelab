@@ -1,18 +1,19 @@
 # ADR-W034: The household keeps its own calendar
 
-- **Status:** accepted for phases 1, 2 and 4; phases 3 and 5 are a plan,
-  not a commitment.
+- **Status:** accepted. Built: A1–A14. Open: C1 (event bus), C3
+  (other providers), per-member personal calendars (C2).
 - **Relates to:** ADR-W005 (package format), ADR-W013 A4 (backups),
   ADR-W019 A10 (a Route is not always served at the host it declares),
   ADR-W024 (household events and automations), ADR-W029 (a package is
   checked against the app it configures), ADR-W030 A5/A5.1 (scoped
-  integrations and the adapter contract), ADR-W031 (Butlers).
+  integrations and the adapter contract), ADR-W031 (Butlers), ADR-W038
+  (declared shared calendars).
 - **Governed by:** ADR-W033 where they overlap.
 - **Terminology:** "connection" here means an integration connection
   (ADR-W030 A5), not an ADR-W033 Connection (how a Person reaches an
   Agent).
-- **Audience:** decision record for the `calendar` capability, and the
-  brief for whoever builds the phases that are not here yet.
+- **Audience:** decision record for the `calendar` capability. Which
+  calendars exist and who may read or write each is ADR-W038.
 
 ---
 
@@ -106,7 +107,9 @@ can observe, which is what makes A1's boundary worth having.
 
 The Calendar capability keeps operational state only — what a connection
 is, what it was verified to do, what work was queued and answered, and
-the audit of it. Not a table of events.
+the audit of it. Not a table of events. A commitment booking (ADR-W035
+A7) keeps its date, the calendar ID and the event href it follows; it is
+a pointer to the event, not a copy of it.
 
 An events table would be a second thing that can be right, and the
 household edits the first one from a phone whenever it likes. The cost
@@ -129,13 +132,17 @@ the first, for the same reason `keystone/domestic` keeps its own copy of
 the tier rule: a call that arrived some other way still cannot write.
 
 **The in-process road** (Keystone's own action gateway, for the calendar
-this household runs) is made available by the deployment: the six tools
-are registered only when Keystone is started with `-calendar-url`,
-`-calendar-user` and `CALENDAR_PASSWORD`, the same way `-ntfy-url` is.
+this household runs) is made available by the deployment: the seven tools
+are registered when Keystone is started with `-calendar-url`, the same way
+`-ntfy-url` is. A missing `-calendar-user` or `CALENDAR_PASSWORD` is logged
+as a warning at startup, and every call then fails upstream.
 Wiring makes the tools available; it grants them to no Agent. Each Agent
 uses them only under an Owner's grant to that Agent, by tool class,
 bundle or explicit selection, with opt-in tools excluded from broad grants
 (ADR-W033 A0, B3–B5).
+_Code not yet conformant: calendar actions are reached through the single
+`do_household_action` tool and filtered by declared tier, not granted per
+action to each Agent._
 
 On either road, deleting an event is additionally gated per call by the
 `confirm` tier (A10).
@@ -176,36 +183,28 @@ a phone is wherever that phone put it. Reads therefore carry the `href`
 the server reported, and changing or deleting an event the household made
 starts by reading it.
 
-### A9. The agent acts on the household calendar, not on anybody's own
+### A9. The agent acts on declared shared calendars, not on anybody's own
 
 Everybody's own calendars are their own: `rights` is anchored on the name
 they signed in with, and nothing — including the service account — reads
-another person's. Alongside them is one **household** calendar, under its
-own principal, readable and writable by everyone in `calendar_users`, and
-that is what the six tools act on.
+another person's. Alongside them are the declared shared calendars of
+ADR-W038, each a group collection with its own read and write access;
+`household` is the default one. The seven tools act on the default, or on
+the calendar named by their optional `calendar` argument, within the
+acting Person's access to it.
 
 It is deliberately not "the agent acts on your calendar", which would
 mean a standing grant over every member's private appointments for the
-convenience of a create. That grant is a decision for the permissions
-phase (C2), not a default.
+convenience of a create. So an agent cannot answer "what's on MY
+calendar tomorrow" — only what is on the shared calendars that Person can
+read. That is open (C2).
 
-One cost, and one that was a cost until the mechanism was found:
+### A10. Delete asks first
 
-- **An agent cannot answer "what's on MY calendar tomorrow"** — only
-  what is on the household's. Until C2, that is the honest boundary.
-- **Getting the shared calendar onto a phone was the hard part, and is
-  no longer.** See A12.
+Deleting an event uses the `confirm` tier of **ADR-W024 A5.1**, the
+general tier for every destructive household action.
 
-### A10. Delete asks first, on a tier that now exists
-
-Deleting an event wants "do it, but ask first", and when this capability
-was first written there was no such tier. There is now: **ADR-W024 A5.1**
-adds `confirm` and the attendance axis it needs, because the shape of the
-want is general — it is every destructive household action — and a tier
-only the calendar understood would have been the same mistake in a
-smaller box.
-
-So `calendar.delete_event` is declared at `confirm`, and two things
+`calendar.delete_event` is declared at `confirm`, and two things
 follow. A rule firing at 3am cannot carry it at all, because there would
 be nobody to ask. A person in chat gets a question naming the actual
 event — "Delete 'Dentist for Sam' from Fri 18 Sep?", via the executor's
@@ -234,27 +233,20 @@ The corollary is in the failure behaviour: if Radicale is unreachable the
 adapter reports `unavailable` and dependent work waits. Nothing anywhere
 reconstructs an agenda from memory.
 
-### A12. The shared calendar is a GROUP collection, so a phone finds it
+### A12. A shared calendar is a GROUP collection, so a phone finds it
 
 A CalDAV client discovers the calendars under the principal it signed in
-as and nothing else. That is why a shared calendar under its own
-principal could only reach an iPhone through a configuration profile
-pinning a second account — and why the profile was, for a while, the only
-path to the thing the household actually wanted.
+as and nothing else. Radicale yields a collection stored under
+`collection-root/<group_collections_folder>/<base64 of a group name>` as
+a child of the principal of **everybody in that group**. So the household
+calendar lives at `GROUPS/Y2FsZW5kYXJfdXNlcnM=` — `calendar_users`,
+encoded — and a member signs in as themselves and finds it beside their
+own. Further declared calendars follow ADR-W038's discovery and rights.
 
-Radicale has the arrangement that removes the problem rather than working
-around it. A collection stored under
-`collection-root/<group_collections_folder>/<base64 of a group name>` is
-yielded by discovery as a child of the principal of **everybody in that
-group**. So the household calendar lives at
-`GROUPS/Y2FsZW5kYXJfdXNlcnM=` — `calendar_users`, encoded — and a member
-signs in as themselves and finds it beside their own.
-
-Three things had to be true and all three were checked against the
-released version rather than master:
+This needs Radicale 3.8.0 or later:
 
 - `[group] type = from_auth` feeds Radicale the memberships the directory
-  returned. New in **3.8.0**.
+  returned.
 - `ldap_groups_attribute = memberOf` returns group **DNs**, and Radicale
   takes the RDN value of each — so `cn=calendar_users,ou=groups,…`
   becomes `calendar_users`, which is what both the rights file's
@@ -265,16 +257,12 @@ The base64 is spelled twice — in the rights file and in the job that
 creates the collection — because the package template language has no
 base64 to derive it with.
 `TestTheHouseholdCalendarIsTheGroupsOwnCollection` pins both against the
-LdapGroup's own name, because renaming the group without changing the
-encoding fails silently in the worst way: the calendar is created where
-no member's discovery looks, the rights rule guards a path nothing uses,
-and the shared calendar simply never appears.
+LdapGroup's own name; a mismatch would create the calendar where no
+member's discovery looks.
 
-**Not verified on a device.** Discovery returns the group collection with
-an href outside the requested principal's path, which is what the
-mechanism is for and what a compliant client should follow. If a phone
-turns out not to, the fallback needs no change: add the household
-calendar by its own address as a second account.
+**Not verified on a device.** If a phone does not follow the group
+collection's href, add the household calendar by its own address as a
+second account.
 
 ### A13. A member's first calendar is made for them
 
@@ -289,184 +277,82 @@ all, so only they ever reach it.
 
 ### A14. Pin the release, not `latest`
 
-`ghcr.io/kozea/radicale:latest` is **not the latest release**. This
-project's workflow publishes `latest` from its nightly schedule build: on
-2026-09-18 `latest` and `nightly-20260918` were the same digest, and
-`3.8.0` was a different one. The first version of this package pinned
-`latest`, which meant pinning an unreleased master build of the thing
-holding the household's calendar.
-
-The pin is `stable` — the tag the release workflow applies on a release,
-matching `3.8.0` — and `TestTheCalendarImageIsTheReleaseNotTheNightly`
-holds it there.
-
-The general rule, which is not in ADR-W029 and should be: resolving a
-digest from a tag is not enough. **Check what the tag means in that
-project.** `latest` is a convention, not a guarantee, and this is the
-second time in one capability that reading an upstream's publishing
-setup contradicted what its name implied.
+`ghcr.io/kozea/radicale:latest` is a nightly build, not the latest
+release. The image is pinned to the `stable` release tag's digest, and
+`TestTheCalendarImageIsTheReleaseNotTheNightly` holds it there.
 
 ---
 
-# Part B — What shipped
+# Part B — Implementation rules
 
-### B1. Phase 1 — the capability
+### B1. The capability
 
 `packages/calendar-radicale`: Radicale on a persistent volume, behind the
 private ingress, signed in against the household directory
-(`auth: app_ldap` — the media-jellyfin posture, and the only one a phone's
-calendar app can use, since it sends HTTP Basic per request and cannot
-follow a login redirect), with `calendar_users` as the grant and a daily
-backup of the collections.
+(`auth: app_ldap`, since a phone's calendar app sends HTTP Basic and
+cannot follow a login redirect), with `calendar_users` as the grant and a
+daily backup of the collections.
 
-Three findings came out of checking the package against the app
-(ADR-W029), and each of them would have shipped a converged install that
-did not work:
+- **Radicale reads no environment variables.** Its configuration is one
+  ini file; a setting passed as `env:` is inert.
+- **The reader password is placed by a root Job.** A managed file carrying
+  a secret reference is materialised `0600` root-owned, and this image
+  runs as uid 1000; Wildstone cannot yet say what user a managed file
+  belongs to, so the Job hands the file to the user that reads it.
+- **One service account.** Radicale searches the directory as it and
+  Keystone writes the shared calendars as it. `owner_only` still applies
+  to every person's own calendars, and this account is in none of them.
 
-1. **Radicale reads no environment variables.** Its configuration is one
-   ini file and nothing else, so a setting passed as `env:` would be
-   inert — the `photos-immich` failure exactly.
-2. **The published image is not the image its Dockerfile describes.** The
-   Dockerfile defaults to `DEPENDENCIES=bcrypt`, under which
-   `[auth] type = ldap` dies on `ImportError`. The release workflow
-   passes `bcrypt,argon2,ldap`. Reading the Dockerfile and stopping there
-   would have rejected the whole LDAP design on evidence that was wrong.
-3. **The reader password cannot live in the config file.** A managed file
-   carrying a secret reference is narrowed to `0600` root-owned when the
-   node materialises it, and this image runs as uid 1000. Authelia is the
-   one package that escapes that, by pinning `PUID=0`, and Radicale has
-   no such knob. So the credential is placed by a Job that runs as root
-   and hands the file to the user that has to read it.
+### B2. Reads and writes in the CalDAV layer
 
-The third is a **gap, not a workaround to be proud of**: Wildstone has no
-way to say what user a managed file belongs to. The Job is the shape that
-gap forces. Closing it — an owner on `ConfigFile`, or a container-user
-field — would delete this Job and is worth doing before the next
-non-root app needs a secret in a file.
+`keystone/adapter/caldav` reads (`caldav.today`, `caldav.events`) and
+writes (`caldav.create_event`, `caldav.update_event`,
+`caldav.delete_event`) under A5's gates, with A6's generation, A7's
+editing and A8's addressing. Both roads share one exported
+implementation. Creates are conditional on `If-None-Match: *` so a
+colliding UID cannot silently replace an event; updates are conditional
+on the etag they read, so a concurrent edit is a refusal rather than a
+lost update.
 
-The install steps this leaves are **one account and its password**, used
-by both halves: Radicale searches the directory as it, and Keystone
-writes the household calendar as it. A second account would be a second
-thing to create, rotate and forget, and it would gain nothing —
-`owner_only` still applies to every person's own calendars and this
-account is in none of them.
+### B3. The seven tools
 
-That one manual step cannot be removed today, and the reason is worth
-naming: `kind: LdapUser` declares that a person must exist and
-deliberately carries no credential, because a password cannot live in a
-spec (ADR-W020 A4). Nothing lets a package create a service account with
-a password it knows. It is the same gap
-`wild household publisher home-automation` works around, and it is worth
-closing once rather than per package.
-
-### B2. Phase 2 — reads, and writes, in the CalDAV layer
-
-Reading was already built: `keystone/adapter/caldav` has answered
-`caldav.today` and `caldav.events` since ADR-W030 P12.
-
-Writing is new: `caldav.create_event`, `caldav.update_event` and
-`caldav.delete_event`, under A5's gates, with A6's generation, A7's
-editing and A8's addressing. `EventWrite`, `Events`, `CreateEvent`,
-`UpdateEvent` and `DeleteEvent` are exported so the two roads share one
-implementation: the work-queue road arrives with JSON, the in-process
-road with a struct, and neither gets its own copy of the protocol. Creates are conditional on `If-None-Match: *`
-so a colliding UID cannot silently replace an event; updates are
-conditional on the etag they read, so two people editing one event is a
-refusal a caller can act on rather than a lost update.
-
-Fixing the round trip turned up a **pre-existing bug in the read path**:
-`unfold` stripped every leading space from a continuation line, where RFC
-5545 adds exactly one. "Dentist for␍␊␠␠Sam" was read as "Dentist forSam".
-It had been invisible because a fold only loses a character when it lands
-next to a space; the write path's own round trip made it impossible to
-miss. The contract test had been written to accept either answer, and now
-accepts one.
-
-### B3. Phase 4 — the six tools, on
-
-`packages/calendar-radicale` declares six `agentTools` and
-`keystone/domestic` registers an executor for each, so a Butler can use
-the calendar the day the capability is installed:
+`packages/calendar-radicale` declares seven `agentTools` and
+`keystone/domestic` registers an executor for each:
 
 | tool | tier | what it does |
 | --- | --- | --- |
 | `calendar.get_agenda` | read | what is on, for a day or a window |
 | `calendar.search_events` | read | find by title |
 | `calendar.check_availability` | read | is that window free, and what is in it |
+| `calendar.how_to_add` | read | how to get the calendar onto a phone |
 | `calendar.create_event` | domestic | add one |
 | `calendar.update_event` | domestic | change one |
 | `calendar.delete_event` | confirm | remove one, after the person says yes (A10) |
 
-No new agent surface was needed. `butler.list_household_actions` and
-`butler.do_household_action` already route to the domestic gateway, which
-dispatches any tool a package declares *and* a deployment has wired — so
-these six are reachable through the path `notifications.notify` already
-uses, and household automation rules can name them too. Wiring is not a
-grant: an Agent discovers and calls them only once an Owner has granted
-them to that Agent (ADR-W033 B3–B5).
+They are reached through `butler.list_household_actions` and
+`butler.do_household_action`, and household automation rules can name
+them. Wiring is not a grant (A5; ADR-W033 B3–B5).
 
-Three things about the executors are worth recording because they are not
-obvious from the tool list:
+Executor rules:
 
 - **The summary is the whole answer.** `do_household_action` hands the
-  model `Result.Summary` and drops `Result.Detail`, so a read's summary
-  is written to be read aloud — "Tomorrow: 3 things. 08:00 school run…" —
-  rather than as a log line with the answer in a field nothing downstream
-  can see.
-- **An event is named by what it is, not by an id.** Changing and
-  deleting take a title and a date. A CalDAV UID is not something a
-  person says out loud, and it would have to survive a round trip through
-  a chat message to be useful. Ambiguity refusal falls out of it: "2
-  events on Fri 18 Sep match 'dinner': …. Say which one" is a refusal
-  that names the candidates, where an id would silently have picked one.
-- **A time with no offset is the household's clock.** A model asked for a
-  time produces `2026-09-25T18:30` far more often than an RFC3339 string
-  with an offset, and reading that as UTC puts a six-thirty dinner on
-  every phone at the wrong hour. It is the single most consequential line
-  in the package and it has a test that fails on the mutation.
+  model `Result.Summary` only, so a read's summary is written to be read
+  aloud.
+- **An event is named by title and date, not by an id.** Ambiguity is a
+  refusal that names the candidates.
+- **A time with no offset is in the household's time zone**, never UTC.
 
 `TestCalendarToolsAreDeclaredByThePackage` pins the package's declaration
-against `domestic.CalendarTools`, names and tiers both. A tool in one and
-not the other fails at somebody's dispatch, where a Butler has already
-told the household it can do the thing.
+against `domestic.CalendarTools`, names and tiers both.
 
-### B4. What walking the paths found
+### B4. Runtime facts
 
-Five defects, all of the same family: everything reconciled, every test
-passed, and the thing did not work. Recorded because the shape repeats.
-
-1. **The shared calendar did not exist.** Radicale does not create a
-   collection on demand — `app/put.py` returns 409 Conflict when a PUT's
-   parent is not already a collection — and nothing created it. The
-   household's first "add dinner on Friday" would have failed, as a
-   protocol error that reads like the server being down. The credential
-   Job now creates it, with the `VCALENDAR` tag and the right ownership,
-   only when absent.
-2. **The confirmation question was discarded.** `NoticeRequest.Body` had
-   been accepted and dropped since migration 0030, because there was no
-   column — invisible while every question's KIND said everything there
-   was to say. A confirm-tier action therefore rendered as "Household
-   confirm" with a yes and a no beside it. Consent to an unnamed action
-   is not consent, so this was a correctness fix, not a presentation one.
-3. **There was no way to reach the profile.** The API returned
-   `addToPhone` and the page never drew it. The one path to the feature
-   existed only for somebody who knew the URL.
-4. **The card claimed "Nothing in the next three days"** whenever it was
-   available, having looked at nothing. It now reads the shared calendar,
-   and an unreadable calendar is `Available: false` with a reason —
-   because "nothing on" and "could not look" are different answers and a
-   wall tablet must not render the second as the first.
-5. **A household running both calendars could get the wrong address.**
-   `calendarServer` returned the first matching Route, so a profile built
-   for the Wildstone calendar could carry davis's host: an account that
-   installs cleanly, fails to connect, and blames a password the person
-   does not have. Ours is preferred explicitly now, and a test pins it in
-   both orderings.
-
-The through-line: each was a claim about something OUTSIDE the code under
-test — what Radicale does with a PUT, what the notices table stores, what
-the page draws — and that is exactly the class ADR-W029 says a package's
-own checks cannot catch. Walking the paths found all five in one pass.
+- The credential Job creates the shared collection only when it is
+  absent (Radicale does not create a collection on PUT).
+- An unreadable calendar is reported as `Available: false` with a reason,
+  never as an empty agenda.
+- When both calendar capabilities are installed, the portal prefers
+  Wildstone's own calendar route over Davis's.
 
 ---
 
@@ -491,50 +377,21 @@ declaring one nothing honours.
 The temporal half needs a small scheduler, and idempotent publication:
 `starting` must fire once for an appointment, not once per tick.
 
-### C2. Per-member calendars, and the confirmation tier
+### C2. Personal calendars
 
-Two things B3 deliberately left, and they are the same shape: both need a
-permission Wildstone has not got.
+Access to shared calendars is decided by ADR-W038, and the `confirm`
+tier is built (A10). What stays open is a Person's own calendar: an
+agent cannot reach it (A9), and whether Keystone should ever act with a
+per-member credential — a member's calendar password is theirs — is
+undecided.
 
-**A member's own calendar.** Today an agent acts on the household
-calendar and cannot see anybody's private one (A9). Changing that means
-either the service account holding a standing grant over everyone's
-collections — which is exactly the thing A9 refuses to make a default —
-or a per-member credential Keystone can act with, which is a real design
-problem: a household member's calendar password is theirs.
-
-The permissions this wants, riding the existing Owner/Member model
-(ADR-W033 A1, B3) rather than a new one: `calendar.read.own`, `calendar.write.own`,
-`calendar.read.household`, `calendar.write.household`, `calendar.admin`.
-
-**A confirmation tier.** The policy this capability wants is:
-
-| action | default |
-| --- | --- |
-| read the agenda, search, check availability | allow |
-| create an event | allow |
-| change an event the agent created | allow |
-| change an event a person created | confirm |
-| delete an event | confirm |
-| touch another member's calendar | per policy; deny by default |
-| bulk operations | confirm |
-
-Three of those rows say **confirm**. The tier exists in ADR-W024 A5.1,
-where every capability's actions can use it, and `calendar.delete_event`
-is declared at it (A10). The other confirm rows are not built.
+Changes to the calendar registry go through an Owner-approved package
+Plan (ADR-W033 E2; ADR-W038).
 
 ### C2a. The adapter runtime has no runner
 
-Recorded because it surprised the author and will surprise the next
-person: `keystone/adapter` is library code with contract tests and **no
-caller**. Nothing in the repository builds a binary that runs
-`adapter.Runner`, and no package deploys one. The work-queue road
-described in A1 is therefore a design that compiles, not a road anything
-currently travels.
-
-Nothing today needs it — Radicale is on Wildstone's own network and the
-in-process road reaches it — so this is not a gap to close on the
-calendar's account. It is the first thing C3 needs.
+`keystone/adapter` has no deployed `adapter.Runner`, so the work-queue
+road of A1 is not yet travelled; C3 needs it first.
 
 ### C3. Phase 5 — other people's calendars
 

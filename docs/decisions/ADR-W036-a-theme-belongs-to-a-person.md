@@ -192,8 +192,8 @@ resolved, so the token block is injected into the document at a marker
 Nothing is fetched and there is no flash of the default palette on a
 wall tablet somebody is standing in front of.
 
-The Console's bundle is served *before* anyone authenticates — the
-static files go to a browser that has not yet sent its bearer token — so
+The Console's bundle is served *before* sign-in — the static files go to
+a browser that has not yet completed OIDC sign-in (ADR-W033 A4.1) — so
 there is no request at which a per-person sheet could be injected. It
 applies the tokens as inline custom properties on the root element
 instead, which outranks every rule in `styles.css` with no selector to

@@ -2,9 +2,9 @@
 
 - **Status:** accepted, and built. K1 through K7 are implemented:
   `Meter` and `Commitment` resource kinds, the readings store and its
-  four doors, the occurrence ledger, the daily pass, the household
+  five doors, the occurrence ledger, the daily pass, the household
   homepage's rows and answer paths, the Console screen, and the agent's
-  two read tools. Every decision in Part A is made.
+  tools (A13). Every decision in Part A is made.
 - **Number:** W035.
 - **Governed by:** ADR-W033 where they overlap.
 - **Relates to:** ADR-W024 (household events, the `Automation` resource,
@@ -18,15 +18,16 @@
   (scheduled duty belongs to Keystone, not cron). Surface decisions are
   written against PR #238, the Wildstone-served household homepage.
 - **Audience:** decision record for a core Keystone subsystem. Part A is
-  the shape; Part B is the build order. Not an implementation spec — each
-  work package gets its own spec when it is scheduled.
+  the shape; Part B says where it lives in code.
+- **Terminology:** "clock" here is the built-in time meter (A2); "calendar"
+  is the Calendar capability (ADR-W034, ADR-W038).
 
 ---
 
 ## The intent, in one sentence
 
 The home lab keeps a durable list of what the household owes itself, and
-works out what is due from numbers that count up — the calendar being
+works out what is due from numbers that count up — the clock being
 only one of them.
 
 The occasion, stated plainly because it is the acceptance test: a child's
@@ -46,7 +47,7 @@ that goes up, and each is currently tracked in somebody's head.
 ### A1. Two new resource kinds: `Meter` and `Commitment`
 
 **A `Meter` is a number that only goes up.** Miles on a vehicle, hours on
-a furnace blower, gallons through a filter, days on the calendar. A meter
+a furnace blower, gallons through a filter, days on the clock. A meter
 has a name, a unit, and a series of readings, each stamped with when it
 was taken and who said so.
 
@@ -55,8 +56,7 @@ meter reaches a number.** It names one or more meters, an interval on
 each, and what counts as having done it.
 
 Both are Statefile resources, Keystone-owned, applied at no node — the
-same arrangement `Automation` already has (`keystone/reconcile/
-reconcile.go:459`). Creating or changing one is a plan a human Owner approves;
+same arrangement `Automation` already has (`keystone/reconcile`). Creating or changing one is a plan a human Owner approves;
 after that, code runs it. This is ADR-W024 A1's rule, unchanged: the
 *definition* is what gets approved, never each firing.
 
@@ -68,22 +68,21 @@ record one reading, and four of them disagreeing by Tuesday.
 ### A2. The clock is a meter, and it is the one every household already has
 
 "Every 5,000 miles" and "every 365 days" are the same sentence with a
-different meter. Treating the calendar as a special case produces two code
+different meter. Treating the clock as a special case produces two code
 paths, two state machines, and a `Commitment` schema with a `dueDate`
 field *and* a `dueMileage` field that are mutually exclusive in a comment.
 
 So there is a built-in meter, `clock`, whose readings are supplied by
 Keystone's own clock and which needs no configuration, no publisher, and
 no package. A household that never defines a meter can still track every
-calendar obligation it has.
+time-based obligation it has.
 
 Consequence: a purely time-based commitment is not a lesser form. It is
 the ordinary case, running on the meter that is always there.
 
 ### A3. A reading is a core write. Publishers are one door, not the door
 
-This is the decision the rest of the design bends around, and the one an
-earlier sketch of this ADR got wrong.
+This is the decision the rest of the design bends around.
 
 ADR-W024 A3 routes household facts through `POST /api/v1/household/events`,
 which requires a `publisher` principal — minted per capability by the
@@ -92,38 +91,23 @@ wrong as the only way to record a number a *person* reads off a dashboard,
 because it makes an installed capability a prerequisite for tracking a
 truck.
 
-A meter reading may therefore be written four ways, all equal:
+A meter reading may therefore be written five ways, all equal:
 
 | Door | Requires an installed capability? |
 |---|---|
 | Console — a field on the commitment's card | no, but Console is Owner-only |
 | `wild meter read f150-odometer 84210` | no, but the `wild` CLI is an Owner's tool |
 | Household chat — "truck's at 84,210" | **yes** — a chat capability. Built as `record_meter_reading` (A13). |
-| A family-facing web surface | **yes** today — see the correction below |
+| The household portal (A22) | **yes** — the `dashboard` capability's `wildstone` profile |
 | A household event from a publisher | **yes — and this is the optional one** |
 
-**Correction, recorded rather than quietly fixed.** An earlier version of
-this table claimed the first three doors were free. Reviewing it against
-the surfaces actually being built showed otherwise: chat is a capability,
-and the family dashboard is a capability, so today a household **Member**
-has no capability-free way to write a reading at all. A4's promise holds
-for the Owner and fails for the family, which is the half that matters.
-
-The fix is available and is not a change to A4 — it is what A4 requires.
-`keystone/portal` is Wildstone serving small household surfaces of its
-own, behind a door that produces an identity holding no RBAC verb — and
-PR #238 extends it into the family front page itself. **A22 settles what
-that costs**, and A19 settles where a commitment appears on it. The short
-version: a family door needs the `dashboard` capability on its
-`wildstone` profile, and that is a dependency this ADR accepts and names
-rather than one it can design away.
-
-
+So a household **Member** has no door that needs nothing installed:
+chat and the portal are both capabilities. A22 states that cost.
 
 The engine does not care which door a reading came through. It records
 the value, the meter, when it was taken, and the principal that wrote it,
-and that is the whole contract. A publisher event is a *fourth door*,
-not the foundation.
+and that is the whole contract. A publisher event is one door among
+five, not the foundation.
 
 **Rejected:** synthesising a built-in publisher principal for
 Console/CLI writes. It would preserve one intake at the cost of a lie —
@@ -163,14 +147,6 @@ appointment. That sentence is what makes the rest of this decision true:
 a replay that can see a fact from after the point it is replaying is not
 a replay, and the same bound keeps a publisher with a fast clock from
 moving today's answer.
-
-Two rounds of review were needed to get it, which is itself the lesson.
-The first found the function taking the newest reading outright. The
-second found that fixing *readings* had left completions and bookings
-open, so a recurring commitment still advanced into a future cycle and a
-one-off still reported itself done before the work. The bound belongs on
-every input the ledger supplies, and stating it that way — rather than
-per-field — is what closes the class instead of the instance.
 
 Given a commitment, the readings on its meters, and the record of what
 has been done, "is this due" is a pure function. No I/O, no model, no
@@ -235,22 +211,21 @@ the furnace filter — the state is skipped entirely and the path is
 `waived` is not `satisfied`. Skipping a cycle on purpose is a recorded
 decision with a person attached, and the next occurrence still opens.
 
+**Booking writes a calendar event.** A booking creates an event on the
+booking calendar (ADR-W038) and keeps the calendar ID and the event's
+href. It follows that event: moved on the calendar, the booking moves;
+deleted there, the booking is cancelled and the occurrence asks again.
+A booking made while no calendar is configured is a date with nothing to
+follow. An unreadable calendar does not cancel a booking.
+
 ### A8. Completion requires evidence, and the evidence carries the reading
 
-**Amended after the build.** "Evidence" first meant a reading current
-enough for the engine to conclude from, and that was stricter than the
-household needs. The point of the tracker is that the oil gets changed
-at about five thousand miles, not that the odometer at the moment of
-service is known exactly — and a cycle that cannot be closed sits
-overdue forever with the work already done, which is the one failure the
-costs section says a schema cannot fix.
-
-So the rule is now three-way, and the middle case is the amendment:
+A completion closes a cycle under a three-way rule:
 
 - A number somebody **typed** is used as given.
 - A reading **too old to rely on** is used, and the completion records
   which meters were guessed (`approximate`).
-- **No reading at all** is still refused. There is nothing to be roughly
+- **No reading at all** is refused. There is nothing to be roughly
   right with, and inventing one is the failure this whole design exists
   to prevent.
 
@@ -260,8 +235,8 @@ cycle is measured from too low a number and comes due EARLY. Nagging
 sooner is a nuisance; nagging never is a missed oil change.
 
 The card still asks for the number — a person standing at the truck
-beats any inference — it just no longer refuses the answer when nobody
-types it.
+beats any inference — but does not refuse the answer when nobody types
+it.
 
 A commitment is satisfied by a recorded completion: what was done, when,
 by whom, and **the meter reading at the time**. That last part is not
@@ -273,7 +248,7 @@ already enforces for durable work: the state change and the evidence are
 written in one transaction, so a crash leaves work to finish rather than
 a lie about finished work. It arrives again as W033 E10.
 
-A completion may be declared the same four ways a reading may (A3).
+A completion may be declared through the same doors a reading may (A3).
 
 ### A9. Three rollover modes, all named
 
@@ -305,7 +280,7 @@ creating.
 **A one-off may name its due point absolutely** — a date for the clock,
 a number for a counter — because "the dentist on the third" is the
 commonest one-off there is and expressing it as an interval from an
-anchor would mean doing calendar arithmetic to say a date already known.
+anchor would mean doing date arithmetic to say a date already known.
 An absolute point belongs only to a one-off: a fixed point cannot repeat.
 
 ### A10. Several meters, earliest wins
@@ -316,7 +291,7 @@ when the *first* of them is crossed, and the record says which one
 tripped it.
 
 This is not a novelty. Fleet and aircraft maintenance have tracked
-calendar, hours, and cycles against one item, earliest wins, for
+elapsed time, hours, and cycles against one item, earliest wins, for
 decades. The vocabulary is worth borrowing rather than reinventing.
 
 ### A11. "I don't know" is a state, and an estimate never triggers anything
@@ -381,8 +356,8 @@ deterministic steps and inference steps:
   tools, to answer "what's coming up on the truck".
 
 - The Butler may **write down a reading it was given** — "truck's at
-  84,210" — through `record_meter_reading` on a Member Agent. A3
-  lists household chat as one of the four doors, and this is it. The
+  84,210" — through `record_meter_reading` on a Member Agent. This is
+  A3's household-chat door. The
   tool takes a number and nothing else: it cannot derive, estimate, or
   look one up, a value it cannot parse whole is refused rather than
   salvaged, and the reading is attributed to the member whose session it
@@ -392,14 +367,8 @@ It cannot mark a commitment satisfied, record a reading it was not
 given, waive an occurrence, or change a due threshold. Those are writes
 by a person or a plan.
 
-**The emphasis is load-bearing and was misread once.** K7 first shipped
-two read tools and a comment saying there was "deliberately no third",
-which was stricter than this decision: a reading it WAS given was never
-on the forbidden list. The effect was that the chat door A3 names had no
-hinge — a person could tell the agent the odometer and get a polite
-acknowledgement and nothing written down. The line is between
-transcribing a number a person said and deciding what it means. The
-agent does the first; the engine does the second.
+The line is between transcribing a number a person said and deciding
+what it means. The agent does the first; the engine does the second.
 
 `record_meter_reading` is a Member-class tool and not opt-in, so a
 household tool bundle includes it; an Owner withholds it from an Agent
@@ -434,8 +403,7 @@ change).
 Nothing here needs minute precision: a yearly checkup with a sixty-day
 lead and an oil change with a three-hundred-mile lead are both indifferent
 to whether the pass ran at 07:00 or 07:04. The pattern already exists —
-`nextMorning` at `keystone/cmd/keystone/main.go:1045` fires the daily
-morning report — and ADR-W011 A4's rule holds: scheduled duty belongs to
+`nextMorning` in `keystone/cmd/keystone` fires the daily morning report — and ADR-W011 A4's rule holds: scheduled duty belongs to
 Keystone, not to cron on a host.
 
 ### A16. Risk and policy
@@ -468,9 +436,8 @@ than told a conclusion.
 
 ### A18. A Commitment is not a routine
 
-ADR-W033 landed while this was drafted, and the first question it raises
-is whether a commitment should be one of its routines (E5) rather than a
-resource kind of its own.
+The question is whether a commitment should be an ADR-W033 routine (E5)
+rather than a resource kind of its own.
 
 It should not. W033 E6 binds an approved routine to its **tools, targets,
 parameter limits, trigger/schedule, output audience, delivery policy,
@@ -514,24 +481,17 @@ So **commitments get no surface of their own.** They contribute
 which is the difference between a tracker people pass every day and one
 they have to remember to visit.
 
-Two things that page decided independently are worth recording, because
-agreement reached twice from different directions is the strongest
-evidence either is right:
+The page's own rules apply unchanged:
 
-- Its `homeCard` carries `Available` and `Problem` under the rule *"never
-  render an unreachable service as nothing to do; silence and all-clear
-  must not look the same"*. That is A11 exactly: a meter nobody has read
-  is not a meter reading "not due".
-- Its `Decidable` renders an item a member may not act on as read-only —
-  *"the affordance is absent, never present-and-refused"*. That is the
-  checkup case, where the item is about a child and the action belongs to
-  a parent.
+- A `homeCard` carries `Available` and `Problem`: an unreachable service
+  never renders as nothing to do. That is A11: a meter nobody has read is
+  not a meter reading "not due".
+- `Decidable` renders an item a member may not act on as read-only — the
+  affordance is absent, never present-and-refused.
 
-**Honestly: the shape fits and the plumbing does not exist.**
-`homeNeedsYou` builds from notices and owner-side plans, and an item's
-`Seq` addresses a notice. Contributing commitments means extending the
-item source and the answer path, not reusing them as they stand. That is
-K5's work and it is real work.
+Commitment items and their answer paths are served by
+`api/handlers_portal_commitments.go`; the server lists the answers each
+item offers (`asks`).
 
 ### A20. The write boundary is the connection ceiling, not a new role
 
@@ -575,56 +535,48 @@ should be nagged about it. So:
   is household; a medication refill is personal and opt-in.
 
 There is no `adults` value: W033 A1 makes `child` a constrained Member
-profile rather than a role. These fields carry Person, Group and
-role-class references from W033's one namespace (B8.1); a Group answers
-only for its members.
+profile rather than a role. `mayComplete` and `notify` accept
+`household`, `household/<member>` (a Person, W033 A2) and `group/<name>`
+(W033 B8.1's one namespace); a group answers only for its members, and a
+group nobody is in denies.
+_Code not yet conformant: `household/<member>` is keyed by directory
+handle; a rename detaches it._
 
 ### A22. What A4 costs, stated exactly
 
-A3's correction asked where a household Member writes a reading when
-nothing is installed. PR #238 answers it: the `dashboard` capability
-gains a `wildstone` profile that Keystone serves itself, `exclusive: true`
-with the gethomepage profile, and **only the wildstone profile declares
-the `LdapGroup`** the portal's routes are gated on.
+A household Member writes a reading through the portal: the `dashboard`
+capability's `wildstone` profile, which Keystone serves itself,
+`exclusive: true` with the gethomepage profile. **Only the wildstone
+profile declares the `LdapGroup`** the portal's routes are gated on.
 
-That is a good answer. `dashboard` is no longer an app launcher whose
-absence costs a household some convenience; under the wildstone profile
+`dashboard` is therefore not an app launcher whose absence costs a
+household some convenience; under the wildstone profile
 it *is* the family front page, and depending on it is much closer to
 depending on ingress — which no web surface can avoid — than to depending
 on an optional extra.
 
-**The residue, recorded rather than smoothed over:** a household running
-the gethomepage profile gets 404 on the portal routes, so its Members
-have no door at all and the tracker is Console-and-CLI only, which is to
-say Owner-only. A4 therefore reads, precisely: the engine, the readings,
-the ledger and the Owner's access need nothing installed; a **family**
-door needs the `dashboard` capability on its `wildstone` profile. That is
-a capability dependency this ADR accepts, named here so nobody later
-discovers it as a surprise.
+A household running the gethomepage profile gets 404 on the portal
+routes, so its tracker is Owner-only (Console and CLI): the engine, the
+readings, the ledger and the Owner's access need nothing installed; a
+**family** door needs the `dashboard` capability on its `wildstone`
+profile.
 
-# Part B — Work packages (ordered)
+# Part B — Where it lives
 
-Each lands nothing the previous one does not need, and each is testable
-with fixtures and fakes. `K` for *keeping*, to avoid colliding with
-W024's `H` packages and W030's `P` packages.
-
-| # | Package | Proves |
-|---|---|---|
-| **K1** | `Meter` resource kind + readings store: schema, validation, plan integration, the built-in `clock` meter, `POST /api/v1/household/meters/{name}/readings` under an ordinary authenticated write, `wild meter read\|list\|history` | A number can be recorded and read back by a household with nothing installed (A2, A3) |
-| **K2** | `Commitment` resource kind: schema, validation, plan integration, risk grading, the `commitment-*` policy rules, household plan classification | A commitment is a plan, approved once, policy-checked like any resource (A1, A16) |
-| **K3** | The due-ness function: pure evaluation over (commitment, readings, completions) → occurrence state, multi-meter earliest-wins, both rollover modes, staleness. Unit-tested against a table of fixtures. No storage, no timer. **Built — `keystone/commitment`** | The hard logic is correct and provable in isolation (A5, A9, A10, A11) |
-| **K4** | Occurrence ledger + the daily pass: `runtimedb` tables, state transitions, the timer, `commitment.*` events onto the household timeline, completion-with-evidence in one transaction | The state machine survives a restart and the timeline records why (A6, A8, A12, A15) |
-| **K5** | The answering paths: commitments contribute `needsYou` items and Activity rows on the household homepage, and an answer path that records a reading, a completion, a booking or a waive. Extends the item source and the answer verb — neither exists for anything but notices today (A19) | A member answers where they already are, without a Console credential (A19, A20) |
-| **K6** | Console → Commitments, Owner-side: the definition list, an occurrence's history and ledger, a dry run, projection shown as projection | An Owner can see and change what the household owes (A20) |
-| **K7** | The extension seam: an example `Automation` that turns `person.arrived_home` into "what's the odometer say", shipped as documentation rather than built-in behaviour; Agent read/draft tools with a dry run | Home Assistant extends the tracker without the tracker depending on it (A4, A13) |
-
-K1–K4 are the product. K5–K7 are what make it pleasant.
+K1 `Meter` and readings: `keystone/resource/meter.go`,
+`runtimedb/meterreadings.go`, `wild meter`. K2 `Commitment`:
+`keystone/resource/commitment.go`. K3 the due-ness function:
+`keystone/commitment`. K4 the ledger and daily pass:
+`runtimedb/commitmentledger.go`, `keystone/upkeep`. K5 portal items and
+answers: `api/handlers_portal_commitments.go`. K6 Console:
+`console/src/views/Commitments.tsx`. K7 agent tools: `get_upkeep` and
+`record_meter_reading` in `keystone/butler/household.go`.
 
 ---
 
 ## Schema sketch
 
-Illustrative, not binding — K1 and K2 settle the field names.
+Illustrative; `keystone/resource` holds the field names.
 
 ```yaml
 # The meter. Nothing installed; a person types the number in.
@@ -691,7 +643,7 @@ spec:
   nothing installed. Installing something makes it nicer, never possible.
 - **Approved once, run by code.** The definition passes a human; the
   firings do not.
-- **One primitive, not two.** The calendar is a meter. There is no
+- **One primitive, not two.** The clock is a meter. There is no
   separate time-based path.
 - **The ledger is the truth.** States are derived, so they can be
   rebuilt, replayed, and dry-run.
@@ -742,17 +694,11 @@ Automations remain the nagging layer (A12).
 
 ---
 
-## What the K3 prototype settled
+## Due-ness rules
 
-The due-ness function is built, in `keystone/commitment` — a leaf package
-on the standard library alone, no storage, no clock of its own. 41 tests,
-91.8% statement coverage, and every one of 18 deliberate mutations to the
-logic is caught by at least one of them.
-
-Building it answered seven things Part A left open. They are refinements
-to the decisions above, not departures from them, and they belong in the
-ADR because each one is a place where the obvious implementation is
-wrong.
+These refine Part A and are normative for `keystone/commitment` (a leaf
+package: no storage, no clock of its own). Each is a place where the
+obvious implementation is wrong.
 
 1. **Staleness undermines only the negative conclusion.** A11 says a
    stale reading cannot support "not due yet". It does not follow that a
@@ -762,7 +708,7 @@ wrong.
    blocks only the conclusion that something is *not* due.
 
 2. **Comparing a month against a mile needs a common scale.** A10 says
-   "earliest wins" without saying how to compare units. The prototype
+   "earliest wins" without saying how to compare units. Earliest-wins
    uses progress as a fraction of each rule's own interval, so a rule 96%
    through five thousand miles and one 96.2% through six months are
    directly comparable, and the answer does not depend on the order the
@@ -787,9 +733,9 @@ wrong.
    serves, or the rebase carries the old number explicitly; with neither,
    the rule reports itself unresolved rather than inventing a threshold.
 
-6. **A calendar month is not `AddDate`.** Go's `time.Time.AddDate`
+6. **A month is not `AddDate`.** Go's `time.Time.AddDate`
    normalises 31 February forward to 3 March. A filter changed on the
-   31st is due at the end of February, so calendar steps clamp to the
+   31st is due at the end of February, so month steps clamp to the
    last day of the target month. Related: an interval of `6mo` and one of
    `180d` are genuinely different across daylight saving, and the parser
    keeps them apart — `m` is minutes, and a month is `mo`, because that
@@ -803,7 +749,7 @@ wrong.
    day it was done.
 
 8. **A fixed schedule is measured from its anchor, never from the slot
-   before it.** Stepping compounds the month-end clamp of finding 6: a
+   before it.** Stepping compounds the month-end clamp of rule 6: a
    schedule anchored on 31 January is due 28 February, and a step from
    *that* lands on 28 March, so one short month moves every occurrence
    for the rest of the commitment's life. Each slot is computed from the
@@ -832,129 +778,24 @@ wrong.
 11. **A due point behind where tracking began is refused, on a counter
     as on the clock.** "Due at 50" on a meter that read 100 the day the
     commitment was written is not a very overdue commitment; it is one
-    nobody can ever meet. The calendar rule refused this from the start
-    and the counter rule did not, which is the same asymmetry as finding
-    9 in a different place.
+    nobody can ever meet.
 
-None of this needed storage, an API, a resource kind or a model to
-settle, which is the argument for having built K3 first.
+## Rules from review
 
-Findings 8 to 11, and the amendments to A5 and A11 above, came from two
-rounds of review on this PR rather than from writing it. They share a
-shape worth naming: each is a case where the function produced a number
-instead of saying it could not, which is the one behaviour this package
-exists to refuse.
-
-Findings 10 and 11 add a second shape, and it is the more instructive
-one: a rule stated for the clock and not for counters, or fixed for one
-input and not its siblings. Both rounds found one of each. A guarantee
-worth having is worth stating over every input it covers, which is how
-A5 is now written.
-
----
-
-## What landed, and what it settled
-
-**ADR-W033 landed** on main in #228, together with the Person core
-(#202). That settles:
-
-- **Whether a commitment is a W033 routine.** It is not — A18.
-
-**The household homepage merged** as #238. A19, A20 and A22 were written
-against it in review, so each was re-checked against the merged tree
-rather than assumed to have survived: `needsYouItem` still carries
-`Summary`, `WaitingOn`, `Waited`, `Consequence`, `Decidable` and `Tone`;
-`homeCard` still carries `Available` and `Problem`; the connection is
-`household_portal` in `keystone/portal/scope.go`; and the family front
-page is `capability: dashboard, profile: wildstone, exclusive: true`,
-gated by the `LdapGroup` only that profile declares.
-
-**The open question this ADR left is closed.**
-
-- **One-off obligations** are a `Commitment` whose rollover is `once`
-  (A9), with the A6 exception for how they finish. Prototyped and
-  tested. The alternative — a separate reminder kind — was rejected
-  because it would have split one household concept across two schemas,
-  two surfaces and two review paths on the strength of a difference that
-  turns out to be one field.
-
-K1 through K7 are built (#244), and what review found of them is below.
-
-## What review found after K1–K7 (#244)
-
-Five defects, all real, all of the two shapes this ADR already names.
-They are recorded here rather than only in the commit log because each
-one is a place where the obvious implementation is wrong, and the next
-person to touch this code will be tempted by the same obvious thing.
-
-**A rule stated for one input and not its sibling** — the shape that
-found four of the eight defects in the K3 rounds, and three of these
-five.
-
-1. **A bare date and an RFC3339 instant are not the same kind of
-   thing.** `2026-09-10` means that day where the household lives, so it
-   is built at midnight in the household's timezone. `2026-09-10T12:00Z`
-   already names a moment. The pass rebuilt the wall-clock fields of
-   both in the household location, so noon UTC became noon local and
-   every threshold derived from the anchor moved with it — five hours in
-   a Chicago household, seven in a Los Angeles one, to a date that still
-   looked entirely plausible. `resource.CommitmentAnchorAt` takes the
-   location and tells the two forms apart. Absolute `due.at` values had
-   the same fault and the same fix.
-
-2. **`mayComplete: [group/parents]` granted authority to everybody.**
-   The check returned true for any group reference at all, justified by
-   a comment saying the write path would refuse anyone outside it — and
-   the write path calls the same function. A personal commitment
-   narrowed to the adults could be ticked off by the child it was
-   hidden from. The groups were available all along: the identity proxy
-   forwards them on the header the door already authenticates against.
-   They now travel with the member as one value, so a caller that
-   forgets them does not compile, and a group nobody is in denies. A
-   household that narrows a commitment to a group it never created
-   would rather find out because nobody can tick it off.
-
-3. **The page asked, and then would not listen.** Commitments rendered
-   on the family homepage as rows nobody could answer: the Needs-you
-   card drew its controls only for a notice's `seq`, and a commitment
-   is a named resource with none. Every answer path K5 shipped was
-   reachable only from curl. The server now lists the answers on offer
-   (`asks`) and the page holds no list of its own — a page working out
-   whether a commitment wants a number, a tick or an appointment would
-   be a second copy of the state machine, drifting from the one that
-   refuses the write.
-
-**Producing a number instead of saying it could not** — the behaviour
-the engine exists to refuse, found twice more outside the engine.
-
-4. **A counter cycle could be closed with no number, permanently.**
-   `done` or `waived` recorded a completion with empty positions. Both
-   rollover modes measure the next cycle from the position the meter
-   stood at, so the new cycle opened unresolvable — and no endpoint
-   deletes or corrects a completion, so one tap made the truck's oil
-   untrackable forever. The schema had said "evidence is not optional"
-   since it was written and was the only thing enforcing it. A reading
-   the member just took supplies its own evidence; a stale one does
-   not, because measuring the next change from wherever the truck was
-   in June is this failure wearing a helpful face.
-
-5. **`satisfiedBy` did nothing.** It validated, generated a Console
-   type, and was read by nothing. A household that declared it watched
-   the commitment go overdue with the proof sitting in its own
-   timeline. The pass now harvests before it judges — but the event is
-   **evidence, not an instruction**: it closes a cycle only when the
-   completion it implies can carry the numbers the next cycle needs,
-   under the same rule and the same function a member tapping Done is
-   held to. It is evaluated at the event's moment, which is what the
-   pure function's `Now` argument was for, so a reading taken two days
-   after the service does not retroactively make it usable.
-
-**What the shape of these says.** Four of the five are a rule that was
-true in one place and absent in its twin, and the fifth is a field with
-no reader. Both are invisible to coverage: every line ran, and the
-tests that ran them asserted the half that was right. The pins that
-caught things here were the cross-package interval agreement test, the
-stylesheet class audit, and the person-reference verdict on every new
-column — three guards that turn a silent omission into a build failure.
-That is the kind of test this design needs more of, and more of them
-than it needs assertions.
+- **A bare-date anchor is midnight in the household's time zone; an
+  RFC3339 anchor is an instant** and is not rebuilt in local time. The
+  same holds for absolute `due.at` values (`resource.CommitmentAnchorAt`).
+- **`group/<name>` in `mayComplete` admits only that group's members.**
+  Groups travel with the member from the authenticated door; a group
+  nobody is in denies.
+- **The server supplies `asks`.** The page lists only the answers the
+  server says an item offers, and holds no copy of the state machine.
+- **Closing a cycle needs meter positions**, under A8's three-way rule: a
+  typed number is used as given, a stale reading is used and marked
+  `approximate`, and no reading at all is refused. `done` and `waived`
+  never record a completion with empty positions.
+- **`satisfiedBy` is evidence, not an instruction.** The pass harvests
+  matching events before it judges; an event closes a cycle only when the
+  completion it implies can carry the positions A8 requires, evaluated at
+  the event's moment, so a later reading does not make it usable
+  retroactively.

@@ -1,6 +1,7 @@
 # ADR-W038: Declared shared calendars
 
-Status: proposed (#324)
+- **Status:** accepted; implemented (`keystone/sharedcalendar`, `api/calendar_registry.go`, migration 0080)
+- **Governed by:** ADR-W033 where they overlap.
 
 ## Declaration and compatibility
 
@@ -8,31 +9,37 @@ The `calendar-radicale` package's `calendars` parameter declares a bounded JSON
 registry. The approved package Plan renders it into ConfigFile/calendar-registry
 (`calendars.json`). It contains identifiers, display names, colors, read/write
 people and directory groups, one default, and a booking target. Credentials,
-host paths and URLs are not declaration fields. Owners use the existing
-capability configuration and reviewed Plan flow; no new direct-write configuration
-endpoint bypasses that process.
+host paths and URLs are not declaration fields. A registry change is a package
+Plan change: an Agent may propose it, and only an Owner approves the exact
+version (ADR-W033 E2). No direct-write configuration endpoint bypasses that.
 
-`household` is retained. Its collection is the existing `-calendar-url`, preserving
-stored event links and mobile profiles. Additional collection paths are derived
-from stable IDs at that configured origin. An installation without the registry
-uses the original Household definition. The initial default and booking target
-are Household; an Owner may change them independently. Changing either does not
-change existing bookings' collection identifiers. Photos, files and personal
-CalDAV collections are outside this registry.
+The registry declares 1–32 calendars and must retain `household`. Its collection
+is `-calendar-url`, which preserves stored event links and mobile profiles.
+Additional collection paths are derived from stable IDs at that configured
+origin. An installation without the registry gets a single `household` calendar
+(readable and writable by `calendar_users`) that is both default and booking
+target. An Owner may change the default and booking target independently;
+changing either does not change existing bookings' collection identifiers.
+Photos, files and personal CalDAV collections are outside this registry.
 
-The original adapter configuration supplies a credential and trusted origin;
-a per-collection factory replaces its singular use by the portal and bookings.
-The legacy fields remain as a compatibility seam. Neither the browser nor a
-Butler chooses an origin or sends a filesystem path.
+The adapter configuration supplies the credential and trusted origin; a
+per-collection factory serves the portal and bookings. Neither the browser nor
+a Butler chooses an origin or sends a filesystem path.
 
 ## Access and visibility
 
-Read/write groups name existing directory groups. Direct member grants name
-existing directory usernames. Write implies read. The portal uses the identity
+The registry is a resource-specific rule (ADR-W033 A0 layer 2): it can narrow
+what ADR-W033 A10 lets a reader see on the household agenda, never widen it.
+Read/write groups belong to the one household group namespace (ADR-W033 B8.1);
+direct member grants name a Person (ADR-W033 A2). Write implies read.
+The portal uses the identity
 proxy's proven member and group list. Butler calls resolve declared directory
 membership and current Wildstone entitlement projections for their acting
 person; they cannot supply groups. Groups maintained only outside Wildstone's
 declarations/entitlements are not inferred by a Butler from a user's claim.
+_Code not yet conformant: members are keyed by directory username and groups
+are only checked for syntax (`^[a-z][a-z0-9_-]{0,47}$`), not existence; a
+rename detaches the grant._
 
 Radicale's LDAP authentication still requires `calendar_users`, independently
 of the collection grant. Give authorized people that application entitlement
@@ -46,9 +53,9 @@ it cannot grant access or hide a calendar for another person. Dashboard and
 agenda reads filter by the reader, even when the agenda is displaying somebody
 else's day. Calendar identifiers, names and colors accompany displayed events.
 
-Butler tools keep their existing names (`get_agenda`, `search_events`,
-`check_availability`, `create_event`, `update_event`, `delete_event`) and accept
-an optional `calendar` ID. Results identify the selected calendar. An omitted ID
+The Butler calendar tools (`get_agenda`, `search_events`, `check_availability`,
+`create_event`, `update_event`, `delete_event`, `how_to_add`) accept an optional
+`calendar` ID. Results identify the selected calendar. An omitted ID
 selects the default; an explicitly selected calendar is not filtered by the
 member's dashboard visibility. Destructive calls resolve defaults before their
 confirmation key is constructed, and check current access again when executing.
@@ -74,14 +81,11 @@ restarts Radicale to adopt its discovery and rights configuration together.
 Removed declarations withdraw access but do not erase stored calendar data.
 The existing backup still includes the complete Radicale collections volume.
 
-This follows the pinned upstream interfaces:
-[3.8.0 discovery](https://github.com/Kozea/Radicale/blob/v3.8.0/radicale/storage/multifilesystem/discover.py),
-[3.8.0 rights](https://github.com/Kozea/Radicale/blob/v3.8.0/radicale/rights/from_file.py).
-The integration test runs real Radicale 3.8.0 with test-only authentication and
-its real group, rights, storage and WSGI request handling. It exercises discovery,
-read-only refusal, hidden collections, MOVE and personal-calendar isolation.
-Real Apple Calendar and Thunderbird/DAVx5 checks remain device acceptance work;
-a successful protocol test is not a claim that a particular client was tested.
+This follows the pinned upstream
+[3.8.0 discovery](https://github.com/Kozea/Radicale/blob/v3.8.0/radicale/storage/multifilesystem/discover.py)
+and [rights](https://github.com/Kozea/Radicale/blob/v3.8.0/radicale/rights/from_file.py)
+interfaces, exercised by an integration test against real Radicale 3.8.0.
+Named client apps (Apple Calendar, Thunderbird/DAVx5) are not claimed tested.
 
 ## Event identity and failure behavior
 

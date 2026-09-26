@@ -1,22 +1,13 @@
-# The household calendar widget, and why it is not built
+# The household calendar widget: background
 
-*Status: the decision was taken — see [ADR-W034](../decisions/ADR-W034-the-household-keeps-its-own-calendar.md).
-Way forward 3 below is what shipped: `packages/calendar-radicale` is a
-household calendar that is Wildstone's own, so the control plane needs no
-member's credential to offer one. Tracked as
-[#230](https://github.com/chickenrat17/wildstone-homelab/issues/230).
-2026-09-18.*
-
-**What changed, and what did not.** The card is no longer blocked on a
-household running `calendar-radicale`: Keystone holds a service
-credential for the SHARED calendar, and the card now carries the
-hand-off that matters — a configuration profile that puts that calendar
-on a phone, which is the one thing a person cannot do from iOS's own
-settings. Everything below still holds for a household whose calendars
-come from **davis**, and that is still the case the card must answer
-honestly. A member's PERSONAL calendar remains unreadable by this
-surface on either server, for the reason this note gives: the credential
-is theirs.
+*Status: background only. Decisions are in
+[ADR-W034](../decisions/ADR-W034-the-household-keeps-its-own-calendar.md)
+(the Calendar capability) and
+[ADR-W038](../decisions/ADR-W038-shared-calendar-registry.md) (declared
+shared calendars and per-calendar access); where this note differs, they
+win. It still describes the constraint for a household whose calendars
+come from **davis**: a member's personal calendar is unreadable by the
+portal on either server, because the credential is theirs.*
 
 The implementation package specifies a Calendar widget on the household
 homepage (§7) and a full Calendar page (§12.3): read-only, the next
