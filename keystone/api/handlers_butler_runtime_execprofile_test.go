@@ -11,6 +11,8 @@ package api
 
 import (
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -223,4 +225,126 @@ func TestReExpandingAgentHermesWithANewExecutionProfileChangesTheManagedConfig(t
 	if !strings.Contains(afterContent, "- terminal") {
 		t.Errorf("re-expanding with execution_profile=sandboxed did not add its toolsets to the managed config:\n%s", afterContent)
 	}
+}
+
+// A newer agent-hermes in the catalog can reach an installed runtime
+// (#389). The runtime record names the package and both versions, and
+// upgrading files one Plan at the catalog's version, applying nothing
+// until it is approved. Before this, the Runtime tab re-rendered only on
+// a profile or class change and the Packages screen re-expanded the
+// installed version, which found nothing to change.
+func TestAPackagedRuntimeCanBeUpgradedToTheCatalogsVersion(t *testing.T) {
+	h := hermesCatalogHarness(t)
+	createAgent(t, h, "health")
+	if res := h.do(runtimedb.RoleAdmin, http.MethodPut, "/api/v1/butlers/health/runtime",
+		map[string]any{"type": "hermes"}, nil); res.StatusCode != http.StatusOK {
+		t.Fatalf("PUT native->hermes = %d", res.StatusCode)
+	}
+	pkg, err := h.s.Catalog.Get("agent-hermes", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	current := pkg.Metadata.Version
+
+	// Installed from a catalog whose agent-hermes is an older version,
+	// then the catalog moves on to the shipped one.
+	shipped := h.s.Catalog
+	h.s.Catalog = olderHermesCatalog(t, current, "0.0.1")
+	installCapability(t, h, "agent-hermes", hermesParams("health"))
+	h.s.Catalog = shipped
+
+	type runtimeView struct {
+		Package *struct {
+			Name      string `json:"name"`
+			Instance  string `json:"instance"`
+			Installed string `json:"installedVersion"`
+			Available string `json:"availableVersion"`
+		} `json:"package"`
+	}
+	read := func() runtimeView {
+		t.Helper()
+		var v runtimeView
+		if res := h.do(runtimedb.RoleAdmin, http.MethodGet, "/api/v1/butlers/health/runtime", nil, &v); res.StatusCode != http.StatusOK {
+			t.Fatalf("GET runtime = %d", res.StatusCode)
+		}
+		if v.Package == nil {
+			t.Fatal("the runtime record does not name its package")
+		}
+		return v
+	}
+	upgrade := func() (int, map[string]any) {
+		t.Helper()
+		var out map[string]any
+		res := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/butlers/health/runtime/upgrade", map[string]any{}, &out)
+		return res.StatusCode, out
+	}
+
+	if v := read(); v.Package.Name != "agent-hermes" || v.Package.Instance != "health" ||
+		v.Package.Installed != "0.0.1" || v.Package.Available != current {
+		t.Fatalf("package = %+v, want agent-hermes#health installed at 0.0.1, available %s", *v.Package, current)
+	}
+
+	code, out := upgrade()
+	if code != http.StatusOK {
+		t.Fatalf("upgrade = %d %v", code, out)
+	}
+	planID, _ := out["plan"].(string)
+	if planID == "" || out["from"] != "0.0.1" || out["to"] != current {
+		t.Fatalf("upgrade answered %v, want a plan from 0.0.1 to %s", out, current)
+	}
+	planRec, err := h.s.DB.GetPlan(planID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if planRec.State != runtimedb.PlanProposed {
+		t.Errorf("upgrade plan state = %q, want proposed", planRec.State)
+	}
+	if !strings.Contains(planRec.Summary, "upgrade health's runtime") {
+		t.Errorf("upgrade plan summary = %q", planRec.Summary)
+	}
+
+	// Once that is applied it is current, and there is nothing to do.
+	if res := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/plans/"+planID+"/approve", nil, nil); res.StatusCode != http.StatusOK {
+		t.Fatalf("approving the upgrade = %d", res.StatusCode)
+	}
+	if v := read(); v.Package.Installed != current {
+		t.Fatalf("installed after the upgrade = %s, want %s", v.Package.Installed, current)
+	}
+	if code, _ := upgrade(); code != http.StatusConflict {
+		t.Fatalf("upgrading a current runtime = %d, want 409", code)
+	}
+}
+
+// olderHermesCatalog is the shipped catalog with agent-hermes relabelled
+// as version older, so an install can be made from it.
+func olderHermesCatalog(t *testing.T, current, older string) *catalog.Catalog {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.CopyFS(dir, os.DirFS("../../packages")); err != nil {
+		t.Fatal(err)
+	}
+	manifest := filepath.Join(dir, "agent-hermes", "package.yaml")
+	raw, err := os.ReadFile(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	relabelled := strings.Replace(string(raw), "version: "+current, "version: "+older, 1)
+	if relabelled == string(raw) {
+		t.Fatalf("agent-hermes's manifest does not say version: %s", current)
+	}
+	// And renders something different, as an older version would: the
+	// upgrade must have a change to make.
+	changed := strings.Replace(relabelled, "max_concurrent_runs: 1", "max_concurrent_runs: 2", 1)
+	if changed == relabelled {
+		t.Fatal("agent-hermes's manifest no longer sets max_concurrent_runs: 1")
+	}
+	relabelled = changed
+	if err := os.WriteFile(manifest, []byte(relabelled), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c, err := catalog.LoadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
 }

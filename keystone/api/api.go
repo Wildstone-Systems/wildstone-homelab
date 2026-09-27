@@ -650,6 +650,9 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("PUT /api/v1/butlers/{name}/runtime", s.handle(principal.VerbManage, s.consequential(s.setButlerRuntime)))
 	mux.Handle("POST /api/v1/butlers/{name}/runtime/credential", s.handle(principal.VerbManage, s.consequential(s.rotateRuntimeCredential)))
 	mux.Handle("POST /api/v1/butlers/{name}/runtime/revoke", s.handle(principal.VerbManage, s.consequential(s.revokeButlerRuntime)))
+	// Upgrading files a Plan and applies nothing, so it needs manage
+	// and no fresh sign-in; approving the Plan is the consequential act.
+	mux.Handle("POST /api/v1/butlers/{name}/runtime/upgrade", s.handle(principal.VerbManage, s.upgradeButlerRuntime))
 	// The runtime inventory across every live Agent (design doc §9 H9,
 	// #355): one read, same verb as the roster it augments.
 	mux.Handle("GET /api/v1/runtimes", s.handle(principal.VerbRead, s.listAgentRuntimes))

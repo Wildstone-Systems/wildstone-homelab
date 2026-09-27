@@ -25,6 +25,7 @@ package proposals
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -40,6 +41,10 @@ import (
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 	"github.com/chickenrat17/wildstone-homelab/keystone/statefile"
 )
+
+// ErrNoOp is a proposal that would change nothing: every resource it puts
+// is already desired exactly as given, and it deletes nothing.
+var ErrNoOp = errors.New("proposal is a no-op against current desired state")
 
 // StoredProposal and DeletionRef are the shared shapes from
 // keystone/plan (the reconcile loop's drift path writes the same
@@ -263,7 +268,7 @@ func File(deps Deps, id principal.Identity, req Request, opts Options) (any, int
 
 	p := plan.Diff(desired, current)
 	if len(p.Steps) == 0 {
-		return nil, http.StatusBadRequest, fmt.Errorf("proposal is a no-op against current desired state")
+		return nil, http.StatusBadRequest, ErrNoOp
 	}
 	p.Summary = req.Summary
 

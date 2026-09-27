@@ -432,6 +432,15 @@ export interface RuntimeRecord {
     processingClass?: "local_only" | "cloud";
   };
   executionProfileRef?: string;
+  // The Wildstone package this runtime was installed from, when it was
+  // (GET only). installedVersion is what it runs; availableVersion is the
+  // catalog's current one, and a difference is an upgrade to offer.
+  package?: {
+    name: string;
+    instance: string;
+    installedVersion: string;
+    availableVersion?: string;
+  };
 }
 
 // One row of the runtime inventory across every live Agent (#355,
@@ -1890,6 +1899,15 @@ export const api = {
       "POST",
       `/api/v1/butlers/${encodeURIComponent(name)}/runtime/credential`,
       node ? { node } : {},
+    ),
+  // Files a Plan re-rendering the Agent's packaged runtime at the
+  // catalog's current version (#389). Nothing restarts until the Plan
+  // is approved.
+  upgradeButlerRuntime: (name: string) =>
+    call<{ plan: string; from: string; to: string }>(
+      "POST",
+      `/api/v1/butlers/${encodeURIComponent(name)}/runtime/upgrade`,
+      {},
     ),
   // Every credential the runtime ever held stops working from the next
   // request; the Agent itself is untouched.
