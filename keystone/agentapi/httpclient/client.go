@@ -186,6 +186,19 @@ func (c *Client) Manifest(ctx context.Context, h agentapi.Handle) (agentapi.Mani
 	return res, err
 }
 
+var _ agentapi.ToolsClient = (*Client)(nil)
+
+// Tools implements agentapi.ToolsClient: GET /api/v1/agent/tools.
+func (c *Client) Tools(ctx context.Context) ([]agentapi.ToolSpec, error) {
+	var res struct {
+		Tools []agentapi.ToolSpec `json:"tools"`
+	}
+	if err := c.getJSON(ctx, "/api/v1/agent/tools", &res); err != nil {
+		return nil, err
+	}
+	return res.Tools, nil
+}
+
 // Invoke implements agentapi.Client. denied, waiting and rejected
 // outcomes arrive here in res with a nil error, exactly as the
 // in-process client returns them (ADR-W039 §4 item 5): only a

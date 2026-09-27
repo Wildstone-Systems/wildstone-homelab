@@ -132,6 +132,22 @@ func (m *mcpServer) dispatch(ctx context.Context, r *http.Request, req jsonrpcRe
 	case "tools/list":
 		handle, err := m.handleFor(r)
 		if err != nil {
+			// No run in flight and none named: Hermes lists its tools
+			// once, when it connects, before any task exists. It is
+			// offered the Agent's own tool set; each tools/call is still
+			// authorized against the run's task (agentapi.ToolsClient).
+			// With runs in flight but none identifiable it still refuses,
+			// rather than answer for one of them.
+			tc, ok := m.keystone.(agentapi.ToolsClient)
+			if ok && m.runs.idle() && r.Header.Get(handleHeader) == "" && r.Header.Get(runIDHeader) == "" {
+				specs, terr := tc.Tools(ctx)
+				if terr != nil {
+					resp.Error = &jsonrpcError{Code: codeInternalError, Message: terr.Error()}
+					return resp
+				}
+				resp.Result = mcpToolsListResult{Tools: toolsFor(agentapi.Manifest{Tools: specs})}
+				return resp
+			}
 			resp.Error = &jsonrpcError{Code: codeInvalidParams, Message: err.Error()}
 			return resp
 		}

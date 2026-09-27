@@ -73,6 +73,11 @@ type Gateway struct {
 	// Now is the gateway clock for observation freshness; nil means
 	// time.Now.
 	Now func() time.Time
+	// Replies is where an external runtime's answer goes (#364): a
+	// Complete carrying a Reply, and a Fail, are handed to it so the
+	// turn waiting on the task hears. nil keeps Complete and Fail as
+	// they were, with no answer path.
+	Replies Replies
 
 	// SliceRounds, ToolCalls and ObservationTTL override the package
 	// constants when > 0. Tests set them; production leaves them.
@@ -101,6 +106,15 @@ type Gateway struct {
 	// somewhere. Records is that somewhere; Forget releases a task's.
 	records map[string][]butler.ToolCallRecord
 }
+
+// Replies accepts what an external runtime reports about a turn it was
+// handed. butlerlive.Butlers implements it.
+type Replies interface {
+	RuntimeReplied(ctx context.Context, h agentapi.Handle, reply string) error
+	RuntimeFailed(taskID, reason string)
+}
+
+var _ Replies = (*butlerlive.Butlers)(nil)
 
 // InProcess returns g as an agentapi.Client. The native runner will
 // hold this (2b); an HTTP transport (2c) calls the same methods with
@@ -269,27 +283,23 @@ func permitsFor(connection string) func(string) (bool, string) {
 
 // Manifest implements agentapi.Client: the surface for the task on the
 // handle, narrowed by the Butler's effective authority right now.
-func (g *Gateway) Manifest(ctx context.Context, h agentapi.Handle) (agentapi.Manifest, error) {
-	s, err := g.open(ctx, h)
-	if err != nil {
-		return agentapi.Manifest{}, err
-	}
-	caps := s.toolset.Capabilities(s.readOnly)
+// toolSpecs is a manifest's tool list: the offered specs, which are
+// what the model is handed (Runner.Run's specs) — the list narrows to
+// the same set for the same reason, a name is itself a disclosure —
+// each marked read-only unless its capability mutates.
+func toolSpecs(ts butler.Toolset, caps butler.CapabilityManifest, readOnly bool) ([]agentapi.ToolSpec, error) {
 	mutating := make(map[string]bool, len(caps.Tools))
 	for _, t := range caps.Tools {
 		mutating[t.Name] = t.Mutating
 	}
-	// The offered specs are what the model is handed today
-	// (Runner.Run's specs); the manifest's tool list narrows to the
-	// same set for the same reason — a name is itself a disclosure.
-	offered := s.toolset.OfferedSpecs(s.readOnly)
+	offered := ts.OfferedSpecs(readOnly)
 	tools := make([]agentapi.ToolSpec, 0, len(offered))
 	for _, spec := range offered {
 		var schema json.RawMessage
 		if spec.InputSchema != nil {
 			body, err := json.Marshal(spec.InputSchema)
 			if err != nil {
-				return agentapi.Manifest{}, fmt.Errorf("agentgateway: encoding the input schema of %s: %w", spec.Name, err)
+				return nil, fmt.Errorf("agentgateway: encoding the input schema of %s: %w", spec.Name, err)
 			}
 			schema = body
 		}
@@ -299,6 +309,73 @@ func (g *Gateway) Manifest(ctx context.Context, h agentapi.Handle) (agentapi.Man
 			InputSchema:  schema,
 			ReadOnlyHint: !mutating[spec.Name],
 		})
+	}
+	return tools, nil
+}
+
+var _ agentapi.ToolsClient = (*Gateway)(nil)
+
+// Tools implements agentapi.ToolsClient: the Agent's own tool set, for
+// a runtime that lists its tools before it holds any task (#364).
+//
+// The surface is built for the Agent the runtime principal is bound to
+// (as its creator, for the seams — see below) and scoped to it exactly
+// as open scopes a task's — the per-Butler authority — but checked as
+// an ADMINISTRATIVE caller: the question is
+// what this Agent may be offered, and there is no person or Connection
+// to ask it for yet. Nothing is dispatched through this surface. Every
+// Invoke opens its own task-scoped one, with the person and Connection
+// legs on.
+func (g *Gateway) Tools(ctx context.Context) ([]agentapi.ToolSpec, error) {
+	if g.DB == nil || g.Gateways == nil {
+		return nil, fmt.Errorf("%w: the gateway is not wired", ErrRefused)
+	}
+	principal, ok := principalFrom(ctx)
+	if !ok {
+		return nil, fmt.Errorf("%w: listing tools needs the runtime principal they are for", ErrRefused)
+	}
+	seq, bound, err := g.DB.RuntimePrincipalButler(principal)
+	if err != nil {
+		return nil, err
+	}
+	if !bound {
+		return nil, fmt.Errorf("%w: %s is not a runtime principal", ErrRefused, principal)
+	}
+	b, err := g.DB.GetButlerBySeq(seq)
+	if err != nil {
+		return nil, err
+	}
+	if !b.RetiredAt.IsZero() {
+		return nil, fmt.Errorf("%w: %s is retired", ErrRefused, b.Name)
+	}
+	// Built as the Agent's creator: a surface registers a tool only when
+	// its seam is wired, and some seams (memory) are bound to a member,
+	// so a surface built for nobody would never list recall or remember
+	// and a runtime could never call them. Only the specs are read.
+	gw, err := g.Gateways.For(b, butlerlive.Turn{Butler: b.Name, Member: b.CreatedBy})
+	if err != nil {
+		return nil, err
+	}
+	sc, ok := gw.(butlerlive.Scoped)
+	if !ok {
+		return nil, fmt.Errorf("%w: the %s surface cannot be scoped to a butler; refusing to list %s's tools unscoped",
+			ErrRefused, b.Surface, b.Name)
+	}
+	sc.SetAuthorizer(&butlerstore.Authority{DB: g.DB, Butler: b.Name})
+	sc.SetCaller(butler.CallerAdministrative, "", "")
+	readOnly := !b.CarriesActionAuthority()
+	return toolSpecs(gw, gw.Capabilities(readOnly), readOnly)
+}
+
+func (g *Gateway) Manifest(ctx context.Context, h agentapi.Handle) (agentapi.Manifest, error) {
+	s, err := g.open(ctx, h)
+	if err != nil {
+		return agentapi.Manifest{}, err
+	}
+	caps := s.toolset.Capabilities(s.readOnly)
+	tools, err := toolSpecs(s.toolset, caps, s.readOnly)
+	if err != nil {
+		return agentapi.Manifest{}, err
 	}
 	actions := make([]agentapi.ActionSpec, 0, len(caps.Actions))
 	for _, a := range caps.Actions {

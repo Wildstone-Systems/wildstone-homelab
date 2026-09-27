@@ -363,7 +363,13 @@ Switch the Agent to `local_only` and the payload comes through in full.
    `platform-only`, pointed at a local model endpoint you already run.
 2. Approve the resulting Plan.
 3. Confirm the bridge's health shows `connected`, and send it a chat
-   turn.
+   turn. Expected: the answer is Hermes's, not the in-process model's.
+   Keystone logs `butler answered … loop=external` for it (never
+   `loop=native` or `loop=runner` for an Agent whose runtime is Hermes),
+   and the bridge's log shows the delivery being run and acknowledged.
+   A turn Hermes takes longer than two minutes over answers "still
+   working on it"; the task stays open and completes when Hermes
+   reports back (#364).
 4. Watch the bridge's logs for the MCP calls Hermes makes back through
    it, and confirm `disabled_toolsets` appears in its rendered config.
 5. Change the profile to `sandboxed` (H6, #352): from the Agent's
@@ -384,8 +390,11 @@ Known open points, honestly: the Hermes image is pinned to the
 `v2026.9.21` index digest (package 0.1.1; an install made from 0.1.0
 recorded a placeholder digest that 404s, and must be reconfigured with
 the new `hermes_image_digest`); the `/v1/runs` body
-shape is only pinned by a unit test, never verified against a live
-Hermes (design-doc spike S3 was never run); the bridge's
+(`input`, `instructions`, `conversation_history`) and event shape
+(`{"event":"run.completed","output":…}`) follow Hermes's API server
+source but are pinned only by unit tests (design-doc spike S3 was never
+run); an answer that arrives after the two-minute wait completes the
+task but is not yet shown in the conversation; the bridge's
 `identity_header` is static, leaning on `max_concurrent_runs: 1`
 instead of per-call identity; there is no egress allowlist yet; and an
 external runtime's escalation deliveries are acknowledged as a no-op

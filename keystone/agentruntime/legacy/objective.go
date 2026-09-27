@@ -93,18 +93,24 @@ func (r *Runner) verifyObjective(ctx context.Context, taskID, request, answer, m
 	kind := "effectful"
 	proposalOnly := false
 	var effects []agentruntime.ObjectiveEffect
+	// What the log line below reports about this verdict: never its text,
+	// which can echo what the person said.
+	parsed, fenced := false, false
 	if result != nil && !result.Truncated && len(result.ToolCalls) == 0 {
+		var text string
+		text, fenced = unfence(result.Text)
 		var verdict struct {
 			Kind               string                         `json:"kind"`
 			ProposalOnly       bool                           `json:"proposalOnly,omitempty"`
 			Effects            []agentruntime.ObjectiveEffect `json:"effects,omitempty"`
 			AnswerClaimsEffect *bool                          `json:"answerClaimsEffect,omitempty"`
 		}
-		decoder := json.NewDecoder(strings.NewReader(result.Text))
+		decoder := json.NewDecoder(strings.NewReader(text))
 		decoder.DisallowUnknownFields()
 		if decoder.Decode(&verdict) == nil {
 			var extra any
 			if decoder.Decode(&extra) == io.EOF {
+				parsed = true
 				if verdict.AnswerClaimsEffect != nil {
 					claims = *verdict.AnswerClaimsEffect
 				}
@@ -126,5 +132,38 @@ func (r *Runner) verifyObjective(ctx context.Context, taskID, request, answer, m
 			}
 		}
 	}
+	bound := 0
+	for _, e := range effects {
+		if e.SourceKey != "" {
+			bound++
+		}
+	}
+	// A verdict that cannot complete effectful work — unreadable, or
+	// naming effects bound to no operation while operations ran — ends
+	// the task not done or held for review, so it is worth one line
+	// saying which (#364).
+	if r.Log != nil && (!parsed || (kind == "effectful" && bound < len(effects) && len(operations) > 0)) {
+		r.Log.Warn("objective verdict did not bind every effect",
+			"task", taskID, "parsed", parsed, "fenced", fenced, "kind", kind,
+			"effects", len(effects), "bound", bound, "operations", len(operations))
+	}
 	return claims, r.Ledger.ClassifyObjective(taskID, kind, proposalOnly, effects)
+}
+
+// unfence strips one Markdown code fence around a verdict — the most
+// common way a model breaks "return exactly this JSON" — and reports
+// whether it did. Nothing else is forgiven: the decoder that reads the
+// result still takes exactly one object with no unknown fields and
+// nothing after it.
+func unfence(text string) (string, bool) {
+	t := strings.TrimSpace(text)
+	if !strings.HasPrefix(t, "```") || !strings.HasSuffix(t, "```") || len(t) < 6 {
+		return text, false
+	}
+	t = strings.TrimSuffix(strings.TrimPrefix(t, "```"), "```")
+	// An info string on the opening fence ("json"), up to its newline.
+	if nl := strings.IndexByte(t, '\n'); nl >= 0 && !strings.ContainsAny(t[:nl], "{[") {
+		t = t[nl+1:]
+	}
+	return strings.TrimSpace(t), true
 }

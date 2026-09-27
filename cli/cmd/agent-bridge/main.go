@@ -77,7 +77,7 @@ func main() {
 	}
 
 	ks := &httpclient.Client{BaseURL: *wildstoneURL, Bearer: wildstoneToken}
-	hc := &hermesClient{Base: *hermesURL, APIKey: hermesKey}
+	hc := &hermesClient{Base: *hermesURL, APIKey: hermesKey, Log: log}
 	runs := newRunRegistry()
 
 	br := &bridge{

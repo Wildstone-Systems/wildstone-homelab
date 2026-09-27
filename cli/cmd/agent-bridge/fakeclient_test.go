@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/agentapi"
@@ -14,6 +15,7 @@ import (
 // zero-value success.
 type fakeClient struct {
 	manifestFn   func(ctx context.Context, h agentapi.Handle) (agentapi.Manifest, error)
+	toolsFn      func(ctx context.Context) ([]agentapi.ToolSpec, error)
 	invokeFn     func(ctx context.Context, req agentapi.InvokeRequest) (agentapi.InvokeResult, error)
 	startFn      func(ctx context.Context, w agentapi.WorkStart) error
 	waitFn       func(ctx context.Context, w agentapi.WorkWait) error
@@ -70,6 +72,13 @@ func (f *fakeClient) Wait(ctx context.Context, w agentapi.WorkWait) error {
 		return f.waitFn(ctx, w)
 	}
 	return nil
+}
+
+func (f *fakeClient) Tools(ctx context.Context) ([]agentapi.ToolSpec, error) {
+	if f.toolsFn != nil {
+		return f.toolsFn(ctx)
+	}
+	return nil, errors.New("fakeClient: no toolsFn")
 }
 
 func (f *fakeClient) Complete(ctx context.Context, w agentapi.WorkComplete) error {

@@ -1190,6 +1190,11 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	if err := apiSrv.BackfillAgentTools(); err != nil {
 		return fmt.Errorf("backfilling agent tools: %w", err)
 	}
+	// And the memory tools no inventory listed before #364, so no
+	// governed Agent could be given them: once, never over a removal.
+	if err := apiSrv.BackfillMemoryTools(); err != nil {
+		return fmt.Errorf("backfilling agent memory tools: %w", err)
+	}
 	// Every Agent authenticates as a runtime principal bound to it
 	// (ADR-W039 §3.3). 0081 gave Agents made before it their native
 	// runtime record; the credential is minted here, once, because a
@@ -1883,6 +1888,9 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 				// gets the identical validation, standing policy and
 				// audit event a human's POST /plans does.
 				Proposals: apiSrv.ProposalDeps(),
+				// An external runtime's answer reaches the turn
+				// waiting on it (#364).
+				Replies: butlers,
 			}
 			butlers.AgentClient = agentgateway.InProcess(agentGw)
 			butlers.WithPrincipal = func(ctx context.Context, name string) context.Context {

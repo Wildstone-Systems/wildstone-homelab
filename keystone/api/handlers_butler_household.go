@@ -73,6 +73,15 @@ func (h *ButlerHost) householdSeams() butler.HouseholdSeams {
 	return h.Household
 }
 
+// inventorySeams is householdSeams for a view that describes or assigns
+// tools rather than serving a session: memory, which only a session
+// binds, is present (butler.InventoryMemory).
+func (h *ButlerHost) inventorySeams() butler.HouseholdSeams {
+	seams := h.householdSeams()
+	seams.Memory = butler.InventoryMemory()
+	return seams
+}
+
 // householdGateway builds the per-session family gateway for member.
 // Per-session rather than shared because the gateway is BOUND to the
 // member (ADR-W026 A1/A4): the member it acts for is a construction

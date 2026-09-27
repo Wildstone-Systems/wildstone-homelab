@@ -931,6 +931,7 @@ func (s *Server) Handler() http.Handler {
 	// notify) — the decision that this family adds no new RBAC verb,
 	// since RoleButler already holds both.
 	mux.Handle("POST /api/v1/agent/manifest", s.handle(principal.VerbRead, s.agentManifest))
+	mux.Handle("GET /api/v1/agent/tools", s.handle(principal.VerbRead, s.agentTools))
 	mux.Handle("POST /api/v1/agent/invoke", s.handle(principal.VerbPropose, s.agentInvoke))
 	mux.Handle("POST /api/v1/agent/recall", s.handle(principal.VerbRead, s.agentRecall))
 	mux.Handle("POST /api/v1/agent/remember", s.handle(principal.VerbPropose, s.agentRemember))
@@ -1156,6 +1157,15 @@ func (s *Server) writeJSON(w http.ResponseWriter, status int, body any) {
 		// §4.1): a newly minted API token, join token or runtime
 		// credential, each in the only moment it ever exists in a
 		// response.
+	case deliveriesResponse:
+		// Redacted everywhere but each delivery's task handle, which the
+		// runtime must present back (deliveriesResponse.redacted).
+		d := body.(deliveriesResponse)
+		if raw, err = d.redacted(); err != nil {
+			s.Log.Error("response redaction failed", "err", err)
+			http.Error(w, `{"error":"internal"}`, http.StatusInternalServerError)
+			return
+		}
 	default:
 		raw = []byte(redact.String(string(raw)))
 	}

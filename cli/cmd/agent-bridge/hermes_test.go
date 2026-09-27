@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -14,17 +16,30 @@ import (
 )
 
 // TestBuildRunRequestShape pins exactly what this bridge sends as the
-// body of POST /v1/runs today (hermes.go's own TODO(spike S3)): a
+// body of POST /v1/runs: the field names Hermes's API server reads
+// (input, instructions, conversation_history of {role, content}). A
 // deliberate, reviewed diff is how that shape should change, not a
 // silent one.
 func TestBuildRunRequestShape(t *testing.T) {
-	m := agentapi.Manifest{SystemPrompt: "You are Mika's assistant."}
+	m := agentapi.Manifest{SystemPrompt: "You are the household's assistant."}
 	req := buildRunRequest(m, nil)
 	raw, err := json.Marshal(req)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `{"input":"` + defaultRunInput + `","system":"You are Mika's assistant."}`
+	want := `{"input":"` + defaultRunInput + `","instructions":"You are the household's assistant."}`
+	if string(raw) != want {
+		t.Fatalf("run request shape =\n%s\nwant\n%s", raw, want)
+	}
+
+	payload := []byte(`{"handle":"t.s","text":"and tomorrow?","history":[` +
+		`{"role":"user","text":"what's on today?"},{"role":"assistant","text":"nothing"},{"role":"tool","text":"x"}]}`)
+	raw, err = json.Marshal(buildRunRequest(m, payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want = `{"input":"and tomorrow?","instructions":"You are the household's assistant.",` +
+		`"conversation_history":[{"role":"user","content":"what's on today?"},{"role":"assistant","content":"nothing"}]}`
 	if string(raw) != want {
 		t.Fatalf("run request shape =\n%s\nwant\n%s", raw, want)
 	}
@@ -103,19 +118,26 @@ func TestStartRunNon2xxIsAnError(t *testing.T) {
 
 func TestWaitForRunParsesTerminalEvents(t *testing.T) {
 	tests := []struct {
-		event string
-		want  string
+		name   string
+		event  string
+		want   string
+		output string
 	}{
-		{`{"type":"run.completed"}`, "completed"},
-		{`{"type":"run.failed","error":"boom"}`, "failed"},
-		{`{"type":"run.cancelled","reason":"stopped"}`, "cancelled"},
-		{`{"type":"run.interrupted","reason":"steer"}`, "interrupted"},
+		// Hermes's own framing: the name under "event", the answer
+		// under "output" (api_server_runs.py upstream).
+		{"hermes-completed", `{"event":"run.completed","run_id":"run-1","completed":true,"output":"It's sunny."}`, "completed", "It's sunny."},
+		{"hermes-failed", `{"event":"run.failed","run_id":"run-1","error":"boom"}`, "failed", ""},
+		{"hermes-cancelled", `{"event":"run.cancelled","run_id":"run-1","interrupted":true}`, "cancelled", ""},
+		{"completed", `{"type":"run.completed"}`, "completed", ""},
+		{"failed", `{"type":"run.failed","error":"boom"}`, "failed", ""},
+		{"cancelled", `{"type":"run.cancelled","reason":"stopped"}`, "cancelled", ""},
+		{"interrupted", `{"type":"run.interrupted","reason":"steer"}`, "interrupted", ""},
 	}
 	for _, tt := range tests {
-		t.Run(tt.want, func(t *testing.T) {
+		t.Run(tt.name, func(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "text/event-stream")
-				fmt.Fprintf(w, "event: tool.started\ndata: {\"type\":\"tool.started\"}\n\n")
+				fmt.Fprintf(w, "id: 1\ndata: {\"event\":\"message.delta\",\"delta\":\"It's\"}\n\n")
 				fmt.Fprintf(w, "data: %s\n\n", tt.event)
 			}))
 			defer srv.Close()
@@ -126,6 +148,9 @@ func TestWaitForRunParsesTerminalEvents(t *testing.T) {
 			}
 			if outcome.Terminal != tt.want {
 				t.Fatalf("Terminal = %q, want %q", outcome.Terminal, tt.want)
+			}
+			if outcome.Output != tt.output {
+				t.Fatalf("Output = %q, want %q", outcome.Output, tt.output)
 			}
 		})
 	}
@@ -164,5 +189,33 @@ func TestHealthNon200IsAnError(t *testing.T) {
 	c := &hermesClient{Base: srv.URL, APIKey: "k"}
 	if err := c.Health(context.Background()); err == nil {
 		t.Fatal("want an error on a non-200 health response")
+	}
+}
+
+// TestWaitForRunLogsToolCalls: each tool.started names its tool in the
+// bridge's log, by name only.
+func TestWaitForRunLogsToolCalls(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"event\":\"tool.started\",\"run_id\":\"run-1\",\"tool\":\"mcp_wildstone_remember\",\"preview\":\"favorite color\"}\n\n")
+		fmt.Fprint(w, "data: {\"event\":\"tool.completed\",\"run_id\":\"run-1\",\"tool\":\"mcp_wildstone_remember\",\"error\":false}\n\n")
+		fmt.Fprint(w, "data: {\"event\":\"run.completed\",\"run_id\":\"run-1\",\"output\":\"noted\"}\n\n")
+	}))
+	defer srv.Close()
+	var buf bytes.Buffer
+	c := &hermesClient{Base: srv.URL, APIKey: "k", Log: slog.New(slog.NewTextHandler(&buf, nil))}
+	outcome, err := c.WaitForRun(context.Background(), "run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome.Output != "noted" {
+		t.Fatalf("Output = %q, want the run's answer", outcome.Output)
+	}
+	logged := buf.String()
+	if strings.Count(logged, "hermes tool call") != 1 || !strings.Contains(logged, "tool=mcp_wildstone_remember") {
+		t.Fatalf("log = %q, want one tool call line naming the tool", logged)
+	}
+	if strings.Contains(logged, "favorite color") {
+		t.Fatalf("log = %q: a tool's arguments reached the log", logged)
 	}
 }

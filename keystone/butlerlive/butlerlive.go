@@ -292,8 +292,15 @@ type Butlers struct {
 	// switch-parity tests.
 	UseAgentGateway bool
 
-	// mu guards clients.
+	// ExternalReplyWait bounds how long a turn waits for an external
+	// runtime's answer (#364). Zero means externalReplyWait.
+	ExternalReplyWait time.Duration
+
+	// mu guards clients and waiting.
 	mu sync.Mutex
+	// waiting holds, per task, the turn waiting on its external
+	// runtime's answer (see external.go).
+	waiting map[string]chan runtimeReply
 	// clients caches one provider per ROUTE, keyed by the route's seq
 	// and the backend it resolved to. Building an HTTP client per
 	// message is waste; caching across a reconfiguration would be worse
