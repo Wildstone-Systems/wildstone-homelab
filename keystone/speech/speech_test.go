@@ -444,3 +444,53 @@ func TestWarmDownloadsTheModel(t *testing.T) {
 		t.Fatalf("downloads = %d, want 1", f.downloads.Load())
 	}
 }
+
+// A voice message that finds the model missing while the startup Warm
+// is still downloading it must not start a second download of the same
+// model (a review finding on #386).
+func TestWarmAndA404ShareOneDownload(t *testing.T) {
+	release := make(chan struct{})
+	var downloads, inFlight atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/v1/models/"):
+			downloads.Add(1)
+			inFlight.Add(1)
+			<-release
+			w.WriteHeader(http.StatusOK)
+		case r.URL.Path == "/v1/audio/transcriptions":
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+	// Released on every exit, so a regression fails instead of hanging
+	// srv.Close on a handler that never returns.
+	var once sync.Once
+	free := func() { once.Do(func() { close(release) }) }
+	defer free()
+	c := &Client{BaseURL: srv.URL + "/v1", Model: "m", Where: Local, DownloadsModels: true}
+	r := &Router{Mode: ModeLocal, Local: c}
+
+	done := make(chan struct{})
+	go func() {
+		r.Warm(context.Background(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+		close(done)
+	}()
+	deadline := time.Now().Add(5 * time.Second)
+	for inFlight.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if _, err := c.Transcribe(context.Background(), voice, "audio/ogg", ""); !errors.Is(err, ErrWarming) {
+		t.Fatalf("err = %v, want ErrWarming", err)
+	}
+	time.Sleep(50 * time.Millisecond) // give a second download the chance to start
+	if n := downloads.Load(); n != 1 {
+		t.Fatalf("downloads in flight = %d, want 1", n)
+	}
+	free()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Warm did not finish once the download did")
+	}
+}

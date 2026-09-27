@@ -286,6 +286,10 @@
   // o.say(message, bad)               where status and errors are shown
   function dictation(o) {
     var rec = null, chunks = [], stream = null, started = 0, timer = null, state = "idle", discard = false;
+    // generation counts assistant changes. A transcript that comes back after
+    // the assistant changed belongs to the old one, so it is dropped
+    // rather than typed into a conversation with the new one.
+    var generation = 0;
     // No microphone API, a page not on HTTPS, or a frame the parent did
     // not allow the microphone: the button is never shown, rather than
     // shown and failing when pressed.
@@ -361,6 +365,7 @@
       if (!blob.size) { set("idle"); o.say("Nothing was recorded. Try again.", true); return; }
       set("working");
       o.say("Writing down what you said…");
+      var mine = generation;
       var form = new FormData();
       form.append("agent", o.agent());
       form.append("seconds", seconds.toFixed(1));
@@ -368,6 +373,7 @@
       fetch("/api/v1/assistant/transcribe", { method: "POST", body: form, headers: { accept: "application/json" } })
         .then(function (r) { return r.json().catch(function () { return {}; }).then(function (j) { return { ok: r.ok, j: j }; }); })
         .then(function (res) {
+          if (mine !== generation) { o.say(""); return; }
           if (!res.ok) { throw new Error(res.j.error || "I couldn't make that out. Try again, or type."); }
           var words = String(res.j.text || "").trim();
           var had = o.input.value.trim();
@@ -376,7 +382,7 @@
           o.input.focus();
           o.say("Check what I heard, then send.");
         })
-        .catch(function (err) { o.say(String(err.message || err), true); })
+        .catch(function (err) { if (mine === generation) { o.say(String(err.message || err), true); } })
         .then(function () { set("idle"); });
     }
     o.button.addEventListener("click", function () {
@@ -387,9 +393,11 @@
     return {
       // show is called whenever the assistant changes: it puts the
       // button up for one that can take dictation, and throws away a
-      // recording in progress — words meant for one assistant are not
-      // typed into a conversation with another.
+      // recording in progress or one still being written down — words
+      // meant for one assistant are not typed into a conversation with
+      // another.
       show: function (on) {
+        generation++;
         o.button.hidden = !(supported && on);
         if (state === "recording") { discard = true; stop(); }
       }

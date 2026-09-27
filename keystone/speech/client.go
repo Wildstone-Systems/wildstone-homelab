@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -160,24 +161,44 @@ func (c *Client) EnsureModel(ctx context.Context) error {
 	return nil
 }
 
-// startWarming fetches the model in the background, once at a time.
-func (c *Client) startWarming() {
+// errDownloading reports that a model download is already running for
+// this engine, started by somebody else.
+var errDownloading = errors.New("speech: the model is already downloading")
+
+// download runs EnsureModel unless one is already running for this
+// Client, in which case it returns errDownloading at once. Every path
+// that fetches the model — the startup Warm and the one a 404 starts —
+// goes through here, so a model that is gigabytes is never requested
+// twice at the same time.
+func (c *Client) download(ctx context.Context) error {
 	c.mu.Lock()
 	if c.warming {
 		c.mu.Unlock()
-		return
+		return errDownloading
 	}
 	c.warming = true
 	c.mu.Unlock()
+	defer func() {
+		c.mu.Lock()
+		c.warming = false
+		c.mu.Unlock()
+	}()
+	return c.EnsureModel(ctx)
+}
+
+// startWarming fetches the model in the background, unless a download
+// is already running.
+func (c *Client) startWarming() {
+	c.mu.Lock()
+	busy := c.warming
+	c.mu.Unlock()
+	if busy {
+		return
+	}
 	go func() {
-		defer func() {
-			c.mu.Lock()
-			c.warming = false
-			c.mu.Unlock()
-		}()
 		ctx, cancel := context.WithTimeout(context.Background(), warmTimeout)
 		defer cancel()
-		_ = c.EnsureModel(ctx) // the next Transcribe finds out either way
+		_ = c.download(ctx) // the next Transcribe finds out either way
 	}()
 }
 

@@ -156,7 +156,7 @@ func (r *Router) Warm(ctx context.Context, log *slog.Logger) {
 	backoff := 10 * time.Second
 	for {
 		wctx, cancel := context.WithTimeout(ctx, warmTimeout)
-		err := c.EnsureModel(wctx)
+		err := c.download(wctx)
 		cancel()
 		if err == nil {
 			log.Info("speech: local model ready", "model", c.Model)
@@ -164,6 +164,17 @@ func (r *Router) Warm(ctx context.Context, log *slog.Logger) {
 		}
 		if ctx.Err() != nil {
 			return
+		}
+		if errors.Is(err, errDownloading) {
+			// A voice message's 404 started the download first. Wait
+			// for it rather than asking for the same model again; the
+			// next attempt finds it present and returns at once.
+			select {
+			case <-time.After(5 * time.Second):
+			case <-ctx.Done():
+				return
+			}
+			continue
 		}
 		log.Warn("speech: local model not ready yet; voice messages will say so until it is", "model", c.Model, "err", err, "retry", backoff)
 		select {
