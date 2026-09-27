@@ -249,7 +249,7 @@ func TestAPackagedRuntimeCanBeUpgradedToTheCatalogsVersion(t *testing.T) {
 	// Installed from a catalog whose agent-hermes is an older version,
 	// then the catalog moves on to the shipped one.
 	shipped := h.s.Catalog
-	h.s.Catalog = olderHermesCatalog(t, current, "0.0.1")
+	h.s.Catalog = olderHermesCatalog(t, current, "0.0.1", true)
 	installCapability(t, h, "agent-hermes", hermesParams("health"))
 	h.s.Catalog = shipped
 
@@ -257,8 +257,9 @@ func TestAPackagedRuntimeCanBeUpgradedToTheCatalogsVersion(t *testing.T) {
 		Package *struct {
 			Name      string `json:"name"`
 			Instance  string `json:"instance"`
-			Installed string `json:"installedVersion"`
-			Available string `json:"availableVersion"`
+			Installed  string `json:"installedVersion"`
+			Available  string `json:"availableVersion"`
+			Upgradable bool   `json:"upgradable"`
 		} `json:"package"`
 	}
 	read := func() runtimeView {
@@ -280,7 +281,7 @@ func TestAPackagedRuntimeCanBeUpgradedToTheCatalogsVersion(t *testing.T) {
 	}
 
 	if v := read(); v.Package.Name != "agent-hermes" || v.Package.Instance != "health" ||
-		v.Package.Installed != "0.0.1" || v.Package.Available != current {
+		v.Package.Installed != "0.0.1" || v.Package.Available != current || !v.Package.Upgradable {
 		t.Fatalf("package = %+v, want agent-hermes#health installed at 0.0.1, available %s", *v.Package, current)
 	}
 
@@ -315,9 +316,64 @@ func TestAPackagedRuntimeCanBeUpgradedToTheCatalogsVersion(t *testing.T) {
 	}
 }
 
+// A release that renders exactly what the install runs is not offered
+// as an upgrade, and a removed install is not a packaged runtime at all:
+// its origin outlives it in the plan history, and upgrading it would
+// quietly reinstall it (#389).
+func TestOnlyALiveInstallThatWouldChangeIsUpgradable(t *testing.T) {
+	h := hermesCatalogHarness(t)
+	createAgent(t, h, "health")
+	if res := h.do(runtimedb.RoleAdmin, http.MethodPut, "/api/v1/butlers/health/runtime",
+		map[string]any{"type": "hermes"}, nil); res.StatusCode != http.StatusOK {
+		t.Fatalf("PUT native->hermes = %d", res.StatusCode)
+	}
+	pkg, err := h.s.Catalog.Get("agent-hermes", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	shipped := h.s.Catalog
+	h.s.Catalog = olderHermesCatalog(t, pkg.Metadata.Version, "0.0.1", false)
+	installCapability(t, h, "agent-hermes", hermesParams("health"))
+	h.s.Catalog = shipped
+
+	var v struct {
+		Package *struct {
+			Installed  string `json:"installedVersion"`
+			Upgradable bool   `json:"upgradable"`
+		} `json:"package"`
+	}
+	if res := h.do(runtimedb.RoleAdmin, http.MethodGet, "/api/v1/butlers/health/runtime", nil, &v); res.StatusCode != http.StatusOK {
+		t.Fatalf("GET runtime = %d", res.StatusCode)
+	}
+	if v.Package == nil || v.Package.Installed != "0.0.1" || v.Package.Upgradable {
+		t.Fatalf("package = %+v, want installed 0.0.1 and not upgradable (same render)", v.Package)
+	}
+
+	// Removed: the install's origin is still in the plan history.
+	var proposed map[string]any
+	if res := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/capabilities/disable",
+		map[string]any{"package": "agent-hermes", "instance": "health"}, &proposed); res.StatusCode != http.StatusCreated {
+		t.Fatalf("removing = %d %v", res.StatusCode, proposed)
+	}
+	planID, _ := proposed["id"].(string)
+	if res := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/plans/"+planID+"/approve", nil, nil); res.StatusCode != http.StatusOK {
+		t.Fatalf("approving the removal = %d", res.StatusCode)
+	}
+	v.Package = nil
+	if res := h.do(runtimedb.RoleAdmin, http.MethodGet, "/api/v1/butlers/health/runtime", nil, &v); res.StatusCode != http.StatusOK {
+		t.Fatalf("GET runtime = %d", res.StatusCode)
+	}
+	if v.Package != nil {
+		t.Fatalf("a removed install still reads as the runtime's package: %+v", v.Package)
+	}
+	if res := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/butlers/health/runtime/upgrade", map[string]any{}, nil); res.StatusCode != http.StatusNotFound {
+		t.Fatalf("upgrading a removed install = %d, want 404", res.StatusCode)
+	}
+}
+
 // olderHermesCatalog is the shipped catalog with agent-hermes relabelled
 // as version older, so an install can be made from it.
-func olderHermesCatalog(t *testing.T, current, older string) *catalog.Catalog {
+func olderHermesCatalog(t *testing.T, current, older string, differ bool) *catalog.Catalog {
 	t.Helper()
 	dir := t.TempDir()
 	if err := os.CopyFS(dir, os.DirFS("../../packages")); err != nil {
@@ -332,13 +388,15 @@ func olderHermesCatalog(t *testing.T, current, older string) *catalog.Catalog {
 	if relabelled == string(raw) {
 		t.Fatalf("agent-hermes's manifest does not say version: %s", current)
 	}
-	// And renders something different, as an older version would: the
-	// upgrade must have a change to make.
-	changed := strings.Replace(relabelled, "max_concurrent_runs: 1", "max_concurrent_runs: 2", 1)
-	if changed == relabelled {
-		t.Fatal("agent-hermes's manifest no longer sets max_concurrent_runs: 1")
+	// And, when differ, renders something different, as an older
+	// version usually would.
+	if differ {
+		changed := strings.Replace(relabelled, "max_concurrent_runs: 1", "max_concurrent_runs: 2", 1)
+		if changed == relabelled {
+			t.Fatal("agent-hermes's manifest no longer sets max_concurrent_runs: 1")
+		}
+		relabelled = changed
 	}
-	relabelled = changed
 	if err := os.WriteFile(manifest, []byte(relabelled), 0o644); err != nil {
 		t.Fatal(err)
 	}

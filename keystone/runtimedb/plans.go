@@ -148,6 +148,29 @@ func (db *DB) GetPlan(id string) (PlanRecord, error) {
 //
 // proposed/rejected/superseded stay out: those never reached the
 // Statefile, and they are the ones that genuinely never happened.
+// AppliedPlanJSONMentioning is every applied plan whose JSON contains
+// needle, newest first, with no limit. A package's install provenance
+// has to be found however many unrelated plans came after it; a
+// bounded window of recent plans loses it on a long-lived deployment.
+func (db *DB) AppliedPlanJSONMentioning(needle string) ([]string, error) {
+	rows, err := db.sql.Query(
+		`SELECT plan_json FROM plans WHERE state IN (?, ?, ?, ?) AND instr(plan_json, ?) > 0 ORDER BY seq DESC`,
+		string(PlanApproved), string(PlanApplying), string(PlanApplied), string(PlanFailed), needle)
+	if err != nil {
+		return nil, fmt.Errorf("runtimedb: listing applied plans: %w", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var j string
+		if err := rows.Scan(&j); err != nil {
+			return nil, fmt.Errorf("runtimedb: scanning applied plan: %w", err)
+		}
+		out = append(out, j)
+	}
+	return out, rows.Err()
+}
+
 func (db *DB) AppliedPlanJSON(limit int) ([]string, error) {
 	if limit <= 0 {
 		limit = 50

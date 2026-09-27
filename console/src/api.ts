@@ -440,6 +440,9 @@ export interface RuntimeRecord {
     instance: string;
     installedVersion: string;
     availableVersion?: string;
+    // Whether upgrading to availableVersion would change what runs. A
+    // release that renders the same resources is not offered.
+    upgradable?: boolean;
   };
 }
 

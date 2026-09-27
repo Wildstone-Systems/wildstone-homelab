@@ -221,8 +221,7 @@ export function TabRuntime({
   // restart Plan (#389): the profile controls below re-render only when
   // they change, and the Packages screen re-expands the installed version.
   const pkg = runtime?.package;
-  const upgradeTo =
-    pkg?.availableVersion && pkg.availableVersion !== pkg.installedVersion ? pkg.availableVersion : "";
+  const upgradeTo = pkg?.upgradable && pkg.availableVersion ? pkg.availableVersion : "";
 
   async function upgradePackage() {
     setUpgrading(true);
