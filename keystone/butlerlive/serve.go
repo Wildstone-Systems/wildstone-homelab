@@ -405,6 +405,75 @@ func (bs *Butlers) runtimeOffline(b runtimedb.Butler) (bool, string, error) {
 	return false, "", nil
 }
 
+// resumableForExternal picks the task a message in a session continues
+// when b answers through an external runtime: the newest open task the
+// runtime does not hold. open is false when every open task is held, in
+// which case the message gets a new task. For a native b it returns
+// newest unchanged with open true, so a native conversation resumes
+// exactly as it always has.
+func (bs *Butlers) resumableForExternal(b runtimedb.Butler, newest runtimedb.ButlerTask, session string) (runtimedb.ButlerTask, bool, error) {
+	if _, external, err := bs.externalRuntime(b); err != nil || !external {
+		return newest, true, err
+	}
+	tasks, err := bs.DB.OpenButlerTasksForSession(session)
+	if err != nil {
+		return runtimedb.ButlerTask{}, false, err
+	}
+	for _, task := range tasks {
+		held, err := bs.heldByExternalRuntime(b, task)
+		if err != nil {
+			return runtimedb.ButlerTask{}, false, err
+		}
+		if !held {
+			return task, true, nil
+		}
+	}
+	if len(tasks) == 0 {
+		// Nothing open: newest is finished, and the switch below opens
+		// a new task for it as it always has.
+		return newest, true, nil
+	}
+	return newest, false, nil
+}
+
+// heldByExternalRuntime reports whether task is work b's external
+// runtime holds: running (the runtime has it and has not answered), or
+// parked in waiting(runtime-offline) to be re-offered to it. A task
+// waiting for anything else, such as the person's reply to a question,
+// is not held and is resumed by the next message as usual.
+func (bs *Butlers) heldByExternalRuntime(b runtimedb.Butler, task runtimedb.ButlerTask) (bool, error) {
+	switch task.State {
+	case runtimedb.ButlerTaskRunning, runtimedb.ButlerTaskWaiting:
+	default:
+		return false, nil
+	}
+	if _, external, err := bs.externalRuntime(b); err != nil || !external {
+		return false, err
+	}
+	if task.State == runtimedb.ButlerTaskRunning {
+		return true, nil
+	}
+	waits, err := bs.DB.ListButlerTaskWaits(task.ID)
+	if err != nil || len(waits) == 0 {
+		return false, err
+	}
+	last := waits[len(waits)-1]
+	if last.Reason != runtimedb.ButlerWaitRuntimeOffline {
+		return false, nil
+	}
+	if last.ResolvedAt.IsZero() {
+		return true, nil
+	}
+	// The offline wait resolved after the state above was read: the
+	// runtime reconnected and started the task (Work Start resolves the
+	// wait and moves it to running in one step). It holds it now.
+	now, err := bs.DB.GetButlerTask(task.ID)
+	if err != nil {
+		return false, err
+	}
+	return now.State == runtimedb.ButlerTaskRunning, nil
+}
+
 // queueForOfflineRuntime moves task to waiting(runtime-offline). It
 // first moves a pending task to running (mirroring the runtime's own
 // first Work call, Client.Start) so the transition to waiting is legal
@@ -468,8 +537,24 @@ func (bs *Butlers) task(b runtimedb.Butler, t Turn) (runtimedb.ButlerTask, bool,
 			// cancelled" is the true answer to a follow-up on a
 			// conversation somebody stopped, and inventing a fresh task
 			// would quietly restart work that was deliberately halted.
-			switch existing.State {
-			case runtimedb.ButlerTaskCompleted, runtimedb.ButlerTaskFailed:
+			// An external runtime may hold the newest task while an
+			// older one waits on the person (#389): this message is for
+			// the newest task the runtime does not hold, or a new one.
+			existing, open, herr := bs.resumableForExternal(b, existing, t.SessionID)
+			if herr != nil {
+				return runtimedb.ButlerTask{}, false, herr
+			}
+			switch {
+			case existing.State == runtimedb.ButlerTaskCompleted, existing.State == runtimedb.ButlerTaskFailed:
+			case !open:
+				// An external runtime is still working on every open
+				// task in this conversation, or they are parked for that
+				// runtime to come back. Resuming one would re-issue its
+				// handle and invalidate the one the runtime holds, so its
+				// answer would be refused and lost. This message is a new
+				// turn with its own task instead; the others keep their
+				// handles, and their answers reach the conversation when
+				// they arrive (LateAnswer).
 			default:
 				// THE CALLER MUST BE THE ORIGIN, checked here rather
 				// than only when a tool runs.

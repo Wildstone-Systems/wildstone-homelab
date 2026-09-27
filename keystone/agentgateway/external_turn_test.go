@@ -398,3 +398,115 @@ func TestALateAnswerThatFailsCanBeRetriedWithTheSameHandle(t *testing.T) {
 		t.Fatalf("task state = %s, want completed by the retried answer", task.State)
 	}
 }
+
+// A follow-up sent while the runtime is still working on the previous
+// message gets its own task, and does not take the handle the runtime
+// holds (#389). Resuming used to re-issue that handle, so the in-flight
+// run's answer was refused and only the newest message was answered.
+func TestAFollowUpDoesNotCutOffTheRunInFlight(t *testing.T) {
+	f, bs, _ := externalFixture(t, `{"kind":"informational"}`)
+	bs.ExternalReplyWait = 50 * time.Millisecond
+	var late []string
+	bs.LateAnswer = func(taskID, text string) error {
+		late = append(late, taskID)
+		return nil
+	}
+	turn := func(text, session string) butlerlive.Answer {
+		t.Helper()
+		answer, err := bs.Serve(context.Background(), butlerlive.Turn{
+			Butler: "alfred", Member: "mika", Text: text, SessionID: session,
+			Connection: butlerlive.ConnectionScope{Name: butlerlive.ConsoleConnection},
+		})
+		if err != nil {
+			t.Fatalf("Serve(%q): %v", text, err)
+		}
+		return answer
+	}
+
+	first := turn("is n1 healthy?", "")
+	sid, err := f.db.InsertButlerSession(runtimedb.ButlerSession{
+		Principal: "butler", ActingFor: "mika", Provider: "test", Mode: runtimedb.ButlerModeFull,
+		Surface: runtimedb.ButlerSurfaceAdmin, Butler: "alfred", FinalText: first.FinalText,
+		Turns: []runtimedb.ButlerTurn{
+			{Role: runtimedb.ButlerRoleUser, Text: "is n1 healthy?", TaskID: first.TaskID},
+			{Role: runtimedb.ButlerRoleAssistant, Text: first.FinalText},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.db.SetButlerTaskSession(first.TaskID, sid); err != nil {
+		t.Fatal(err)
+	}
+	d, _ := nextTurn(t, f.g)
+
+	second := turn("and n2?", sid)
+	if second.TaskID == first.TaskID || second.Resumed {
+		t.Fatalf("the follow-up resumed %s (resumed=%t), want a task of its own", second.TaskID, second.Resumed)
+	}
+
+	// The first run reports back under the handle it was given.
+	ctx := WithPrincipal(context.Background(), "rt-alfred")
+	if err := f.g.Complete(ctx, agentapi.WorkComplete{Handle: d.Handle, Reply: "n1 is fine"}); err != nil {
+		t.Fatalf("the in-flight run's Complete was refused: %v", err)
+	}
+	task, err := f.db.GetButlerTask(first.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.State != runtimedb.ButlerTaskCompleted || task.ResultSummary != "n1 is fine" {
+		t.Fatalf("first task = %s %q, want completed with its own answer", task.State, task.ResultSummary)
+	}
+	if len(late) != 1 || late[0] != first.TaskID {
+		t.Fatalf("late answers = %v, want the first task's", late)
+	}
+}
+
+// An older task in the conversation that waits on the person is what
+// the next message answers, even after a follow-up opened a newer task
+// the runtime still holds (#389).
+func TestAnOlderTaskWaitingOnThePersonIsStillResumed(t *testing.T) {
+	f, bs, _ := externalFixture(t, `{"kind":"informational"}`)
+	bs.ExternalReplyWait = 50 * time.Millisecond
+	bs.LateAnswer = func(string, string) error { return nil }
+	turn := func(text, session string) butlerlive.Answer {
+		t.Helper()
+		answer, err := bs.Serve(context.Background(), butlerlive.Turn{
+			Butler: "alfred", Member: "mika", Text: text, SessionID: session,
+			Connection: butlerlive.ConnectionScope{Name: butlerlive.ConsoleConnection},
+		})
+		if err != nil {
+			t.Fatalf("Serve(%q): %v", text, err)
+		}
+		return answer
+	}
+
+	first := turn("restart the media server", "")
+	sid, err := f.db.InsertButlerSession(runtimedb.ButlerSession{
+		Principal: "butler", ActingFor: "mika", Provider: "test", Mode: runtimedb.ButlerModeFull,
+		Surface: runtimedb.ButlerSurfaceAdmin, Butler: "alfred", FinalText: first.FinalText,
+		Turns: []runtimedb.ButlerTurn{
+			{Role: runtimedb.ButlerRoleUser, Text: "restart the media server", TaskID: first.TaskID},
+			{Role: runtimedb.ButlerRoleAssistant, Text: first.FinalText},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.db.SetButlerTaskSession(first.TaskID, sid); err != nil {
+		t.Fatal(err)
+	}
+	second := turn("and check the backups", sid)
+	if second.TaskID == first.TaskID {
+		t.Fatal("the follow-up resumed the task the runtime holds")
+	}
+
+	// The first task now waits on the person.
+	if err := f.ledger.Wait(first.TaskID, string(agentapi.WorkWaitReply), "which media server?"); err != nil {
+		t.Fatal(err)
+	}
+	third := turn("the one on n1", sid)
+	if third.TaskID != first.TaskID || !third.Resumed {
+		t.Fatalf("the answer went to %s (resumed=%t), want the waiting %s", third.TaskID, third.Resumed, first.TaskID)
+	}
+}
