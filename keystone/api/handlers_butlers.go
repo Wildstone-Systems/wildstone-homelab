@@ -799,6 +799,11 @@ func (s *Server) butlerStatus(r *http.Request, _ principal.Identity) (any, int, 
 		"endpoint":   b.Endpoint,
 		"mode":       mode,
 	}
+	// Whether the Console's mic works for this Butler (ADR-W042).
+	if ok, max := s.dictationInfo(b.Name); ok {
+		out["dictation"] = true
+		out["dictationMaxSeconds"] = max
+	}
 	// A Butler that cannot answer says why, and says it from the model's
 	// own readiness rather than from a sentence this handler invented.
 	if !b.Reachable() {
