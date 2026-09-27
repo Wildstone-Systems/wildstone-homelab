@@ -1036,7 +1036,6 @@ export interface IndexMeasurement {
 
 // ---------------------------------------------------------------- integrations
 
-// One named connection to an application (ADR-W030 A5). Keystone holds
 // A PantryOS pairing (ADR-W042 A6): the address Keystone reaches PantryOS
 // at, and when and by whom it was paired. The agent key is sealed in
 // Keystone and never sent here.
@@ -1049,6 +1048,20 @@ export interface PantryPairing {
 }
 export type PantryPairingStatus = { paired: false } | { paired: true; pairing: PantryPairing };
 
+// Moving the household's old grocery list into PantryOS (#387): the
+// Wildstone lists that mean groceries and still have open items. A move
+// sends each item to PantryOS and removes the old list once it is empty.
+export const PANTRY_GROCERY_MOVE_PATH = "/api/v1/pantry/grocery-move";
+export interface GroceryMoveList {
+  name: string;
+  items: string[];
+}
+export interface GroceryMoveResult {
+  moved: number;
+  lists: { name: string; moved: string[]; removed: boolean; left: number }[];
+}
+
+// One named connection to an application (ADR-W030 A5). Keystone holds
 // the contract and the leases; the application-specific half lives in an
 // adapter outside it.
 export interface IntegrationConnection {
@@ -1833,6 +1846,8 @@ export const api = {
   pairPantry: (req: { address: string; code: string; keystoneUrl: string }) =>
     call<PantryPairingStatus>("POST", PANTRY_PAIRING_PATH, req),
   unpairPantry: () => call<{ paired: false; publisherTokensRevoked: number }>("DELETE", PANTRY_PAIRING_PATH),
+  groceryMovePreview: () => call<{ lists: GroceryMoveList[] }>("GET", PANTRY_GROCERY_MOVE_PATH),
+  moveGroceries: () => call<GroceryMoveResult>("POST", PANTRY_GROCERY_MOVE_PATH),
   indexMeasurements: () =>
     call<{ measurements: IndexMeasurement[] | null }>("GET", "/api/v1/butler/index/measurements"),
   compactButlerIndex: (maxAgeDays: number) =>

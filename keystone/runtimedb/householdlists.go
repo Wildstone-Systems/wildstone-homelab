@@ -416,3 +416,50 @@ func touchList(tx *sql.Tx, seq int64, stamp string, changed bool) error {
 	_, err := tx.Exec(`UPDATE household_lists SET updated_at = ? WHERE seq = ?`, stamp, seq)
 	return err
 }
+
+// RetireMovedListItems finishes moving a list's items somewhere else —
+// PantryOS's grocery list, in practice (ADR-W042 A3.1, #387). It takes
+// the moved items off the list and, once nothing open is left on it,
+// removes the list altogether so the household is not shown two grocery
+// lists. Ticked items are the old list's history and go with it.
+//
+// One transaction, and the emptiness is judged inside it: an item added
+// to the old list while the move ran keeps the list, and is left for the
+// next move rather than lost.
+//
+// It reports whether the list was removed and how many open items are
+// still on it.
+func (db *DB) RetireMovedListItems(list string, moved []string) (removed bool, open int, err error) {
+	if err := db.gate(GateIngestion); err != nil {
+		return false, 0, err
+	}
+	clean, err := cleanListItems(moved)
+	if err != nil {
+		return false, 0, err
+	}
+	tx, err := db.sql.Begin()
+	if err != nil {
+		return false, 0, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	l, err := getListTx(tx, list)
+	if err != nil {
+		return false, 0, err
+	}
+	for _, it := range clean {
+		if _, err := tx.Exec(`DELETE FROM household_list_items WHERE list = ? AND text_key = ?`, l.Seq, listKey(it)); err != nil {
+			return false, 0, fmt.Errorf("runtimedb: taking %q off %s: %w", it, l.Name, err)
+		}
+	}
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM household_list_items WHERE list = ? AND checked = 0`, l.Seq).Scan(&open); err != nil {
+		return false, 0, err
+	}
+	if open == 0 {
+		if _, err := tx.Exec(`DELETE FROM household_lists WHERE seq = ?`, l.Seq); err != nil {
+			return false, 0, fmt.Errorf("runtimedb: removing %s: %w", l.Name, err)
+		}
+	} else if err := touchList(tx, l.Seq, now(), len(clean) > 0); err != nil {
+		return false, 0, err
+	}
+	return open == 0, open, tx.Commit()
+}

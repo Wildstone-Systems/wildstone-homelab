@@ -2,7 +2,10 @@ import { useState } from "react";
 import {
   api,
   isPendingStepUp,
+  PANTRY_GROCERY_MOVE_PATH,
   PANTRY_PAIRING_PATH,
+  type GroceryMoveList,
+  type GroceryMoveResult,
   type PantryPairingStatus,
 } from "../api";
 import { ErrorLine, useAction, useLoad, when } from "../lib";
@@ -46,7 +49,12 @@ export function PantryPairingPanel() {
   const status = useLoad(() => api.pantryPairing(), []);
   if (status.error) return <ErrorLine error={status.error} />;
   if (!status.data) return <div className="muted">Checking whether PantryOS is paired…</div>;
-  return <PantryPairingView status={status.data} onChanged={() => status.reload()} />;
+  return (
+    <>
+      <PantryPairingView status={status.data} onChanged={() => status.reload()} />
+      {status.data.paired && <GroceryMovePanel />}
+    </>
+  );
 }
 
 // Separated from its fetch so the render check can put it in each state:
@@ -198,6 +206,84 @@ export function PantryPairingView({
         </div>
       )}
       {unpair.state.phase === "error" && <ErrorLine error={unpair.state.message} />}
+    </>
+  );
+}
+
+// Moving the old grocery list (#387). While PantryOS is installed it owns
+// the grocery list, so a Wildstone "Shopping" list nobody's requests
+// reach any more is offered across once PantryOS is paired — offered,
+// never done on its own. Each item leaves the old list only once PantryOS
+// has it; the old list goes when nothing open is left on it.
+export function GroceryMovePanel() {
+  const preview = useLoad(() => api.groceryMovePreview(), []);
+  if (preview.error) return <ErrorLine error={preview.error} />;
+  if (!preview.data) return null;
+  return <GroceryMoveView lists={preview.data.lists} onMoved={() => preview.reload()} />;
+}
+
+function itemCount(n: number) {
+  return n === 1 ? "1 item" : `${n} items`;
+}
+
+function movedLine(r: GroceryMoveResult) {
+  const gone = r.lists.filter((l) => l.removed).map((l) => l.name);
+  const kept = r.lists.filter((l) => !l.removed && l.left > 0);
+  const parts = [`Moved ${itemCount(r.moved)} to PantryOS.`];
+  if (gone.length > 0) parts.push(`The old ${gone.join(" and ")} list is gone.`);
+  for (const l of kept) parts.push(`${l.name} still has ${itemCount(l.left)} added while this ran; move again to take them too.`);
+  return parts.join(" ");
+}
+
+// Separated from its fetch so the render check can show it with lists.
+export function GroceryMoveView({ lists, onMoved }: { lists: GroceryMoveList[]; onMoved: () => void }) {
+  const resuming = isPendingStepUp("POST", PANTRY_GROCERY_MOVE_PATH);
+  const move = useAction();
+  const [done, setDone] = useState<string | null>(null);
+  const total = lists.reduce((n, l) => n + l.items.length, 0);
+
+  if (total === 0) {
+    return done ? <div className="note" style={{ marginTop: "var(--space-4)" }}>{done}</div> : null;
+  }
+  return (
+    <>
+      <div className="sect" style={{ marginTop: "var(--space-6)" }}>
+        <span className="eyebrow">Old grocery list</span>
+        <StatusPill kind="warn">{itemCount(total)} to move</StatusPill>
+        <span className="fade" />
+      </div>
+      <div style={{ display: "grid", gap: "var(--space-3)" }}>
+        {resuming && <div className="callout">Password confirmed. Move now to finish.</div>}
+        <div className="note">
+          PantryOS keeps the grocery list now, so requests no longer reach the Wildstone list below. Move what is
+          still on it; each item leaves only once PantryOS has it, and the old list goes when it is empty.
+        </div>
+        {lists.map((l) => (
+          <div key={l.name}>
+            <strong>{l.name}</strong>
+            <div className="muted">{l.items.join(", ")}</div>
+          </div>
+        ))}
+        <div className="row">
+          <button
+            className="btn btn-primary"
+            disabled={move.state.phase === "busy"}
+            onClick={async () => {
+              await move.run(async () => {
+                const r = await api.moveGroceries();
+                setDone(movedLine(r));
+              }, "moved");
+              // Either way the old list changed or may have: a move that
+              // stopped part-way took what PantryOS accepted off it.
+              onMoved();
+            }}
+          >
+            {move.state.phase === "busy" ? "Moving…" : `Move ${itemCount(total)} to PantryOS`}
+          </button>
+        </div>
+        {move.state.phase === "error" && <ErrorLine error={move.state.message} />}
+        {done && <div className="note">{done}</div>}
+      </div>
     </>
   );
 }

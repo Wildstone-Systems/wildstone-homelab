@@ -118,6 +118,10 @@ var groceryListNames = map[string]bool{
 	"grocery list": true, "shopping list": true, "groceries list": true,
 }
 
+// IsGroceryList reports whether a list name means the grocery list —
+// the lists a move to PantryOS takes across (#387).
+func IsGroceryList(name string) bool { return isGroceryList(name) }
+
 func isGroceryList(name string) bool {
 	return groceryListNames[strings.ToLower(strings.Join(strings.Fields(name), " "))]
 }

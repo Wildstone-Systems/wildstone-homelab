@@ -96,10 +96,27 @@ pantry, and the real deployment is enrolled with
   PantryOS match and are refused, saying where the list lives — a delete is
   refused before anyone is asked to confirm it. The lists overview notes
   that the grocery list is kept in PantryOS.
-- **Not yet:** a one-time import of an existing household `shopping` list
-  into PantryOS on first connect (each item through `pantry.add`, which is
-  repeat-safe). Until then, the old list stays in Wildstone, untouched and
-  still visible on the Lists card.
+
+#### A3.1. Moving the old grocery list *(Implemented, #387)*
+
+A household that kept groceries in `lists-wildstone` has an old list that
+nobody's requests reach once PantryOS is installed. It is moved across,
+offered and never automatic:
+
+- **Where:** the pantry service's Connection panel, once PantryOS is paired
+  (`GET|POST /api/v1/pantry/grocery-move`). Not the install Plan: at
+  install time there is no connected PantryOS to move to.
+- **What:** the open items of every grocery-named list (A3's names). Ticked
+  items are the old list's history and are not sent.
+- **One item at a time, through `pantry.add`** (repeat-safe). An item
+  leaves the old list only once PantryOS has it
+  (`runtimedb.RetireMovedListItems`), and the old list is removed, ticked
+  history with it, once nothing open is left on it. That emptiness is
+  judged in the same transaction, so an item added while the move ran
+  keeps the list and waits for the next move.
+- **Part-way failure loses nothing:** the move stops, says how far it got,
+  and leaves the rest on the old list; moving again finishes it.
+- It is consequential (A4.1 step-up), because it removes a list.
 
 ### A4. Events
 
@@ -227,7 +244,8 @@ connected yet.
    connection-only), `publishes:` (A4), `agentTools:` (A5); a test pinning
    the tools to the domestic gateway, as `TestListsToolsAreDeclaredByThePackage`
    does for lists.
-4. `keystone/domestic`: grocery routing (A3) with the unavailable case pinned.
+4. `keystone/domestic`: grocery routing (A3) with the unavailable case pinned;
+   moving an old grocery list across (A3.1, #387).
 5. Connection Plan + pairing exchange (A6) — the exchange is implemented
    (#384), with its Console screen in the pantry service's detail panel
    (Services → PantryOS → Connection).

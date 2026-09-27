@@ -2579,7 +2579,7 @@ check("a secret field is never spell-checked", secretOut.includes('spellCheck="f
 // Pairing with PantryOS (ADR-W042 A6). The screen must never hold either
 // secret, must say where the code comes from, and must survive the
 // password confirmation a consequential pairing can ask for.
-import { PantryPairingView } from "../src/views/PantryPairing";
+import { GroceryMoveView, PantryPairingView } from "../src/views/PantryPairing";
 import { clearStepUp, rememberStepUp } from "../src/api";
 
 const unpaired = renderToString(
@@ -2613,6 +2613,23 @@ check("back from a password confirmation, the pairing is one click from done",
   resumed.includes("Password confirmed") && resumed.includes('value="KCTW-X54C"'), resumed);
 clearStepUp();
 store.delete("wst.console.pantry-pairing-draft");
+
+// Moving the old grocery list (#387): offered with what it will move,
+// and nothing at all when there is nothing to move.
+const toMove = renderToString(
+  h(GroceryMoveView, { lists: [{ name: "Shopping", items: ["milk", "eggs"] }], onMoved: () => {} }),
+);
+check("the old grocery list's open items are shown before anything moves",
+  toMove.includes("Shopping") && toMove.includes("milk, eggs"), toMove);
+check("the move says how much it will move", toMove.includes("Move 2 items to PantryOS"));
+check("and that nothing leaves the old list before PantryOS has it", toMove.includes("only once PantryOS has it"));
+check("with nothing to move there is no offer",
+  renderToString(h(GroceryMoveView, { lists: [], onMoved: () => {} })) === "");
+rememberStepUp("POST", "/api/v1/pantry/grocery-move");
+check("back from a password confirmation, the move is one click from done",
+  renderToString(h(GroceryMoveView, { lists: [{ name: "Shopping", items: ["milk"] }], onMoved: () => {} }))
+    .includes("Password confirmed. Move now to finish."));
+clearStepUp();
 
 console.log(failures === 0 ? "\nALL CHECKS PASSED" : `\n${failures} CHECK(S) FAILED`);
 process.exit(failures === 0 ? 0 : 1);

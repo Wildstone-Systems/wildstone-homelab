@@ -41,6 +41,9 @@ type Server struct {
 	// PairingHTTP, when set, is the client pairing calls PantryOS with
 	// (tests); its redirect policy is always replaced with "never follow".
 	PairingHTTP *http.Client
+	// PantryGroceries is PantryOS's grocery list, which the household's
+	// old one moves to (#387). nil answers the move with 503.
+	PantryGroceries PantryGroceries
 
 	Principals *principal.Store
 	DB         *runtimedb.DB
@@ -434,6 +437,11 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/pantry/pairing", s.handle(principal.VerbRead, s.pantryPairingStatus))
 	mux.Handle("POST /api/v1/pantry/pairing", s.handle(principal.VerbManage, s.consequential(s.pairPantry)))
 	mux.Handle("DELETE /api/v1/pantry/pairing", s.handle(principal.VerbManage, s.consequential(s.unpairPantry)))
+	// Moving the household's old grocery list into PantryOS (#387):
+	// offered, never automatic, and consequential because it removes the
+	// old list once everything on it has arrived.
+	mux.Handle("GET /api/v1/pantry/grocery-move", s.handle(principal.VerbRead, s.groceryMovePreview))
+	mux.Handle("POST /api/v1/pantry/grocery-move", s.handle(principal.VerbManage, s.consequential(s.moveGroceries)))
 	// Replay is a read: it evaluates and returns, writes nothing.
 	// Meters and their readings (ADR-W035 K1). The reading is an
 	// ordinary authenticated write rather than a Plan: it is evidence,

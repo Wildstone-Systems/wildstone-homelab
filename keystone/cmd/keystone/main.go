@@ -1360,6 +1360,7 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 		for _, e := range pantryActions.Executors() {
 			actions.Register(e)
 		}
+		apiSrv.PantryGroceries = pantryActions
 		// The household lists (packages/lists-wildstone). Registered
 		// unconditionally and gated per call on the install, for the
 		// drop box's reason: installing or removing the package takes
