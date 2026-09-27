@@ -738,6 +738,10 @@ func (s *Server) Handler() http.Handler {
 	// than converse.
 	mux.Handle("POST /api/v1/chat/adapters/{capability}", s.handle(principal.VerbManage, s.consequential(s.mintChatAdapter)))
 	mux.Handle("POST /api/v1/chat/messages", s.handle(principal.VerbConverse, s.receiveChatMessage))
+	// A voice message: the same door, with a recording instead of text
+	// (ADR-W042). The adapter's credential decides the Connection here
+	// exactly as it does for text.
+	mux.Handle("POST /api/v1/chat/voice", s.handle(principal.VerbConverse, s.receiveChatVoice))
 	mux.Handle("GET /api/v1/chat/outbound", s.handle(principal.VerbConverse, s.pollChatOutbound))
 	mux.Handle("GET /api/v1/chat/outbound/{seq}/ready", s.handle(principal.VerbConverse, s.readyChatOutbound))
 	mux.Handle("POST /api/v1/chat/outbound/{seq}/ack", s.handle(principal.VerbConverse, s.ackChatOutbound))

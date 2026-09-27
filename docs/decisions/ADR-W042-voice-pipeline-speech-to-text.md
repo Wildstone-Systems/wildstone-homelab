@@ -1,10 +1,10 @@
 # ADR-W042: The voice pipeline, part one — speech to text
 
-- **Status:** accepted; slice 1 implemented (`keystone/speech`, `packages/speech-speaches`, `-speech-*` flags); slices 2–7 not yet
+- **Status:** accepted; slices 1–2 implemented (`keystone/speech`, `packages/speech-speaches`, `-speech-*` flags, `POST /api/v1/chat/voice`); slices 3–7 not yet
 - **Governed by:** ADR-W033 where they overlap (B6 privacy chain, B7 Connections, B9 addressing).
 - **Scope:** turning a recorded voice message into the text of an ordinary Agent turn, on Telegram, Discord, Slack and Matrix, and dictation on the family dashboard (the assistant widget and the conversations page). It does not decide text-to-speech replies, wake words, live streaming audio, or shared household devices; §8 records what those will need so part one does not block them.
 - **Depends on / relates to:** [`docs/02-implementation-scope.md`](../02-implementation-scope.md) §7 ("Voice remains post-v1. Local transcription and Kokoro text-to-speech are the current preferences, using the same identity/conversation boundary"); [`docs/agent-architecture-baseline.md`](../agent-architecture-baseline.md) "Privacy gateway" and AC12 (transcription is an external processing boundary); [`docs/audit/findings/155-identity.md`](../audit/findings/155-identity.md) F-155-12 (voice ingress must establish a Person before admission); ADR-W026 G5 (a transport is its `Transport` methods and nothing else).
-- **Implementation:** slice 1: `keystone/speech` (Transcriber, Client, Router), `keystone/cmd/keystone/speech.go` (flags), `packages/speech-speaches`. §7 lists the remaining slices.
+- **Implementation:** slice 1: `keystone/speech` (Transcriber, Client, Router), `keystone/cmd/keystone/speech.go` (flags), `packages/speech-speaches`. Slice 2: `keystone/api/handlers_chat_voice.go`, sharing `chatInbound` with typed messages in `handlers_chat_message.go`. §7 lists the remaining slices.
 
 ---
 
@@ -71,19 +71,24 @@ Rejected: transcribing inside each adapter (four copies of the privacy rule, and
 1. **Metadata limits, in the adapter, before download:** vendor-reported duration ≤ `voice_max_seconds` (default 120) and size ≤ 10 MB. Over the limit → a short "that's too long, please send a shorter message or type it" reply, no download.
 2. **Addressing:** a voice message in a group is addressed only when it replies to the bot (you cannot @mention by voice). Direct messages are always addressed. Unaddressed group audio is ignored like unaddressed text.
 3. **Binding, in Keystone, before transcription** (F-155-12): the account must resolve to a live binding for this Connection. An unbound account's audio is discarded untranscribed — no CPU spent and nothing sent to a cloud engine for a stranger.
-4. **Privacy (AC12):** the Transcriber has a processing class, `local` or `cloud`. `cloud` is used only when the Agent's and the Connection's privacy classification allow cloud processing. If they do not and no local engine is installed, the reply is "voice isn't available here yet; please type" — never a silent cloud fallback. If the policy check itself fails, stop.
+4. **Privacy (AC12):** the Transcriber has a processing class, `local` or `cloud`. `cloud` is used only when the Agent already sends what it is told out of the house: a named Agent assigned a cloud model, and, for an external runtime, declared `cloud` by the Owner (`voiceMayLeaveHouse`). An Agent on a local model, an external runtime that is local-only or undeclared, the legacy single-provider Butler, and any lookup error all answer local. If only a cloud engine is configured, the reply is "I can't listen to voice messages in this conversation right now; please type" — never a silent cloud fallback.
 5. **Transcribe**, with a timeout (default 60 s). Empty or failed → a short "I couldn't make that out" reply.
 6. **Hand the text to the normal turn path** (`receiveChatMessage`'s body after the text check; `assistantAsk` for the portal).
 
 ### 2.3 A transcript is speech, not a command
 
-A transcript is **never** parsed as a slash command, and never enters secret intake (`prepareSecretInput`, `/secret …`). Saying "slash secret household wifi equals …" becomes an ordinary message, not a stored secret. Speech recognisers mis-hear; commands and secrets need typing.
+Speech recognisers mis-hear, so three doors that act on exact words stay closed to voice:
+
+- **Slash commands.** A transcript is never parsed as one. "Slash status" said aloud is a sentence for the Agent.
+- **A rule's answer.** A spoken "yes" is not recorded as the household's answer to a rule's question; it goes to the Agent.
+- **Secrets.** A transcript that looks like a `/secret` command or a credential ("the alarm code is …") is **not stored and not passed on**. The disclosure is recorded, as for a secret typed in a room, and the reply says the recording is already on the vendor's servers and points to the Secrets page. The Agent never sees it, and the reply never repeats it.
 
 ### 2.4 What is kept
 
-- **Audio: never stored.** It lives in memory for one request and is dropped. Not written to disk, logs, traces, or the runtime DB.
-- **Transcript: stored as the message text**, like typed text, plus two fields on the turn: `source: voice` and `audio_seconds`. The conversations page shows a mic icon on those messages.
-- **Audit:** one event per transcription — Connection, Person, engine (`local`/`cloud`), duration, outcome. No text, no audio.
+- **Audio: never stored.** It lives in memory for one request and is dropped. It is read part by part (not `ParseMultipartForm`, which spills large files to a temp file) and never written to disk, logs, traces, or the runtime DB.
+- **Transcript: stored as the message text**, like typed text. The reply starts with `🎙️ I heard: "…"` (clipped to 300 characters), so a mis-hearing shows next to the answer to it. A `source: voice` marker on the stored turn, and the mic icon on the conversations page, come with slice 4.
+- **Audit:** one `chat.voice` event per voice message that got past the sender and room checks — account, Agent, engine (`local`/`cloud`), reported duration, outcome (`transcribed`, `off`, `unavailable`, `too_long`, `unsupported`, `empty`, `warming`, `timeout`, `failed`). No text, no audio.
+- **Duplicates:** the clip is claimed before it is transcribed. Without a vendor message id, a hash of the audio stands in for the text in the dedupe key, so a redelivered clip is heard once.
 
 ### 2.5 Dashboard dictation, not voice turns
 
@@ -197,8 +202,8 @@ Moving the mode into the Console, and a per-Connection voice switch, are follow-
 
 Each slice is one PR with its own tests.
 
-1. **`keystone/speech` + `speech-speaches` package.** `Transcriber`, the OpenAI-compatible client, settings, audit event; the package. Tests with a fake HTTP engine (success, timeout, empty, error) and the privacy matrix.
-2. **`POST /api/v1/chat/voice`.** Multipart parsing with limits, binding-before-transcription, privacy check, handoff to the shared turn path, `source: voice` on the turn, no-command rule. Tests beside `handlers_chat_message_test.go`, including "unbound account never reaches the Transcriber" and "`/secret` by voice is not intake".
+1. **`keystone/speech` + `speech-speaches` package** *(done)*. `Transcriber`, the OpenAI-compatible client, settings, audit event; the package. Tests with a fake HTTP engine (success, timeout, empty, error) and the privacy matrix.
+2. **`POST /api/v1/chat/voice`** *(done)*. Multipart parsing with limits, binding-before-transcription, privacy check, handoff to the shared turn path, the §2.3 rules, the "I heard" line. Tests in `handlers_chat_voice_test.go`, including "a stranger's recording never reaches the engine", "a spoken secret is not stored" and "a local Agent's audio never reaches the cloud".
 3. **Telegram.** `voice`, `audio`, `video_note`; `getFile` download. Tests with recorded update fixtures.
 4. **Dashboard dictation.** `POST /api/v1/assistant/transcribe`; mic button in `assistant-widget.html` and `assistant.html` (MediaRecorder, a visible recording state, a stop button, a 120 s cap, clear errors when the mic is denied); mic icon on voice turns in the conversation view.
 5. **Discord.** Voice-message flag and single attachment download.
