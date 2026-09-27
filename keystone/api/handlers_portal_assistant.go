@@ -300,12 +300,19 @@ func (s *Server) assistantAsk(_ http.ResponseWriter, r *http.Request, member str
 		return nil, http.StatusServiceUnavailable, fmt.Errorf("no assistant is configured on this deployment")
 	}
 	if prior == nil && !req.New {
-		found, n, err := s.trustedContinuation(member, agent, portal.Connection)
+		found, candidates, err := s.trustedContinuation(member, agent, portal.Connection)
 		if err != nil {
 			return nil, http.StatusInternalServerError, err
 		}
-		if n > 1 {
-			return nil, http.StatusConflict, continuationChoiceError(n)
+		if len(candidates) > 1 {
+			// Ask, don't guess (design §7): nothing is continued, and the
+			// dashboard is handed the candidates to offer, so the Person
+			// picks one and the same message is sent to it — rather than
+			// being told to go and find it in their history.
+			return map[string]any{
+				"error":  continuationChoiceError(len(candidates)).Error(),
+				"choose": continuationChoices(candidates),
+			}, http.StatusConflict, nil
 		}
 		prior = found
 	}

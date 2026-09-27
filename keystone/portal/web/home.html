@@ -2195,6 +2195,63 @@
   // continuing a recent one (set by /new, cleared once it has one).
   var agents = [], session = "", agent = "", fresh = false;
   var maxDictation = 0;
+
+  // ---- which conversation this page is in, across reloads.
+  //
+  // Keystone continues a conversation on its own only when exactly one
+  // recent one could be meant, and otherwise asks (design §7, "Ambiguous
+  // continuation"). Remembering the one this page was in keeps a reload
+  // from turning into a question: sending to it is not a guess, it is
+  // where the person was. Only for as long as a conversation counts as
+  // recent (Keystone's default 30 minutes); after that the next message
+  // starts fresh, as the server would. The same code is in
+  // assistant.html and assistant-widget.html; change one, change all
+  // three.
+  var RECENT_MS = 30 * 60 * 1000;
+  function memoryKey(name) { return "wildstone.assistant.session." + name; }
+  function remembered(name) {
+    try {
+      var v = JSON.parse(localStorage.getItem(memoryKey(name)) || "null");
+      if (v && v.session && Date.now() - v.at < RECENT_MS) { return v.session; }
+    } catch (e) {}
+    return "";
+  }
+  function remember(name, id) {
+    try { localStorage.setItem(memoryKey(name), JSON.stringify({ session: id, at: Date.now() })); } catch (e) {}
+  }
+  function forget(name) {
+    try { localStorage.removeItem(memoryKey(name)); } catch (e) {}
+  }
+
+  // chooser asks which conversation a message is for, when Keystone
+  // answered that several could be: each by its subject and last
+  // activity, most recent first, and a new one. pick(id) is called with
+  // the chosen conversation, or "" for a new one.
+  function chooser(box, choices, pick) {
+    var wrap = make("div", "note note-warn");
+    var d = make("div");
+    d.appendChild(make("div", null, "Which conversation is this for?"));
+    var row = make("div", "spread");
+    row.style.cssText = "flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-2)";
+    choices.forEach(function (c) {
+      var label = c.subject || "Recent conversation";
+      if (c.at) {
+        try { label += " · " + new Date(c.at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }); } catch (e) {}
+      }
+      var b = make("button", "hbtn hbtn-ghost", label);
+      b.type = "button";
+      b.addEventListener("click", function () { wrap.remove(); pick(c.session); });
+      row.appendChild(b);
+    });
+    var fresh = make("button", "hbtn", "New conversation");
+    fresh.type = "button";
+    fresh.addEventListener("click", function () { wrap.remove(); pick(""); });
+    row.appendChild(fresh);
+    d.appendChild(row);
+    wrap.appendChild(d);
+    box.appendChild(wrap);
+    return wrap;
+  }
   function canDictate(name) {
     return agents.some(function (a) { return a.name === name && a.dictation; });
   }
@@ -2239,6 +2296,8 @@
           return;
         }
         agent = agents[0].name;
+        session = remembered(agent);
+        if (session) { el("open-conversation").href = "/assistant/?session=" + encodeURIComponent(session); }
         maxDictation = res.j.dictationMaxSeconds || 0;
         dict.show(canDictate(agent));
         // One entry is a label, not a menu.
@@ -2339,10 +2398,31 @@
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ agent: agent, session: session, text: body, new: fresh })
     })
-      .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+      .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, status: r.status, j: j }; }); })
       .then(function (res) {
         thread.removeChild(working);
         mine.style.opacity = "";
+        if (res.status === 404 && session && session === remembered(agent)) {
+          // The conversation this page remembered is gone: forget it
+          // and send the message again, as a message with none named.
+          forget(agent);
+          session = "";
+          mine.remove();
+          // After this request's own clean-up below has run.
+          setTimeout(send, 0);
+          return;
+        }
+        if (res.status === 409 && res.j.choose && res.j.choose.length) {
+          // Several recent conversations could be meant. Ask here, keep
+          // what was typed (it is still in the box), and send it to the
+          // one picked.
+          mine.remove();
+          chooser(thread, res.j.choose, function (id) {
+            if (id) { session = id; fresh = false; } else { session = ""; fresh = true; }
+            send();
+          });
+          return;
+        }
         if (!res.ok) { throw new Error(res.j.error || "I couldn't answer that one"); }
         if (res.j.command) {
           // A slash command: answered without the assistant, and not a
@@ -2351,10 +2431,12 @@
           if (res.j.newConversation) {
             session = "";
             fresh = true;
+            forget(agent);
             clear(thread);
           } else if (res.j.session) {
             session = res.j.session;
             fresh = false;
+            remember(agent, session);
           }
           thread.appendChild(turn("assistant", res.j.reply || ""));
           el("open-conversation").href = session
@@ -2365,6 +2447,7 @@
         }
         session = res.j.session || session;
         fresh = false;
+        if (session) { remember(agent, session); }
         // The assistant may just have changed a list ("add milk",
         // "I got the eggs"): show it now rather than at the next poll.
         if (!el("lists-wid").hidden) { loadLists(); }
