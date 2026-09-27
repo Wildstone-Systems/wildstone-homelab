@@ -13,7 +13,9 @@ import { api } from "../api";
 // a recording or a transcript still in flight is dropped when the
 // Butler changes.
 
-type State = "idle" | "recording" | "working";
+// starting is the wait for the browser's microphone permission, which
+// can take as long as the person takes to answer the prompt.
+type State = "idle" | "starting" | "recording" | "working";
 
 // The first of these the browser can record: Chrome, Edge and Firefox
 // take WebM/Opus, Safari takes MP4. Keystone accepts all of them.
@@ -78,6 +80,14 @@ export function MicButton({
   // Butler are not typed into a conversation with another.
   const generation = useRef(0);
   const discard = useRef(false);
+  const unmounted = useRef(false);
+  // The caller's callbacks as of the latest render. A recording only
+  // ever reports into the generation it started in, so the latest
+  // callbacks are the right ones whenever a report is still wanted.
+  const onTextRef = useRef(onText);
+  const onNoteRef = useRef(onNote);
+  onTextRef.current = onText;
+  onNoteRef.current = onNote;
 
   const release = () => {
     stream.current?.getTracks().forEach((t) => t.stop());
@@ -94,14 +104,13 @@ export function MicButton({
       discard.current = true;
       stop();
     }
-    onNote("");
-    // Only the Butler starts a new generation; onNote is the caller's
-    // setter and changes every render.
+    onNoteRef.current("");
   }, [butler]);
 
   // Leaving the page never leaves the microphone on.
   useEffect(
     () => () => {
+      unmounted.current = true;
       window.clearTimeout(timer.current);
       discard.current = true;
       if (recorder.current && recorder.current.state !== "inactive") recorder.current.stop();
@@ -110,43 +119,66 @@ export function MicButton({
     [],
   );
 
-  const finish = () => {
+  // finish sends a stopped recording to the Butler it was made for, and
+  // types the words only if that Butler is still the one on screen.
+  const finish = (mine: number, forButler: string) => {
     release();
     const rec = recorder.current;
     recorder.current = null;
     const blob = new Blob(chunks.current, { type: rec?.mimeType || "audio/webm" });
     chunks.current = [];
-    if (discard.current) {
+    if (discard.current || mine !== generation.current || unmounted.current) {
       discard.current = false;
-      setState("idle");
+      if (!unmounted.current) setState("idle");
       return;
     }
     if (!blob.size) {
       setState("idle");
-      onNote("Nothing was recorded. Try again.", true);
+      onNoteRef.current("Nothing was recorded. Try again.", true);
       return;
     }
     const seconds = (Date.now() - started.current) / 1000;
-    const mine = generation.current;
     setState("working");
-    onNote("Writing down what you said…");
+    onNoteRef.current("Writing down what you said…");
     api
-      .transcribeForButler(butler, blob, seconds)
+      .transcribeForButler(forButler, blob, seconds)
       .then((res) => {
-        if (mine !== generation.current) return;
-        onText(String(res.text || "").trim());
-        onNote("Check what I heard, then send.");
+        if (mine !== generation.current || unmounted.current) return;
+        onTextRef.current(String(res.text || "").trim());
+        onNoteRef.current("Check what I heard, then send.");
       })
       .catch((err: unknown) => {
-        if (mine !== generation.current) return;
-        onNote(String((err as Error)?.message || err), true);
+        if (mine !== generation.current || unmounted.current) return;
+        onNoteRef.current(String((err as Error)?.message || err), true);
       })
-      .finally(() => setState("idle"));
+      .finally(() => {
+        if (!unmounted.current) setState("idle");
+      });
   };
 
   const start = async () => {
+    // The Butler this recording is for is fixed HERE, before the
+    // permission prompt: a switch while the prompt is open must not
+    // send one Butler's audio to another, or to another's engine.
+    const mine = generation.current;
+    const forButler = butler;
+    setState("starting");
+    let s: MediaStream;
     try {
-      const s = await navigator.mediaDevices.getUserMedia({ audio: true });
+      s = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (err) {
+      if (unmounted.current) return;
+      setState("idle");
+      if (mine === generation.current) onNoteRef.current(micError(err), true);
+      return;
+    }
+    if (unmounted.current || mine !== generation.current) {
+      // The Butler changed, or the page went, while the prompt was open.
+      s.getTracks().forEach((t) => t.stop());
+      if (!unmounted.current) setState("idle");
+      return;
+    }
+    try {
       stream.current = s;
       chunks.current = [];
       discard.current = false;
@@ -155,20 +187,20 @@ export function MicButton({
       rec.ondataavailable = (e) => {
         if (e.data && e.data.size) chunks.current.push(e.data);
       };
-      rec.onstop = finish;
+      rec.onstop = () => finish(mine, forButler);
       recorder.current = rec;
       rec.start();
       started.current = Date.now();
       setState("recording");
       const max = maxSeconds || 120;
-      onNote(`Listening… press the mic again when you're done (up to ${limitPhrase(max)}).`);
+      onNoteRef.current(`Listening… press the mic again when you're done (up to ${limitPhrase(max)}).`);
       // Just short of the server's limit, so a full-length recording is
       // never refused for a fraction of a second.
       timer.current = window.setTimeout(stop, Math.max(1, max - 1) * 1000);
     } catch (err) {
       release();
       setState("idle");
-      onNote(micError(err), true);
+      onNoteRef.current(micError(err), true);
     }
   };
 
@@ -177,7 +209,7 @@ export function MicButton({
     <button
       type="button"
       className={"btn btn-secondary mic" + (recording ? " mic-recording" : "")}
-      disabled={disabled || state === "working"}
+      disabled={disabled || state === "working" || state === "starting"}
       onClick={() => (recording ? stop() : state === "idle" ? void start() : undefined)}
       aria-pressed={recording}
       aria-label={recording ? "Stop dictating" : "Dictate"}
