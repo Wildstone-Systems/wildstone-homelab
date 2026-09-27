@@ -498,3 +498,23 @@ func handleRemember(ctx context.Context, seams MemorySeams, s memorySession, inp
 	}
 	return ToolOutcome{Content: b.String(), EffectConfirmed: true}
 }
+
+// InventoryMemory is the memory seam for a surface that only DESCRIBES
+// or ASSIGNS tools — the tool inventory a new Agent is seeded from, the
+// Console's per-Agent tool list, the "does this tool exist" check —
+// never one that serves a session.
+//
+// Memory is bound to one member when a session is built (butlerstore.
+// MemorySeams), so the deployment's base household seams carry none,
+// and a surface built from them registers no recall or remember. Every
+// view built that way reported both as absent: no governed Agent was
+// ever seeded with them, the Console could not list them, and assigning
+// one was refused as structurally absent (#364). These seams make them
+// present; they refuse if anything ever dispatches through them.
+func InventoryMemory() MemorySeams {
+	refuse := errors.New("butler: an inventory surface's memory is never dispatched")
+	return MemorySeams{
+		Recall:   func(context.Context, string, int) ([]MemoryHit, error) { return nil, refuse },
+		Remember: func(context.Context, MemoryNote) error { return refuse },
+	}
+}

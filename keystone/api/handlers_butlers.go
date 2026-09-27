@@ -139,7 +139,7 @@ func (s *Server) availableToolDetails(class string, readOnly bool) []butler.Capa
 	var manifest butler.CapabilityManifest
 	switch class {
 	case runtimedb.AgentClassMember:
-		manifest = butler.NewHouseholdGateway("", s.ButlerHost.householdSeams()).
+		manifest = butler.NewHouseholdGateway("", s.ButlerHost.inventorySeams()).
 			ForAdministration().Capabilities(readOnly)
 	case runtimedb.AgentClassOwner:
 		_, live, _, _, _ := s.ButlerHost.Current()
@@ -864,7 +864,7 @@ func (s *Server) butlerTools(r *http.Request, _ principal.Identity) (any, int, e
 	var manifest butler.CapabilityManifest
 	switch b.AgentClass {
 	case runtimedb.AgentClassMember:
-		gw := butler.NewHouseholdGateway("", s.ButlerHost.householdSeams()).ForAdministration()
+		gw := butler.NewHouseholdGateway("", s.ButlerHost.inventorySeams()).ForAdministration()
 		gw.SetAuthorizer(authority)
 		manifest = gw.Capabilities(readOnly)
 	case runtimedb.AgentClassOwner:
@@ -880,7 +880,7 @@ func (s *Server) butlerTools(r *http.Request, _ principal.Identity) (any, int, e
 		// (ADR-W033 B3) — the same union its sessions are built from
 		// (butler.OwnerToolset), so this screen lists what it can
 		// actually reach and an Owner can narrow a household tool on it.
-		member := butler.NewHouseholdGateway("", s.ButlerHost.householdSeams()).ForAdministration()
+		member := butler.NewHouseholdGateway("", s.ButlerHost.inventorySeams()).ForAdministration()
 		member.SetAuthorizer(authority)
 		manifest = butler.NewOwnerToolset(live.Scoped(authority).ForAdministration(), member).Capabilities(readOnly)
 	default:
