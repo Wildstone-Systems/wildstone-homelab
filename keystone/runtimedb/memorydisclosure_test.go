@@ -303,3 +303,33 @@ func TestCompatibleExternalConnectionsCanShareAuthorizedMemory(t *testing.T) {
 	}
 	disclosurePaths(t, db, read, 0)
 }
+
+// A person's own verified one-to-one chat receives their memory wherever it
+// was recorded, as it continues their conversations (agent-system-design
+// §7). Without a binding the classification rule decides, and a room is
+// never verified.
+func TestAVerifiedChatReceivesMemoryRecordedElsewhere(t *testing.T) {
+	db, at, _ := disclosureFixture(t)
+	// Remembered on the trusted Console, not on this Connection.
+	console, err := db.InsertButlerTask(ButlerTask{Kind: ButlerTaskConversation, Author: "sam", Owner: "sam",
+		Surface: ButlerSurfaceFamily, AgentClass: AgentClassMember, Audience: ButlerAudiencePrivate,
+		Objective: "remember", OriginConnection: "console"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	disclosedMemory(t, db, console)
+	destination := MemoryDestination{ConnectionRef: at.Seq}
+
+	t.Run("unbound", func(t *testing.T) {
+		disclosurePaths(t, db, db.BindMemoryRead("sam", "memory-agent", destination), 0)
+	})
+	bind(t, db, at, "sam", "sam-chat")
+	t.Run("verified", func(t *testing.T) {
+		disclosurePaths(t, db, db.BindMemoryRead("sam", "memory-agent", destination), 1)
+	})
+	t.Run("room", func(t *testing.T) {
+		room := destination
+		room.Group = true
+		disclosurePaths(t, db, db.BindMemoryRead("sam", "memory-agent", room), 0)
+	})
+}
