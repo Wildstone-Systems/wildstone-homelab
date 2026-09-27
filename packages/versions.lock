@@ -57,6 +57,7 @@ mqtt-mosquitto 1.0.0 655714a2a046b37b
 music-lidarr 1.0.2 1550d84b6977656a
 music-navidrome 1.0.1 343ee7aea309fac7
 notifications 1.0.1 3a33ed5c22f13118
+pantry-pantryos 0.1.0 fb919aa5cbb6099c
 passwords-vaultwarden 1.0.1 9d174311e604cacf
 pdf-stirling 1.0.0 406324d4385b76a0
 photos-immich 1.0.1 ca6bb9afd82a91af

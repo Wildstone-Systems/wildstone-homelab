@@ -133,6 +133,7 @@ var categoryOf = map[string]string{
 	"documents": "reading",
 	// Running the house.
 	"recipes":         "house",
+	"pantry":          "house",
 	"home-assistant":  "house",
 	"home-automation": "house",
 	"inventory":       "house",

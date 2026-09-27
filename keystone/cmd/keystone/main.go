@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/adapter/caldav"
+	"github.com/chickenrat17/wildstone-homelab/keystone/adapter/pantry"
 	"github.com/chickenrat17/wildstone-homelab/keystone/agentgateway"
 	"github.com/chickenrat17/wildstone-homelab/keystone/agentruntime"
 	"github.com/chickenrat17/wildstone-homelab/keystone/agentruntime/legacy"
@@ -114,6 +115,7 @@ func main() {
 	consoleStepUp := flag.Duration("console-stepup-window", consoleauth.DefaultStepUpWindow, "how recent a sign-in a consequential Console operation requires")
 	calendarURL := flag.String("calendar-url", "", "CalDAV collection of the household calendar, e.g. http://radicale:5232/GROUPS/Y2FsZW5kYXJfdXNlcnM=/; other declared calendars are derived from its origin (ADR-W034, ADR-W038). Empty leaves them all unregistered, so a Butler does not offer the household a calendar this deployment has not got. The password comes ONLY from CALENDAR_PASSWORD, never a flag")
 	calendarUser := flag.String("calendar-user", "", "directory account the calendar actions sign in to the CalDAV collection as; its password comes from CALENDAR_PASSWORD")
+	pantryURL := flag.String("pantry-url", "", "PantryOS address for the pantry.* actions, e.g. https://pantry.example.internal (ADR-W042). Empty leaves them unregistered, so a Butler does not offer the household a pantry this deployment has not got. The agent key comes ONLY from PANTRY_AGENT_KEY, never a flag")
 	householdIngress := flag.String("household-ingress", "", "comma-separated EXACT remote addresses of the identity proxy (Authelia). Empty fails closed. This names ONE trust boundary and it now gates TWO things: the household review page (ADR-W030 A8.1), and Console sign-in by forwarded identity (ADR-W032) — a request from one of these addresses carrying Remote-User and a Remote-Groups list containing console_users, who is an active Owner Person with a fresh Console sign-in (OIDC, ADR-W033 A4.1), is authenticated as that person, with admin authority. Setting this does not by itself grant anyone the Console: they must also be in the console_users directory group, which packages/wildstone-console declares, and be an active Owner")
 	hostOpsEnabled := flag.Bool("hostops-enabled", false, "enable the host.* executor family (ADR-W039 Phase 6/H7, #353): Tier 3 host administration (container logs/stats/restart, disk usage, systemd unit status, image pruning, a reconcile poke) through existing Wardstone ops, never a privileged container or a shell. Off by default; an Owner still has to grant the family to a specific Agent (opt-in) and confirm every mutating call before anything runs")
 	flag.Parse()
@@ -136,6 +138,7 @@ func main() {
 		Interval: *automationEvery, Timezone: *householdTZ,
 		NtfyURL: *ntfyURL, ReplyURL: *replyURL, ReplyTTL: *replyTTL,
 		CalendarURL: *calendarURL, CalendarUser: *calendarUser,
+		PantryURL:          *pantryURL,
 		Ingress:            splitNonEmpty(*householdIngress),
 		ConsoleEntryWindow: *consoleEntry, ConsoleStepUpWindow: *consoleStepUp,
 		HostOpsEnabled:    *hostOpsEnabled,
@@ -285,6 +288,11 @@ type householdConfig struct {
 	// Its password arrives in CALENDAR_PASSWORD, never in a flag — the
 	// same division -ntfy-url and NTFY_TOKEN already make.
 	CalendarUser string
+	// PantryURL is PantryOS, for the pantry.* actions; empty leaves them
+	// unregistered (ADR-W042). Its agent key arrives in PANTRY_AGENT_KEY,
+	// never in a flag — the division -calendar-url and CALENDAR_PASSWORD
+	// make.
+	PantryURL string
 	// HostOpsEnabled turns on the host.* executor family (ADR-W039 H7,
 	// #353): Tier 3 "host administration" through Wildstone executors —
 	// never a privileged container, never a shell. Off by default, like
@@ -1324,6 +1332,25 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 		for _, e := range lists.Executors() {
 			actions.Register(e)
 		}
+		// PantryOS (packages/pantry-pantryos, ADR-W042). The calendar's
+		// road (ADR-W034 A5): Keystone holds the upstream, an operator
+		// who set -pantry-url and PANTRY_AGENT_KEY has said the
+		// household's agents may use it, and each call is also gated on
+		// the package being installed, as the lists are.
+		if householdCfg.PantryURL != "" {
+			key := os.Getenv("PANTRY_AGENT_KEY")
+			if key == "" {
+				log.Warn("pantry: -pantry-url is set but PANTRY_AGENT_KEY is empty; the pantry actions are not registered")
+			} else {
+				pantryActions := &domestic.Pantry{Authority: db,
+					Upstream: &pantry.HTTP{BaseURL: householdCfg.PantryURL, AgentKey: key},
+					Enabled:  func() (bool, error) { return apiSrv.CapabilityEnabled(domestic.PantryCapability) },
+				}
+				for _, e := range pantryActions.Executors() {
+					actions.Register(e)
+				}
+			}
+		}
 	}
 	// Wire the chat delivery executors now that the API server exists:
 	// both seams are its methods, so keystone/domestic learns neither
@@ -1557,14 +1584,14 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 				if capName, _, ok := strings.Cut(tool, "."); ok && capName == domestic.HostOpsCapability {
 					continue
 				}
-				// filedrop and lists are registered from the catalog
-				// too, and are gated on the install for the same
-				// reason: a Butler that lists "find_file" or "add_items"
-				// to a household without the capability has promised
-				// them something that cannot happen.
+				// filedrop, lists and pantry are gated on the install
+				// for the same reason: a Butler that lists "find_file",
+				// "add_items" or "start_cooking" to a household without
+				// the capability has promised them something that cannot
+				// happen.
 				if capName, _, ok := strings.Cut(tool, "."); ok &&
 					(strings.HasPrefix(capName, "chat-") || capName == domestic.FiledropCapability ||
-						capName == domestic.ListsCapability) {
+						capName == domestic.ListsCapability || capName == domestic.PantryCapability) {
 					on, cerr := apiSrv.CapabilityEnabled(capName)
 					if cerr != nil {
 						return v, cerr

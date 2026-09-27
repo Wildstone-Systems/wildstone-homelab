@@ -1,8 +1,9 @@
 # ADR-W042: PantryOS integration
 
 - **Status:** proposed. The PantryOS half is implemented (PantryOS ADR 0026).
-  Wildstone: A2 implemented (#380 — `keystone/adapter/pantry/http.go`); the
-  rest is tracked in #379.
+  Wildstone: A2 implemented (#380 — `keystone/adapter/pantry/http.go`); A4/A5
+  implemented as `packages/pantry-pantryos` and `keystone/domestic/pantry.go`
+  (#382), on the road in A1.1; the rest is tracked in #379.
 - **Builds on:** ADR-W024 (household events, A8 subject mapping, A10 shims),
   ADR-W025 / `docs/catalog-integration-contract.md` (the `integrates:` block),
   ADR-W030 A5/A5.1/A8 (connections, adapters, action classes, P12's PantryOS
@@ -141,6 +142,30 @@ policy validates them and an Owner may make them stricter, never weaker
 - **Not in v1:** `log_meal` and `delete_meal` (they need a food-name →
   catalog-item resolution step PantryOS does not expose yet), fetching
   product URLs (outbound fetches), receipt/cloud AI, and anything admin.
+
+### A1.1 Amendment: v1 takes the calendar's road
+
+A1's adapter container needs two things that do not exist yet: a program
+that runs an `adapter.Runner` in a container, and a production consumer
+that asks the integration work queue and waits for the answer (the
+`crossapp.Integrations` seam is exercised only by tests). Rather than build
+both before the household can use its pantry, v1 takes the road ADR-W034
+A5 already accepted for the calendar:
+
+- Keystone holds the upstream itself: `-pantry-url` names PantryOS and
+  `PANTRY_AGENT_KEY` carries its agent key (never a flag). With either
+  missing the `pantry.*` executors are not registered, so no Agent is
+  offered a pantry this deployment has not got.
+- Each call is also gated on `pantry-pantryos` being installed, as the
+  lists are, and the tools are left out of an Agent's vocabulary until it
+  is.
+- The upstream is the same `pantry.HTTP`, checked by the same contract
+  suite, so moving to the adapter container later changes where it runs,
+  not what it does.
+
+This is an operator's decision on a different road, as W034 A5 puts it —
+not a weaker one: the declaration check, tiers, confirmation and the
+execution authority all apply exactly as on the queue path.
 
 ### A6. Connecting
 
