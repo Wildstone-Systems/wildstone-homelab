@@ -88,6 +88,11 @@
   @media (prefers-reduced-motion: reduce) {
     details.panel > summary .ph-caret-down { transition: none; }
   }
+  /* Dictation (ADR-W042): red while it is listening, so nobody talks
+     to a microphone they think is off. */
+  .mic[data-state="recording"] { background: var(--st-bad-bg); color: var(--st-bad); border-color: var(--st-bad); }
+  #mic-note:empty { display: none; }
+  #mic-note.bad { color: var(--st-bad); }
 </style>
 
 <main class="page">
@@ -149,10 +154,14 @@
         <div class="composer">
           <label class="sr" for="ask">Ask the assistant</label>
           <textarea id="ask" rows="2" placeholder="Ask the house for something"></textarea>
+          <button class="hbtn hbtn-secondary send mic" id="mic" type="button" aria-label="Dictate" hidden>
+            <i class="ph ph-microphone" aria-hidden="true"></i>
+          </button>
           <button class="hbtn hbtn-primary send" id="send" type="button" aria-label="Send">
             <i class="ph ph-paper-plane-tilt" aria-hidden="true"></i>
           </button>
         </div>
+        <div class="muted" id="mic-note" aria-live="polite"></div>
         <div class="muted tnum" id="session-id"></div>
       </div>
     </section>
@@ -261,6 +270,145 @@
   }
 
   var member = "", agents = [], agent = "", session = "", fresh = false;
+  var maxDictation = 0;
+  // ============================================================ dictation
+  // The mic button (ADR-W042). It records in the browser, posts the clip
+  // to Keystone, and puts the words it gets back into the text box. It
+  // never sends anything to the assistant: the person reads what was
+  // heard, fixes it, and presses Send like always.
+  //
+  // The same code is in assistant.html, home.html and
+  // assistant-widget.html, because these pages carry their own script
+  // (see portal/web.go's policy); change one, change all three.
+  //
+  // o.button  the mic button          o.input  the text box
+  // o.agent() the chosen assistant    o.max()  seconds before it stops itself
+  // o.say(message, bad)               where status and errors are shown
+  function dictation(o) {
+    var rec = null, chunks = [], stream = null, started = 0, timer = null, state = "idle", discard = false;
+    // No microphone API, a page not on HTTPS, or a frame the parent did
+    // not allow the microphone: the button is never shown, rather than
+    // shown and failing when pressed.
+    var framedWithout = document.featurePolicy && document.featurePolicy.allowsFeature &&
+      !document.featurePolicy.allowsFeature("microphone");
+    var supported = !!(window.isSecureContext && window.MediaRecorder && navigator.mediaDevices &&
+      navigator.mediaDevices.getUserMedia) && !framedWithout;
+
+    function set(next) {
+      state = next;
+      var b = o.button;
+      b.setAttribute("data-state", next);
+      b.setAttribute("aria-pressed", next === "recording" ? "true" : "false");
+      b.setAttribute("aria-label", next === "recording" ? "Stop dictating" : "Dictate");
+      b.title = next === "recording" ? "Stop and write down what you said" : "Dictate instead of typing";
+      b.disabled = next === "working";
+    }
+    function release() {
+      if (stream) { stream.getTracks().forEach(function (t) { t.stop(); }); stream = null; }
+    }
+    // The first of these the browser can record: Chrome, Edge and
+    // Firefox take WebM/Opus, Safari takes MP4. Keystone accepts all of
+    // them.
+    function pickType() {
+      var types = ["audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus", "audio/mp4"];
+      for (var i = 0; i < types.length; i++) {
+        if (MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(types[i])) { return types[i]; }
+      }
+      return "";
+    }
+    function micError(err) {
+      var n = err && err.name;
+      if (n === "NotAllowedError" || n === "SecurityError") {
+        return "The microphone is blocked. Allow it for this site in your browser to dictate, or type instead.";
+      }
+      if (n === "NotFoundError" || n === "OverconstrainedError") { return "No microphone was found on this device."; }
+      return "The microphone couldn't start. You can still type.";
+    }
+    function start() {
+      navigator.mediaDevices.getUserMedia({ audio: true }).then(function (s) {
+        stream = s;
+        chunks = [];
+        var type = pickType();
+        rec = type ? new MediaRecorder(s, { mimeType: type }) : new MediaRecorder(s);
+        rec.ondataavailable = function (e) { if (e.data && e.data.size) { chunks.push(e.data); } };
+        rec.onstop = finish;
+        rec.start();
+        started = Date.now();
+        set("recording");
+        var max = o.max() || 120;
+        o.say("Listening… press the mic again when you're done (up to " +
+          (max % 60 ? max + " seconds" : max / 60 + (max === 60 ? " minute" : " minutes")) + ").");
+        // Stop just short of the server's limit, so a full-length
+        // recording is never refused for a fraction of a second.
+        timer = setTimeout(stop, Math.max(1, max - 1) * 1000);
+      }).catch(function (err) {
+        release();
+        set("idle");
+        o.say(micError(err), true);
+      });
+    }
+    function stop() {
+      clearTimeout(timer);
+      if (rec && rec.state !== "inactive") { rec.stop(); }
+    }
+    function finish() {
+      release();
+      var seconds = (Date.now() - started) / 1000;
+      var blob = new Blob(chunks, { type: (rec && rec.mimeType) || "audio/webm" });
+      rec = null;
+      chunks = [];
+      if (discard) { discard = false; set("idle"); o.say(""); return; }
+      if (!blob.size) { set("idle"); o.say("Nothing was recorded. Try again.", true); return; }
+      set("working");
+      o.say("Writing down what you said…");
+      var form = new FormData();
+      form.append("agent", o.agent());
+      form.append("seconds", seconds.toFixed(1));
+      form.append("audio", blob, "dictation");
+      fetch("/api/v1/assistant/transcribe", { method: "POST", body: form, headers: { accept: "application/json" } })
+        .then(function (r) { return r.json().catch(function () { return {}; }).then(function (j) { return { ok: r.ok, j: j }; }); })
+        .then(function (res) {
+          if (!res.ok) { throw new Error(res.j.error || "I couldn't make that out. Try again, or type."); }
+          var words = String(res.j.text || "").trim();
+          var had = o.input.value.trim();
+          o.input.value = had ? had + " " + words : words;
+          o.input.dispatchEvent(new Event("input", { bubbles: true }));
+          o.input.focus();
+          o.say("Check what I heard, then send.");
+        })
+        .catch(function (err) { o.say(String(err.message || err), true); })
+        .then(function () { set("idle"); });
+    }
+    o.button.addEventListener("click", function () {
+      if (state === "recording") { stop(); } else if (state === "idle") { start(); }
+    });
+    set("idle");
+    o.button.hidden = true;
+    return {
+      // show is called whenever the assistant changes: it puts the
+      // button up for one that can take dictation, and throws away a
+      // recording in progress — words meant for one assistant are not
+      // typed into a conversation with another.
+      show: function (on) {
+        o.button.hidden = !(supported && on);
+        if (state === "recording") { discard = true; stop(); }
+      }
+    };
+  }
+
+  function canDictate(name) {
+    return agents.some(function (a) { return a.name === name && a.dictation; });
+  }
+  var dict = dictation({
+    button: el("mic"), input: el("ask"),
+    agent: function () { return agent; },
+    max: function () { return maxDictation; },
+    say: function (message, bad) {
+      var n = el("mic-note");
+      n.textContent = message || "";
+      n.className = bad ? "muted bad" : "muted";
+    }
+  });
 
   // The session can be handed over from the front page's card, which is
   // what "Open conversation hands the same session to the full agent
@@ -306,6 +454,8 @@
           return;
         }
         agent = agents[0].name;
+        maxDictation = res.j.dictationMaxSeconds || 0;
+        dict.show(canDictate(agent));
         if (agents[0].directive) { text("subtitle", agents[0].directive); }
         // THE PICKER IS ALWAYS THERE. It used to appear only with two
         // or more, per the design's "one entry is a label, not a menu" —
@@ -335,6 +485,7 @@
             // raise authority above what the member and the surface
             // already hold.
             agent = sel.value;
+            dict.show(canDictate(agent));
             var picked = agents.filter(function (a) { return a.name === agent; })[0];
             text("subtitle", (picked && picked.directive) || "Ask the house for something");
             newConversation();
@@ -503,6 +654,7 @@
         fresh = false;
         if (res.j.agent) {
           agent = res.j.agent;
+          dict.show(canDictate(agent));
           if (el("agent-select").hidden) { text("agent-label", agent); }
           else { el("agent-select").value = agent; }
         }
@@ -698,6 +850,7 @@
   function send() {
     var box = el("ask"), body = box.value.trim();
     if (!body || !agent) { return; }
+    el("mic-note").textContent = "";
     var thread = el("thread");
     el("asks").hidden = true;
     var mine = turn("user", body);

@@ -44,6 +44,7 @@ import (
 	"github.com/chickenrat17/wildstone-homelab/keystone/portal"
 	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
+	"github.com/chickenrat17/wildstone-homelab/keystone/speech"
 )
 
 // maxPortalMessage bounds one message from the widget.
@@ -66,6 +67,9 @@ type assistantAgent struct {
 	LeavesTheHouse bool   `json:"leavesTheHouse"`
 	Reachable      bool   `json:"reachable"`
 	CarriesActions bool   `json:"carriesActions"`
+	// Dictation says the mic button works for this assistant: voice is
+	// on, and an engine its privacy class allows exists (ADR-W042).
+	Dictation bool `json:"dictation"`
 }
 
 // assistantAgents answers "which assistants may I talk to from here",
@@ -96,9 +100,19 @@ func (s *Server) assistantAgents(_ http.ResponseWriter, r *http.Request, member 
 			LeavesTheHouse: b.ModelKind == runtimedb.ModelCloud,
 			Reachable:      b.Reachable(),
 			CarriesActions: b.CarriesActionAuthority(),
+			Dictation:      s.canDictate(b.Name),
 		})
 	}
 	out := map[string]any{"agents": agents, "member": member}
+	if s.Speech.Enabled() {
+		// How long the mic records before stopping on its own: the
+		// same limit the server enforces.
+		max := s.Speech.MaxSeconds
+		if max <= 0 {
+			max = speech.DefaultMaxSeconds
+		}
+		out["dictationMaxSeconds"] = max
+	}
 	if len(agents) == 0 {
 		out["setup"] = s.assistantSetup(r, member, desired)
 	}

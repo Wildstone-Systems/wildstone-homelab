@@ -792,6 +792,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/assistant/memory/promote", s.portal(surfaceAssistant, s.assistantPromoteMemory))
 	mux.Handle("POST /api/v1/assistant/memory/forget", s.portal(surfaceAssistant, s.assistantForget))
 	mux.Handle("POST /api/v1/assistant/ask", s.portal(surfaceAssistant, s.assistantAsk))
+	// Dictation: sound to text for the text box, never a turn (ADR-W042).
+	mux.Handle("POST /api/v1/assistant/transcribe", s.portal(surfaceAssistant, s.assistantTranscribe))
 	mux.Handle("GET /api/v1/assistant/conversations/{id}", s.portal(surfaceAssistant, s.assistantConversation))
 
 	// The household's own front page (the dashboard capability's

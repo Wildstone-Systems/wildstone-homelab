@@ -71,6 +71,9 @@
   ::placeholder { color: var(--dim); opacity: 1; }
   #note.bad { color: var(--bad); }
   .cloud { color: var(--dim); font-size: 11px; }
+  #mic { display: inline-flex; align-items: center; padding: 5px 8px; }
+  /* Red while it is listening (ADR-W042). */
+  #mic[data-state="recording"] { color: var(--bad); border-color: var(--bad); }
   [hidden] { display: none !important; }
 </style>
 
@@ -86,6 +89,12 @@
 
 <form id="ask">
   <input id="text" aria-label="Ask the assistant" placeholder="Ask something…" autocomplete="off" maxlength="4000">
+  <button id="mic" type="button" aria-label="Dictate" hidden>
+    <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor"
+         stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="9" y="3" width="6" height="11" rx="3"></rect><path d="M5 11a7 7 0 0 0 14 0M12 18v3"></path>
+    </svg>
+  </button>
   <button id="send" type="submit">Send</button>
 </form>
 
@@ -103,6 +112,140 @@
   let session = "", agents = [], fresh = false;
 
   const say = (text, bad) => { note.textContent = text || ""; note.className = bad ? "bad" : ""; };
+
+  // ============================================================ dictation
+  // The mic button (ADR-W042). It records in the browser, posts the clip
+  // to Keystone, and puts the words it gets back into the text box. It
+  // never sends anything to the assistant: the person reads what was
+  // heard, fixes it, and presses Send like always.
+  //
+  // The same code is in assistant.html, home.html and
+  // assistant-widget.html, because these pages carry their own script
+  // (see portal/web.go's policy); change one, change all three.
+  //
+  // o.button  the mic button          o.input  the text box
+  // o.agent() the chosen assistant    o.max()  seconds before it stops itself
+  // o.say(message, bad)               where status and errors are shown
+  function dictation(o) {
+    var rec = null, chunks = [], stream = null, started = 0, timer = null, state = "idle", discard = false;
+    // No microphone API, a page not on HTTPS, or a frame the parent did
+    // not allow the microphone: the button is never shown, rather than
+    // shown and failing when pressed.
+    var framedWithout = document.featurePolicy && document.featurePolicy.allowsFeature &&
+      !document.featurePolicy.allowsFeature("microphone");
+    var supported = !!(window.isSecureContext && window.MediaRecorder && navigator.mediaDevices &&
+      navigator.mediaDevices.getUserMedia) && !framedWithout;
+
+    function set(next) {
+      state = next;
+      var b = o.button;
+      b.setAttribute("data-state", next);
+      b.setAttribute("aria-pressed", next === "recording" ? "true" : "false");
+      b.setAttribute("aria-label", next === "recording" ? "Stop dictating" : "Dictate");
+      b.title = next === "recording" ? "Stop and write down what you said" : "Dictate instead of typing";
+      b.disabled = next === "working";
+    }
+    function release() {
+      if (stream) { stream.getTracks().forEach(function (t) { t.stop(); }); stream = null; }
+    }
+    // The first of these the browser can record: Chrome, Edge and
+    // Firefox take WebM/Opus, Safari takes MP4. Keystone accepts all of
+    // them.
+    function pickType() {
+      var types = ["audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus", "audio/mp4"];
+      for (var i = 0; i < types.length; i++) {
+        if (MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(types[i])) { return types[i]; }
+      }
+      return "";
+    }
+    function micError(err) {
+      var n = err && err.name;
+      if (n === "NotAllowedError" || n === "SecurityError") {
+        return "The microphone is blocked. Allow it for this site in your browser to dictate, or type instead.";
+      }
+      if (n === "NotFoundError" || n === "OverconstrainedError") { return "No microphone was found on this device."; }
+      return "The microphone couldn't start. You can still type.";
+    }
+    function start() {
+      navigator.mediaDevices.getUserMedia({ audio: true }).then(function (s) {
+        stream = s;
+        chunks = [];
+        var type = pickType();
+        rec = type ? new MediaRecorder(s, { mimeType: type }) : new MediaRecorder(s);
+        rec.ondataavailable = function (e) { if (e.data && e.data.size) { chunks.push(e.data); } };
+        rec.onstop = finish;
+        rec.start();
+        started = Date.now();
+        set("recording");
+        var max = o.max() || 120;
+        o.say("Listening… press the mic again when you're done (up to " +
+          (max % 60 ? max + " seconds" : max / 60 + (max === 60 ? " minute" : " minutes")) + ").");
+        // Stop just short of the server's limit, so a full-length
+        // recording is never refused for a fraction of a second.
+        timer = setTimeout(stop, Math.max(1, max - 1) * 1000);
+      }).catch(function (err) {
+        release();
+        set("idle");
+        o.say(micError(err), true);
+      });
+    }
+    function stop() {
+      clearTimeout(timer);
+      if (rec && rec.state !== "inactive") { rec.stop(); }
+    }
+    function finish() {
+      release();
+      var seconds = (Date.now() - started) / 1000;
+      var blob = new Blob(chunks, { type: (rec && rec.mimeType) || "audio/webm" });
+      rec = null;
+      chunks = [];
+      if (discard) { discard = false; set("idle"); o.say(""); return; }
+      if (!blob.size) { set("idle"); o.say("Nothing was recorded. Try again.", true); return; }
+      set("working");
+      o.say("Writing down what you said…");
+      var form = new FormData();
+      form.append("agent", o.agent());
+      form.append("seconds", seconds.toFixed(1));
+      form.append("audio", blob, "dictation");
+      fetch("/api/v1/assistant/transcribe", { method: "POST", body: form, headers: { accept: "application/json" } })
+        .then(function (r) { return r.json().catch(function () { return {}; }).then(function (j) { return { ok: r.ok, j: j }; }); })
+        .then(function (res) {
+          if (!res.ok) { throw new Error(res.j.error || "I couldn't make that out. Try again, or type."); }
+          var words = String(res.j.text || "").trim();
+          var had = o.input.value.trim();
+          o.input.value = had ? had + " " + words : words;
+          o.input.dispatchEvent(new Event("input", { bubbles: true }));
+          o.input.focus();
+          o.say("Check what I heard, then send.");
+        })
+        .catch(function (err) { o.say(String(err.message || err), true); })
+        .then(function () { set("idle"); });
+    }
+    o.button.addEventListener("click", function () {
+      if (state === "recording") { stop(); } else if (state === "idle") { start(); }
+    });
+    set("idle");
+    o.button.hidden = true;
+    return {
+      // show is called whenever the assistant changes: it puts the
+      // button up for one that can take dictation, and throws away a
+      // recording in progress — words meant for one assistant are not
+      // typed into a conversation with another.
+      show: function (on) {
+        o.button.hidden = !(supported && on);
+        if (state === "recording") { discard = true; stop(); }
+      }
+    };
+  }
+
+  let maxDictation = 0;
+  const canDictate = (name) => agents.some((a) => a.name === name && a.dictation);
+  const dict = dictation({
+    button: el("mic"), input: el("text"),
+    agent: () => el("agent").value,
+    max: () => maxDictation,
+    say,
+  });
 
   // textContent, never innerHTML: what comes back is a model's output,
   // and it is displayed as text whatever it contains.
@@ -161,6 +304,8 @@
       return;
     }
     const chosen = agents[0];
+    maxDictation = body.dictationMaxSeconds || 0;
+    dict.show(canDictate(chosen.name));
     if (!chosen.reachable) say(chosen.name + " is not answering right now", true);
     else if (chosen.leavesTheHouse) say("This assistant runs outside the house");
     offerSuggestions();
@@ -174,6 +319,7 @@
     log.replaceChildren();
     el("prompt").hidden = false;
     const chosen = agents.find((a) => a.name === el("agent").value);
+    dict.show(canDictate(el("agent").value));
     if (chosen && !chosen.reachable) say(chosen.name + " is not answering right now", true);
     else say(chosen && chosen.leavesTheHouse ? "This assistant runs outside the house" : "");
   };
