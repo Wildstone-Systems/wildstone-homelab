@@ -45,7 +45,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: agent-hermes
-  version: 0.1.3
+  version: 0.1.4
   capability: agent-hermes
   profile: hermes
   instanced: true
@@ -236,9 +236,14 @@ templates:
             # making "the one run in flight" unambiguous
             # (cli/cmd/agent-bridge/runs.go documents the fallback).
 
+        # No `memory`: Hermes's own MEMORY.md/USER.md is not this Agent's
+        # memory — Wildstone's is (design doc §3.5), through the MCP
+        # server's recall/remember, which are audited, permission-scoped
+        # and enforced by processing class. With both offered, a model
+        # asked to "remember" reached for the native one, Wildstone saw
+        # no tool call, and the turn ended "not done" (#364).
         platform_toolsets:
           api_server:
-            - memory
             - session_search
             - skills
             - todo
@@ -261,7 +266,7 @@ templates:
           # cron is operator-edited config, not an agent-callable grant;
           # `connections` (manage_connections) is Wildstone's own to
           # manage, never Hermes's.
-          disabled_toolsets: [browser, homeassistant, image_gen, computer_use, kanban, cronjob, a2a, connections]
+          disabled_toolsets: [browser, homeassistant, image_gen, computer_use, kanban, cronjob, a2a, connections, memory]
 
         {{- if ne .Params.execution_profile "platform-only" }}
 
@@ -296,7 +301,14 @@ templates:
           allow_private_urls: true
           redact_secrets: true
 
+        # Hermes's built-in memory, off: not written (the toolset above)
+        # and not injected into the prompt either — the notes are read
+        # from these switches, not from the toolset, so an install that
+        # already wrote a USER.md would otherwise keep carrying it.
         memory:
+          memory_enabled: false
+          user_profile_enabled: false
+          nudge_interval: 0
           write_approval: false
         skills:
           write_approval: false

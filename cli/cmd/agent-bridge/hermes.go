@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -39,6 +40,8 @@ type hermesClient struct {
 	// APIKey is Hermes's own API_SERVER_KEY.
 	APIKey string
 	HTTP   *http.Client
+	// Log, when set, records each tool a run calls (logToolCall).
+	Log *slog.Logger
 }
 
 func (c *hermesClient) httpClient() *http.Client {
@@ -248,6 +251,7 @@ func (c *hermesClient) WaitForRun(ctx context.Context, runID string) (runOutcome
 		}
 		joined := strings.Join(data, "\n")
 		data = data[:0]
+		c.logToolCall(runID, []byte(joined))
 		var ev sseEvent
 		if err := json.Unmarshal([]byte(joined), &ev); err != nil {
 			return runOutcome{}, false // an SSE comment or a shape we don't decode; not an error
@@ -275,6 +279,31 @@ func (c *hermesClient) WaitForRun(ctx context.Context, runID string) (runOutcome
 		return out, nil
 	}
 	return runOutcome{}, fmt.Errorf("hermes: run %s's events stream ended with no terminal event", runID)
+}
+
+// logToolCall logs the tool a run calls, from its tool.started event:
+// the tool's name only, never its arguments or result. It is how a turn
+// that ended "not done" can be told apart from one whose tool was
+// refused, and a Hermes-native tool from a Wildstone one.
+func (c *hermesClient) logToolCall(runID string, data []byte) {
+	if c.Log == nil {
+		return
+	}
+	var ev struct {
+		Event string `json:"event"`
+		Type  string `json:"type"`
+		Tool  string `json:"tool"`
+	}
+	if json.Unmarshal(data, &ev) != nil {
+		return
+	}
+	name := ev.Event
+	if name == "" {
+		name = ev.Type
+	}
+	if name == "tool.started" && ev.Tool != "" {
+		c.Log.Info("hermes tool call", "run", runID, "tool", ev.Tool)
+	}
 }
 
 // Health probes Hermes's own liveness endpoint.

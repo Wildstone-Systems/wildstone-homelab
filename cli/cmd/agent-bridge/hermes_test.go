@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -187,5 +189,33 @@ func TestHealthNon200IsAnError(t *testing.T) {
 	c := &hermesClient{Base: srv.URL, APIKey: "k"}
 	if err := c.Health(context.Background()); err == nil {
 		t.Fatal("want an error on a non-200 health response")
+	}
+}
+
+// TestWaitForRunLogsToolCalls: each tool.started names its tool in the
+// bridge's log, by name only.
+func TestWaitForRunLogsToolCalls(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"event\":\"tool.started\",\"run_id\":\"run-1\",\"tool\":\"mcp_wildstone_remember\",\"preview\":\"favorite color\"}\n\n")
+		fmt.Fprint(w, "data: {\"event\":\"tool.completed\",\"run_id\":\"run-1\",\"tool\":\"mcp_wildstone_remember\",\"error\":false}\n\n")
+		fmt.Fprint(w, "data: {\"event\":\"run.completed\",\"run_id\":\"run-1\",\"output\":\"noted\"}\n\n")
+	}))
+	defer srv.Close()
+	var buf bytes.Buffer
+	c := &hermesClient{Base: srv.URL, APIKey: "k", Log: slog.New(slog.NewTextHandler(&buf, nil))}
+	outcome, err := c.WaitForRun(context.Background(), "run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome.Output != "noted" {
+		t.Fatalf("Output = %q, want the run's answer", outcome.Output)
+	}
+	logged := buf.String()
+	if strings.Count(logged, "hermes tool call") != 1 || !strings.Contains(logged, "tool=mcp_wildstone_remember") {
+		t.Fatalf("log = %q, want one tool call line naming the tool", logged)
+	}
+	if strings.Contains(logged, "favorite color") {
+		t.Fatalf("log = %q: a tool's arguments reached the log", logged)
 	}
 }
