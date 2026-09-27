@@ -56,6 +56,21 @@ func matrixServer(t *testing.T, sync string) (*httptest.Server, *[]string) {
 	return srv, &paths
 }
 
+func waitForMatrixInvites(t *testing.T, m *matrix) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		m.inviteMu.Lock()
+		joining := len(m.joiningInvites)
+		m.inviteMu.Unlock()
+		if joining == 0 {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("timed out waiting for Matrix invitation worker")
+}
+
 // The second transport maps into the SAME Incoming the first does — the
 // point of G5: the contract above the driver did not move.
 func TestMatrixReceiveMapping(t *testing.T) {
@@ -161,6 +176,7 @@ func TestMatrixAcceptsInvitedRoomsBeforeAdvancingTheCursor(t *testing.T) {
 	if len(msgs) != 0 {
 		t.Fatalf("invitation produced messages before the room was joined: %+v", msgs)
 	}
+	waitForMatrixInvites(t, m)
 	if len(joined) != 1 || !strings.Contains(joined[0], "/join/!new:example.org") {
 		t.Fatalf("join requests = %v, want the invited room", joined)
 	}
@@ -204,15 +220,21 @@ func TestMatrixRetriesInvitationWhenJoiningFails(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Receive: %v", err)
 	}
-	if len(problems) != 1 || problems[0].Problem == "" {
-		t.Fatalf("failed join diagnostics = %+v, want one", problems)
+	if len(problems) != 0 {
+		t.Fatalf("asynchronous join returned immediate diagnostics: %+v", problems)
 	}
 	if m.since != "after-invite" {
 		t.Fatalf("cursor = %q after failed join, want it advanced", m.since)
 	}
-	if _, err := m.Receive(context.Background()); err != nil {
+	waitForMatrixInvites(t, m)
+	problems, err = m.Receive(context.Background())
+	if err != nil {
 		t.Fatalf("retry Receive: %v", err)
 	}
+	if len(problems) != 1 || problems[0].Problem == "" {
+		t.Fatalf("failed join diagnostics = %+v, want one", problems)
+	}
+	waitForMatrixInvites(t, m)
 	if joinAttempts != 2 || m.since != "after-retry" {
 		t.Fatalf("join attempts = %d, cursor = %q; want retry and then advancement", joinAttempts, m.since)
 	}
@@ -224,6 +246,14 @@ func TestMatrixFailedInvitationDoesNotStarveJoinedRooms(t *testing.T) {
 	  "join":{"!working:example.org":{"summary":{"m.joined_member_count":2},"timeline":{"events":[
 	    {"type":"m.room.message","event_id":"$hello","sender":"@sam:example.org","content":{"msgtype":"m.text","body":"hello"}}
 	  ]}}}}}`
+	joinStarted := make(chan struct{}, 1)
+	releaseJoin := make(chan struct{})
+	released := false
+	defer func() {
+		if !released {
+			close(releaseJoin)
+		}
+	}()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case strings.Contains(r.URL.Path, "/account/whoami"):
@@ -231,6 +261,8 @@ func TestMatrixFailedInvitationDoesNotStarveJoinedRooms(t *testing.T) {
 		case strings.Contains(r.URL.Path, "/sync"):
 			w.Write([]byte(sync)) //nolint:errcheck
 		case strings.Contains(r.URL.Path, "/join/"):
+			joinStarted <- struct{}{}
+			<-releaseJoin
 			http.Error(w, "unavailable", http.StatusServiceUnavailable)
 		default:
 			http.NotFound(w, r)
@@ -243,11 +275,112 @@ func TestMatrixFailedInvitationDoesNotStarveJoinedRooms(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Receive: %v", err)
 	}
-	if len(msgs) != 2 || msgs[0].Problem == "" || msgs[1].MessageID != "$hello" {
-		t.Fatalf("messages = %+v, want failed-invite diagnostic and joined-room message", msgs)
+	if len(msgs) != 1 || msgs[0].MessageID != "$hello" {
+		t.Fatalf("messages = %+v, want joined-room message without waiting for the join", msgs)
 	}
 	if m.since != "next" {
 		t.Fatalf("cursor = %q, want next", m.since)
+	}
+	select {
+	case <-joinStarted:
+	case <-time.After(time.Second):
+		t.Fatal("background invitation join did not start")
+	}
+	close(releaseJoin)
+	released = true
+	waitForMatrixInvites(t, m)
+}
+
+func TestMatrixDoesNotRetryPermanentInvitationFailure(t *testing.T) {
+	syncs := 0
+	joinAttempts := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, "/account/whoami"):
+			w.Write([]byte(`{"user_id":"@butler:example.org"}`)) //nolint:errcheck
+		case strings.Contains(r.URL.Path, "/sync"):
+			syncs++
+			if syncs == 1 {
+				w.Write([]byte(`{"next_batch":"one","rooms":{"invite":{"!forbidden:example.org":{}}}}`)) //nolint:errcheck
+				return
+			}
+			w.Write([]byte(`{"next_batch":"later","rooms":{}}`)) //nolint:errcheck
+		case strings.Contains(r.URL.Path, "/join/"):
+			joinAttempts++
+			http.Error(w, "forbidden", http.StatusForbidden)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	m := &matrix{homeserver: srv.URL, token: "tok", timeout: time.Second, http: srv.Client()}
+	if _, err := m.Receive(context.Background()); err != nil {
+		t.Fatalf("Receive: %v", err)
+	}
+	waitForMatrixInvites(t, m)
+	problems, err := m.Receive(context.Background())
+	if err != nil {
+		t.Fatalf("diagnostic Receive: %v", err)
+	}
+	if len(problems) != 1 || !strings.Contains(problems[0].Problem, "will not be retried") {
+		t.Fatalf("permanent failure diagnostics = %+v", problems)
+	}
+	if _, err := m.Receive(context.Background()); err != nil {
+		t.Fatalf("later Receive: %v", err)
+	}
+	if joinAttempts != 1 {
+		t.Fatalf("permanent failure join attempts = %d, want 1", joinAttempts)
+	}
+}
+
+func TestMatrixDropsWithdrawnInvitationBeforeQueuedJoin(t *testing.T) {
+	syncs := 0
+	blockedStarted := make(chan struct{}, 1)
+	releaseBlocked := make(chan struct{})
+	withdrawnJoined := make(chan struct{}, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, "/account/whoami"):
+			w.Write([]byte(`{"user_id":"@butler:example.org"}`)) //nolint:errcheck
+		case strings.Contains(r.URL.Path, "/sync"):
+			syncs++
+			if syncs == 1 {
+				w.Write([]byte(`{"next_batch":"one","rooms":{"invite":{"!blocked:example.org":{},"!withdrawn:example.org":{}}}}`)) //nolint:errcheck
+				return
+			}
+			w.Write([]byte(`{"next_batch":"two","rooms":{"leave":{"!withdrawn:example.org":{}}}}`)) //nolint:errcheck
+		case strings.Contains(r.URL.Path, "/join/!blocked:"):
+			blockedStarted <- struct{}{}
+			<-releaseBlocked
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+		case strings.Contains(r.URL.Path, "/join/!withdrawn:"):
+			withdrawnJoined <- struct{}{}
+			w.Write([]byte(`{"room_id":"!withdrawn:example.org"}`)) //nolint:errcheck
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	m := &matrix{homeserver: srv.URL, token: "tok", timeout: time.Second, http: srv.Client()}
+	if _, err := m.Receive(context.Background()); err != nil {
+		t.Fatalf("Receive: %v", err)
+	}
+	select {
+	case <-blockedStarted:
+	case <-time.After(time.Second):
+		t.Fatal("first queued join did not start")
+	}
+	if _, err := m.Receive(context.Background()); err != nil {
+		t.Fatalf("withdrawal Receive: %v", err)
+	}
+	close(releaseBlocked)
+	waitForMatrixInvites(t, m)
+	select {
+	case <-withdrawnJoined:
+		t.Fatal("adapter attempted to join a withdrawn invitation")
+	default:
 	}
 }
 

@@ -28,6 +28,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -46,11 +47,15 @@ type matrix struct {
 	// encryptedWarned bounds diagnostics to one per room per process. The
 	// adapter cannot decrypt the event, but it must not fail silently either.
 	encryptedWarned map[string]bool
-	// pendingInvites keeps failed joins available for retry after the /sync
-	// cursor advances. One unreachable invitation must not starve messages
-	// from rooms the bot has already joined.
+	// Invitation joins run away from the /sync hot path. A slow or broken
+	// remote room must never delay messages already fetched from joined rooms.
+	inviteOnce     sync.Once
+	inviteMu       sync.Mutex
+	inviteQueue    chan string
 	pendingInvites map[string]struct{}
+	joiningInvites map[string]struct{}
 	inviteWarned   map[string]bool
+	inviteProblems []Incoming
 	// txn numbers outgoing messages: Matrix deduplicates on the
 	// transaction id, so a retried send is not a second message.
 	txn atomic.Int64
@@ -87,6 +92,7 @@ type syncResponse struct {
 	NextBatch string `json:"next_batch"`
 	Rooms     struct {
 		Invite map[string]struct{} `json:"invite"`
+		Leave  map[string]struct{} `json:"leave"`
 		Join   map[string]struct {
 			Summary struct {
 				JoinedMemberCount int `json:"m.joined_member_count"`
@@ -155,7 +161,8 @@ func (m *matrix) Receive(ctx context.Context) ([]Incoming, error) {
 		return nil, err
 	}
 	first := m.since == ""
-	problems := m.joinInvitedRooms(ctx, sync.Rooms.Invite)
+	m.scheduleInvitedRooms(ctx, sync.Rooms.Invite, sync.Rooms.Leave)
+	problems := m.takeInviteProblems()
 	m.since = sync.NextBatch
 	if first {
 		return problems, nil
@@ -249,15 +256,25 @@ func (m *matrix) Receive(ctx context.Context) ([]Incoming, error) {
 	return out, nil
 }
 
-// joinInvitedRooms accepts rooms the bot account was explicitly invited to.
+// scheduleInvitedRooms queues rooms the bot account was explicitly invited to.
 // Joining does not admit the sender to an Agent: messages still pass through
 // Keystone's invite-key and binding checks after the room becomes readable.
-func (m *matrix) joinInvitedRooms(ctx context.Context, invited map[string]struct{}) []Incoming {
+// The bounded worker is deliberately independent of Receive: remote joins can
+// be slow, and no invitation may hold up traffic from already-joined rooms.
+func (m *matrix) scheduleInvitedRooms(ctx context.Context, invited, left map[string]struct{}) {
+	m.inviteMu.Lock()
 	if m.pendingInvites == nil {
 		m.pendingInvites = map[string]struct{}{}
 	}
+	if m.joiningInvites == nil {
+		m.joiningInvites = map[string]struct{}{}
+	}
 	if m.inviteWarned == nil {
 		m.inviteWarned = map[string]bool{}
+	}
+	for roomID := range left {
+		delete(m.pendingInvites, roomID)
+		delete(m.inviteWarned, roomID)
 	}
 	for roomID := range invited {
 		m.pendingInvites[roomID] = struct{}{}
@@ -265,32 +282,101 @@ func (m *matrix) joinInvitedRooms(ctx context.Context, invited map[string]struct
 
 	rooms := make([]string, 0, len(m.pendingInvites))
 	for roomID := range m.pendingInvites {
-		rooms = append(rooms, roomID)
-	}
-	sort.Strings(rooms)
-	var problems []Incoming
-	for _, roomID := range rooms {
-		path := "/_matrix/client/v3/join/" + url.PathEscape(roomID)
-		var joined struct {
-			RoomID string `json:"room_id"`
-		}
-		err := m.call(ctx, http.MethodPost, path, map[string]any{}, &joined)
-		if err == nil && joined.RoomID != "" && joined.RoomID != roomID {
-			err = fmt.Errorf("joined room %q instead", joined.RoomID)
-		}
-		if err != nil {
-			if !m.inviteWarned[roomID] {
-				m.inviteWarned[roomID] = true
-				problems = append(problems, Incoming{
-					Conversation: roomID,
-					Problem:      "Matrix room invitation could not be accepted; the adapter will retry: " + err.Error(),
-				})
-			}
+		if _, joining := m.joiningInvites[roomID]; joining {
 			continue
 		}
+		m.joiningInvites[roomID] = struct{}{}
+		rooms = append(rooms, roomID)
+	}
+	m.inviteMu.Unlock()
+	if len(rooms) == 0 {
+		return
+	}
+	m.inviteOnce.Do(func() {
+		m.inviteQueue = make(chan string, 16)
+		go m.inviteWorker(ctx)
+	})
+	sort.Strings(rooms)
+	for _, roomID := range rooms {
+		select {
+		case m.inviteQueue <- roomID:
+		default:
+			// Never block /sync on a full retry queue. Removing this marker
+			// makes the room eligible to be queued on the next poll.
+			m.inviteMu.Lock()
+			delete(m.joiningInvites, roomID)
+			m.inviteMu.Unlock()
+		}
+	}
+}
+
+func (m *matrix) inviteWorker(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case roomID := <-m.inviteQueue:
+			m.joinInvitedRoom(ctx, roomID)
+		}
+	}
+}
+
+func (m *matrix) joinInvitedRoom(ctx context.Context, roomID string) {
+	m.inviteMu.Lock()
+	_, pending := m.pendingInvites[roomID]
+	m.inviteMu.Unlock()
+	if !pending { // the invitation was withdrawn while queued
+		m.inviteMu.Lock()
+		delete(m.joiningInvites, roomID)
+		m.inviteMu.Unlock()
+		return
+	}
+
+	joinCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	path := "/_matrix/client/v3/join/" + url.PathEscape(roomID)
+	var joined struct {
+		RoomID string `json:"room_id"`
+	}
+	err := m.call(joinCtx, http.MethodPost, path, map[string]any{}, &joined)
+	if err == nil && joined.RoomID != "" && joined.RoomID != roomID {
+		err = fmt.Errorf("joined room %q instead", joined.RoomID)
+	}
+
+	m.inviteMu.Lock()
+	defer m.inviteMu.Unlock()
+	delete(m.joiningInvites, roomID)
+	if _, stillPending := m.pendingInvites[roomID]; !stillPending {
+		return // withdrawn while the request was in flight
+	}
+	if err == nil {
 		delete(m.pendingInvites, roomID)
 		delete(m.inviteWarned, roomID)
+		return
 	}
+	if permanentMatrixError(err) {
+		delete(m.pendingInvites, roomID)
+		delete(m.inviteWarned, roomID)
+		m.inviteProblems = append(m.inviteProblems, Incoming{
+			Conversation: roomID,
+			Problem:      "Matrix room invitation was rejected and will not be retried: " + err.Error(),
+		})
+		return
+	}
+	if !m.inviteWarned[roomID] {
+		m.inviteWarned[roomID] = true
+		m.inviteProblems = append(m.inviteProblems, Incoming{
+			Conversation: roomID,
+			Problem:      "Matrix room invitation could not be accepted; the adapter will retry: " + err.Error(),
+		})
+	}
+}
+
+func (m *matrix) takeInviteProblems() []Incoming {
+	m.inviteMu.Lock()
+	defer m.inviteMu.Unlock()
+	problems := m.inviteProblems
+	m.inviteProblems = nil
 	return problems
 }
 
@@ -425,6 +511,22 @@ func (m *matrix) Send(ctx context.Context, conversation, body string) error {
 	return m.call(ctx, http.MethodPut, path, payload, &out)
 }
 
+type matrixHTTPError struct {
+	status int
+	text   string
+}
+
+func (e *matrixHTTPError) Error() string { return e.text }
+
+func permanentMatrixError(err error) bool {
+	var httpErr *matrixHTTPError
+	if !errors.As(err, &httpErr) {
+		return false
+	}
+	return httpErr.status >= 400 && httpErr.status < 500 &&
+		httpErr.status != http.StatusRequestTimeout && httpErr.status != http.StatusTooManyRequests
+}
+
 func (m *matrix) call(ctx context.Context, method, path string, body, out any) error {
 	var reader io.Reader
 	if body != nil {
@@ -452,7 +554,8 @@ func (m *matrix) call(ctx context.Context, method, path string, body, out any) e
 		return err
 	}
 	if res.StatusCode >= 300 {
-		return fmt.Errorf("matrix %s: %s: %s", path, res.Status, strings.TrimSpace(string(data)))
+		return &matrixHTTPError{status: res.StatusCode,
+			text: fmt.Sprintf("matrix %s: %s: %s", path, res.Status, strings.TrimSpace(string(data)))}
 	}
 	if out == nil {
 		return nil
