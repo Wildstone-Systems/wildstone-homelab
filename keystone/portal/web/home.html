@@ -2379,6 +2379,7 @@
   function send() {
     var box = el("ask"), body = box.value.trim();
     if (!body || !agent) { return; }
+    awaiting++;
     el("mic-note").textContent = "";
     var thread = el("thread");
     el("asks").hidden = true;
@@ -2468,6 +2469,17 @@
         foot.appendChild(make("span", "muted tnum", when(new Date().toISOString())));
         t.lastChild.appendChild(foot);
         thread.appendChild(t);
+        if (res.j.pending) {
+          awaitAnswer(session, res.j.seen || 0, function (m) {
+            var late = turn(m.role, m.text);
+            var lateFoot = make("div", "spread");
+            lateFoot.style.marginTop = "var(--space-2)";
+            lateFoot.appendChild(make("span", "muted tnum", when(m.at || new Date().toISOString())));
+            late.lastChild.appendChild(lateFoot);
+            thread.appendChild(late);
+            thread.scrollTop = thread.scrollHeight;
+          });
+        }
         if (res.j.proposals) {
           thread.appendChild(make("span", "pill pill-warn",
             res.j.proposals === 1 ? "1 thing needs the owner's approval"
@@ -2493,6 +2505,34 @@
         thread.scrollTop = thread.scrollHeight;
         box.focus();
       });
+  }
+
+  // A reply that stands in for an answer still to come: the assistant's
+  // runtime is taking longer than a turn waits, or is offline and the
+  // turn resumes when it is back (#389). The answer is added to the
+  // conversation as a new turn when it arrives, so look for it for a
+  // while and show it here. seen is how many messages the conversation
+  // already had. Sending again, or moving to another conversation,
+  // stops the wait; the answer is still there when it is reopened.
+  var awaiting = 0;
+  function awaitAnswer(id, seen, show) {
+    var mine = ++awaiting, tries = 0;
+    function poll() {
+      if (mine !== awaiting || id !== session || ++tries > 60) { return; }
+      fetch("/api/v1/assistant/conversations/" + encodeURIComponent(id),
+            { headers: { accept: "application/json" } })
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (j) {
+          if (mine !== awaiting || id !== session) { return; }
+          var messages = (j && j.messages) || [];
+          if (messages.length <= seen) { setTimeout(poll, 10000); return; }
+          messages.slice(seen).forEach(function (m) {
+            if (m.role !== "user") { show(m); }
+          });
+        })
+        .catch(function () { setTimeout(poll, 10000); });
+    }
+    setTimeout(poll, 10000);
   }
 
   el("send").addEventListener("click", send);

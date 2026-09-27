@@ -237,6 +237,12 @@ func TestAFailedExternalRunIsReported(t *testing.T) {
 func TestALateExternalAnswerStillSettlesTheTask(t *testing.T) {
 	f, bs, j := externalFixture(t, `{"kind":"informational"}`)
 	bs.ExternalReplyWait = 50 * time.Millisecond
+	type shown struct{ task, text string }
+	var late []shown
+	bs.LateAnswer = func(taskID, text string) error {
+		late = append(late, shown{taskID, text})
+		return nil
+	}
 
 	answer, err := bs.Serve(context.Background(), butlerlive.Turn{
 		Butler: "alfred", Member: "mika", Text: "is n1 healthy?",
@@ -273,6 +279,10 @@ func TestALateExternalAnswerStillSettlesTheTask(t *testing.T) {
 	}
 	if task.ResultSummary != "n1 is fine" {
 		t.Fatalf("result summary = %q, want the late answer", task.ResultSummary)
+	}
+	// And it goes back to the conversation that asked (#389), once.
+	if len(late) != 1 || late[0].task != answer.TaskID || late[0].text != "n1 is fine" {
+		t.Fatalf("late answers shown = %+v, want the one for %s", late, answer.TaskID)
 	}
 }
 

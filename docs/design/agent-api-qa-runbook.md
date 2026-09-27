@@ -369,7 +369,16 @@ Switch the Agent to `local_only` and the payload comes through in full.
    and the bridge's log shows the delivery being run and acknowledged.
    A turn Hermes takes longer than two minutes over answers "still
    working on it"; the task stays open and completes when Hermes
-   reports back (#364).
+   reports back (#364). The answer then appears in the same
+   conversation: an open portal page shows it within about 10 seconds,
+   and a Telegram chat gets it as a new message (#389). Keystone logs
+   `butler answered after its turn stopped waiting` for it.
+   Stop the `hermes` container and the bridge logs `hermes is not
+   answering`; within about 90 seconds the Agent's runtime shows
+   `offline`, and a new message is parked at once with "not connected
+   right now" (Keystone logs `butler turn parked for its runtime`).
+   Start it again: the parked turn is re-offered and its answer arrives
+   the same way as a late one.
 4. Watch the bridge's logs for the MCP calls Hermes makes back through
    it, and confirm `disabled_toolsets` appears in its rendered config.
 5. Change the profile to `sandboxed` (H6, #352): from the Agent's

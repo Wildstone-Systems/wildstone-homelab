@@ -1772,6 +1772,9 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 				DB:     db,
 				Ledger: ledger,
 				Log:    log,
+				// An answer settled after its turn returned goes back
+				// to the conversation and chat that asked (#389).
+				LateAnswer: apiSrv.DeliverLateAnswer,
 				// The native reasoning loop reaches Wildstone only
 				// through the in-process Agent Gateway now (ADR-W039
 				// Phase 2b, #337): a Handle issued at task admission,

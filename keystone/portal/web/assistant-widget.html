@@ -389,10 +389,38 @@
     box.append(fresh);
   };
 
+  // A reply that stands in for an answer still to come (#389): the
+  // answer is added to the conversation as a new turn when it arrives,
+  // so look for it for a while and show it. seen is how many messages
+  // the conversation already had. Sending again, or moving to another
+  // conversation, stops the wait.
+  let awaiting = 0;
+  const awaitAnswer = (id, seen) => {
+    const mine = ++awaiting;
+    let tries = 0;
+    const poll = async () => {
+      if (mine !== awaiting || id !== session || ++tries > 60) return;
+      try {
+        const r = await fetch("/api/v1/assistant/conversations/" + encodeURIComponent(id),
+          { headers: { accept: "application/json" } });
+        const j = r.ok ? await r.json() : null;
+        if (mine !== awaiting || id !== session) return;
+        const messages = (j && j.messages) || [];
+        if (messages.length > seen) {
+          messages.slice(seen).forEach((m) => { if (m.role !== "user") add(m.role, m.text); });
+          return;
+        }
+      } catch (_) { /* try again below */ }
+      setTimeout(poll, 10000);
+    };
+    setTimeout(poll, 10000);
+  };
+
   el("ask").onsubmit = async (e) => {
     e.preventDefault();
     const text = el("text").value.trim();
     if (!text) return;
+    awaiting++;
     el("text").value = "";
     el("suggestions").replaceChildren();
     const mine = add("user", text);
@@ -456,6 +484,7 @@
       if (session) remember(agent, session);
       waiting.classList.remove("pending");
       waiting.textContent = body.reply || "(no answer)";
+      if (body.pending) awaitAnswer(session, body.seen || 0);
       if (body.proposals) {
         say(body.proposals + " change" + (body.proposals === 1 ? "" : "s") + " proposed — an adult has to approve");
       }

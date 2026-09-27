@@ -259,8 +259,10 @@ func (bs *Butlers) RuntimeFailed(taskID, reason string) {
 // carries, so a transient failure here would leave a retry of that
 // delivery refused, and the answer stranded.
 //
-// Nobody is shown the answer yet; it is recorded as the task's result.
-// Delivering it back to the conversation is follow-up work.
+// Once settled, the answer goes back to the conversation that asked,
+// through LateAnswer. A failure there is logged rather than returned: the
+// task is complete, so the runtime retrying its report could only be
+// refused, and the answer is still on the task.
 func (bs *Butlers) settleLateReply(ctx context.Context, h agentapi.Handle, reply string) error {
 	taskID := h.TaskID()
 	if bs.AgentClient == nil {
@@ -312,6 +314,11 @@ func (bs *Butlers) settleLateReply(ctx context.Context, h agentapi.Handle, reply
 	if bs.Log != nil {
 		bs.Log.Info("butler answered after its turn stopped waiting", "butler", b.Name, "model", b.Model,
 			"task", taskID, "loop", "external")
+	}
+	if bs.LateAnswer != nil {
+		if err := bs.LateAnswer(taskID, s.Transcript().FinalText); err != nil && bs.Log != nil {
+			bs.Log.Error("showing a late answer in its conversation", "butler", b.Name, "task", taskID, "err", err)
+		}
 	}
 	return nil
 }
