@@ -184,7 +184,7 @@ func TestAFailedAddSaysWhatWasAlreadyAdded(t *testing.T) {
 
 const stepTwo = `{"session":{"recipe_name":"Flatbread","servings_made":"2","step_number":2,"total_steps":3,
   "step_text":"Rest ten minutes","is_last_step":false,"step_ingredients":[]}}`
-const lastStep = `{"session":{"recipe_name":"Flatbread","servings_made":"2","step_number":3,"total_steps":3,
+const lastStep = `{"session":{"id":"s-flatbread","recipe_name":"Flatbread","servings_made":"2","step_number":3,"total_steps":3,
   "step_text":"Bake with the flour.","is_last_step":true,
   "step_ingredients":[{"item":"Flour","quantity":"4","unit":"g"}]}}`
 
@@ -456,5 +456,54 @@ func TestAStaleAnswerSaysHowOldItIs(t *testing.T) {
 	up.answers[pantry.CapList] = ok(`{"list":"groceries","items":["milk"]}`)
 	if r, _ := g.Dispatch(ctx, pantryCall(PantryToolShowGroceries, nil)); strings.Contains(r.Summary, "out of date") {
 		t.Fatalf("current answer warned: %q", r.Summary)
+	}
+}
+
+// An approval is for the dish it named. If the tablet switches to another
+// cook after the question was asked, the retry is a different call — a new
+// question with a new consent key — and the approved finish can only ever be
+// sent for the session it was about.
+func TestAnApprovedFinishCannotFinishADifferentCook(t *testing.T) {
+	current := lastStep
+	var finishedSession any
+	up := &scriptedPantry{answers: map[string]func(map[string]any) (adapter.Answer, error){
+		pantry.CapCookCurrent: func(req map[string]any) (adapter.Answer, error) { return ok(current)(req) },
+		pantry.CapCookFinish: func(req map[string]any) (adapter.Answer, error) {
+			finishedSession = req["session_id"]
+			return adapter.Answer{Data: map[string]any{
+				"session": map[string]any{"recipe_name": "Flatbread"},
+				"cook":    map[string]any{"cook_event_id": "c1"},
+			}}, nil
+		},
+	}}
+	g, asked, answer := pantryGateway(t, up, true)
+	ctx := context.Background()
+	finish := pantryCall(PantryToolFinishCooking, nil)
+
+	if _, err := g.Dispatch(ctx, finish); err == nil {
+		t.Fatal("finished without asking")
+	}
+	*answer = ConfirmApproved // the person said yes — to Flatbread
+
+	// Meanwhile the tablet stopped Flatbread and started Pasta.
+	current = `{"session":{"id":"s-pasta","recipe_name":"Pasta","servings_made":"4","step_number":1,"total_steps":2,"step_text":"Boil."}}`
+	*answer = ConfirmAsked
+	if _, err := g.Dispatch(ctx, finish); err == nil {
+		t.Fatal("the Flatbread approval finished Pasta")
+	}
+	if len(*asked) != 2 || (*asked)[0].Key == (*asked)[1].Key || !strings.Contains((*asked)[1].Question, "Pasta") {
+		t.Fatalf("questions = %+v", *asked)
+	}
+	if finishedSession != nil {
+		t.Fatalf("PantryOS was asked to finish %v without approval", finishedSession)
+	}
+
+	// Approved for Pasta: PantryOS is asked to finish exactly that session.
+	*answer = ConfirmApproved
+	if _, err := g.Dispatch(ctx, finish); err != nil {
+		t.Fatal(err)
+	}
+	if finishedSession != "s-pasta" {
+		t.Fatalf("finished session = %v, want s-pasta", finishedSession)
 	}
 }

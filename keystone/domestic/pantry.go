@@ -222,6 +222,35 @@ func (t *pantryTool) execute(ctx context.Context, c Call) (Result, error) {
 	return Result{}, fmt.Errorf("pantry has no tool %q", t.tool)
 }
 
+// PrepareContext binds a finish to the cook going on NOW: the session id
+// becomes a parameter, so it is part of what the person approves (the
+// gateway's consent key covers every parameter), and it is what PantryOS is
+// asked to finish. If the tablet switches dishes after the question, the
+// retry is a different call — a new question — and the approved one can
+// only ever finish the dish it named.
+func (t *pantryTool) PrepareContext(ctx context.Context, c Call) (Call, error) {
+	if t.tool != PantryToolFinishCooking {
+		return c, nil
+	}
+	if err := t.pantry.ready(); err != nil {
+		return c, err
+	}
+	s, err := t.pantry.session(ctx)
+	if err != nil {
+		return c, err
+	}
+	if s == nil || s.ID == "" {
+		return c, errors.New("nothing is being cooked, so there is nothing to finish")
+	}
+	params := make(map[string]string, len(c.Params)+1)
+	for k, v := range c.Params {
+		params[k] = v
+	}
+	params["session_id"] = s.ID
+	c.Params = params
+	return c, nil
+}
+
 // Describe implements Describer for the confirm-tier finish, so the
 // person is asked about a dish rather than a tool call. It reads the
 // cook-along first: nobody is asked to finish a cook that is not
@@ -514,6 +543,7 @@ func (p *Pantry) getRecipe(ctx context.Context, c Call) (Result, error) {
 
 // cookSession is the part of a pantry-1 session these summaries read.
 type cookSession struct {
+	ID          string
 	Recipe      string
 	Servings    float64
 	Step, Total int
@@ -541,6 +571,7 @@ func sessionOf(v any) *cookSession {
 		return nil
 	}
 	s := &cookSession{
+		ID:     str(m["id"]),
 		Recipe: str(m["recipe_name"]),
 		Step:   intOf(m["step_number"], 0),
 		Total:  intOf(m["total_steps"], 0),
@@ -923,6 +954,11 @@ func (p *Pantry) finishCooking(ctx context.Context, c Call) (Result, error) {
 	req := map[string]any{}
 	if loc := strings.TrimSpace(c.Params["location_id"]); loc != "" {
 		req["location_id"] = loc
+	}
+	// The cook that was approved (bound in PrepareContext), not whatever is
+	// cooking by now: PantryOS finishes that one, or refuses.
+	if id := strings.TrimSpace(c.Params["session_id"]); id != "" {
+		req["session_id"] = id
 	}
 	d, _, err := p.ask(ctx, true, pantry.CapCookFinish, req)
 	if err != nil {
