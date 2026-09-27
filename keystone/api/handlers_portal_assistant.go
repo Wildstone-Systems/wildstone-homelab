@@ -348,13 +348,13 @@ func (s *Server) assistantAsk(_ http.ResponseWriter, r *http.Request, member str
 		"proposals": len(ans.PlanIDs),
 	}
 	// The reply is a stand-in and the answer comes later as a new turn
-	// (#389). seen is how many messages the conversation already shows,
-	// so the page waits for the one after them, even if it lands before
-	// the page first looks.
+	// (#389). seen is how many messages the page already shows, so it
+	// waits for the one after them, even if it lands before the page
+	// first looks.
 	if ans.Pending && ans.SessionID != "" {
 		if sess, err := s.DB.GetButlerSession(ans.SessionID); err == nil {
 			out["pending"] = true
-			out["seen"] = len(assistantMessages(sess))
+			out["seen"] = seenThroughLastAsk(assistantMessages(sess))
 		}
 	}
 	return out, status, nil
@@ -378,6 +378,20 @@ func (s *Server) assistantConversation(_ http.ResponseWriter, r *http.Request, m
 		return nil, http.StatusNotFound, fmt.Errorf("that conversation is not here any more")
 	}
 	return map[string]any{"session": sess.ID, "agent": sess.Butler, "messages": assistantMessages(sess)}, http.StatusOK, nil
+}
+
+// seenThroughLastAsk counts messages up to and including the reply to
+// the newest question: that question, and the stand-in reply the page
+// has just drawn. The late answer can already be in the conversation by
+// the time this is read, and counting it as seen would leave the page
+// waiting for a message after it that never comes.
+func seenThroughLastAsk(messages []assistantMessage) int {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == runtimedb.ButlerRoleUser {
+			return min(i+2, len(messages))
+		}
+	}
+	return len(messages)
 }
 
 // assistantMessages is a conversation's turns as the page renders them:

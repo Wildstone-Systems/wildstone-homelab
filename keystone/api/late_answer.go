@@ -2,6 +2,7 @@ package api
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/agentapi"
 	"github.com/chickenrat17/wildstone-homelab/keystone/redact"
@@ -25,7 +26,71 @@ import (
 //   - and, when the conversation's reply went out through a chat
 //     Connection, as a new message to that same chat, under the same
 //     privacy check a live reply passes (handleChatMessage).
+//
+// The answer can arrive while the turn that stood in for it is still
+// being recorded: its conversation not yet linked to the task, or its
+// chat reply not yet queued. Delivering then would lose it, or send it
+// to the screen only, so it waits (lateAnswerReady) and delivers once
+// that bookkeeping is done, in the background, for a bounded time. If
+// the chat reply never appears (it failed to queue), the answer still
+// goes into the conversation.
 func (s *Server) DeliverLateAnswer(taskID, text string) error {
+	ready, err := s.lateAnswerReady(taskID)
+	if err != nil {
+		return err
+	}
+	if ready {
+		return s.deliverLateAnswer(taskID, text)
+	}
+	go func() {
+		wait := s.lateAnswerPoll
+		if wait <= 0 {
+			wait = time.Second
+		}
+		for i := 0; i < lateAnswerTries; i++ {
+			time.Sleep(wait)
+			ready, err := s.lateAnswerReady(taskID)
+			if err != nil {
+				s.Log.Error("waiting to show a late answer", "task", taskID, "err", err)
+				return
+			}
+			if ready {
+				break
+			}
+		}
+		if err := s.deliverLateAnswer(taskID, text); err != nil {
+			s.Log.Error("showing a late answer in its conversation", "task", taskID, "err", err)
+		}
+	}()
+	return nil
+}
+
+// lateAnswerTries bounds how long a late answer waits for its turn's
+// bookkeeping: a minute at the default poll, far longer than recording
+// a turn takes.
+const lateAnswerTries = 60
+
+// lateAnswerReady reports whether the turn a late answer belongs to has
+// been recorded: its task is linked to a conversation, and, for a turn
+// that arrived through a chat Connection, its reply has been queued, so
+// the answer can follow it to the same chat.
+func (s *Server) lateAnswerReady(taskID string) (bool, error) {
+	task, err := s.DB.GetButlerTask(taskID)
+	if err != nil {
+		return false, err
+	}
+	if task.SessionID == "" {
+		return false, nil
+	}
+	if task.OriginConnectionRef == 0 {
+		return true, nil
+	}
+	_, ok, err := s.DB.ChatReplyRouteForSession(task.SessionID)
+	return ok, err
+}
+
+// deliverLateAnswer does the delivery DeliverLateAnswer describes.
+func (s *Server) deliverLateAnswer(taskID, text string) error {
 	task, err := s.DB.GetButlerTask(taskID)
 	if err != nil {
 		return err
