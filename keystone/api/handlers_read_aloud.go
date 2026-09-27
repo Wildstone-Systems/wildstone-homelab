@@ -48,19 +48,40 @@ func (s *Server) assistantSpeak(_ http.ResponseWriter, r *http.Request, member s
 	if code, err := decodeStrict(r, &req); err != nil {
 		return nil, code, err
 	}
-	b, err := s.DB.ResolveButlerFor(strings.TrimSpace(req.Agent), member)
-	switch {
-	case err == nil, errors.Is(err, runtimedb.ErrButlerUnreachable):
-	case errors.Is(err, runtimedb.ErrNoButlerAccess), errors.Is(err, runtimedb.ErrNotFound),
-		errors.Is(err, runtimedb.ErrNotAdmitted):
-		return nil, http.StatusNotFound, fmt.Errorf("no assistant answers there for you")
-	default:
-		return nil, http.StatusInternalServerError, err
-	}
-	if !portalMayReach(b) {
-		return nil, http.StatusNotFound, fmt.Errorf("no assistant answers there for you")
+	b, status, err := s.portalVoiceButler(strings.TrimSpace(req.Agent), member)
+	if err != nil {
+		return nil, status, err
 	}
 	return s.readAloud(r, b.Name, req.Text, "assistant.read_aloud", map[string]string{"member": member})
+}
+
+// portalVoiceButler resolves the assistant a dashboard voice request
+// (dictation, or a listen button) is for: one this member may reach
+// from the dashboard. An assistant whose model is down still counts —
+// voice does not need the model — so it is read again after
+// ResolveButlerFor, which returns no record with ErrButlerUnreachable,
+// and a retired one is still refused.
+func (s *Server) portalVoiceButler(agent, member string) (runtimedb.Butler, int, error) {
+	refused := fmt.Errorf("no assistant answers there for you")
+	b, err := s.DB.ResolveButlerFor(agent, member)
+	if errors.Is(err, runtimedb.ErrButlerUnreachable) {
+		b, err = s.DB.GetButler(agent)
+		if err == nil && !b.Live() {
+			err = runtimedb.ErrButlerUnreachable
+		}
+	}
+	switch {
+	case err == nil:
+	case errors.Is(err, runtimedb.ErrButlerUnreachable), errors.Is(err, runtimedb.ErrNoButlerAccess),
+		errors.Is(err, runtimedb.ErrNotFound), errors.Is(err, runtimedb.ErrNotAdmitted):
+		return runtimedb.Butler{}, http.StatusNotFound, refused
+	default:
+		return runtimedb.Butler{}, http.StatusInternalServerError, err
+	}
+	if !portalMayReach(b) {
+		return runtimedb.Butler{}, http.StatusNotFound, refused
+	}
+	return b, http.StatusOK, nil
 }
 
 // speakForButler is POST /api/v1/butlers/{name}/speak, {"text"}: the

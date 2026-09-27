@@ -49,17 +49,9 @@ func (s *Server) assistantTranscribe(_ http.ResponseWriter, r *http.Request, mem
 
 	// The ceiling, exactly as /assistant/ask applies it, so the mic
 	// cannot confirm an assistant the text box would not.
-	b, err := s.DB.ResolveButlerFor(agent, member)
-	switch {
-	case err == nil, errors.Is(err, runtimedb.ErrButlerUnreachable):
-	case errors.Is(err, runtimedb.ErrNoButlerAccess), errors.Is(err, runtimedb.ErrNotFound),
-		errors.Is(err, runtimedb.ErrNotAdmitted):
-		return nil, http.StatusNotFound, fmt.Errorf("no assistant answers there for you")
-	default:
-		return nil, http.StatusInternalServerError, err
-	}
-	if !portalMayReach(b) {
-		return nil, http.StatusNotFound, fmt.Errorf("no assistant answers there for you")
+	b, status, err := s.portalVoiceButler(agent, member)
+	if err != nil {
+		return nil, status, err
 	}
 
 	res, terr := s.Speech.Transcribe(r.Context(), s.dictationMayLeaveHouse(b.Name), clip.Audio, clip.MIME, clip.Seconds)

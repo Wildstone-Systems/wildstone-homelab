@@ -86,6 +86,40 @@ func (k *keystoneClient) speech(ctx context.Context, transport string, seq int64
 	return audio, mt, nil
 }
 
+// voiceQueue bounds the voice replies waiting for the worker. A
+// household sends a handful at a time; past this the engine is clearly
+// stuck, and a reply whose text has arrived loses only its voice.
+const voiceQueue = 16
+
+// voiceJob is one delivered reply whose voice is still to be sent.
+type voiceJob struct {
+	seq          int64
+	conversation string
+}
+
+// queueVoice hands a voice reply to the worker without waiting. When
+// the queue is full the voice is dropped, never the delivery loop held.
+func (a *adapter) queueVoice(q chan<- voiceJob, j voiceJob) {
+	select {
+	case q <- j:
+	default:
+		a.log.Warn("voice reply dropped: too many waiting; the text was sent", "seq", j.seq)
+	}
+}
+
+// voiceWorker sends voice replies one at a time, in order, apart from
+// the text delivery loop.
+func (a *adapter) voiceWorker(ctx context.Context, q <-chan voiceJob) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case j := <-q:
+			a.deliverVoice(ctx, j.seq, j.conversation)
+		}
+	}
+}
+
 // deliverVoice sends a delivered reply's voice message, when Keystone
 // has one. Any failure is logged and dropped: the person already has
 // the answer in text.

@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"testing"
@@ -136,5 +137,31 @@ func TestTheConsoleReadsAReplyAloud(t *testing.T) {
 	h.do(runtimedb.RoleAdmin, http.MethodGet, "/api/v1/butlers/alfred/status", nil, &st)
 	if st["readAloud"] != true {
 		t.Fatalf("status = %v, want readAloud", st)
+	}
+}
+
+// An assistant whose model is down still reads its earlier replies
+// aloud and still takes dictation: voice does not need the model.
+func TestVoiceWorksWhileTheAssistantsModelIsDown(t *testing.T) {
+	h := dictationHousehold(t)
+	if err := h.s.DB.UpsertModel(runtimedb.Model{Name: "kitchen-box", Kind: runtimedb.ModelLocal,
+		Provider: "ollama", ProviderModel: "llama", Readiness: runtimedb.ModelReady, Enabled: false}, "root-admin"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.s.DB.ResolveButlerFor("sandy", "sam"); !errors.Is(err, runtimedb.ErrButlerUnreachable) {
+		t.Fatalf("setup: resolve = %v, want the model down", err)
+	}
+	h.voicing(speech.Local)
+	h.s.Speech.Mode, h.s.Speech.Local = speech.ModeLocal, &fakeEngine{where: speech.Local, text: "hello"}
+	if status, _, audio := h.listen(t, "sam", "sandy", "Earlier reply."); status != http.StatusOK || len(audio) == 0 {
+		t.Fatalf("listen = %d", status)
+	}
+	if status, out := h.dictate(t, "sam", "sandy", webmClip, "audio/webm"); status != http.StatusOK || out["text"] != "hello" {
+		t.Fatalf("dictate = %d %v", status, out)
+	}
+	// Still only the dashboard's assistants: the operator one is refused
+	// whether or not its model answers.
+	if status, _, _ := h.listen(t, "sam", "operator", "x"); status != http.StatusNotFound {
+		t.Fatalf("operator = %d", status)
 	}
 }

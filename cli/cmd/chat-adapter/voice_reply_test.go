@@ -285,3 +285,39 @@ func TestMatrixUploadsThenSendsAnAudioEvent(t *testing.T) {
 		t.Error("the event is not marked as a voice message")
 	}
 }
+
+// slowVoiceTransport blocks every voice send until released.
+type slowVoiceTransport struct {
+	voiceTransport
+	release chan struct{}
+}
+
+func (s *slowVoiceTransport) SendVoice(ctx context.Context, conversation string, audio []byte, mimeType string) error {
+	select {
+	case <-s.release:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	return s.voiceTransport.SendVoice(ctx, conversation, audio, mimeType)
+}
+
+// A stuck voice never holds up the text of later messages.
+func TestASlowVoiceDoesNotDelayLaterText(t *testing.T) {
+	ks := &fakeKeystone{
+		pending: []outboundMessage{
+			{Seq: 1, Target: "chat-1", Body: "spoken answer", Speak: true},
+			{Seq: 2, Target: "chat-2", Body: "someone else's answer"},
+		},
+		speech: map[int64][]byte{1: []byte("ID3")},
+	}
+	tr := &slowVoiceTransport{release: make(chan struct{})}
+	a, done := newTestAdapter(t, ks, tr)
+	defer done()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	runUntil(ctx, a, func() bool { return len(tr.sentMessages()) == 2 })
+	if sent := tr.sentMessages(); len(sent) != 2 {
+		t.Fatalf("text sent while a voice was stuck = %+v, want both", sent)
+	}
+	close(tr.release)
+}
