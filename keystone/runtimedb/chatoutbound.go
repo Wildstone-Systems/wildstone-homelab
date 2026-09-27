@@ -88,7 +88,7 @@ type ChatOutbound struct {
 	ExpiresAt   time.Time `json:"expiresAt"`
 	DeliveredAt time.Time `json:"deliveredAt,omitempty"`
 	// Speech is the text to read aloud after Body is delivered, or ""
-	// (migration 0091). It never leaves in a poll: the adapter sees
+	// (migration 0092). It never leaves in a poll: the adapter sees
 	// Speak, and asks Keystone for the audio, which is made then.
 	Speech string `json:"-"`
 	// Speak tells the adapter this reply is also to be sent as a voice

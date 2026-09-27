@@ -27,7 +27,7 @@ A reply's text is as private as the question. `Router.Speak(allowCloud, text)` u
 ### 2.3 Chat: the adapter delivers, Keystone speaks
 
 ```text
-voice message ─► … ─► answer queued with speech text (migration 0091)
+voice message ─► … ─► answer queued with speech text (migration 0092)
 adapter: poll ─► ready ─► send text ─► ack ─► POST /chat/outbound/{seq}/speech ─► SendVoice
                                                    │
                                      Keystone: same Connection? unexpired? person still admitted?
@@ -106,4 +106,4 @@ type VoiceSender interface {
 
 ## 6. The 🎙️ marker (ADR-W042's deferred item)
 
-A person's turn now records how it arrived: `butler_session_turns.source` is `voice` for a chat voice message or dictation that was sent, `''` for typed text (migration 0090). The dashboard and Console send `voice: true` with a dictated message (the text box remembers it was dictated until it is emptied or sent). The conversations page, the dashboard, the widget and the Console show a 🎙️ beside such turns, so a mis-hearing reads as one. It is a label only: it grants and withholds nothing.
+A person's turn now records how it arrived: `butler_session_turns.source` is `voice` for a chat voice message or dictation that was sent, `''` for typed text (migration 0091). The dashboard and Console send `voice: true` with a dictated message (the text box remembers it was dictated until it is emptied or sent). The conversations page, the dashboard, the widget and the Console show a 🎙️ beside such turns, so a mis-hearing reads as one. It is a label only: it grants and withholds nothing.

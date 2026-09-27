@@ -214,7 +214,7 @@ func insertTurns(tx *sql.Tx, session int64, base int, turns []ButlerTurn) error 
 			return fmt.Errorf("runtimedb: turn source %q is not valid on a %s turn", t.Source, t.Role)
 		}
 		// source is named only when there is one: a typed turn is the
-		// column's default, and so is every turn written before 0090.
+		// column's default, and so is every turn written before 0091.
 		cols, marks := "session, ordinal, role, text, created_at, capped, tool_json, plan_ids", "?, ?, ?, ?, ?, ?, ?, ?"
 		args := []any{session, base + i, t.Role, t.Text, now(), boolInt(t.Capped), t.TranscriptJSON,
 			strings.Join(t.PlanIDs, ",")}
