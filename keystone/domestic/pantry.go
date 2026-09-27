@@ -677,6 +677,11 @@ func (p *Pantry) setTimer(ctx context.Context, c Call) (Result, error) {
 	if label := strings.TrimSpace(c.Params["label"]); label != "" {
 		req["label"] = label
 	}
+	// Who asked: PantryOS names them as the subject of the timer's
+	// pantry.timer_finished, so a routine can tell THEM it is done.
+	if c.Subject != "" {
+		req["member"] = c.Subject
+	}
 	d, _, err := p.ask(ctx, true, pantry.CapTimerSet, req)
 	if err != nil {
 		return Result{}, err

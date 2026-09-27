@@ -96,8 +96,8 @@ publishes:
         - { name: quantity, type: number }
         - { name: unit, type: string }
     - type: pantry.timer_finished
-      subject: household
-      description: A kitchen timer went off — set on the tablet or by an agent. Sent once per timer.
+      subject: member
+      description: A kitchen timer went off — set on the tablet or by an agent. Sent once per timer. The subject is whoever set it (the member an agent was asked by, or the member linked to the tablet's profile); a timer set by nobody known has none.
       fields:
         - { name: label, type: string, required: true }
         - { name: duration_seconds, type: number }

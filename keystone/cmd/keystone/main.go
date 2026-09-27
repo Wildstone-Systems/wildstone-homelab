@@ -1001,24 +1001,12 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	// all, because a household rule notifies the HOUSEHOLD — pointing one
 	// at the operator's private bot would put household events into the
 	// one conversation that can also propose changes.
-	var chatCapabilities []string
-	if cat != nil {
-		for _, p := range cat.List() {
-			capName := p.Metadata.Capability
-			if !strings.HasPrefix(capName, "chat-") || !strings.HasSuffix(capName, "-family") {
-				continue
-			}
-			declaresSend := false
-			for _, t := range p.AgentTools {
-				if t.Name == "send" {
-					declaresSend = true
-				}
-			}
-			if declaresSend {
-				chatCapabilities = append(chatCapabilities, capName)
-			}
-		}
-	}
+	//
+	// Registered under the PACKAGE's capability ("chat-matrix"): chat
+	// packages are instanced, so an installed bot is "chat-matrix-<name>"
+	// and never matched the "-family" suffix this once required — which
+	// left every routine's chat delivery unwired.
+	chatCapabilities := domestic.ChatSendCapabilities(agentToolSources(cat))
 
 	// The host.* executor family (ADR-W039 §3.4, §5.4; H7, #353): Tier 3
 	// host administration through the SAME Wardstone gateway and

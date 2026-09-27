@@ -381,7 +381,8 @@ func TestKitchenTimers(t *testing.T) {
 	if err != nil || r.Summary != "Started a 9 minutes timer for Pasta. The kitchen tablet will ring." || !r.EffectConfirmed {
 		t.Fatalf("set = %q %v", r.Summary, err)
 	}
-	if got := up.asked[0]; got != "act pantry.timer.set map[label:pasta seconds:540]" {
+	// Sam asked, so Sam is who PantryOS will say the timer went off for.
+	if got := up.asked[0]; got != "act pantry.timer.set map[label:pasta member:sam seconds:540]" {
 		t.Fatalf("PantryOS was asked %q", got)
 	}
 	for _, bad := range []string{"", "0", "-3", "soon", "2000"} {

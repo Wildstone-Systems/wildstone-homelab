@@ -182,6 +182,21 @@ policy validates them and an Owner may make them stricter, never weaker
     time ("simmer 20 minutes"), which the agent offers and never starts on
     its own. A timer that goes off is `pantry.timer_finished`, so a routine
     can announce it where nobody is near the tablet.
+  - **Its subject is whoever set it**: `set_timer` passes the member the
+    agent was asked by, and a tablet timer carries the profile picked there,
+    which PantryOS maps to its linked member. A timer set by nobody known
+    has no subject, never a guessed one.
+  - **The announcement** is an ordinary household routine,
+    `docs/routines/kitchen-timer.yaml`: on `pantry.timer_finished`, a
+    `chat-*.send` with no `member`, so it goes to the event's subject. An
+    Owner approves it like any other. A run for a timer that names nobody
+    stops (`this event names nobody to tell`) rather than pausing the
+    routine, which the next timer may well need.
+  - Fixed on the way: routine chat delivery was wired only for chat
+    capabilities named `chat-*-family`, and the chat packages became
+    instanced as `chat-matrix` and the rest, so no routine could send a
+    chat message. They are now wired by the package's capability
+    (`domestic.ChatSendCapabilities`).
   - Ticking and timers are `read`, like moving a step: they change no stock.
   - The plan set on the tablet (amounts changed, ingredients left out,
     "use it all") is kept in the session, so an agent's `finish_cooking`
