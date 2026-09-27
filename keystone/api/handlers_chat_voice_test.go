@@ -428,6 +428,37 @@ func TestVoiceUploadIsValidated(t *testing.T) {
 	}
 }
 
+// A recording the adapter would not download still earns the person a
+// "too long" reply — after the sender check, like every other outcome.
+func TestVoiceTooLargeToFetchIsAnsweredNotSilent(t *testing.T) {
+	h := newHarness(t)
+	h.wireHouseholdButler(nil, runtimedb.ButlerModeFull)
+	h.bindAccount(t, "family", "sam", "telegram", "12345")
+	engine := h.hearing("x")
+
+	resp, out := h.sendVoice(t, runtimedb.RoleConcierge, map[string]any{
+		"transport": "telegram", "account": "12345", "messageId": "v-1",
+		"audioSeconds": 900, "tooLarge": true,
+	}, []byte{}, "audio/ogg")
+	if resp.StatusCode != http.StatusAccepted || out.Reason != "voice message not transcribed: too_long" {
+		t.Fatalf("status = %d, out = %+v", resp.StatusCode, out)
+	}
+	if engine.calls.Load() != 0 {
+		t.Fatal("the engine was asked about a recording nobody downloaded")
+	}
+	if q := h.poll(t, runtimedb.RoleConcierge, ""); len(q) != 1 || !strings.Contains(q[0].Body, "too long") {
+		t.Fatalf("reply = %+v", q)
+	}
+
+	// And a stranger's oversized clip is as silent as any other.
+	resp, out = h.sendVoice(t, runtimedb.RoleConcierge, map[string]any{
+		"transport": "telegram", "account": "99999", "messageId": "v-2", "tooLarge": true,
+	}, []byte{}, "audio/ogg")
+	if resp.StatusCode != http.StatusAccepted || out.Bound {
+		t.Fatalf("stranger: status = %d, out = %+v", resp.StatusCode, out)
+	}
+}
+
 func TestHeardLine(t *testing.T) {
 	if got := heardLine("  turn   on\nthe lights "); got != "🎙️ I heard: “turn on the lights”\n\n" {
 		t.Errorf("heardLine = %q", got)

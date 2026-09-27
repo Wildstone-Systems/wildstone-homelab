@@ -45,13 +45,19 @@ type voiceClip struct {
 	Audio   []byte
 	MIME    string
 	Seconds float64
+	// TooLarge says the adapter did not download the recording because
+	// the vendor reported it over the size or length an adapter will
+	// fetch. It still comes here, so the person — once the sender and
+	// room checks have passed — is told to send something shorter,
+	// rather than hearing nothing at all.
+	TooLarge bool
 }
 
 // digest stands in for a voice message's text in its dedupe key, so an
 // adapter that sends no message id still has a redelivered clip
 // collapse onto the first.
 func (v *voiceClip) digest() string {
-	sum := sha256.Sum256(v.Audio)
+	sum := sha256.Sum256(fmt.Appendf(nil, "%s\x00%g\x00%t\x00%s", v.MIME, v.Seconds, v.TooLarge, v.Audio))
 	return "voice:" + hex.EncodeToString(sum[:16])
 }
 
@@ -61,6 +67,10 @@ func (v *voiceClip) digest() string {
 type voiceMessage struct {
 	inboundMessage
 	AudioSeconds float64 `json:"audioSeconds,omitempty"`
+	// TooLarge: the adapter left the recording on the vendor's servers
+	// because it was reported too big to fetch; the audio part is then
+	// empty (voiceClip.TooLarge).
+	TooLarge bool `json:"tooLarge,omitempty"`
 }
 
 // maxVoiceMetaBytes bounds the "message" part, which is a handful of
@@ -159,7 +169,11 @@ func readVoiceUpload(r *http.Request) (inboundMessage, *voiceClip, int, error) {
 	if meta.AudioSeconds < 0 {
 		return inboundMessage{}, nil, http.StatusBadRequest, fmt.Errorf("audioSeconds cannot be negative")
 	}
-	clip.Seconds = meta.AudioSeconds
+	clip.Seconds, clip.TooLarge = meta.AudioSeconds, meta.TooLarge
+	if clip.TooLarge {
+		// Nothing to transcribe, and nothing that should have been sent.
+		clip.Audio = nil
+	}
 	return meta.inboundMessage, clip, http.StatusOK, nil
 }
 
@@ -170,8 +184,15 @@ func readVoiceUpload(r *http.Request) (inboundMessage, *voiceClip, int, error) {
 // Every outcome is recorded as one chat.voice event naming the account,
 // the Agent, the engine and the outcome — never the words or the audio.
 func (s *Server) transcribeChatVoice(ctx context.Context, at runtimedb.Connection, account string, clip *voiceClip) (heard, reply, reason string) {
-	allowCloud := s.voiceMayLeaveHouse(at)
-	res, err := s.Speech.Transcribe(ctx, allowCloud, clip.Audio, clip.MIME, clip.Seconds)
+	var (
+		res speech.Result
+		err error
+	)
+	if clip.TooLarge {
+		err = speech.ErrTooLarge
+	} else {
+		res, err = s.Speech.Transcribe(ctx, s.voiceMayLeaveHouse(at), clip.Audio, clip.MIME, clip.Seconds)
+	}
 
 	outcome := "transcribed"
 	if err != nil {

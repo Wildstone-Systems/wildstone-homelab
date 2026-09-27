@@ -1,6 +1,6 @@
 # ADR-W042: The voice pipeline, part one — speech to text
 
-- **Status:** accepted; slices 1–2 implemented (`keystone/speech`, `packages/speech-speaches`, `-speech-*` flags, `POST /api/v1/chat/voice`); slices 3–7 not yet
+- **Status:** accepted; slices 1–3 implemented (`keystone/speech`, `packages/speech-speaches`, `-speech-*` flags, `POST /api/v1/chat/voice`, Telegram); slices 4–7 not yet
 - **Governed by:** ADR-W033 where they overlap (B6 privacy chain, B7 Connections, B9 addressing).
 - **Scope:** turning a recorded voice message into the text of an ordinary Agent turn, on Telegram, Discord, Slack and Matrix, and dictation on the family dashboard (the assistant widget and the conversations page). It does not decide text-to-speech replies, wake words, live streaming audio, or shared household devices; §8 records what those will need so part one does not block them.
 - **Depends on / relates to:** [`docs/02-implementation-scope.md`](../02-implementation-scope.md) §7 ("Voice remains post-v1. Local transcription and Kokoro text-to-speech are the current preferences, using the same identity/conversation boundary"); [`docs/agent-architecture-baseline.md`](../agent-architecture-baseline.md) "Privacy gateway" and AC12 (transcription is an external processing boundary); [`docs/audit/findings/155-identity.md`](../audit/findings/155-identity.md) F-155-12 (voice ingress must establish a Person before admission); ADR-W026 G5 (a transport is its `Transport` methods and nothing else).
@@ -204,7 +204,7 @@ Each slice is one PR with its own tests.
 
 1. **`keystone/speech` + `speech-speaches` package** *(done)*. `Transcriber`, the OpenAI-compatible client, settings, audit event; the package. Tests with a fake HTTP engine (success, timeout, empty, error) and the privacy matrix.
 2. **`POST /api/v1/chat/voice`** *(done)*. Multipart parsing with limits, binding-before-transcription, privacy check, handoff to the shared turn path, the §2.3 rules, the "I heard" line. Tests in `handlers_chat_voice_test.go`, including "a stranger's recording never reaches the engine", "a spoken secret is not stored" and "a local Agent's audio never reaches the cloud".
-3. **Telegram.** `voice`, `audio`, `video_note`; `getFile` download. Tests with recorded update fixtures.
+3. **Telegram** *(done)*. `voice`, `audio` and `video_note` become a `VoiceNote` whose download is deferred until the adapter's own checks pass (flood guard; in a group, only a reply to the bot or an audio caption that mentions it). `getFile` then `/file/bot<token>/<path>`, capped at 10 MB on what Telegram reports and on the bytes read. A recording reported over 10 MB or 600 s is not downloaded but still posted with `tooLarge: true` and no audio, so Keystone can tell a known person "too long" after its sender check, and a stranger nothing. Transport errors are stripped of their URL, which carries the bot token.
 4. **Dashboard dictation.** `POST /api/v1/assistant/transcribe`; mic button in `assistant-widget.html` and `assistant.html` (MediaRecorder, a visible recording state, a stop button, a 120 s cap, clear errors when the mic is denied); mic icon on voice turns in the conversation view.
 5. **Discord.** Voice-message flag and single attachment download.
 6. **Slack.** `file_share` + `slack_audio`, Bearer download, `files:read` in the package text.
