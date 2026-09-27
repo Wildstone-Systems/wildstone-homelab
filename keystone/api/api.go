@@ -637,6 +637,10 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("PUT /api/v1/butlers/{name}/access", s.handle(principal.VerbManage, s.setButlerAccess))
 	mux.Handle("PUT /api/v1/butlers/{name}/connection", s.handle(principal.VerbManage, s.setButlerConnection))
 	mux.Handle("PUT /api/v1/butlers/{name}/tool", s.handle(principal.VerbManage, s.setButlerTool))
+	// Assigning adds to a governed Agent's reach where the switch above
+	// only subtracts (#389). Opt-in tools need a fresh sign-in, checked
+	// in the handler because only it knows which tool it was given.
+	mux.Handle("PUT /api/v1/butlers/{name}/assignment", s.handle(principal.VerbManage, s.setButlerAssignment))
 	mux.Handle("PUT /api/v1/butlers/{name}/address", s.handle(principal.VerbManage, s.setButlerAddress))
 	mux.Handle("PUT /api/v1/butlers/{name}/class", s.handle(principal.VerbManage, s.consequential(s.setButlerAgentClass)))
 	// The Agent's runtime record (ADR-W039 §3.3): which runtime, as

@@ -82,6 +82,10 @@ type CapabilityTool struct {
 	AgentClass AgentClass `json:"agentClass,omitempty"`
 	Available  bool       `json:"available"`
 	Reason     string     `json:"reason,omitempty"`
+	// Unassigned is set on an unavailable tool that is wired here and
+	// withheld only because a governed Agent has not been given it, so
+	// assigning it would make it available (ToolDecision.Unassigned).
+	Unassigned bool `json:"unassigned,omitempty"`
 }
 
 // ServiceSystem is the service Keystone's own tools belong to. It
@@ -257,6 +261,7 @@ func (gw *ToolGateway) Capabilities(readOnly bool) CapabilityManifest {
 			if d := gw.checkTool(name, entry); !d.Allowed {
 				tool.Available = false
 				tool.Reason = d.Reason
+				tool.Unassigned = d.Unassigned
 			}
 		}
 		if !tool.Available {
@@ -343,6 +348,7 @@ func (gw *HouseholdGateway) Capabilities(readOnly bool) CapabilityManifest {
 			if d := gw.checkTool(name, entry); !d.Allowed {
 				tool.Available = false
 				tool.Reason = d.Reason
+				tool.Unassigned = d.Unassigned
 			}
 		}
 		if !tool.Available {

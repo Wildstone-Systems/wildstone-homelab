@@ -207,6 +207,9 @@ func (gw *ToolGateway) query(tool string, entry toolEntry) ToolAuthorityQuery {
 		// tool this gateway does not register (ADR-W030 A7).
 		Structural:    true,
 		GrantRequired: entry.GrantRequired,
+		Service:       ServiceSystem,
+		ToolClass:     string(AgentClassOwner),
+		OptIn:         entry.OptIn,
 		TaskID:        gw.SessionTask,
 		RoutinePlanID: gw.routinePlanID,
 		Resource:      ResourceRef{Kind: entry.Reaches},
