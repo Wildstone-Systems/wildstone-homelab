@@ -42,7 +42,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: matrix-synapse
-  version: 1.0.4
+  version: 1.0.5
   capability: matrix-homeserver
   profile: synapse
 requires:
@@ -62,13 +62,9 @@ policies:
   classifications: [family_private]
   dataSensitivity: high
 templates:
-  # PostgreSQL and the restic repository each get independent generated
-  # credentials. The OIDC secret is synthesized with the OidcClient below.
-  - |
-    apiVersion: wildstone.dev/v1
-    kind: Secret
-    metadata: { name: matrix-postgres-password, node: "{{ .Params.node }}" }
-    spec: { name: matrix-postgres-password }
+  # The config generator requires a password-shaped input, but the runtime
+  # database uses only a capability-owned Unix socket and has no rotatable
+  # password that could drift from an initialized PostgreSQL data directory.
   - |
     apiVersion: wildstone.dev/v1
     kind: Secret
@@ -91,6 +87,11 @@ templates:
     kind: Volume
     metadata: { name: matrix-pgdata, node: "{{ .Params.node }}" }
     spec: { name: matrix-pgdata }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: matrix-postgres-socket, node: "{{ .Params.node }}" }
+    spec: { name: matrix-postgres-socket }
   - |
     apiVersion: wildstone.dev/v1
     kind: Volume
@@ -175,11 +176,8 @@ templates:
         import yaml
 
         oidc_secret = os.environ.pop("MATRIX_OIDC_CLIENT_SECRET", "")
-        database_password = os.environ.pop("POSTGRES_PASSWORD", "")
         if not oidc_secret:
             raise SystemExit("matrix: generated OIDC client secret is empty")
-        if not database_password:
-            raise SystemExit("matrix: generated PostgreSQL password is empty")
 
         target = Path("/tmp/matrix-oidc-client-secret")
         temporary = target.with_suffix(".tmp")
@@ -189,14 +187,16 @@ templates:
         os.chmod(temporary, 0o600)
         os.replace(temporary, target)
 
-        # migrate_config must run before this container, but a completed Job
-        # is not rerun when a node secret rotates. Keep only a harmless
-        # placeholder in that Job and materialize the current database value
-        # here, on the Synapse container that rotation actually re-creates.
+        # migrate_config requires a password-shaped input even though this
+        # deployment connects over a capability-owned Unix socket. Remove the
+        # disposable generator value before Synapse reads the config. With TCP
+        # disabled on PostgreSQL, socket-volume possession is the boundary and
+        # no persisted database password can drift after a secret rotation.
         config_path = Path("/data/homeserver.yaml")
         with config_path.open("r", encoding="utf-8") as source:
             config = yaml.safe_load(source)
-        config["database"]["args"]["password"] = database_password
+        config["database"]["args"]["host"] = "/run/postgresql"
+        config["database"]["args"].pop("password", None)
         config_temporary = config_path.with_suffix(".yaml.tmp")
         config_descriptor = os.open(
             config_temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600
@@ -229,14 +229,14 @@ templates:
           SYNAPSE_SERVER_NAME: "{{ or .Params.server_name (printf "matrix.%s" .Params.public_domain) }}"
           SYNAPSE_REPORT_STATS: "no"
           SYNAPSE_NO_TLS: "yes"
-          POSTGRES_HOST: matrix-postgres
+          POSTGRES_HOST: /run/postgresql
           POSTGRES_PORT: "5432"
           POSTGRES_DB: synapse
           POSTGRES_USER: synapse
           # The runtime startup module replaces this before Synapse reads it.
-          # This is deliberately NOT matrix-postgres-password: rotating the
-          # live database credential must target matrix-synapse below rather
-          # than leave the value frozen in this completed Job's output.
+          # This disposable value exists only because migrate_config requires
+          # one. The startup module removes it; the socket-only runtime has no
+          # database credential to freeze in this completed Job's output.
           POSTGRES_PASSWORD: "secret/matrix-postgres-config-placeholder"
           UID: "991"
           GID: "991"
@@ -252,10 +252,20 @@ templates:
       env:
         POSTGRES_DB: synapse
         POSTGRES_USER: synapse
-        POSTGRES_PASSWORD: "secret/matrix-postgres-password"
+        # Required by the official entrypoint when no role password is set.
+        # TCP is disabled below, so this applies only inside the private socket
+        # volume shared with Synapse; no other capability can mount it.
+        POSTGRES_HOST_AUTH_METHOD: trust
         POSTGRES_INITDB_ARGS: "--encoding=UTF-8 --lc-collate=C --lc-ctype=C"
+      command:
+        - postgres
+        - -c
+        - listen_addresses=
+        - -c
+        - unix_socket_directories=/run/postgresql
       mounts:
         - { source: matrix-pgdata, target: /var/lib/postgresql/data }
+        - { source: matrix-postgres-socket, target: /run/postgresql }
       restart: unless-stopped
       resources: { memory: 768m, cpus: "1", pidsLimit: 256 }
 
@@ -270,7 +280,6 @@ templates:
         SYNAPSE_CONFIG_PATH: /data/homeserver.yaml
         PYTHONPATH: /etc/wildstone/matrix-homeserver
         MATRIX_OIDC_CLIENT_SECRET: "{{ .Resolved.OidcSecretRef }}"
-        POSTGRES_PASSWORD: "secret/matrix-postgres-password"
         UID: "991"
         GID: "991"
         TZ: "{{ .Params.timezone }}"
@@ -282,6 +291,7 @@ templates:
         - --config-path=/etc/wildstone/matrix-homeserver/private.yaml
       mounts:
         - { source: matrix-data, target: /data }
+        - { source: matrix-postgres-socket, target: /run/postgresql }
         - { source: /etc/wildstone/matrix-homeserver, target: /etc/wildstone/matrix-homeserver, readOnly: true }
       restart: unless-stopped
       noNewPrivileges: true

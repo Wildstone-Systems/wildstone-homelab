@@ -91,9 +91,9 @@ func TestMatrixOidcSecretTravelsByFile(t *testing.T) {
 	startup := matrixResource(t, resource.KindConfigFile, "matrix-oidc-start").ConfigFile
 	for _, want := range []string{
 		`os.environ.pop("MATRIX_OIDC_CLIENT_SECRET", "")`,
-		`os.environ.pop("POSTGRES_PASSWORD", "")`,
 		`Path("/tmp/matrix-oidc-client-secret")`,
-		`config["database"]["args"]["password"] = database_password`,
+		`config["database"]["args"]["host"] = "/run/postgresql"`,
+		`config["database"]["args"].pop("password", None)`,
 		`yaml.safe_dump(config, destination, sort_keys=False)`,
 		`os.execv(`,
 		`"synapse.app.homeserver"`,
@@ -152,19 +152,28 @@ func TestMatrixGenerationAndRuntimeUseTheSameData(t *testing.T) {
 	}
 }
 
-func TestMatrixPostgresCredentialAndBackupAreComplete(t *testing.T) {
+func TestMatrixPostgresSocketAndBackupAreComplete(t *testing.T) {
 	postgres := matrixResource(t, resource.KindContainer, "matrix-postgres").Container
 	generate := matrixResource(t, resource.KindJob, "matrix-config-generate").Job.Run
 	synapse := matrixResource(t, resource.KindContainer, "matrix-synapse").Container
-	if postgres.Env["POSTGRES_PASSWORD"] != synapse.Env["POSTGRES_PASSWORD"] {
-		t.Errorf("Postgres and Synapse runtime use different password references: %q vs %q",
-			postgres.Env["POSTGRES_PASSWORD"], synapse.Env["POSTGRES_PASSWORD"])
+	if _, ok := postgres.Env["POSTGRES_PASSWORD"]; ok {
+		t.Error("Postgres declares a rotatable password even though its initialized role would retain the old value")
+	}
+	if _, ok := synapse.Env["POSTGRES_PASSWORD"]; ok {
+		t.Error("Synapse declares a database password instead of using the private Unix socket")
 	}
 	if generate.Env["POSTGRES_PASSWORD"] != "secret/matrix-postgres-config-placeholder" {
 		t.Errorf("config Job must use only its disposable placeholder, got %q", generate.Env["POSTGRES_PASSWORD"])
 	}
-	if generate.Env["POSTGRES_PASSWORD"] == postgres.Env["POSTGRES_PASSWORD"] {
-		t.Errorf("completed config Job freezes the live PostgreSQL secret: %q", generate.Env["POSTGRES_PASSWORD"])
+	if generate.Env["POSTGRES_HOST"] != "/run/postgresql" {
+		t.Errorf("config generator writes database host %q, want the private socket", generate.Env["POSTGRES_HOST"])
+	}
+	if postgres.Env["POSTGRES_HOST_AUTH_METHOD"] != "trust" || !slices.Contains(postgres.Command, "listen_addresses=") {
+		t.Errorf("Postgres is not socket-only: auth=%q command=%v", postgres.Env["POSTGRES_HOST_AUTH_METHOD"], postgres.Command)
+	}
+	if !mountsVolume(postgres, "matrix-postgres-socket", "/run/postgresql") ||
+		!mountsVolume(synapse, "matrix-postgres-socket", "/run/postgresql") {
+		t.Error("Postgres and Synapse do not share the capability-owned socket volume")
 	}
 	if generate.Env["POSTGRES_HOST"] != "matrix-postgres" {
 		t.Errorf("Synapse generator points at database host %q", generate.Env["POSTGRES_HOST"])
