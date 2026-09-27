@@ -13,17 +13,14 @@
 # and this package installs no container for it. Removing the package
 # stops the tools and the events; it never touches PantryOS itself.
 #
-# CONNECTING IT (v1, the calendar's road — ADR-W034 A5, ADR-W042 A6):
-#   1. In PantryOS, mint an agent key (Agent Keys, read + write).
-#   2. Start Keystone with -pantry-url set to PantryOS's address and the
-#      key in PANTRY_AGENT_KEY (never a flag). The tools register only
-#      when both are set, and answer only while this package is
-#      installed.
-#   3. Events: PantryOS posts them to Keystone's household intake with
-#      the `pantry-publisher` token this package provisions. A PantryOS
-#      on another machine cannot receive that token until the pairing
-#      exchange lands (#384); until then it answers the tools but does
-#      not publish.
+# CONNECTING IT (ADR-W042 A6):
+#   Pair (recommended): in PantryOS ask for a pairing code, then
+#   POST /api/v1/pantry/pairing {address, code, keystoneUrl}. PantryOS gets
+#   its publisher token and Keystone its agent key, machine to machine;
+#   nobody copies a secret. Re-pairing rotates both.
+#   Or configure: start Keystone with -pantry-url and the agent key in
+#   PANTRY_AGENT_KEY (never a flag). A pairing wins over these.
+#   Either way the tools answer only while this package is installed.
 #
 # THE GROCERY LIST. While PantryOS is installed it owns the household's
 # grocery list; the household lists (lists-wildstone) keep every other

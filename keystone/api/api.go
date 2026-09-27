@@ -38,6 +38,9 @@ import (
 // OnApproved.
 type Server struct {
 	SecretVault *runtimedb.SecretVault
+	// PairingHTTP, when set, is the client pairing calls PantryOS with
+	// (tests); its redirect policy is always replaced with "never follow".
+	PairingHTTP *http.Client
 
 	Principals *principal.Store
 	DB         *runtimedb.DB
@@ -425,6 +428,12 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/household/events", s.handle(principal.VerbEmit, s.emitHouseholdEvent))
 	mux.Handle("GET /api/v1/household/events", s.handle(principal.VerbRead, s.listHouseholdEvents))
 	mux.Handle("POST /api/v1/household/publishers/{capability}", s.handle(principal.VerbManage, s.consequential(s.mintPublisher)))
+	// Pairing with PantryOS (ADR-W042 A6): the only way a PantryOS on
+	// another machine receives its publisher token. No route returns
+	// either secret.
+	mux.Handle("GET /api/v1/pantry/pairing", s.handle(principal.VerbRead, s.pantryPairingStatus))
+	mux.Handle("POST /api/v1/pantry/pairing", s.handle(principal.VerbManage, s.consequential(s.pairPantry)))
+	mux.Handle("DELETE /api/v1/pantry/pairing", s.handle(principal.VerbManage, s.consequential(s.unpairPantry)))
 	// Replay is a read: it evaluates and returns, writes nothing.
 	// Meters and their readings (ADR-W035 K1). The reading is an
 	// ordinary authenticated write rather than a Plan: it is evidence,

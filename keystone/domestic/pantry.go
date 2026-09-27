@@ -250,6 +250,8 @@ func (p *Pantry) ask(ctx context.Context, act bool, capability string, req map[s
 		ans, err = p.Upstream.Query(ctx, capability, raw)
 	}
 	switch {
+	case errors.Is(err, pantry.ErrNotConnected):
+		return nil, false, errors.New("PantryOS is installed but not connected yet — an Owner needs to pair it (or set -pantry-url and PANTRY_AGENT_KEY)")
 	case errors.Is(err, pantry.ErrRejected):
 		// PantryOS understood and said no: its reason is the answer.
 		return nil, false, fmt.Errorf("PantryOS said: %s", rejection(err))

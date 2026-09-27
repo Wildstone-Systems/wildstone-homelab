@@ -26,6 +26,10 @@ var consequentialRoutes = []struct{ method, path, body string }{
 	{http.MethodPost, "/api/v1/nodes/n1/secrets/s1/rotate", `{}`},
 	{http.MethodPost, "/api/v1/backups/p1/restore", `{}`},
 	{http.MethodPost, "/api/v1/household/publishers/home-automation", `{}`},
+	// Pairing mints a publisher token and stores a credential; unpairing
+	// revokes them (ADR-W042 A6).
+	{http.MethodPost, "/api/v1/pantry/pairing", `{}`},
+	{http.MethodDelete, "/api/v1/pantry/pairing", ``},
 	{http.MethodPost, "/api/v1/butler/members/giulia/disable", ``},
 	{http.MethodPost, "/api/v1/butler/members/giulia/offboard", ``},
 	{http.MethodPost, "/api/v1/butler/members/giulia/offboarding", `{}`},

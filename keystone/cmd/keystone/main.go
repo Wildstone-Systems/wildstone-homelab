@@ -1323,28 +1323,42 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 			actions.Register(e)
 		}
 		// PantryOS (packages/pantry-pantryos, ADR-W042). The calendar's
-		// road (ADR-W034 A5): Keystone holds the upstream, an operator
-		// who set -pantry-url and PANTRY_AGENT_KEY has said the
-		// household's agents may use it, and each call is also gated on
-		// the package being installed, as the lists are.
+		// road (ADR-W034 A5): Keystone holds the upstream, and each call
+		// is gated on the package being installed, as the lists are.
 		//
-		// Built whether or not it is configured, because the household
-		// lists ask it one question either way — is PantryOS installed —
-		// and an installed PantryOS owns the grocery list even before
-		// anyone connects it (ADR-W042 A3): a grocery request is then
-		// told PantryOS is not connected, never written somewhere else.
+		// Registered whether or not PantryOS is connected yet: an
+		// installed PantryOS owns the grocery list even before anyone
+		// connects it (A3), so a request is then told PantryOS is not
+		// connected, never written somewhere else.
+		//
+		// Where PantryOS is, asked on every call: a pairing (ADR-W042 A6)
+		// wins, because it is the newer and more deliberate act; the
+		// -pantry-url flag with PANTRY_AGENT_KEY is the fallback. Pairing,
+		// re-pairing and unpairing take effect without a restart.
+		pantryFlagKey := os.Getenv("PANTRY_AGENT_KEY")
+		if householdCfg.PantryURL != "" && pantryFlagKey == "" {
+			log.Warn("pantry: -pantry-url is set but PANTRY_AGENT_KEY is empty; only a pairing can connect PantryOS")
+		}
 		pantryActions := &domestic.Pantry{Authority: db,
 			Enabled: func() (bool, error) { return apiSrv.CapabilityEnabled(domestic.PantryCapability) },
-		}
-		if householdCfg.PantryURL != "" {
-			if key := os.Getenv("PANTRY_AGENT_KEY"); key == "" {
-				log.Warn("pantry: -pantry-url is set but PANTRY_AGENT_KEY is empty; the pantry actions are not registered")
-			} else {
-				pantryActions.Upstream = &pantry.HTTP{BaseURL: householdCfg.PantryURL, AgentKey: key}
-				for _, e := range pantryActions.Executors() {
-					actions.Register(e)
+			Upstream: &pantry.Resolved{Resolve: func() (pantry.HTTP, bool, error) {
+				if secretVault != nil {
+					endpoint, key, err := secretVault.PairingCredential(domestic.PantryCapability)
+					switch {
+					case err == nil:
+						return pantry.HTTP{BaseURL: endpoint, AgentKey: key}, true, nil
+					case !errors.Is(err, runtimedb.ErrNotPaired):
+						return pantry.HTTP{}, false, err
+					}
 				}
-			}
+				if householdCfg.PantryURL != "" && pantryFlagKey != "" {
+					return pantry.HTTP{BaseURL: householdCfg.PantryURL, AgentKey: pantryFlagKey}, true, nil
+				}
+				return pantry.HTTP{}, false, nil
+			}},
+		}
+		for _, e := range pantryActions.Executors() {
+			actions.Register(e)
 		}
 		// The household lists (packages/lists-wildstone). Registered
 		// unconditionally and gated per call on the install, for the

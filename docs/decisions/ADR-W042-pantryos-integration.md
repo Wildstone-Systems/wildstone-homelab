@@ -192,19 +192,30 @@ machine has no way to receive it. So:
 - **Managed:** works as-is; the package wires `<capability>-publisher` into
   PantryOS's environment and PantryOS reads it (a PantryOS env seed for the
   `wildstone` connector config).
-- **Connection-only:** needs a **pairing exchange**. PantryOS shows a
-  one-time, 5-minute code (its ADR 0018 §8 device-pairing pattern). The Owner
-  enters the code and PantryOS's address in Wildstone's connection Plan.
-  Keystone calls PantryOS once, with the code, to (a) receive a fresh agent
-  key for the adapter and (b) deliver the publisher token — the token goes
-  machine to machine over TLS, is never shown to a person, and is still
-  stored only as a hash in Keystone. Re-pairing is rotation, exactly like
-  re-minting today.
+- **Connection-only:** a **pairing exchange** *(implemented, #384 / PantryOS
+  #77)*:
+  1. PantryOS shows a one-time code (five minutes, single use).
+  2. The Owner sends it with PantryOS's address and this Keystone's address
+     as PantryOS reaches it: `POST /api/v1/pantry/pairing`
+     `{address, code, keystoneUrl}` (manage, consequential step-up).
+  3. Keystone mints a fresh `publisher-pantry` token — without revoking the
+     current one yet — and calls PantryOS's
+     `/api/integrations/wildstone/pairing/exchange` once, never following a
+     redirect. PantryOS stores the connection and answers with an agent key.
+  4. Keystone checks that key against PantryOS's capability list, seals it
+     in `integration_pairings` (migration 0089: the household secret key,
+     bound to capability and endpoint, refused at startup with a missing or
+     wrong key), and only then revokes the publisher tokens it replaces.
 
-Until pairing lands, a connection-only PantryOS can answer queries and
-actions but cannot publish events. The PantryOS side already accepts the
-token (`PUT /api/integrations/wildstone/connection`), so pairing only has to
-deliver it.
+  Any failure revokes the token just minted and leaves an existing pairing
+  exactly as it was. No route returns either secret: `GET` reports the
+  endpoint and when, `DELETE` forgets the key and revokes the publisher
+  tokens (PantryOS itself is untouched). Re-pairing is rotation.
+
+The pantry tools resolve PantryOS on every call: a pairing wins over
+`-pantry-url`/`PANTRY_AGENT_KEY`, so pairing, re-pairing and unpairing take
+effect without a restart. An installed PantryOS with neither says it is not
+connected yet.
 
 ## Work (Wildstone side)
 
@@ -217,8 +228,8 @@ deliver it.
    the tools to the domestic gateway, as `TestListsToolsAreDeclaredByThePackage`
    does for lists.
 4. `keystone/domestic`: grocery routing (A3) with the unavailable case pinned.
-5. Connection Plan + pairing exchange (A6), including the one Keystone call
-   that delivers a publisher token to a connection-only app.
+5. Connection Plan + pairing exchange (A6) — the exchange is implemented
+   (#384); a Console screen for it is not.
 
 ## Consequences
 

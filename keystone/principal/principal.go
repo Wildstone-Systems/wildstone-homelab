@@ -122,6 +122,14 @@ func (s *Store) Revoke(secret string) error {
 	return s.DB.RevokeToken(hashSecret(secret))
 }
 
+// RevokeOthers revokes every live token held by name except secret: a
+// rotation that only lands once the new credential is known to have
+// arrived (ADR-W042 A6 pairing), so a failed hand-over leaves the old one
+// working.
+func (s *Store) RevokeOthers(name, secret string) (int64, error) {
+	return s.DB.RevokeTokensForExcept(name, hashSecret(secret))
+}
+
 // Bootstrap mints the first admin principal + token when the principals
 // table is empty (the ADR-W003 join-token pattern: print once at first
 // start, everything after goes through the API). Returns ("", nil) when
