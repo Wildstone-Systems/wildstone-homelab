@@ -180,6 +180,10 @@ type Server struct {
 	CalendarBook       CalendarBook
 	CalendarBookFor    func(collectionURL string) CalendarBook
 	calendarBookingsMu sync.Mutex
+	// pantryPairingMu serializes pairing and unpairing PantryOS: each mints,
+	// exchanges and revokes publisher tokens, and two at once could revoke
+	// each other's new token (ADR-W042 A6).
+	pantryPairingMu sync.Mutex
 
 	// Butlers serves conversations as named specialists (ADR-W031) —
 	// cmd/keystone wires it over butlerlive, butlerstore and the

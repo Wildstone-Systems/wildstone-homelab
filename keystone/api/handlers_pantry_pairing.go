@@ -94,6 +94,12 @@ func (s *Server) pairPantry(r *http.Request, id principal.Identity) (any, int, e
 		return nil, http.StatusBadRequest, errors.New("code is the one-time code PantryOS shows (Wildstone → Pair)")
 	}
 
+	// One pairing at a time, end to end: a second one waits for the first
+	// to settle, so its rotation cannot revoke the token the first one just
+	// handed PantryOS (or the other way round).
+	s.pantryPairingMu.Lock()
+	defer s.pantryPairingMu.Unlock()
+
 	name := publisherPrincipalPrefix + PantryCapability
 	if err := s.ensurePublisherPrincipal(name, id); err != nil {
 		return nil, http.StatusInternalServerError, err
@@ -129,8 +135,13 @@ func (s *Server) pairPantry(r *http.Request, id principal.Identity) (any, int, e
 	if err := s.SecretVault.SavePairing(PantryCapability, address, agentKey, id.Name); err != nil {
 		return fail(http.StatusInternalServerError, err)
 	}
-	if _, err := s.Principals.RevokeOthers(name, token); err != nil && s.Log != nil {
-		s.Log.Error("pantry pairing: revoking the replaced publisher tokens", "err", err)
+	if _, err := s.Principals.RevokeOthers(name, token); err != nil {
+		// The new pairing is saved and works, but a token it replaced may
+		// still be live. That is not a success to report: say so, and let
+		// pairing again (which rotates again) finish the job.
+		s.appendEvent("integration.pair-incomplete", "", PantryCapability, id.Name)
+		return nil, http.StatusInternalServerError, fmt.Errorf(
+			"PantryOS is paired, but the publisher tokens it replaced could not be revoked (%v) — pair again to finish", err)
 	}
 	s.appendEvent("integration.paired", "", PantryCapability, id.Name)
 	info, err := s.DB.Pairing(PantryCapability)
@@ -227,6 +238,8 @@ func (s *Server) pantryPairingStatus(_ *http.Request, _ principal.Identity) (any
 // tokens. PantryOS itself is untouched; its agent key is PantryOS's to
 // revoke, and is useless without the address Keystone just forgot.
 func (s *Server) unpairPantry(_ *http.Request, id principal.Identity) (any, int, error) {
+	s.pantryPairingMu.Lock()
+	defer s.pantryPairingMu.Unlock()
 	if err := s.DB.DeletePairing(PantryCapability); err != nil {
 		return nil, http.StatusInternalServerError, err
 	}

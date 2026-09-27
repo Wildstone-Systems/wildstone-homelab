@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 )
@@ -22,7 +23,9 @@ type fakePantryOS struct {
 	gotToken    string
 	gotKeystone string
 	capsStatus  int
-	srv         *httptest.Server
+	// delay holds the exchange open, so two pairings can overlap.
+	delay time.Duration
+	srv   *httptest.Server
 }
 
 func newFakePantryOS(t *testing.T, code, key string) *fakePantryOS {
@@ -30,6 +33,7 @@ func newFakePantryOS(t *testing.T, code, key string) *fakePantryOS {
 	f := &fakePantryOS{code: code, key: key, capsStatus: http.StatusOK}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST "+pantryExchangePath, func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(f.delay)
 		var body map[string]string
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		f.mu.Lock()
@@ -124,6 +128,49 @@ func TestPairingAgainRotatesThePublisherToken(t *testing.T) {
 	}
 	if _, key, _ := h.s.SecretVault.PairingCredential(PantryCapability); key != "REPLACED-agent-key-2" {
 		t.Fatalf("stored key = %q", key)
+	}
+}
+
+// Two pairings at once (two Owners, or a double submit) are taken one after
+// the other: whichever lands last is THE pairing, its token works, and the
+// other's does not. Without that, each rotation could revoke the other's new
+// token and leave PantryOS holding a dead one behind a 200.
+func TestTwoPairingsAtOnceLeaveOneWorkingPairing(t *testing.T) {
+	h := pairingHarness(t)
+	first := newFakePantryOS(t, "AAAA-AAAA", "REPLACED-agent-key-1")
+	second := newFakePantryOS(t, "BBBB-BBBB", "REPLACED-agent-key-2")
+	first.delay, second.delay = 200*time.Millisecond, 200*time.Millisecond
+
+	var wg sync.WaitGroup
+	codes := make([]int, 2)
+	for i, p := range []*fakePantryOS{first, second} {
+		wg.Add(1)
+		go func(i int, p *fakePantryOS, code string) {
+			defer wg.Done()
+			resp, _ := pair(h, p.srv.URL, code)
+			codes[i] = resp.StatusCode
+		}(i, p, []string{"AAAA-AAAA", "BBBB-BBBB"}[i])
+	}
+	wg.Wait()
+	if codes[0] != http.StatusOK || codes[1] != http.StatusOK {
+		t.Fatalf("pairings answered %v", codes)
+	}
+	endpoint, key, err := h.s.SecretVault.PairingCredential(PantryCapability)
+	if err != nil {
+		t.Fatal(err)
+	}
+	winner, loser := first, second
+	if key == "REPLACED-agent-key-2" {
+		winner, loser = second, first
+	}
+	if endpoint != winner.srv.URL {
+		t.Fatalf("stored endpoint %q is not the pairing whose key is stored", endpoint)
+	}
+	if !h.publisherTokenWorks(winner.gotToken) {
+		t.Fatal("the pairing that stands holds a revoked publisher token")
+	}
+	if h.publisherTokenWorks(loser.gotToken) {
+		t.Fatal("the replaced pairing's publisher token still works")
 	}
 }
 
