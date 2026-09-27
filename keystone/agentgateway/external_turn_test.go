@@ -273,3 +273,33 @@ func TestALateExternalAnswerStillSettlesTheTask(t *testing.T) {
 		t.Fatalf("result summary = %q, want the late answer", task.ResultSummary)
 	}
 }
+
+// A verdict the model wrapped in a code fence is read, not discarded as
+// unparsable — which used to end every such turn held for review (#364).
+func TestAFencedVerdictStillCompletesTheTurn(t *testing.T) {
+	f, bs, _ := externalFixture(t, "```json\n{\"kind\":\"informational\"}\n```")
+	go func() {
+		d, _ := nextTurn(t, f.g)
+		ctx := WithPrincipal(context.Background(), "rt-alfred")
+		if err := f.g.Complete(ctx, agentapi.WorkComplete{Handle: d.Handle, Reply: "n1 is fine"}); err != nil {
+			t.Errorf("Complete: %v", err)
+		}
+	}()
+	answer, err := bs.Serve(context.Background(), butlerlive.Turn{
+		Butler: "alfred", Member: "mika", Text: "is n1 healthy?",
+		Connection: butlerlive.ConnectionScope{Name: butlerlive.ConsoleConnection},
+	})
+	if err != nil {
+		t.Fatalf("Serve: %v", err)
+	}
+	if answer.FinalText != "n1 is fine" {
+		t.Fatalf("FinalText = %q, want the runtime's answer", answer.FinalText)
+	}
+	task, err := f.db.GetButlerTask(answer.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.State != runtimedb.ButlerTaskCompleted {
+		t.Fatalf("task state = %s, want completed", task.State)
+	}
+}
