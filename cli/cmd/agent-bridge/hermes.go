@@ -28,6 +28,7 @@ import (
 type hermesRunner interface {
 	StartRun(ctx context.Context, req hermesRunRequest, idempotencyKey string) (runID string, err error)
 	WaitForRun(ctx context.Context, runID string) (runOutcome, error)
+	Health(ctx context.Context) error
 }
 
 var _ hermesRunner = (*hermesClient)(nil)
@@ -317,6 +318,9 @@ func (c *hermesClient) Health(ctx context.Context) error {
 		return fmt.Errorf("hermes: GET /health: %w", err)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return errNoHealthEndpoint
+	}
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("hermes: GET /health: %s", resp.Status)
 	}

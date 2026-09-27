@@ -37,6 +37,12 @@ type bridge struct {
 	log      *slog.Logger
 	pollWait time.Duration
 	version  string
+	// health is whether Hermes is answering (health.go). nil skips the
+	// check, for tests that are not about it.
+	health *healthGate
+
+	// noHealthLogged makes the "no /health endpoint" notice one line.
+	noHealthLogged atomic.Bool
 
 	// escalationLogged makes the "no answer path yet" notice a one-time
 	// thing (H3 brief: "log once"), not one line per escalation delivery.
@@ -48,15 +54,24 @@ type bridge struct {
 // Wildstone's own health state (unregistered/offline → connected) turns
 // on this arriving, and the tasks it re-offers should not wait 30s for
 // nothing.
+//
+// Each beat is sent only if Hermes answers its health probe first
+// (health.go). While it does not, the probe repeats on the shorter
+// healthProbeDownInterval so a recovery is reported promptly.
 func (b *bridge) heartbeatLoop(ctx context.Context) {
-	t := time.NewTicker(heartbeatInterval)
-	defer t.Stop()
 	for {
-		if err := b.keystone.Heartbeat(ctx, agentapi.Heartbeat{At: time.Now().UTC(), Version: b.version}); err != nil && ctx.Err() == nil {
-			b.log.Warn("heartbeat", "err", err)
+		wait := heartbeatInterval
+		if b.probeHermes(ctx) {
+			if err := b.keystone.Heartbeat(ctx, agentapi.Heartbeat{At: time.Now().UTC(), Version: b.version}); err != nil && ctx.Err() == nil {
+				b.log.Warn("heartbeat", "err", err)
+			}
+		} else {
+			wait = healthProbeDownInterval
 		}
+		t := time.NewTimer(wait)
 		select {
 		case <-ctx.Done():
+			t.Stop()
 			return
 		case <-t.C:
 		}
@@ -74,6 +89,9 @@ func (b *bridge) deliveryLoop(ctx context.Context) {
 	after := ""
 	backoff := time.Second
 	for ctx.Err() == nil {
+		if b.health != nil && b.health.wait(ctx) != nil {
+			return
+		}
 		deliveries, err := b.keystone.Deliveries(ctx, after, b.pollWait)
 		if err != nil {
 			if ctx.Err() != nil {

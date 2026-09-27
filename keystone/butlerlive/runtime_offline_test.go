@@ -7,7 +7,10 @@ package butlerlive
 // api.reofferWaitingTasks, proven in the api package.
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/agentapi"
@@ -36,12 +39,20 @@ func TestATaskWaitsWhenItsRuntimeIsNotConnected(t *testing.T) {
 				}
 			}
 
+			var logBuf bytes.Buffer
+			f.butlers.Log = slog.New(slog.NewTextHandler(&logBuf, nil))
+
 			answer, err := f.butlers.Serve(context.Background(), f.turn("alfred", "hello"))
 			if err != nil {
 				t.Fatalf("Serve: %v", err)
 			}
 			if answer.TaskID == "" {
 				t.Fatal("no task was opened for the turn")
+			}
+			// A parked turn is visible in the journal, naming its task.
+			if line := logBuf.String(); !strings.Contains(line, "butler turn parked for its runtime") ||
+				!strings.Contains(line, answer.TaskID) {
+				t.Errorf("no parked-turn log line naming %s:\n%s", answer.TaskID, line)
 			}
 			if f.local.rounds != 0 || f.cloud.rounds != 0 {
 				t.Errorf("a model ran the offline runtime's turn: local=%d cloud=%d", f.local.rounds, f.cloud.rounds)

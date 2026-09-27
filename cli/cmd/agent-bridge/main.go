@@ -87,6 +87,7 @@ func main() {
 		log:      log,
 		pollWait: *pollWait,
 		version:  version,
+		health:   newHealthGate(),
 	}
 
 	mcp := &mcpServer{keystone: ks, runs: runs, secret: mcpSecret, log: log}
