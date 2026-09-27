@@ -114,6 +114,10 @@ type fakeKeystone struct {
 	registered []map[string]string
 	// commands is what registration answers with — the surface's menu.
 	commands []Command
+	// speech is each message's reply read aloud; spoken is every seq
+	// the adapter asked for, in order.
+	speech map[int64][]byte
+	spoken []int64
 }
 
 func (f *fakeKeystone) handler() http.Handler {
@@ -176,6 +180,21 @@ func (f *fakeKeystone) handler() http.Handler {
 			}
 		}
 		w.WriteHeader(http.StatusNotFound)
+	})
+	mux.HandleFunc("POST /api/v1/chat/outbound/{seq}/speech", func(w http.ResponseWriter, r *http.Request) {
+		var seq int64
+		fmt.Sscan(r.PathValue("seq"), &seq) //nolint:errcheck // test fake
+		f.mu.Lock()
+		f.spoken = append(f.spoken, seq)
+		audio, ok := f.speech[seq]
+		delete(f.speech, seq)
+		f.mu.Unlock()
+		if !ok {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "audio/mpeg")
+		w.Write(audio) //nolint:errcheck
 	})
 	mux.HandleFunc("POST /api/v1/chat/outbound/{seq}/ack", func(w http.ResponseWriter, r *http.Request) {
 		var seq int64

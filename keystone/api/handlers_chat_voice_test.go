@@ -131,6 +131,13 @@ func TestVoiceRoundTrip(t *testing.T) {
 	if len(sessions) != 1 || sessions[0].ActingFor != "sam" {
 		t.Fatalf("sessions = %+v, want one for the speaker", sessions)
 	}
+	// The spoken question is stored with its 🎙️ marker; the answer is
+	// not spoken by anybody and carries none.
+	var sess runtimedb.ButlerSession
+	h.do(runtimedb.RoleOperator, "GET", "/api/v1/butler/sessions/"+sessions[0].ID, nil, &sess)
+	if len(sess.Turns) != 2 || sess.Turns[0].Source != runtimedb.TurnSourceVoice || sess.Turns[1].Source != "" {
+		t.Fatalf("turns = %+v, want the question marked voice and the answer unmarked", sess.Turns)
+	}
 
 	events := voiceEvents(t, h)
 	if len(events) != 1 {
@@ -469,5 +476,18 @@ func TestHeardLine(t *testing.T) {
 	long := strings.Repeat("é", 400)
 	if got := heardLine(long); !strings.HasSuffix(got, "…”\n\n") || strings.Count(got, "é") != 300 {
 		t.Errorf("a long transcript is not clipped on a character boundary: %d runes", len([]rune(got)))
+	}
+}
+
+// The conversations page is told which turns were spoken, so it can put
+// a 🎙️ beside them.
+func TestAssistantMessagesMarkSpokenTurns(t *testing.T) {
+	got := assistantMessages(runtimedb.ButlerSession{Turns: []runtimedb.ButlerTurn{
+		{Role: runtimedb.ButlerRoleUser, Text: "spoken", Source: runtimedb.TurnSourceVoice},
+		{Role: runtimedb.ButlerRoleAssistant, Text: "answer"},
+		{Role: runtimedb.ButlerRoleUser, Text: "typed"},
+	}})
+	if len(got) != 3 || !got[0].Voice || got[1].Voice || got[2].Voice {
+		t.Fatalf("messages = %+v, want only the first marked", got)
 	}
 }

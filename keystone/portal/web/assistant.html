@@ -452,6 +452,8 @@
           var words = String(res.j.text || "").trim();
           var had = o.input.value.trim();
           o.input.value = had ? had + " " + words : words;
+          // Sent with the message, so the stored turn shows a 🎙️.
+          o.input.dataset.spoken = "1";
           o.input.dispatchEvent(new Event("input", { bubbles: true }));
           o.input.focus();
           o.say("Check what I heard, then send.");
@@ -461,6 +463,10 @@
     }
     o.button.addEventListener("click", function () {
       if (state === "recording") { stop(); } else if (state === "idle") { start(); }
+    });
+    // A box emptied by hand is no longer dictated.
+    o.input.addEventListener("input", function () {
+      if (!o.input.value.trim()) { delete o.input.dataset.spoken; }
     });
     set("idle");
     o.button.hidden = true;
@@ -478,6 +484,122 @@
     };
   }
 
+  // ============================================================ read aloud
+  // The listen button (ADR-W042 part two). It posts one reply's text to
+  // Keystone, which reads it with the voice the assistant's privacy
+  // class allows, and plays what comes back. One reply plays at a time;
+  // pressing again, starting another, or changing assistant stops it.
+  //
+  // The same code is in assistant.html, home.html and
+  // assistant-widget.html, like the dictation code above; change one,
+  // change all three.
+  //
+  // o.say(message, bad)   where errors are shown
+  function readAloud(o) {
+    var playing = null;
+    // ticket counts starts and stops: audio that arrives after the person
+    // stopped it, or started another, is dropped rather than played.
+    var ticket = 0;
+    // The icon is drawn here rather than taken from the icon font, which
+    // carries only the glyphs the pages already used.
+    // (The slashes are escaped only so no line here reads as a comment.)
+    var SVG = "http:\/\/www.w3.org/2000/svg";
+    function listenIcon(state) {
+      var svg = document.createElementNS(SVG, "svg");
+      svg.setAttribute("viewBox", "0 0 16 16");
+      svg.setAttribute("width", "15");
+      svg.setAttribute("height", "15");
+      svg.setAttribute("aria-hidden", "true");
+      function shape(tag, attrs) {
+        var n = document.createElementNS(SVG, tag);
+        Object.keys(attrs).forEach(function (k) { n.setAttribute(k, attrs[k]); });
+        svg.appendChild(n);
+      }
+      if (state === "playing") {
+        shape("rect", { x: "4", y: "4", width: "8", height: "8", rx: "1.5", fill: "currentColor" });
+      } else if (state === "working") {
+        [4, 8, 12].forEach(function (x) { shape("circle", { cx: String(x), cy: "8", r: "1.4", fill: "currentColor" }); });
+      } else {
+        shape("path", { d: "M2.5 6h2.6L8.5 3.2v9.6L5.1 10H2.5z", fill: "currentColor" });
+        shape("path", { d: "M10.6 5.6a3.4 3.4 0 0 1 0 4.8M12.4 3.8a6 6 0 0 1 0 8.4", fill: "none",
+          stroke: "currentColor", "stroke-width": "1.4", "stroke-linecap": "round" });
+      }
+      return svg;
+    }
+    function showListen(b, state) {
+      b.setAttribute("data-state", state);
+      b.setAttribute("aria-pressed", state === "idle" ? "false" : "true");
+      b.setAttribute("aria-label", state === "idle" ? "Listen" : "Stop reading");
+      b.title = state === "idle" ? "Read this reply aloud" : "Stop reading";
+      while (b.firstChild) { b.removeChild(b.firstChild); }
+      b.appendChild(listenIcon(state));
+    }
+    function stop() {
+      ticket++;
+      if (!playing) { return; }
+      if (playing.audio) { playing.audio.pause(); }
+      if (playing.url) { URL.revokeObjectURL(playing.url); }
+      showListen(playing.button, "idle");
+      playing = null;
+    }
+    function play(b, agentName, words) {
+      stop();
+      var mine = ticket;
+      playing = { button: b };
+      showListen(b, "working");
+      fetch("/api/v1/assistant/speak", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ agent: agentName, text: words })
+      })
+        .then(function (r) {
+          if (!r.ok) {
+            return r.json().catch(function () { return {}; }).then(function (j) {
+              throw new Error(j.error || "That reply couldn't be read aloud just now.");
+            });
+          }
+          return r.blob();
+        })
+        .then(function (blob) {
+          if (mine !== ticket) { return; }
+          var url = URL.createObjectURL(blob);
+          var audio = new Audio(url);
+          playing.audio = audio;
+          playing.url = url;
+          audio.onended = function () { if (mine === ticket) { stop(); } };
+          // "playing" only once sound has started: a browser may refuse
+          // to start it at all.
+          return audio.play().then(function () { if (mine === ticket) { showListen(b, "playing"); } });
+        })
+        .catch(function (err) {
+          if (mine !== ticket) { return; }
+          stop();
+          // A browser that will not start sound without a tap says so;
+          // the button is there to tap.
+          o.say(err && err.name === "NotAllowedError" ? "Press the speaker to hear the reply."
+            : String((err && err.message) || err), !(err && err.name === "NotAllowedError"));
+        });
+    }
+    return {
+      // button makes the listen button for one reply, read by the
+      // assistant that wrote it.
+      button: function (words, agentName) {
+        var b = document.createElement("button");
+        b.type = "button";
+        b.className = "listen";
+        showListen(b, "idle");
+        b.addEventListener("click", function () {
+          if (playing && playing.button === b) { stop(); } else { play(b, agentName, words); }
+        });
+        return b;
+      },
+      // start reads a reply straight away: the answer to a question
+      // the person spoke.
+      start: function (b) { b.click(); },
+      stop: stop
+    };
+  }
+
   function canDictate(name) {
     return agents.some(function (a) { return a.name === name && a.dictation; });
   }
@@ -491,6 +613,25 @@
       n.className = bad ? "muted bad" : "muted";
     }
   });
+
+  function canListen(name) {
+    return agents.some(function (a) { return a.name === name && a.readAloud; });
+  }
+  var listen = readAloud({
+    say: function (message, bad) {
+      var n = el("mic-note");
+      n.textContent = message || "";
+      n.className = bad ? "muted bad" : "muted";
+    }
+  });
+  // listenTo puts a listen button in one reply (into), for the current
+  // assistant, and reads the reply at once when now is set.
+  function listenTo(into, body, now) {
+    if (!body || !canListen(agent)) { return; }
+    var b = listen.button(body, agent);
+    into.appendChild(b);
+    if (now) { listen.start(b); }
+  }
 
   // The session can be handed over from the front page's card, which is
   // what "Open conversation hands the same session to the full agent
@@ -540,6 +681,7 @@
         agent = agents[0].name;
         maxDictation = res.j.dictationMaxSeconds || 0;
         dict.show(canDictate(agent));
+        listen.stop();
         if (agents[0].directive) { text("subtitle", agents[0].directive); }
         // THE PICKER IS ALWAYS THERE. It used to appear only with two
         // or more, per the design's "one entry is a label, not a menu" —
@@ -570,6 +712,7 @@
             // already hold.
             agent = sel.value;
             dict.show(canDictate(agent));
+            listen.stop();
             var picked = agents.filter(function (a) { return a.name === agent; })[0];
             text("subtitle", (picked && picked.directive) || "Ask the house for something");
             newConversation();
@@ -744,6 +887,7 @@
         if (res.j.agent) {
           agent = res.j.agent;
           dict.show(canDictate(agent));
+          listen.stop();
           if (el("agent-select").hidden) { text("agent-label", agent); }
           else { el("agent-select").value = agent; }
         }
@@ -752,7 +896,9 @@
         clear(el("note"));
         var all = [];
         (res.j.messages || []).forEach(function (m) {
-          thread.appendChild(turn(m.role, m.text, m.receipts));
+          var t = turn(m.role, m.text, m.receipts, m.voice);
+          if (m.role !== "user") { listenTo(t.lastChild, m.text); }
+          thread.appendChild(t);
           (m.receipts || []).forEach(function (r) { all.push(r); });
         });
         renderReceipts(all);
@@ -771,8 +917,22 @@
       });
   }
 
-  function turn(role, body, receipts) {
-    if (role === "user") { return make("div", "msg-user", body); }
+  // A person's turn. A spoken one (a voice message, or dictation that
+  // was sent) carries a 🎙️, so a mis-hearing reads as one.
+  function userTurn(body, voice) {
+    var n = make("div", "msg-user", body);
+    if (voice) {
+      var m = make("span", "msg-voice", "🎙️");
+      m.title = "Spoken";
+      m.setAttribute("role", "img");
+      m.setAttribute("aria-label", "Spoken: ");
+      n.insertBefore(m, n.firstChild);
+    }
+    return n;
+  }
+
+  function turn(role, body, receipts, voice) {
+    if (role === "user") { return userTurn(body, voice); }
     var wrap = make("div", "turn");
     var mark = make("span", "turn-mark");
     mark.appendChild(icon("sparkle", true));
@@ -977,7 +1137,9 @@
     el("mic-note").textContent = "";
     var thread = el("thread");
     el("asks").hidden = true;
-    var mine = turn("user", body);
+    var spoken = box.dataset.spoken === "1";
+    listen.stop();
+    var mine = turn("user", body, null, spoken);
     mine.style.opacity = "0.6";
     thread.appendChild(mine);
     var working = turn("assistant", "Thinking…");
@@ -990,7 +1152,7 @@
     fetch("/api/v1/assistant/ask", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ agent: agent, session: session, text: body, new: fresh })
+      body: JSON.stringify({ agent: agent, session: session, text: body, new: fresh, voice: spoken })
     })
       .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, status: r.status, j: j }; }); })
       .then(function (res) {
@@ -1024,6 +1186,7 @@
           // turn of the conversation. /new and /resume move which
           // conversation the next message belongs to.
           box.value = "";
+          delete box.dataset.spoken;
           if (res.j.newConversation) {
             forget(agent);
             newConversation();
@@ -1039,10 +1202,17 @@
         fresh = false;
         if (session) { remember(agent, session); }
         text("session-id", session);
-        thread.appendChild(turn("assistant", res.j.reply || ""));
+        var answer = turn("assistant", res.j.reply || "");
+        // A question the person spoke is answered aloud too, when this
+        // assistant reads aloud; the answer still to come is the one read
+        // when this reply only stands in for it.
+        listenTo(answer.lastChild, res.j.reply, spoken && !res.j.pending);
+        thread.appendChild(answer);
         if (res.j.pending) {
           awaitAnswer(session, res.j.seen || 0, function (m) {
-            thread.appendChild(turn(m.role, m.text, m.receipts));
+            var late = turn(m.role, m.text, m.receipts, m.voice);
+            listenTo(late.lastChild, m.text, spoken);
+            thread.appendChild(late);
             thread.scrollTop = thread.scrollHeight;
             refreshReceipts();
             loadConversations();
@@ -1054,6 +1224,7 @@
                                   : res.j.proposals + " things need the owner's approval"));
         }
         box.value = "";
+        delete box.dataset.spoken;
         loadConversations();
         // Re-read the conversation once the answer is in. The ask
         // response carries the reply but not what the assistant DID to

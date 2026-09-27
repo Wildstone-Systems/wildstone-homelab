@@ -179,3 +179,42 @@ func insertSessionAtSchema(t *testing.T, db *DB, finalText string, turns []Butle
 	}
 	return butlerSessionID(seq)
 }
+
+// A spoken question is stored as one and read back as one; a typed one
+// reads back as nothing. Only a person's turn can be spoken, and
+// "voice" is the only mark there is.
+func TestTurnSourceIsStoredAndClosed(t *testing.T) {
+	db := open(t)
+	id := newSession(t, db, "ok", []ButlerTurn{
+		{Role: ButlerRoleUser, Text: "spoken", Source: TurnSourceVoice},
+		{Role: ButlerRoleAssistant, Text: "ok"},
+	})
+	if err := db.AppendButlerTurns(id, []ButlerTurn{
+		{Role: ButlerRoleUser, Text: "typed"},
+		{Role: ButlerRoleAssistant, Text: "ok"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	sess, err := db.GetButlerSession(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{TurnSourceVoice, "", "", ""}
+	for i, turn := range sess.Turns {
+		if turn.Source != want[i] {
+			t.Errorf("turn %d source = %q, want %q", i, turn.Source, want[i])
+		}
+	}
+
+	for _, bad := range []ButlerTurn{
+		{Role: ButlerRoleAssistant, Text: "an answer is not spoken", Source: TurnSourceVoice},
+		{Role: ButlerRoleUser, Text: "an unknown mark", Source: "telepathy"},
+	} {
+		if _, err := db.InsertButlerSession(ButlerSession{
+			Principal: "butler", ActingFor: "mika", Surface: ButlerSurfaceAdmin,
+			Turns: []ButlerTurn{bad},
+		}); err == nil {
+			t.Errorf("turn %+v was accepted", bad)
+		}
+	}
+}

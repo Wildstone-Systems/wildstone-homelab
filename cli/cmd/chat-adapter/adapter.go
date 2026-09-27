@@ -415,6 +415,10 @@ func (a *adapter) reply(ctx context.Context, conversation, body string) {
 // it, so an adapter that dies mid-send re-reads it and sends again.
 func (a *adapter) deliverLoop(ctx context.Context) {
 	backoff := time.Second
+	// Voice replies go to their own worker: a slow engine or upload
+	// must never hold up the text of any later message.
+	voices := make(chan voiceJob, voiceQueue)
+	go a.voiceWorker(ctx, voices)
 	for ctx.Err() == nil {
 		msgs, err := a.keystone.poll(ctx, a.transport.Name(), a.pollWait)
 		if err != nil {
@@ -441,6 +445,11 @@ func (a *adapter) deliverLoop(ctx context.Context) {
 			}
 			if err := a.keystone.ack(ctx, m.Seq); err != nil {
 				a.log.Error("acking", "seq", m.Seq, "err", err)
+			}
+			// After the ack, so a slow or failed voice never has the
+			// text sent twice.
+			if ready.Speak {
+				a.queueVoice(voices, voiceJob{seq: m.Seq, conversation: ready.Target})
 			}
 		}
 	}

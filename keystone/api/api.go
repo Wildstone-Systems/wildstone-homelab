@@ -14,6 +14,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -39,6 +40,12 @@ import (
 // OnApproved.
 type Server struct {
 	SecretVault *runtimedb.SecretVault
+	// PairingHTTP, when set, is the client pairing calls PantryOS with
+	// (tests); its redirect policy is always replaced with "never follow".
+	PairingHTTP *http.Client
+	// PantryGroceries is PantryOS's grocery list, which the household's
+	// old one moves to (#387). nil answers the move with 503.
+	PantryGroceries PantryGroceries
 
 	Principals *principal.Store
 	DB         *runtimedb.DB
@@ -174,6 +181,10 @@ type Server struct {
 	CalendarBook       CalendarBook
 	CalendarBookFor    func(collectionURL string) CalendarBook
 	calendarBookingsMu sync.Mutex
+	// pantryPairingMu serializes pairing and unpairing PantryOS: each mints,
+	// exchanges and revokes publisher tokens, and two at once could revoke
+	// each other's new token (ADR-W042 A6).
+	pantryPairingMu sync.Mutex
 
 	// Butlers serves conversations as named specialists (ADR-W031) —
 	// cmd/keystone wires it over butlerlive, butlerstore and the
@@ -434,6 +445,17 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/household/events", s.handle(principal.VerbEmit, s.emitHouseholdEvent))
 	mux.Handle("GET /api/v1/household/events", s.handle(principal.VerbRead, s.listHouseholdEvents))
 	mux.Handle("POST /api/v1/household/publishers/{capability}", s.handle(principal.VerbManage, s.consequential(s.mintPublisher)))
+	// Pairing with PantryOS (ADR-W042 A6): the only way a PantryOS on
+	// another machine receives its publisher token. No route returns
+	// either secret.
+	mux.Handle("GET /api/v1/pantry/pairing", s.handle(principal.VerbRead, s.pantryPairingStatus))
+	mux.Handle("POST /api/v1/pantry/pairing", s.handle(principal.VerbManage, s.consequential(s.pairPantry)))
+	mux.Handle("DELETE /api/v1/pantry/pairing", s.handle(principal.VerbManage, s.consequential(s.unpairPantry)))
+	// Moving the household's old grocery list into PantryOS (#387):
+	// offered, never automatic, and consequential because it removes the
+	// old list once everything on it has arrived.
+	mux.Handle("GET /api/v1/pantry/grocery-move", s.handle(principal.VerbRead, s.groceryMovePreview))
+	mux.Handle("POST /api/v1/pantry/grocery-move", s.handle(principal.VerbManage, s.consequential(s.moveGroceries)))
 	// Replay is a read: it evaluates and returns, writes nothing.
 	// Meters and their readings (ADR-W035 K1). The reading is an
 	// ordinary authenticated write rather than a Plan: it is evidence,
@@ -680,6 +702,7 @@ func (s *Server) Handler() http.Handler {
 	// Dictation in the Console: sound to text for the text box, the same
 	// verb and the same Butler resolution as asking (ADR-W042).
 	mux.Handle("POST /api/v1/butlers/{name}/transcribe", s.handle(principal.VerbRead, s.transcribeForButler))
+	mux.Handle("POST /api/v1/butlers/{name}/speak", s.handle(principal.VerbRead, s.speakForButler))
 	mux.Handle("GET /api/v1/butlers/{name}/status", s.handle(principal.VerbRead, s.butlerStatus))
 	mux.Handle("POST /api/v1/butler/models/{name}/readiness", s.handle(principal.VerbManage, s.recordModelReadiness))
 	// Probing is manage because it writes the verdict that decides
@@ -758,6 +781,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/chat/outbound", s.handle(principal.VerbConverse, s.pollChatOutbound))
 	mux.Handle("GET /api/v1/chat/outbound/{seq}/ready", s.handle(principal.VerbConverse, s.readyChatOutbound))
 	mux.Handle("POST /api/v1/chat/outbound/{seq}/ack", s.handle(principal.VerbConverse, s.ackChatOutbound))
+	mux.Handle("POST /api/v1/chat/outbound/{seq}/speech", s.handle(principal.VerbConverse, s.speakChatOutbound))
 	mux.Handle("POST /api/v1/chat/bindings/{id}/revoke", s.handle(principal.VerbManage, s.revokeChatBinding))
 
 	// The household portal (#197, #198): the two surfaces a family
@@ -807,6 +831,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/assistant/ask", s.portal(surfaceAssistant, s.assistantAsk))
 	// Dictation: sound to text for the text box, never a turn (ADR-W042).
 	mux.Handle("POST /api/v1/assistant/transcribe", s.portal(surfaceAssistant, s.assistantTranscribe))
+	mux.Handle("POST /api/v1/assistant/speak", s.portal(surfaceAssistant, s.assistantSpeak))
 	mux.Handle("GET /api/v1/assistant/conversations/{id}", s.portal(surfaceAssistant, s.assistantConversation))
 
 	// The household's own front page (the dashboard capability's
@@ -1154,6 +1179,10 @@ func (s *Server) actingPersonMayStillHold(id principal.Identity) bool {
 // reveal/submission review. Ordinary chat and tool replies cannot use those
 // response types.
 func (s *Server) writeJSON(w http.ResponseWriter, status int, body any) {
+	if a, ok := body.(audioResponse); ok {
+		a.write(w, status)
+		return
+	}
 	raw, err := json.Marshal(body)
 	if err != nil {
 		s.Log.Error("response marshal failed", "err", err)
@@ -1185,6 +1214,30 @@ func (s *Server) writeJSON(w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	w.Write(raw)
+}
+
+// audioResponse is a reply read aloud (ADR-W042 part two), written as
+// the audio itself rather than as JSON. It is the one binary body: the
+// words it was made from were redacted before they were spoken, and a
+// JSON-and-redact pass over base64 audio would only corrupt it.
+type audioResponse struct {
+	MIME  string
+	Audio []byte
+	// Engine is where it was made, "local" or "cloud", for a caller
+	// that shows it.
+	Engine string
+}
+
+func (a audioResponse) write(w http.ResponseWriter, status int) {
+	w.Header().Set("Content-Type", a.MIME)
+	w.Header().Set("Content-Length", strconv.Itoa(len(a.Audio)))
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	if a.Engine != "" {
+		w.Header().Set("X-Wildstone-Speech-Engine", a.Engine)
+	}
+	w.WriteHeader(status)
+	w.Write(a.Audio)
 }
 
 // mintResponse is the one body shape allowed to carry a secret: the newly

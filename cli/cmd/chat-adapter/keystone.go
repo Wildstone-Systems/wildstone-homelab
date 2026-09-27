@@ -64,6 +64,9 @@ type outboundMessage struct {
 	Seq    int64  `json:"seq"`
 	Target string `json:"target"`
 	Body   string `json:"body"`
+	// Speak: once Body is delivered, ask Keystone for it read aloud and
+	// send that as a voice message (ADR-W042 part two).
+	Speak bool `json:"speak,omitempty"`
 }
 
 // send relays one message and reports whether Keystone knows the

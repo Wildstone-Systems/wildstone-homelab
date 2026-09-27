@@ -1136,6 +1136,10 @@ tr.clickable:hover { background: var(--faint); }
   background: color-mix(in srgb, var(--color-text) 10%, transparent);
   border-bottom-right-radius: var(--radius-sm);
 }
+.msg-voice { margin-right: var(--space-2); }
+.listen-row { display: flex; align-items: center; gap: var(--space-2); }
+.listen-row .listen { padding: 2px 6px; }
+.listen-row .listen[aria-pressed="true"] { color: var(--color-accent-300); }
 .msg-butler { padding: 0; background: none; line-height: 1.65; }
 .msg-butler.thinking { display: flex; align-items: center; gap: var(--space-3); color: var(--muted); }
 .msg-note { font-size: 12px; color: var(--muted); }

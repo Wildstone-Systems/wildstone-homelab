@@ -23,6 +23,14 @@ type speechConfig struct {
 	Language   string
 	MaxSeconds int
 	Timeout    time.Duration
+
+	// Spoken replies (ADR-W042 part two). The local voice is served by
+	// the same engine as transcription, at URL.
+	ReplyMode       string
+	ReplyModel      string
+	ReplyVoice      string
+	ReplyCloudModel string
+	ReplyCloudVoice string
 }
 
 // Defaults for the flags. The local model is multilingual and small
@@ -31,6 +39,14 @@ type speechConfig struct {
 const (
 	defaultSpeechModel      = "Systran/faster-whisper-small"
 	defaultSpeechCloudModel = "gpt-4o-mini-transcribe"
+
+	// Kokoro, the project's stated text-to-speech preference: small,
+	// natural, and fast on a CPU. af_heart is its best-rated English
+	// voice; Speaches lists the others at GET /v1/audio/speech/voices.
+	defaultReplyModel      = "speaches-ai/Kokoro-82M-v1.0-ONNX"
+	defaultReplyVoice      = "af_heart"
+	defaultReplyCloudModel = "gpt-4o-mini-tts"
+	defaultReplyCloudVoice = "coral"
 )
 
 // speechRouter builds the Router the API transcribes through. It fails
@@ -57,35 +73,54 @@ func speechRouter(c speechConfig) (*speech.Router, []string, error) {
 		return nil, nil, fmt.Errorf("-speech-language must be a two-letter code such as en, or auto, not %q", c.Language)
 	}
 
-	r := &speech.Router{Mode: mode, Language: lang, MaxSeconds: c.MaxSeconds, Timeout: c.Timeout}
+	replyMode, err := speech.ParseMode(c.ReplyMode)
+	if err != nil {
+		return nil, nil, fmt.Errorf("-speech-replies: %w", err)
+	}
+
+	r := &speech.Router{Mode: mode, Language: lang, MaxSeconds: c.MaxSeconds, Timeout: c.Timeout, ReplyMode: replyMode}
 	var warnings []string
-	if mode == speech.ModeOff {
-		return r, nil, nil
+	url := strings.TrimRight(strings.TrimSpace(c.URL), "/")
+	usesLocal := func(m speech.Mode) bool { return m == speech.ModeLocal || m == speech.ModeLocalThenCloud }
+	usesCloud := func(m speech.Mode) bool { return m == speech.ModeCloud || m == speech.ModeLocalThenCloud }
+	kind, _ := provider.LookupKind("openai")
+
+	if usesLocal(mode) {
+		if url != "" {
+			r.Local = &speech.Client{BaseURL: url, Model: orDefault(c.Model, defaultSpeechModel), Where: speech.Local, DownloadsModels: true}
+		} else {
+			warnings = append(warnings, "no -speech-url is set, so there is no local speech engine; install the speech-speaches package on this node and set -speech-url http://127.0.0.1:18000/v1")
+		}
+	}
+	if usesCloud(mode) {
+		r.Cloud = &speech.Client{BaseURL: kind.DefaultEndpoint, Model: orDefault(c.CloudModel, defaultSpeechCloudModel), Key: kind.Key, Where: speech.Cloud}
 	}
 
-	if url := strings.TrimRight(strings.TrimSpace(c.URL), "/"); url != "" {
-		model := strings.TrimSpace(c.Model)
-		if model == "" {
-			model = defaultSpeechModel
+	if usesLocal(replyMode) {
+		if url != "" {
+			r.LocalVoice = &speech.Client{BaseURL: url, Model: orDefault(c.ReplyModel, defaultReplyModel),
+				Voice: orDefault(c.ReplyVoice, defaultReplyVoice), Where: speech.Local, DownloadsModels: true}
+		} else {
+			warnings = append(warnings, "no -speech-url is set, so there is no local voice to read replies aloud; install the speech-speaches package on this node and set -speech-url http://127.0.0.1:18000/v1")
 		}
-		r.Local = &speech.Client{BaseURL: url, Model: model, Where: speech.Local, DownloadsModels: true}
-	} else if mode == speech.ModeLocal || mode == speech.ModeLocalThenCloud {
-		warnings = append(warnings, "no -speech-url is set, so there is no local speech engine; install the speech-speaches package on this node and set -speech-url http://127.0.0.1:18000/v1")
+	}
+	if usesCloud(replyMode) {
+		r.CloudVoice = &speech.Client{BaseURL: kind.DefaultEndpoint, Model: orDefault(c.ReplyCloudModel, defaultReplyCloudModel),
+			Voice: orDefault(c.ReplyCloudVoice, defaultReplyCloudVoice), Key: kind.Key, Where: speech.Cloud}
 	}
 
-	if mode == speech.ModeCloud || mode == speech.ModeLocalThenCloud {
-		kind, _ := provider.LookupKind("openai")
-		model := strings.TrimSpace(c.CloudModel)
-		if model == "" {
-			model = defaultSpeechCloudModel
-		}
-		r.Cloud = &speech.Client{BaseURL: kind.DefaultEndpoint, Model: model, Key: kind.Key, Where: speech.Cloud}
-		// Only the environment can be checked this early: the Console's
-		// key file is opened later in startup, and a key entered there
-		// is picked up on the first voice message regardless.
-		if strings.TrimSpace(os.Getenv(kind.KeyEnv)) == "" {
-			warnings = append(warnings, "OPENAI_API_KEY is not set; unless an OpenAI key has been entered in the Console, only a local engine can transcribe")
-		}
+	// Only the environment can be checked this early: the Console's key
+	// file is opened later in startup, and a key entered there is picked
+	// up on first use regardless.
+	if (usesCloud(mode) || usesCloud(replyMode)) && strings.TrimSpace(os.Getenv(kind.KeyEnv)) == "" {
+		warnings = append(warnings, "OPENAI_API_KEY is not set; unless an OpenAI key has been entered in the Console, only a local engine can transcribe or read replies aloud")
 	}
 	return r, warnings, nil
+}
+
+func orDefault(v, def string) string {
+	if v = strings.TrimSpace(v); v != "" {
+		return v
+	}
+	return def
 }

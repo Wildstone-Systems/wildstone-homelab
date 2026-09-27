@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/adapter/caldav"
+	"github.com/chickenrat17/wildstone-homelab/keystone/adapter/pantry"
 	"github.com/chickenrat17/wildstone-homelab/keystone/agentgateway"
 	"github.com/chickenrat17/wildstone-homelab/keystone/agentruntime"
 	"github.com/chickenrat17/wildstone-homelab/keystone/agentruntime/legacy"
@@ -115,6 +116,7 @@ func main() {
 	consoleStepUp := flag.Duration("console-stepup-window", consoleauth.DefaultStepUpWindow, "how recent a sign-in a consequential Console operation requires")
 	calendarURL := flag.String("calendar-url", "", "CalDAV collection of the household calendar, e.g. http://radicale:5232/GROUPS/Y2FsZW5kYXJfdXNlcnM=/; other declared calendars are derived from its origin (ADR-W034, ADR-W038). Empty leaves them all unregistered, so a Butler does not offer the household a calendar this deployment has not got. The password comes ONLY from CALENDAR_PASSWORD, never a flag")
 	calendarUser := flag.String("calendar-user", "", "directory account the calendar actions sign in to the CalDAV collection as; its password comes from CALENDAR_PASSWORD")
+	pantryURL := flag.String("pantry-url", "", "PantryOS address for the pantry.* actions, e.g. https://pantry.example.internal (ADR-W042). Empty leaves them unregistered, so a Butler does not offer the household a pantry this deployment has not got. The agent key comes ONLY from PANTRY_AGENT_KEY, never a flag")
 	householdIngress := flag.String("household-ingress", "", "comma-separated EXACT remote addresses of the identity proxy (Authelia). Empty fails closed. This names ONE trust boundary and it now gates TWO things: the household review page (ADR-W030 A8.1), and Console sign-in by forwarded identity (ADR-W032) — a request from one of these addresses carrying Remote-User and a Remote-Groups list containing console_users, who is an active Owner Person with a fresh Console sign-in (OIDC, ADR-W033 A4.1), is authenticated as that person, with admin authority. Setting this does not by itself grant anyone the Console: they must also be in the console_users directory group, which packages/wildstone-console declares, and be an active Owner")
 	speechMode := flag.String("speech-mode", "off", "how voice messages are transcribed (ADR-W042): off | local | local-then-cloud | cloud. local never sends audio out of the house; cloud and local-then-cloud use OpenAI only for a conversation whose Agent may use a cloud model. The OpenAI key comes ONLY from OPENAI_API_KEY or the Console, never a flag")
 	speechURL := flag.String("speech-url", "", "base URL of the local speech-to-text engine, e.g. http://127.0.0.1:18000/v1 (the speech-speaches package, installed on this node); empty means no local engine")
@@ -123,6 +125,11 @@ func main() {
 	speechLanguage := flag.String("speech-language", "auto", "two-letter language hint for transcription, e.g. en, or auto to detect")
 	speechMaxSeconds := flag.Int("speech-max-seconds", speech.DefaultMaxSeconds, "longest voice message accepted, in seconds (5-600)")
 	speechTimeout := flag.Duration("speech-timeout", speech.DefaultTimeout, "how long one transcription may take before it is abandoned")
+	speechReplies := flag.String("speech-replies", "off", "how the Agent's replies are read aloud (ADR-W042 part two): off | local | local-then-cloud | cloud, with the same privacy rule as -speech-mode. When on, a chat voice message is answered with a voice message too, and the dashboard and Console offer a listen button on each reply")
+	speechReplyModel := flag.String("speech-reply-model", defaultReplyModel, "local text-to-speech model, served by the engine at -speech-url; Keystone asks it to download the model at startup")
+	speechReplyVoice := flag.String("speech-reply-voice", defaultReplyVoice, "voice the local model reads replies with, e.g. af_heart, am_micah, bf_emma")
+	speechReplyCloudModel := flag.String("speech-reply-cloud-model", defaultReplyCloudModel, "OpenAI text-to-speech model used when -speech-replies allows the cloud")
+	speechReplyCloudVoice := flag.String("speech-reply-cloud-voice", defaultReplyCloudVoice, "OpenAI voice used when -speech-replies allows the cloud, e.g. coral, alloy, sage")
 	hostOpsEnabled := flag.Bool("hostops-enabled", false, "enable the host.* executor family (ADR-W039 Phase 6/H7, #353): Tier 3 host administration (container logs/stats/restart, disk usage, systemd unit status, image pruning, a reconcile poke) through existing Wardstone ops, never a privileged container or a shell. Off by default; an Owner still has to grant the family to a specific Agent (opt-in) and confirm every mutating call before anything runs")
 	flag.Parse()
 
@@ -143,6 +150,8 @@ func main() {
 	speechRtr, speechWarnings, err := speechRouter(speechConfig{
 		Mode: *speechMode, URL: *speechURL, Model: *speechModel, CloudModel: *speechCloudModel,
 		Language: *speechLanguage, MaxSeconds: *speechMaxSeconds, Timeout: *speechTimeout,
+		ReplyMode: *speechReplies, ReplyModel: *speechReplyModel, ReplyVoice: *speechReplyVoice,
+		ReplyCloudModel: *speechReplyCloudModel, ReplyCloudVoice: *speechReplyCloudVoice,
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "keystone:", err)
@@ -155,6 +164,7 @@ func main() {
 		Interval: *automationEvery, Timezone: *householdTZ,
 		NtfyURL: *ntfyURL, ReplyURL: *replyURL, ReplyTTL: *replyTTL,
 		CalendarURL: *calendarURL, CalendarUser: *calendarUser,
+		PantryURL:          *pantryURL,
 		Ingress:            splitNonEmpty(*householdIngress),
 		ConsoleEntryWindow: *consoleEntry, ConsoleStepUpWindow: *consoleStepUp,
 		HostOpsEnabled:    *hostOpsEnabled,
@@ -305,6 +315,11 @@ type householdConfig struct {
 	// Its password arrives in CALENDAR_PASSWORD, never in a flag — the
 	// same division -ntfy-url and NTFY_TOKEN already make.
 	CalendarUser string
+	// PantryURL is PantryOS, for the pantry.* actions; empty leaves them
+	// unregistered (ADR-W042). Its agent key arrives in PANTRY_AGENT_KEY,
+	// never in a flag — the division -calendar-url and CALENDAR_PASSWORD
+	// make.
+	PantryURL string
 	// HostOpsEnabled turns on the host.* executor family (ADR-W039 H7,
 	// #353): Tier 3 "host administration" through Wildstone executors —
 	// never a privileged container, never a shell. Off by default, like
@@ -1016,24 +1031,12 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	// all, because a household rule notifies the HOUSEHOLD — pointing one
 	// at the operator's private bot would put household events into the
 	// one conversation that can also propose changes.
-	var chatCapabilities []string
-	if cat != nil {
-		for _, p := range cat.List() {
-			capName := p.Metadata.Capability
-			if !strings.HasPrefix(capName, "chat-") || !strings.HasSuffix(capName, "-family") {
-				continue
-			}
-			declaresSend := false
-			for _, t := range p.AgentTools {
-				if t.Name == "send" {
-					declaresSend = true
-				}
-			}
-			if declaresSend {
-				chatCapabilities = append(chatCapabilities, capName)
-			}
-		}
-	}
+	//
+	// Registered under the PACKAGE's capability ("chat-matrix"): chat
+	// packages are instanced, so an installed bot is "chat-matrix-<name>"
+	// and never matched the "-family" suffix this once required — which
+	// left every routine's chat delivery unwired.
+	chatCapabilities := domestic.ChatSendCapabilities(agentToolSources(cat))
 
 	// The host.* executor family (ADR-W039 §3.4, §5.4; H7, #353): Tier 3
 	// host administration through the SAME Wardstone gateway and
@@ -1213,7 +1216,8 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	}
 	apiSrv.ConsoleEntryWindow, apiSrv.ConsoleStepUpWindow = householdCfg.ConsoleEntryWindow, householdCfg.ConsoleStepUpWindow
 	apiSrv.Speech = householdCfg.Speech
-	// Fetch the local model now rather than when somebody first speaks;
+	// Fetch the local models (hearing, and the voice when replies are
+	// read aloud) now rather than when somebody first speaks;
 	// the engine may still be starting, so this retries in the background.
 	go householdCfg.Speech.Warm(context.Background(), log)
 	apiSrv.HouseholdLoc = householdLoc
@@ -1346,12 +1350,53 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 		for _, e := range filedrop.Executors() {
 			actions.Register(e)
 		}
+		// PantryOS (packages/pantry-pantryos, ADR-W042). The calendar's
+		// road (ADR-W034 A5): Keystone holds the upstream, and each call
+		// is gated on the package being installed, as the lists are.
+		//
+		// Registered whether or not PantryOS is connected yet: an
+		// installed PantryOS owns the grocery list even before anyone
+		// connects it (A3), so a request is then told PantryOS is not
+		// connected, never written somewhere else.
+		//
+		// Where PantryOS is, asked on every call: a pairing (ADR-W042 A6)
+		// wins, because it is the newer and more deliberate act; the
+		// -pantry-url flag with PANTRY_AGENT_KEY is the fallback. Pairing,
+		// re-pairing and unpairing take effect without a restart.
+		pantryFlagKey := os.Getenv("PANTRY_AGENT_KEY")
+		if householdCfg.PantryURL != "" && pantryFlagKey == "" {
+			log.Warn("pantry: -pantry-url is set but PANTRY_AGENT_KEY is empty; only a pairing can connect PantryOS")
+		}
+		pantryActions := &domestic.Pantry{Authority: db,
+			Enabled: func() (bool, error) { return apiSrv.CapabilityEnabled(domestic.PantryCapability) },
+			Upstream: &pantry.Resolved{Resolve: func() (pantry.HTTP, bool, error) {
+				if secretVault != nil {
+					endpoint, key, err := secretVault.PairingCredential(domestic.PantryCapability)
+					switch {
+					case err == nil:
+						return pantry.HTTP{BaseURL: endpoint, AgentKey: key}, true, nil
+					case !errors.Is(err, runtimedb.ErrNotPaired):
+						return pantry.HTTP{}, false, err
+					}
+				}
+				if householdCfg.PantryURL != "" && pantryFlagKey != "" {
+					return pantry.HTTP{BaseURL: householdCfg.PantryURL, AgentKey: pantryFlagKey}, true, nil
+				}
+				return pantry.HTTP{}, false, nil
+			}},
+		}
+		for _, e := range pantryActions.Executors() {
+			actions.Register(e)
+		}
+		apiSrv.PantryGroceries = pantryActions
 		// The household lists (packages/lists-wildstone). Registered
 		// unconditionally and gated per call on the install, for the
 		// drop box's reason: installing or removing the package takes
-		// effect without a restart.
+		// effect without a restart. A grocery list goes to PantryOS
+		// while PantryOS is installed (#383).
 		lists := &domestic.Lists{Authority: db, Store: db,
-			Enabled: func() (bool, error) { return apiSrv.CapabilityEnabled(domestic.ListsCapability) },
+			Enabled:   func() (bool, error) { return apiSrv.CapabilityEnabled(domestic.ListsCapability) },
+			Groceries: pantryActions,
 		}
 		for _, e := range lists.Executors() {
 			actions.Register(e)
@@ -1589,14 +1634,14 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 				if capName, _, ok := strings.Cut(tool, "."); ok && capName == domestic.HostOpsCapability {
 					continue
 				}
-				// filedrop and lists are registered from the catalog
-				// too, and are gated on the install for the same
-				// reason: a Butler that lists "find_file" or "add_items"
-				// to a household without the capability has promised
-				// them something that cannot happen.
+				// filedrop, lists and pantry are gated on the install
+				// for the same reason: a Butler that lists "find_file",
+				// "add_items" or "start_cooking" to a household without
+				// the capability has promised them something that cannot
+				// happen.
 				if capName, _, ok := strings.Cut(tool, "."); ok &&
 					(strings.HasPrefix(capName, "chat-") || capName == domestic.FiledropCapability ||
-						capName == domestic.ListsCapability) {
+						capName == domestic.ListsCapability || capName == domestic.PantryCapability) {
 					on, cerr := apiSrv.CapabilityEnabled(capName)
 					if cerr != nil {
 						return v, cerr

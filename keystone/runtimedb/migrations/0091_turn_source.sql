@@ -1,0 +1,11 @@
+-- 0091: how a person's turn reached the Agent (ADR-W042 §2.4).
+--
+-- 'voice' marks a turn whose words came from a recording: a chat voice
+-- message, or dashboard/Console dictation the person checked and sent.
+-- The conversations page shows a 🎙️ beside it, so a mis-hearing reads
+-- as one rather than as something the person typed. '' is typed text,
+-- which is every turn written before this migration.
+--
+-- A label only. It grants and withholds nothing, and the audio it came
+-- from is never stored.
+ALTER TABLE butler_session_turns ADD COLUMN source TEXT NOT NULL DEFAULT '' CHECK (source IN ('', 'voice'));

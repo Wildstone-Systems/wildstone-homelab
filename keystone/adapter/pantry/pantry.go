@@ -1,17 +1,15 @@
-// Package pantry is the PantryOS adapter, running against a VERSIONED
-// FAKE until the real API exists (ADR-W030 A5.1, work package P12).
+// Package pantry is the PantryOS adapter (ADR-W030 A5.1 / P12, ADR-W042).
 //
-// PantryOS has no API yet. ADR-W030 Part C says to exercise it against a
-// fake until it does, and the word carrying the weight is versioned: the
-// fake declares a contract version, the adapter records it as the
-// capability version, and when the real thing arrives its answers are
-// checked against the same contract tests rather than against whatever
-// this package happened to assume.
+// Two upstreams live here. HTTP (http.go) is the real one: PantryOS's
+// contract pantry-1. Fake is the versioned stand-in P12 was built
+// against, kept because the crossapp scenarios and the contract suite
+// need a PantryOS with no network — and it now behaves like pantry-1, so
+// a test that passes against the fake is asking the same question the
+// real PantryOS answers.
 //
-// The fake is not a test double bolted on beside the adapter. It IS the
-// upstream, behind the same interface a real one will implement, so the
-// work of swapping it is replacing one Upstream — and the contract tests
-// that pass today are the ones the real API has to pass.
+// The fake is not a test double bolted on beside the adapter. It IS an
+// upstream, behind the same interface, and the contract suite runs the
+// same cases against both.
 package pantry
 
 import (
@@ -19,6 +17,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -35,12 +34,24 @@ const (
 	// covers it.
 	CapAdd = "pantry.add"
 
-	// ContractVersion is what this adapter was written against. It is
-	// recorded as the capability version so that when the real PantryOS
-	// API lands, "which contract is this" has an answer rather than an
-	// assumption.
-	ContractVersion = "fake-1"
+	// ContractVersion is the contract the fake imitates, recorded as its
+	// capability version.
+	ContractVersion = Contract
 )
+
+// groceryList normalises a list name the way pantry-1 does. PantryOS
+// keeps ONE list, the groceries; every other list is Wildstone's, and
+// asking PantryOS for one is a routing mistake that must be refused, not
+// answered as "nothing on it" (ADR-W042 A3).
+func groceryList(name string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "groceries", "grocery", "shopping":
+		return "groceries", nil
+	case "":
+		return "", fmt.Errorf("%w: needs a list name", ErrRejected)
+	}
+	return "", fmt.Errorf("%w: PantryOS keeps only the grocery list, not %q; other lists belong to Wildstone", ErrRejected, name)
+}
 
 // Fake is a PantryOS stand-in. It is safe for concurrent use because an
 // adapter runtime may answer several claims at once.
@@ -60,9 +71,15 @@ type Fake struct {
 // NewFake builds a fake with a small household's worth of content.
 func NewFake() *Fake {
 	return &Fake{
-		lists: map[string][]string{"groceries": {"milk", "bread"}, "hardware": {}},
+		lists: map[string][]string{"groceries": {"milk", "bread"}},
 		stock: map[string]int{"milk": 1, "eggs": 6},
 	}
+}
+
+// NewEmptyFake is a working PantryOS with nothing in it: an empty grocery
+// list and empty shelves — which is an answer, not an outage.
+func NewEmptyFake() *Fake {
+	return &Fake{lists: map[string][]string{"groceries": {}}, stock: map[string]int{}}
 }
 
 func (f *Fake) now() time.Time {
@@ -101,20 +118,16 @@ func (f *Fake) Query(_ context.Context, capability string, request json.RawMessa
 
 	switch capability {
 	case CapList:
-		if req.List == "" {
-			return adapter.Answer{}, fmt.Errorf("%s needs a list name", CapList)
+		list, err := groceryList(req.List)
+		if err != nil {
+			return adapter.Answer{}, err
 		}
-		items, ok := f.lists[req.List]
-		if !ok {
-			// A list that does not exist and a list with nothing on it
-			// are both empty answers about a working pantry.
-			return adapter.Answer{Empty: true, Data: map[string]any{"list": req.List, "items": []string{}}}, nil
-		}
+		items := f.lists[list]
 		if len(items) == 0 {
-			return adapter.Answer{Empty: true, Data: map[string]any{"list": req.List, "items": []string{}}}, nil
+			return adapter.Answer{Empty: true, Data: map[string]any{"list": list, "items": []string{}}}, nil
 		}
 		return adapter.Answer{
-			Data:       map[string]any{"list": req.List, "items": append([]string{}, items...)},
+			Data:       map[string]any{"list": list, "items": append([]string{}, items...)},
 			Stale:      stale,
 			ObservedAt: f.StaleAfter,
 		}, nil
@@ -154,27 +167,35 @@ func (f *Fake) Act(_ context.Context, capability string, request json.RawMessage
 		List string `json:"list"`
 		Item string `json:"item"`
 	}
-	if err := json.Unmarshal(request, &req); err != nil || req.List == "" || req.Item == "" {
-		return adapter.Answer{}, fmt.Errorf("%s needs a list and an item", CapAdd)
+	if err := json.Unmarshal(request, &req); err != nil || req.Item == "" {
+		return adapter.Answer{}, fmt.Errorf("%w: %s needs a list and an item", ErrRejected, CapAdd)
+	}
+	list, err := groceryList(req.List)
+	if err != nil {
+		return adapter.Answer{}, err
 	}
 	// Adding something already on the list is not an error and does not
 	// add it twice: a routine that fires on a repeated event must not
-	// produce a shopping list with milk on it four times.
-	for _, existing := range f.lists[req.List] {
-		if existing == req.Item {
+	// produce a shopping list with milk on it four times. Case does not
+	// make it a different item, as in PantryOS.
+	for _, existing := range f.lists[list] {
+		if strings.EqualFold(existing, req.Item) {
 			return adapter.Answer{Data: map[string]any{
-				"list": req.List, "item": req.Item, "added": false, "reason": "already on the list",
+				"list": list, "item": existing, "added": false, "reason": "already on the list",
 			}}, nil
 		}
 	}
-	f.lists[req.List] = append(f.lists[req.List], req.Item)
-	return adapter.Answer{Data: map[string]any{"list": req.List, "item": req.Item, "added": true}}, nil
+	f.lists[list] = append(f.lists[list], req.Item)
+	return adapter.Answer{Data: map[string]any{"list": list, "item": req.Item, "added": true}}, nil
 }
 
 // Items exposes a list for assertions.
 func (f *Fake) Items(list string) []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if name, err := groceryList(list); err == nil {
+		list = name
+	}
 	return append([]string{}, f.lists[list]...)
 }
 
