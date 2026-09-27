@@ -105,6 +105,31 @@ func (db *DB) DeletePairing(capability string) error {
 	return err
 }
 
+// Unpair forgets capability's pairing and revokes every live token of the
+// publisher principal it handed out, in ONE transaction: never a pairing
+// gone while its token still works (nothing left to unpair), nor a dead
+// token behind a pairing that still shows. Returns how many tokens it
+// revoked.
+func (db *DB) Unpair(capability, publisher string) (int64, error) {
+	tx, err := db.sql.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM integration_pairings WHERE capability=?`, capability); err != nil {
+		return 0, fmt.Errorf("runtimedb: forgetting the %s pairing: %w", capability, err)
+	}
+	res, err := tx.Exec(`UPDATE tokens SET revoked_at = ? WHERE principal = ? AND revoked_at = ''`, now(), publisher)
+	if err != nil {
+		return 0, fmt.Errorf("runtimedb: revoking tokens for %s: %w", publisher, err)
+	}
+	revoked, err := res.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	return revoked, tx.Commit()
+}
+
 // checkPairingsOpen proves every stored pairing opens with the vault's
 // key, so a wrong key is refused at startup rather than at first use.
 func (v *SecretVault) checkPairingsOpen() error {

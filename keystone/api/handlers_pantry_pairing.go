@@ -268,10 +268,7 @@ func (s *Server) pantryPairingStatus(_ *http.Request, _ principal.Identity) (any
 func (s *Server) unpairPantry(_ *http.Request, id principal.Identity) (any, int, error) {
 	s.pantryPairingMu.Lock()
 	defer s.pantryPairingMu.Unlock()
-	if err := s.DB.DeletePairing(PantryCapability); err != nil {
-		return nil, http.StatusInternalServerError, err
-	}
-	revoked, err := s.DB.RevokeTokensFor(publisherPrincipalPrefix + PantryCapability)
+	revoked, err := s.DB.Unpair(PantryCapability, publisherPrincipalPrefix+PantryCapability)
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}

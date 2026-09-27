@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func pairingVault(t *testing.T) (*DB, *SecretVault, string) {
@@ -91,5 +92,45 @@ func TestTheVaultRefusesAMissingOrWrongKeyWhenOnlyAPairingExists(t *testing.T) {
 	}
 	if _, err := db.OpenSecretVault(keyPath); err == nil {
 		t.Fatal("a wrong key was accepted with a pairing stored")
+	}
+}
+
+// Unpairing forgets the pairing and revokes its publisher's tokens
+// together: if the revoke fails, the pairing is still there (so it still
+// shows, and can be unpaired again) — never gone with its token alive.
+func TestUnpairIsAllOrNothing(t *testing.T) {
+	db, v, _ := pairingVault(t)
+	if err := db.CreatePrincipal("publisher-pantry", RolePublisher, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.InsertToken("h1", "publisher-pantry", "", time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := v.SavePairing("pantry", "https://pantry.example.internal", "pk", "sam"); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := db.sql.Exec(`CREATE TRIGGER no_revoke BEFORE UPDATE ON tokens BEGIN SELECT RAISE(ABORT, 'disk full'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Unpair("pantry", "publisher-pantry"); err == nil {
+		t.Fatal("unpair succeeded though the revoke failed")
+	}
+	if _, err := db.Pairing("pantry"); err != nil {
+		t.Fatalf("the pairing was forgotten though its token still works: %v", err)
+	}
+
+	if _, err := db.sql.Exec(`DROP TRIGGER no_revoke`); err != nil {
+		t.Fatal(err)
+	}
+	n, err := db.Unpair("pantry", "publisher-pantry")
+	if err != nil || n != 1 {
+		t.Fatalf("unpair = %d %v", n, err)
+	}
+	if _, err := db.Pairing("pantry"); !errors.Is(err, ErrNotPaired) {
+		t.Fatalf("after unpair = %v", err)
+	}
+	if tok, _ := db.GetToken("h1"); tok.RevokedAt.IsZero() {
+		t.Fatal("the publisher token still works after unpairing")
 	}
 }
