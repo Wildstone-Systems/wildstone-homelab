@@ -8,7 +8,7 @@
 #   UPDATE_PACKAGE_LOCK=1 go test ./pkgtool/ -run PackageContentMatchesItsVersion
 #
 # name  version  sha256(package.yaml)[:16]
-agent-hermes 0.1.5 cc5df250dc25ccca
+agent-hermes 0.1.6 44b2a5a7ae383615
 ai-ollama 1.0.0 f6b24b7aed67c8ea
 ai-open-webui 1.0.1 b0f5146b6ee76626
 assistant-wildstone 1.0.1 75fe068a57dbe4c9

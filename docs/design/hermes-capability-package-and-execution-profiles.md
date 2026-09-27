@@ -363,7 +363,7 @@ security:
 memory:
   write_approval: false
 skills:
-  write_approval: false       # skill learning is cognition; the supply-chain answer is §7, not a prompt
+  write_approval: true        # was false (skill learning as cognition); agent-written skills are one store per install, listed in every session, so they cross people on a shared Agent (#389)
 database:
   journal_mode: delete        # crash-consistent volume snapshots (§3.5)
 hooks:
@@ -426,7 +426,7 @@ Runtime choice and execution profile are two independent settings on the Agent r
 
 | Aspect | Setting |
 |---|---|
-| Hermes toolsets | `skills`, `todo`, `delegation`, `mcp-wildstone`; `web` only with `outbound_web=true`. Off: `memory` and `session_search` (install-wide stores across every person the Agent serves; memory is Wildstone's `recall`/`remember`, #364), `terminal`, `file`, `code_execution`, `browser`, `homeassistant`, `image_gen`, `computer_use`, `cronjob` (`cronjob_manage`; jobs stay operator-edited config), `a2a`, `connections`, all platform adapters |
+| Hermes toolsets | `skills` (read-only in effect: `skills.write_approval: true` stages every agent-written skill and nobody approves on an unattended install, #389), `todo`, `delegation`, `mcp-wildstone`; `web` only with `outbound_web=true`. Off: `memory` and `session_search` (install-wide stores across every person the Agent serves; memory is Wildstone's `recall`/`remember`, #364), `terminal`, `file`, `code_execution`, `browser`, `homeassistant`, `image_gen`, `computer_use`, `cronjob` (`cronjob_manage`; jobs stay operator-edited config), `a2a`, `connections`, all platform adapters |
 | Terminal backend | Not configured; the toolsets that use it are absent |
 | Container | Official image, one volume, no ports, no Route, no socket, no `capAdd`, no devices. Wanted but not expressible today: read-only rootfs, `cap-drop ALL`, no-new-privileges, memory/pids limits, egress limited to Keystone and the model endpoint (§2.4) |
 | Agent API grants | The Agent's ordinary manifest: read tools, `do_household_action` at `domestic` tier, `propose_change`/`propose_household_plan`, `recall`/`remember`, `notify` (ADR-W039 §3.2) |

@@ -45,7 +45,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: agent-hermes
-  version: 0.1.5
+  version: 0.1.6
   capability: agent-hermes
   profile: hermes
   instanced: true
@@ -315,8 +315,21 @@ templates:
           user_profile_enabled: false
           nudge_interval: 0
           write_approval: false
+        # Skills stay readable (the bundled ones are how Hermes works),
+        # but none it writes lands. Hermes keeps the skills it writes in
+        # one store per install and lists them in every session's
+        # prompt; they are its "procedural memory", including
+        # "user-corrected approaches". One install serves everyone who
+        # talks to the Agent, so a skill learned in one person's
+        # conversation would reach every other person's turn, the same
+        # crossing that turned off memory and session_search above
+        # (#389). write_approval stages every skill write, from a turn
+        # or from Hermes's background review, and an unattended install
+        # has nobody to approve one, so none is committed. Members change
+        # after install without a re-render, so this is not conditional
+        # on how many people the Agent serves.
         skills:
-          write_approval: false
+          write_approval: true
         database:
           # Crash-consistent rather than WAL, so an external volume
           # snapshot (the BackupPlan below) is a valid restore point
