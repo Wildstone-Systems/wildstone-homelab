@@ -42,7 +42,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: matrix-synapse
-  version: 1.0.3
+  version: 1.0.4
   capability: matrix-homeserver
   profile: synapse
 requires:
@@ -69,6 +69,13 @@ templates:
     kind: Secret
     metadata: { name: matrix-postgres-password, node: "{{ .Params.node }}" }
     spec: { name: matrix-postgres-password }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: matrix-postgres-config-placeholder, node: "{{ .Params.node }}" }
+    spec:
+      name: matrix-postgres-config-placeholder
+      purpose: "A non-database placeholder used only while generating Synapse's base config; runtime replaces it before use."
   - |
     apiVersion: wildstone.dev/v1
     kind: Secret
@@ -165,17 +172,39 @@ templates:
         from pathlib import Path
         import sys
 
-        secret = os.environ.pop("MATRIX_OIDC_CLIENT_SECRET", "")
-        if not secret:
+        import yaml
+
+        oidc_secret = os.environ.pop("MATRIX_OIDC_CLIENT_SECRET", "")
+        database_password = os.environ.pop("POSTGRES_PASSWORD", "")
+        if not oidc_secret:
             raise SystemExit("matrix: generated OIDC client secret is empty")
+        if not database_password:
+            raise SystemExit("matrix: generated PostgreSQL password is empty")
 
         target = Path("/tmp/matrix-oidc-client-secret")
         temporary = target.with_suffix(".tmp")
         descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(descriptor, "w", encoding="utf-8") as credential:
-            credential.write(secret)
+            credential.write(oidc_secret)
         os.chmod(temporary, 0o600)
         os.replace(temporary, target)
+
+        # migrate_config must run before this container, but a completed Job
+        # is not rerun when a node secret rotates. Keep only a harmless
+        # placeholder in that Job and materialize the current database value
+        # here, on the Synapse container that rotation actually re-creates.
+        config_path = Path("/data/homeserver.yaml")
+        with config_path.open("r", encoding="utf-8") as source:
+            config = yaml.safe_load(source)
+        config["database"]["args"]["password"] = database_password
+        config_temporary = config_path.with_suffix(".yaml.tmp")
+        config_descriptor = os.open(
+            config_temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600
+        )
+        with os.fdopen(config_descriptor, "w", encoding="utf-8") as destination:
+            yaml.safe_dump(config, destination, sort_keys=False)
+        os.chmod(config_temporary, 0o600)
+        os.replace(config_temporary, config_path)
 
         os.execv(
             sys.executable,
@@ -204,7 +233,11 @@ templates:
           POSTGRES_PORT: "5432"
           POSTGRES_DB: synapse
           POSTGRES_USER: synapse
-          POSTGRES_PASSWORD: "secret/matrix-postgres-password"
+          # The runtime startup module replaces this before Synapse reads it.
+          # This is deliberately NOT matrix-postgres-password: rotating the
+          # live database credential must target matrix-synapse below rather
+          # than leave the value frozen in this completed Job's output.
+          POSTGRES_PASSWORD: "secret/matrix-postgres-config-placeholder"
           UID: "991"
           GID: "991"
         mounts:
@@ -237,6 +270,7 @@ templates:
         SYNAPSE_CONFIG_PATH: /data/homeserver.yaml
         PYTHONPATH: /etc/wildstone/matrix-homeserver
         MATRIX_OIDC_CLIENT_SECRET: "{{ .Resolved.OidcSecretRef }}"
+        POSTGRES_PASSWORD: "secret/matrix-postgres-password"
         UID: "991"
         GID: "991"
         TZ: "{{ .Params.timezone }}"
