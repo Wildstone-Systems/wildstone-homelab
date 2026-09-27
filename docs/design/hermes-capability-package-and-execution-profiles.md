@@ -330,8 +330,9 @@ mcp_servers:
 
 platform_toolsets:
   api_server:                 # every Wildstone delivery arrives as an API-server run
-    - memory                  # runtime-local MEMORY.md/USER.md
-    - session_search
+    # memory and session_search: off since #364 — both are one store for
+    # the whole install, which serves every person the Agent talks to;
+    # memory is Wildstone's recall/remember, per person
     - skills
     - todo
     - delegation              # subagents share the frozen tool set; cannot widen it
@@ -425,7 +426,7 @@ Runtime choice and execution profile are two independent settings on the Agent r
 
 | Aspect | Setting |
 |---|---|
-| Hermes toolsets | `memory`, `session_search`, `skills`, `todo`, `delegation`, `mcp-wildstone`; `web` only with `outbound_web=true`. Off: `terminal`, `file`, `code_execution`, `browser`, `homeassistant`, `image_gen`, `computer_use`, `cronjob` (`cronjob_manage`; jobs stay operator-edited config), `a2a`, `connections`, all platform adapters |
+| Hermes toolsets | `skills`, `todo`, `delegation`, `mcp-wildstone`; `web` only with `outbound_web=true`. Off: `memory` and `session_search` (install-wide stores across every person the Agent serves; memory is Wildstone's `recall`/`remember`, #364), `terminal`, `file`, `code_execution`, `browser`, `homeassistant`, `image_gen`, `computer_use`, `cronjob` (`cronjob_manage`; jobs stay operator-edited config), `a2a`, `connections`, all platform adapters |
 | Terminal backend | Not configured; the toolsets that use it are absent |
 | Container | Official image, one volume, no ports, no Route, no socket, no `capAdd`, no devices. Wanted but not expressible today: read-only rootfs, `cap-drop ALL`, no-new-privileges, memory/pids limits, egress limited to Keystone and the model endpoint (§2.4) |
 | Agent API grants | The Agent's ordinary manifest: read tools, `do_household_action` at `domestic` tier, `propose_change`/`propose_household_plan`, `recall`/`remember`, `notify` (ADR-W039 §3.2) |
@@ -551,7 +552,7 @@ Ordered; each spike is small and yields evidence, not code to keep. All run on a
 |---|---|---|
 | S1 | Run the pinned official image under Wildstone's container rules: one named volume, `command: ["gateway","run"]`, no ports, no socket, no `capAdd`; additionally try `--read-only` with a tmpfs `/tmp` by hand to learn whether the image tolerates it | Gateway starts; `/init` drops to UID 10000; `GET /health` on the container network returns `ok`; the read-only result is written down for the §2.4 resource change |
 | S2 | Managed scope: mount a Wildstone-rendered `config.yaml` at `/etc/hermes` with `HERMES_MANAGED_DIR`; confirm which keys the profile's own config can and cannot override, the platform key used by `/v1/runs`, and the `hooks.outbound` secret field | A table of "pinned / overridable" per key used in §3.3; the config survives a boot migration with the timestamped backup |
-| S3 | Tier 1 against a stub MCP endpoint: the stub serves a three-tool manifest (`get_household_events`, `do_household_action`, `remember`) with `readOnlyHint`; drive a run with `POST /v1/runs` | `GET /v1/toolsets` shows only `memory, session_search, skills, todo, delegation, mcp-wildstone`; the run calls a tool with the bearer header; a prompt asking for a shell command yields no `terminal` call |
+| S3 | Tier 1 against a stub MCP endpoint: the stub serves a three-tool manifest (`get_household_events`, `do_household_action`, `remember`) with `readOnlyHint`; drive a run with `POST /v1/runs` | `GET /v1/toolsets` shows only `skills, todo, delegation, mcp-wildstone`; the run calls a tool with the bearer header; a prompt asking for a shell command yields no `terminal` call |
 | S4 | No host access: from inside the Tier 2 configuration, ask the agent to list `/var/run`, read `/etc/wildstone`, reach the node's IP:22, and read `/proc/1/environ` | Socket absent; managed prefix absent (only `/etc/hermes` mounted); node ports unreachable from the container network only if an egress rule exists — record the gap; `environ` readable → confirms the §5.2 cost 1 |
 | S5 | Delivery → run, both modes: (a) bridge prototype long-polls a stub deliveries endpoint and posts `/v1/runs` with an idempotency key, redelivers once; (b) signed webhook route on `8644` for the external shape | Exactly one run per delivery under redelivery; `run.completed` observed via `/v1/runs/{id}/events`; hook events arrive at the bridge with a valid `X-Hermes-Signature-256` |
 | S6 | Revocation fails closed: mid-run, the stub starts returning `401` for the token | The next MCP call fails; Hermes ends the run with an error, does not retry a `do_household_action`, and the bridge's poll stops; no local effect persists |

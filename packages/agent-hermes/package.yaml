@@ -45,7 +45,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: agent-hermes
-  version: 0.1.4
+  version: 0.1.5
   capability: agent-hermes
   profile: hermes
   instanced: true
@@ -242,9 +242,14 @@ templates:
         # and enforced by processing class. With both offered, a model
         # asked to "remember" reached for the native one, Wildstone saw
         # no tool call, and the turn ended "not done" (#364).
+        #
+        # No `session_search` either, for the same reason one step
+        # removed: it searches every past conversation this install has
+        # had, and one install serves every person who talks to the
+        # Agent, so on a family Agent one member's conversation could
+        # surface in another's turn. Wildstone's recall is per person.
         platform_toolsets:
           api_server:
-            - session_search
             - skills
             - todo
             - delegation
@@ -266,7 +271,7 @@ templates:
           # cron is operator-edited config, not an agent-callable grant;
           # `connections` (manage_connections) is Wildstone's own to
           # manage, never Hermes's.
-          disabled_toolsets: [browser, homeassistant, image_gen, computer_use, kanban, cronjob, a2a, connections, memory]
+          disabled_toolsets: [browser, homeassistant, image_gen, computer_use, kanban, cronjob, a2a, connections, memory, session_search]
 
         {{- if ne .Params.execution_profile "platform-only" }}
 
