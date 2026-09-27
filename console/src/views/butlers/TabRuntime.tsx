@@ -157,6 +157,8 @@ export function TabRuntime({
   const [issuing, setIssuing] = useState(false);
   const [issueError, setIssueError] = useState<string | null>(null);
   const [issued, setIssued] = useState<RuntimeCredential | null>(null);
+  const [upgrading, setUpgrading] = useState(false);
+  const [upgradeError, setUpgradeError] = useState<string | null>(null);
 
   // Back from a step-up: the confirmation, or the credential offer, that
   // was interrupted reopens rather than leaving the person to find it
@@ -215,6 +217,26 @@ export function TabRuntime({
     }
   }
 
+  // A newer package version reaches the running runtime only through a
+  // restart Plan (#389): the profile controls below re-render only when
+  // they change, and the Packages screen re-expands the installed version.
+  const pkg = runtime?.package;
+  const upgradeTo = pkg?.upgradable && pkg.availableVersion ? pkg.availableVersion : "";
+
+  async function upgradePackage() {
+    setUpgrading(true);
+    setUpgradeError(null);
+    try {
+      const out = await api.upgradeButlerRuntime(b.name);
+      say(`Upgrade to ${out.to} filed as a Plan — approve it to restart ${b.name}'s runtime`, "ok");
+      onChanged();
+    } catch (e) {
+      setUpgradeError((e as Error).message);
+    } finally {
+      setUpgrading(false);
+    }
+  }
+
   async function issueCredential() {
     setIssuing(true);
     setIssueError(null);
@@ -239,6 +261,35 @@ export function TabRuntime({
       {!canManage && (
         <div className="note">
           Only an Owner can change {b.name}'s runtime{runtime ? ` — it runs on ${runtime.type}` : ""}.
+        </div>
+      )}
+
+      {pkg && (
+        <div>
+          <div className="eyebrow">PACKAGE</div>
+          <div className="row">
+            <span>
+              Installed from <code>{pkg.name}</code> {pkg.installedVersion}
+              {upgradeTo && <span className="muted"> · {upgradeTo} is available</span>}
+            </span>
+            {canManage && upgradeTo && (
+              <button
+                type="button"
+                className="btn btn-secondary"
+                disabled={upgrading}
+                onClick={() => void upgradePackage()}
+              >
+                {upgrading ? "Filing…" : `Upgrade to ${upgradeTo}`}
+              </button>
+            )}
+          </div>
+          {upgradeTo && (
+            <div className="note">
+              Upgrading files a Plan that re-renders this runtime at {upgradeTo} and restarts it. Nothing
+              changes until the Plan is approved.
+            </div>
+          )}
+          <ErrorLine error={upgradeError} />
         </div>
       )}
 

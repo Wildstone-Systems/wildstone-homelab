@@ -381,11 +381,18 @@ Switch the Agent to `local_only` and the payload comes through in full.
    the same way as a late one.
 4. Watch the bridge's logs for the MCP calls Hermes makes back through
    it, and confirm `disabled_toolsets` appears in its rendered config.
-5. Change the profile to `sandboxed` (H6, #352): from the Agent's
+5. Upgrade the package (#389): with a newer `agent-hermes` in the
+   catalog than the install was made from, the Agent's Runtime tab shows
+   "Installed from agent-hermes <old> · <new> is available" and an
+   **Upgrade to <new>** button. Pressing it files one Plan, titled
+   `upgrade <agent>'s runtime (agent-hermes#<instance>) from agent-hermes
+   <old> to <new>`, and changes nothing until it is approved. Once it is
+   approved and applied, the tab shows the new version and no button.
+6. Change the profile to `sandboxed` (H6, #352): from the Agent's
    Runtime tab, change execution profile (or processing class) and
    save. Check the Plans screen before touching anything else.
 
-Expected for step 5: a new Plan appears, titled something like
+Expected for step 6: a new Plan appears, titled something like
 `restart <agent>'s runtime (agent-hermes#<instance>): execution
 profile sandboxed, processing class <class>` — filed under your own
 identity, exactly like a Console-driven install or reconfigure. The
