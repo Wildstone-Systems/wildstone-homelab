@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -16,30 +17,49 @@ import (
 // dockerClient is a deliberately tiny Docker Engine API client (stdlib
 // only — Wardstone's "~zero dependencies" rule). Endpoint is either
 // "unix:///var/run/docker.sock" or an http://host:port URL (tests).
+//
+// It holds two clients over one transport. http bounds every call at
+// callTimeout, which suits inspect, stats, logs and the like. pulls has no
+// client timeout: an image pull streams progress for as long as the
+// download takes, and a multi-GB image on a home connection outlasts any
+// bound sized for quick calls (#361). A pull is bounded by pullTimeout
+// instead, through its context.
 type dockerClient struct {
-	http *http.Client
-	base string
+	http        *http.Client
+	pulls       *http.Client
+	base        string
+	pullTimeout time.Duration
 }
 
+const (
+	// dockerCallTimeout bounds every Docker Engine API call except a pull.
+	dockerCallTimeout = 2 * time.Minute
+	// dockerPullTimeout bounds one image pull. A pull that runs out of it
+	// has kept the layers it finished, so the retry resumes rather than
+	// starting over.
+	dockerPullTimeout = 30 * time.Minute
+)
+
 func newDockerClient(endpoint string) (*dockerClient, error) {
+	var transport http.RoundTripper
+	base := strings.TrimRight(endpoint, "/")
 	if sock, ok := strings.CutPrefix(endpoint, "unix://"); ok {
-		return &dockerClient{
-			base: "http://docker",
-			http: &http.Client{
-				Timeout: 2 * time.Minute,
-				Transport: &http.Transport{
-					DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-						var d net.Dialer
-						return d.DialContext(ctx, "unix", sock)
-					},
-				},
+		base = "http://docker"
+		transport = &http.Transport{
+			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				var d net.Dialer
+				return d.DialContext(ctx, "unix", sock)
 			},
-		}, nil
+		}
+	} else if !strings.HasPrefix(endpoint, "http://") && !strings.HasPrefix(endpoint, "https://") {
+		return nil, fmt.Errorf("docker endpoint %q: want unix:// or http(s)://", endpoint)
 	}
-	if strings.HasPrefix(endpoint, "http://") || strings.HasPrefix(endpoint, "https://") {
-		return &dockerClient{base: strings.TrimRight(endpoint, "/"), http: &http.Client{Timeout: 2 * time.Minute}}, nil
-	}
-	return nil, fmt.Errorf("docker endpoint %q: want unix:// or http(s)://", endpoint)
+	return &dockerClient{
+		base:        base,
+		http:        &http.Client{Timeout: dockerCallTimeout, Transport: transport},
+		pulls:       &http.Client{Transport: transport},
+		pullTimeout: dockerPullTimeout,
+	}, nil
 }
 
 type containerInspect struct {
@@ -282,12 +302,70 @@ func (d *dockerClient) logs(ctx context.Context, name string, tail uint32, since
 // for the registry the ref names — see registryauth.go. It is a header
 // rather than a query parameter deliberately: query strings end up in
 // proxy and daemon logs.
+//
+// The daemon answers 200 as soon as the pull starts and then streams
+// progress as JSON messages until it ends. A failure partway through (a
+// layer that will not download, a full disk) arrives as an "error"
+// message inside that 200 stream, so the stream is read to its end and
+// checked, rather than taking the status as the outcome. Reading to the
+// end also matters on its own: closing the response early cancels the
+// daemon's pull.
 func (d *dockerClient) pull(ctx context.Context, ref, auth string) error {
-	var headers map[string]string
-	if auth != "" {
-		headers = map[string]string{"X-Registry-Auth": auth}
+	ctx, cancel := context.WithTimeout(ctx, d.pullTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, "POST",
+		d.base+"/images/create?"+url.Values{"fromImage": {ref}}.Encode(), nil)
+	if err != nil {
+		return err
 	}
-	_, err := d.callWithHeaders(ctx, "POST", "/images/create", url.Values{"fromImage": {ref}}, nil, headers)
+	if auth != "" {
+		req.Header.Set("X-Registry-Auth", auth)
+	}
+	resp, err := d.pulls.Do(req)
+	if err != nil {
+		return d.pullFailed(ctx, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		msg := strings.TrimSpace(string(raw))
+		var payload struct {
+			Message string `json:"message"`
+		}
+		if json.Unmarshal(raw, &payload) == nil && payload.Message != "" {
+			msg = payload.Message
+		}
+		return &dockerError{status: resp.StatusCode, message: msg}
+	}
+	dec := json.NewDecoder(resp.Body)
+	for {
+		var m struct {
+			Error       string `json:"error"`
+			ErrorDetail struct {
+				Message string `json:"message"`
+			} `json:"errorDetail"`
+		}
+		if err := dec.Decode(&m); err == io.EOF {
+			return nil
+		} else if err != nil {
+			return d.pullFailed(ctx, err)
+		}
+		if m.ErrorDetail.Message != "" {
+			return fmt.Errorf("docker: pull: %s", m.ErrorDetail.Message)
+		}
+		if m.Error != "" {
+			return fmt.Errorf("docker: pull: %s", m.Error)
+		}
+	}
+}
+
+// pullFailed says why a pull stopped when it was its own deadline, which
+// the transport reports only as a bare "context deadline exceeded".
+func (d *dockerClient) pullFailed(ctx context.Context, err error) error {
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return fmt.Errorf("pull did not finish within %s (layers already downloaded are kept for the retry): %w",
+			d.pullTimeout, err)
+	}
 	return err
 }
 
