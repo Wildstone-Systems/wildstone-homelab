@@ -33,6 +33,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/adapter"
 	"github.com/chickenrat17/wildstone-homelab/keystone/adapter/pantry"
@@ -172,6 +173,12 @@ func (t *pantryTool) Execute(ctx context.Context, c Call) (Result, error) {
 	if err := t.pantry.ready(); err != nil {
 		return Result{}, err
 	}
+	ctx, stale := watchStale(ctx)
+	res, err := t.execute(ctx, c)
+	return stale.note(res), err
+}
+
+func (t *pantryTool) execute(ctx context.Context, c Call) (Result, error) {
 	p := t.pantry
 	switch t.tool {
 	case PantryToolSummary:
@@ -294,11 +301,61 @@ func (p *Pantry) ask(ctx context.Context, act bool, capability string, req map[s
 	case err != nil:
 		return nil, false, err
 	}
+	if ans.Stale {
+		if seen, ok := ctx.Value(staleKey{}).(*staleAnswers); ok {
+			seen.saw(ans.ObservedAt)
+		}
+	}
 	data, _ := ans.Data.(map[string]any)
 	if data == nil {
 		data = map[string]any{}
 	}
 	return data, ans.Empty, nil
+}
+
+// A stale answer (PantryOS replying from what it last saw, not what is
+// true now) is still worth saying — but never as if it were current. One
+// tool call may ask several times; the oldest observation is the one to
+// warn about.
+type staleKey struct{}
+
+type staleAnswers struct {
+	seen bool
+	at   time.Time
+}
+
+func watchStale(ctx context.Context) (context.Context, *staleAnswers) {
+	s := &staleAnswers{}
+	return context.WithValue(ctx, staleKey{}, s), s
+}
+
+func (s *staleAnswers) saw(at time.Time) {
+	if !s.seen || (!at.IsZero() && (s.at.IsZero() || at.Before(s.at))) {
+		s.at = at
+	}
+	s.seen = true
+}
+
+// note adds the warning to a result built from a stale answer.
+func (s *staleAnswers) note(res Result) Result {
+	if !s.seen || res.Summary == "" {
+		return res
+	}
+	when := "a while ago"
+	if !s.at.IsZero() {
+		when = "at " + s.at.Local().Format("15:04 on Jan 2")
+	}
+	res.Summary += fmt.Sprintf(" (PantryOS answered from what it last saw %s — this may be out of date.)", when)
+	detail := map[string]string{}
+	for k, v := range res.Detail {
+		detail[k] = v
+	}
+	detail["stale"] = "true"
+	if !s.at.IsZero() {
+		detail["observed_at"] = s.at.UTC().Format(time.RFC3339)
+	}
+	res.Detail = detail
+	return res
 }
 
 // rejection is PantryOS's own words, without the error chain around them.
@@ -387,7 +444,9 @@ func (p *Pantry) ShowGroceries(ctx context.Context) (Result, error) {
 	if err := p.ready(); err != nil {
 		return Result{}, err
 	}
-	return p.showGroceries(ctx)
+	ctx, stale := watchStale(ctx)
+	res, err := p.showGroceries(ctx)
+	return stale.note(res), err
 }
 
 func (p *Pantry) showGroceries(ctx context.Context) (Result, error) {

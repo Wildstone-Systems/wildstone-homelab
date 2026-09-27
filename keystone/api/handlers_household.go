@@ -44,6 +44,18 @@ func (s *Server) householdStore() *household.Store {
 // 200 says this delivery was a retry of one already recorded (same
 // publisher, same event id) and nothing was written.
 func (s *Server) emitHouseholdEvent(r *http.Request, id principal.Identity) (any, int, error) {
+	// PantryOS keeps its publisher token after the package is removed (it
+	// lives on PantryOS's side). Removing the package is what stops its
+	// events, so its token only counts while the package is installed.
+	if id.Name == publisherPrincipalPrefix+PantryCapability {
+		installed, err := s.CapabilityEnabled(PantryCapability)
+		if err != nil {
+			return nil, http.StatusInternalServerError, err
+		}
+		if !installed {
+			return nil, http.StatusForbidden, errors.New("PantryOS is not installed on this Wildstone; install pantry-pantryos to receive its events")
+		}
+	}
 	var env household.Envelope
 	if err := json.NewDecoder(http.MaxBytesReader(nil, r.Body, maxEnvelopeBytes)).Decode(&env); err != nil {
 		return nil, http.StatusBadRequest, fmt.Errorf("parsing envelope: %w", err)

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/adapter"
 	"github.com/chickenrat17/wildstone-homelab/keystone/adapter/pantry"
@@ -420,5 +421,40 @@ func TestDurationsAreSpoken(t *testing.T) {
 		if got := duration(in); got != want {
 			t.Errorf("duration(%d) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// An answer PantryOS gave from what it last saw is still said — but with
+// when it was seen, never as if it were current. Both through a tool and
+// through the grocery routing that calls ShowGroceries directly.
+func TestAStaleAnswerSaysHowOldItIs(t *testing.T) {
+	ctx := context.Background()
+	seen := time.Date(2026, 9, 27, 8, 30, 0, 0, time.UTC)
+	stale := func(map[string]any) (adapter.Answer, error) {
+		return adapter.Answer{Data: map[string]any{"list": "groceries", "items": []any{"milk"}}, Stale: true, ObservedAt: seen}, nil
+	}
+	up := &scriptedPantry{answers: map[string]func(map[string]any) (adapter.Answer, error){pantry.CapList: stale}}
+	g, _, _ := pantryGateway(t, up, true)
+	r, err := g.Dispatch(ctx, pantryCall(PantryToolShowGroceries, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(r.Summary, "On the grocery list (1): milk.") || !strings.Contains(r.Summary, "may be out of date") {
+		t.Fatalf("summary = %q", r.Summary)
+	}
+	if r.Detail["stale"] != "true" || r.Detail["observed_at"] != "2026-09-27T08:30:00Z" {
+		t.Fatalf("detail = %v", r.Detail)
+	}
+
+	p := &Pantry{Authority: permittedExecution{}, Upstream: up}
+	direct, err := p.ShowGroceries(ctx)
+	if err != nil || !strings.Contains(direct.Summary, "may be out of date") {
+		t.Fatalf("ShowGroceries = %q %v", direct.Summary, err)
+	}
+
+	// A current answer carries no warning.
+	up.answers[pantry.CapList] = ok(`{"list":"groceries","items":["milk"]}`)
+	if r, _ := g.Dispatch(ctx, pantryCall(PantryToolShowGroceries, nil)); strings.Contains(r.Summary, "out of date") {
+		t.Fatalf("current answer warned: %q", r.Summary)
 	}
 }

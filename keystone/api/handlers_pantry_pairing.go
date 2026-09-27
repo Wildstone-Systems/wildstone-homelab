@@ -32,8 +32,11 @@ import (
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/adapter"
 	"github.com/chickenrat17/wildstone-homelab/keystone/adapter/pantry"
+	"github.com/chickenrat17/wildstone-homelab/keystone/capability"
 	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
+	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
+	wsv1 "github.com/chickenrat17/wildstone-homelab/proto/gen/wardstone/v1"
 )
 
 // PantryCapability is the capability a PantryOS pairing is recorded under.
@@ -144,11 +147,12 @@ func (s *Server) pairPantry(r *http.Request, id principal.Identity) (any, int, e
 			"PantryOS is paired, but the publisher tokens it replaced could not be revoked (%v) — pair again to finish", err)
 	}
 	s.appendEvent("integration.paired", "", PantryCapability, id.Name)
+	placed := s.placePantryPublisherSecret(r, token, id)
 	info, err := s.DB.Pairing(PantryCapability)
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
-	return map[string]any{"paired": true, "pairing": info}, http.StatusOK, nil
+	return map[string]any{"paired": true, "pairing": info, "publisherPlacement": placed}, http.StatusOK, nil
 }
 
 func anyAvailable(caps []adapter.Capability) bool {
@@ -249,4 +253,47 @@ func (s *Server) unpairPantry(_ *http.Request, id principal.Identity) (any, int,
 	}
 	s.appendEvent("integration.unpaired", "", PantryCapability, id.Name)
 	return map[string]any{"paired": false, "publisherTokensRevoked": revoked}, http.StatusOK, nil
+}
+
+// placePantryPublisherSecret puts the pairing's publisher token where an
+// installed pantry-pantryos package expects it: the provided secret
+// `pantry-publisher` on the machine its install names — exactly what the
+// generic publisher route would do, so the capability is not left waiting
+// on a secret nobody places. PantryOS itself uses the copy pairing handed
+// it; this one only satisfies the install.
+//
+// Not installed yet: nothing to place (pairing again after installing
+// places it). A placement that fails does not undo the pairing — events
+// and tools already work — but it is recorded and reported.
+func (s *Server) placePantryPublisherSecret(r *http.Request, token string, id principal.Identity) string {
+	secretName := capability.PublisherSecretName(PantryCapability)
+	current, err := s.State.Load()
+	if err != nil {
+		return "not placed: " + err.Error()
+	}
+	node := ""
+	for _, res := range current {
+		if res.Kind == resource.KindSecret && res.Metadata.Name == secretName && res.Metadata.Owner == "capability/"+PantryCapability {
+			node = res.Metadata.Node
+			break
+		}
+	}
+	if node == "" {
+		return "not installed"
+	}
+	if s.Agents == nil {
+		return "not placed: agent plane not wired"
+	}
+	result, err := s.Agents.Apply(r.Context(), node, &wsv1.Operation{Op: &wsv1.Operation_PutSecret{
+		PutSecret: &wsv1.PutSecret{Name: secretName, Value: token},
+	}})
+	if err == nil && result.GetError() != nil {
+		err = errors.New(result.GetError().GetMessage())
+	}
+	if err != nil {
+		s.appendEvent("publisher.mint-failed", node, secretName, id.Name)
+		return fmt.Sprintf("not placed on %s: %v — pair again to retry", node, err)
+	}
+	s.appendEvent("publisher.minted", node, secretName, id.Name)
+	return "placed on " + node
 }

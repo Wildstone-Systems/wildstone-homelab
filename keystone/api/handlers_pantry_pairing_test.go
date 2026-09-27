@@ -11,6 +11,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/chickenrat17/wildstone-homelab/keystone/capability"
+	"github.com/chickenrat17/wildstone-homelab/keystone/household"
+	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 )
 
@@ -276,5 +279,76 @@ func TestAPairedPantryTokenIsNotRotatedByTheGenericPublisherRoute(t *testing.T) 
 	}
 	if !h.publisherTokenWorks(pantryOS.gotToken) {
 		t.Fatal("the paired PantryOS lost its publisher token")
+	}
+}
+
+// installPantry records pantry-pantryos as installed the way an approved
+// install leaves it: the provided publisher secret, owned by the
+// capability, on the machine the install named.
+func installPantry(t *testing.T, h *harness) {
+	t.Helper()
+	name := capability.PublisherSecretName(PantryCapability)
+	if err := h.s.State.Put(resource.Resource{
+		ApiVersion: resource.ApiVersion, Kind: resource.KindSecret,
+		Metadata: resource.Metadata{Name: name, Owner: "capability/" + PantryCapability, Package: "pantry-pantryos", Node: "n1"},
+		Secret:   &resource.SecretSpec{Name: name, Provided: true},
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func (h *harness) emitAs(token string, env household.Envelope) int {
+	h.t.Helper()
+	body, _ := json.Marshal(env)
+	req, _ := http.NewRequest(http.MethodPost, h.srv.URL+"/api/v1/household/events", strings.NewReader(string(body)))
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	resp.Body.Close()
+	return resp.StatusCode
+}
+
+// PantryOS keeps its publisher token after the package is removed, so the
+// token only counts while pantry-pantryos is installed: removing the
+// package is what stops PantryOS's events (and the routines they fire).
+func TestPantryEventsCountOnlyWhilePantryOSIsInstalled(t *testing.T) {
+	h := pairingHarness(t)
+	pantryOS := newFakePantryOS(t, "ABCD-EFGH", "REPLACED-agent-key-1")
+	if resp, out := pair(h, pantryOS.srv.URL, "ABCD-EFGH"); resp.StatusCode != http.StatusOK {
+		t.Fatalf("pair = %d %v", resp.StatusCode, out)
+	}
+	if code := h.emitAs(pantryOS.gotToken, envelope("01J6ZK8Q2M7Y4N3R5T9V1W0X2B")); code != http.StatusForbidden {
+		t.Fatalf("event with pantry-pantryos not installed = %d, want 403", code)
+	}
+	installPantry(t, h)
+	if code := h.emitAs(pantryOS.gotToken, envelope("01J6ZK8Q2M7Y4N3R5T9V1W0X2C")); code != http.StatusCreated {
+		t.Fatalf("event with pantry-pantryos installed = %d, want 201", code)
+	}
+}
+
+// Pairing with pantry-pantryos installed also fills the publisher secret
+// the install declared, so the capability is not left waiting on a secret
+// nothing places. Without the install there is nothing to fill.
+func TestPairingFillsTheInstalledPackagesPublisherSecret(t *testing.T) {
+	h := pairingHarness(t)
+	agent := &publisherFakeAgent{}
+	h.s.Agents = agent
+
+	first := newFakePantryOS(t, "AAAA-AAAA", "REPLACED-agent-key-1")
+	_, out := pair(h, first.srv.URL, "AAAA-AAAA")
+	if out["publisherPlacement"] != "not installed" || len(agent.values) != 0 {
+		t.Fatalf("not installed: publisherPlacement=%v placed=%v", out["publisherPlacement"], agent.values)
+	}
+
+	installPantry(t, h)
+	second := newFakePantryOS(t, "BBBB-BBBB", "REPLACED-agent-key-2")
+	resp, out := pair(h, second.srv.URL, "BBBB-BBBB")
+	if resp.StatusCode != http.StatusOK || out["publisherPlacement"] != "placed on n1" {
+		t.Fatalf("pair = %d %v", resp.StatusCode, out)
+	}
+	if got := agent.values[capability.PublisherSecretName(PantryCapability)]; got == "" || got != second.gotToken {
+		t.Fatal("the placed secret is not the token PantryOS was given")
 	}
 }
