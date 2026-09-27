@@ -43,6 +43,7 @@ import (
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/agentapi"
 	"github.com/chickenrat17/wildstone-homelab/keystone/agentgateway"
+	"github.com/chickenrat17/wildstone-homelab/keystone/butlerlive"
 	"github.com/chickenrat17/wildstone-homelab/keystone/butlerstore"
 	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
@@ -165,7 +166,10 @@ func (s *Server) reofferWaitingTasks(butlerSeq int64) error {
 			s.Log.Error("issuing a handle to re-offer a waiting task", "task", task.ID, "err", err)
 			continue
 		}
-		payload, err := json.Marshal(map[string]any{"handle": string(handle)})
+		// The turn's own words are not kept once it was parked, so the
+		// runtime is given the task's objective: the person's question,
+		// bounded and quoted (butlerlive.conversationObjective).
+		payload, err := json.Marshal(butlerlive.ExternalTurn{Handle: string(handle), Text: task.Objective})
 		if err != nil {
 			s.Log.Error("encoding a turn delivery", "task", task.ID, "err", err)
 			continue

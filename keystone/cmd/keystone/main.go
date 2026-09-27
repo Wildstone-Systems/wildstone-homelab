@@ -1856,6 +1856,9 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 				// gets the identical validation, standing policy and
 				// audit event a human's POST /plans does.
 				Proposals: apiSrv.ProposalDeps(),
+				// An external runtime's answer reaches the turn
+				// waiting on it (#364).
+				Replies: butlers,
 			}
 			butlers.AgentClient = agentgateway.InProcess(agentGw)
 			butlers.WithPrincipal = func(ctx context.Context, name string) context.Context {

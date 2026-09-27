@@ -218,13 +218,24 @@ func (bs *Butlers) Serve(ctx context.Context, t Turn) (Answer, error) {
 		Provider:        p,
 	}
 
-	// The loop that drives this turn. The native agent runtime when this
-	// deployment runs it and the Butler's route is one it can speak;
-	// the Runner otherwise. Either way the same model, the same tools
-	// and the same ledger (see native.go).
+	// The loop that drives this turn. The Butler's own runtime when it
+	// is not native: the turn is handed to it and never run here, which
+	// is what "no fallback branch" above means for a connected runtime
+	// as much as an offline one (#364). Otherwise the native agent
+	// runtime when this deployment runs it and the Butler's route is one
+	// it can speak, and the Runner when not. Either way the same model
+	// judges the answer, through the same tools and the same ledger (see
+	// native.go and external.go).
 	var tr *butler.Transcript
 	loop := "runner"
-	if route, ok := bs.nativeRouteFor(b); ok {
+	rtType, external, err := bs.externalRuntime(b)
+	if err != nil {
+		return bs.blank(b), err
+	}
+	if external {
+		loop = "external"
+		tr, err = bs.runExternal(ctx, runner, b, rtType, t)
+	} else if route, ok := bs.nativeRouteFor(b); ok {
 		loop = "native"
 		tr, err = bs.runNative(ctx, runner, privacy, route, t)
 	} else {

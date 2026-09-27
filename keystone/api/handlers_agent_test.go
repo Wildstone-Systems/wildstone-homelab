@@ -1094,12 +1094,16 @@ func TestReconnectingRuntimeReOffersItsWaitingTasks(t *testing.T) {
 	}
 	var payload struct {
 		Handle string `json:"handle"`
+		Text   string `json:"text"`
 	}
 	if err := json.Unmarshal([]byte(deliveries[0].Payload), &payload); err != nil {
 		t.Fatalf("delivery payload did not decode: %v", err)
 	}
 	if payload.Handle == "" {
 		t.Error("the re-offered delivery carries no handle")
+	}
+	if payload.Text == "" {
+		t.Error("the re-offered delivery does not say what was asked")
 	}
 
 	// The fresh handle actually works — the runtime that follows it up

@@ -73,6 +73,11 @@ type Gateway struct {
 	// Now is the gateway clock for observation freshness; nil means
 	// time.Now.
 	Now func() time.Time
+	// Replies is where an external runtime's answer goes (#364): a
+	// Complete carrying a Reply, and a Fail, are handed to it so the
+	// turn waiting on the task hears. nil keeps Complete and Fail as
+	// they were, with no answer path.
+	Replies Replies
 
 	// SliceRounds, ToolCalls and ObservationTTL override the package
 	// constants when > 0. Tests set them; production leaves them.
@@ -101,6 +106,15 @@ type Gateway struct {
 	// somewhere. Records is that somewhere; Forget releases a task's.
 	records map[string][]butler.ToolCallRecord
 }
+
+// Replies accepts what an external runtime reports about a turn it was
+// handed. butlerlive.Butlers implements it.
+type Replies interface {
+	RuntimeReplied(ctx context.Context, taskID, reply string) error
+	RuntimeFailed(taskID, reason string)
+}
+
+var _ Replies = (*butlerlive.Butlers)(nil)
 
 // InProcess returns g as an agentapi.Client. The native runner will
 // hold this (2b); an HTTP transport (2c) calls the same methods with

@@ -7,6 +7,7 @@ package main
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -163,15 +164,22 @@ func (b *bridge) handleTurn(ctx context.Context, d agentapi.Delivery) bool {
 		return false
 	}
 
-	if outcome.Terminal == "completed" {
-		if err := b.keystone.Complete(ctx, agentapi.WorkComplete{Handle: d.Handle, Summary: "hermes run " + runID + " completed"}); err != nil {
-			b.log.Error("completing task", "delivery", d.ID, "run", runID, "err", err)
+	if outcome.Terminal == "completed" && strings.TrimSpace(outcome.Output) != "" {
+		// The answer is reported, not self-certified: Wildstone judges
+		// it and completes the task (agentapi.WorkComplete.Reply).
+		if err := b.keystone.Complete(ctx, agentapi.WorkComplete{
+			Handle: d.Handle, Summary: "hermes run " + runID + " completed", Reply: outcome.Output,
+		}); err != nil {
+			b.log.Error("reporting the run's answer", "delivery", d.ID, "run", runID, "err", err)
 			return false
 		}
 	} else {
 		reason := outcome.Terminal
 		if outcome.Detail != "" {
 			reason += ": " + outcome.Detail
+		}
+		if outcome.Terminal == "completed" {
+			reason = "the hermes run completed with no answer"
 		}
 		if err := b.keystone.Fail(ctx, agentapi.WorkFail{Handle: d.Handle, Reason: reason}); err != nil {
 			b.log.Error("failing task", "delivery", d.ID, "run", runID, "err", err)

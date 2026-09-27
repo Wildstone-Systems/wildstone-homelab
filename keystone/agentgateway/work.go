@@ -164,6 +164,14 @@ func (g *Gateway) Complete(ctx context.Context, w agentapi.WorkComplete) error {
 	if err := g.Ledger.Fence(); err != nil {
 		return fmt.Errorf("agentgateway: refusing to complete work after this coordinator was superseded: %w", err)
 	}
+	if w.Reply != "" && g.Replies != nil {
+		// An answer, not a completion: Wildstone judges it and
+		// completes the task itself (agentapi.WorkComplete's doc).
+		if err := g.Ledger.Authorize(s.hc.Task.ID); err != nil {
+			return fmt.Errorf("%w: %v", ErrRefused, err)
+		}
+		return g.Replies.RuntimeReplied(ctx, s.hc.Task.ID, w.Reply)
+	}
 	evidence := make([]butler.LedgerEvidence, 0, len(w.Evidence))
 	for _, e := range w.Evidence {
 		evidence = append(evidence, butler.LedgerEvidence{
@@ -193,8 +201,13 @@ func (g *Gateway) Fail(ctx context.Context, w agentapi.WorkFail) error {
 	if err := g.Ledger.Fail(s.hc.Task.ID, w.Reason); err != nil {
 		return err
 	}
-	_, err = g.Ledger.FenceAttempts(s.hc.Task.ID)
-	return err
+	if _, err := g.Ledger.FenceAttempts(s.hc.Task.ID); err != nil {
+		return err
+	}
+	if g.Replies != nil {
+		g.Replies.RuntimeFailed(s.hc.Task.ID, w.Reason)
+	}
+	return nil
 }
 
 // Deliveries implements agentapi.DeliveryClient in-process: no HTTP, no
