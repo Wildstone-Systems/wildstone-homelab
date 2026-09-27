@@ -268,6 +268,17 @@ func (db *DB) RevokeTokensFor(principal string) (int64, error) {
 	return res.RowsAffected()
 }
 
+// RevokeTokensForExcept revokes every live token held by principal except
+// the one with keepHash.
+func (db *DB) RevokeTokensForExcept(principal, keepHash string) (int64, error) {
+	res, err := db.sql.Exec(
+		`UPDATE tokens SET revoked_at = ? WHERE principal = ? AND revoked_at = '' AND hash <> ?`, now(), principal, keepHash)
+	if err != nil {
+		return 0, fmt.Errorf("runtimedb: revoking tokens for %s: %w", principal, err)
+	}
+	return res.RowsAffected()
+}
+
 // HouseholdQuery filters the household stream. Zero fields match
 // everything; From/To bound occurred_at (inclusive). Newest reverses the
 // order — a "last three breakfasts" lookup wants the tail, not the head.

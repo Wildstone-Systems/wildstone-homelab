@@ -132,3 +132,35 @@ func TestListBounds(t *testing.T) {
 		t.Fatalf("lists = %d %v", len(lists), err)
 	}
 }
+
+func TestRetiringMovedItemsRemovesTheListOnlyWhenNothingOpenIsLeft(t *testing.T) {
+	db := open(t)
+	if _, err := db.AddListItems("Shopping", []string{"milk", "eggs", "bread"}, "sam"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.SetListItemsChecked("shopping", []string{"bread"}, true, "sam"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Only milk made it across: eggs is still open, so the list stays.
+	removed, open, err := db.RetireMovedListItems("shopping", []string{"Milk"})
+	if err != nil || removed || open != 1 {
+		t.Fatalf("partial move = removed %v, open %d, %v; want kept with 1 open", removed, open, err)
+	}
+	l, err := db.HouseholdList("shopping")
+	if err != nil || l.Open != 1 || l.Done != 1 || l.Items[0].Text != "eggs" {
+		t.Fatalf("after a partial move the list is %+v, %v", l, err)
+	}
+
+	// Everything open moved: the list, and its ticked history, go.
+	removed, open, err = db.RetireMovedListItems("shopping", []string{"eggs"})
+	if err != nil || !removed || open != 0 {
+		t.Fatalf("full move = removed %v, open %d, %v; want removed", removed, open, err)
+	}
+	if _, err := db.HouseholdList("shopping"); !errors.Is(err, ErrListNotFound) {
+		t.Fatalf("the moved list is still there: %v", err)
+	}
+	if _, _, err := db.RetireMovedListItems("shopping", []string{"eggs"}); !errors.Is(err, ErrListNotFound) {
+		t.Fatalf("retiring a list that is gone = %v, want ErrListNotFound", err)
+	}
+}

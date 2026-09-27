@@ -22,6 +22,13 @@ type RoutineActions interface {
 
 var errRoutineRecipientRevoked = errors.New("routine recipient is no longer admitted")
 
+// errRoutineNoRecipient is an event that names nobody for a routine that
+// sends to "whoever the event is about": a meal logged on an unlinked
+// profile, a kitchen timer set by nobody in particular. That run has
+// nobody to tell, so it stops; the routine is not paused, because the
+// next event may well name somebody.
+var errRoutineNoRecipient = errors.New("this event names nobody to tell")
+
 // TickReviewed consumes the household stream independently of the legacy
 // Statefile cursor. Only exact Owner-approved Plan snapshots are considered.
 // The first tick adopts existing history, so enabling the executor does not
@@ -268,6 +275,9 @@ func (e *Engine) executeReviewed(ctx context.Context, version runtimedb.RoutineE
 }
 
 func (e *Engine) blockRoutineDelivery(version runtimedb.RoutineExecutionVersion, runID int64, err error) error {
+	if errors.Is(err, errRoutineNoRecipient) {
+		return e.DB.SetRoutineRunState(runID, "stopped", "delivery: "+err.Error())
+	}
 	if errors.Is(err, errRoutineRecipientRevoked) {
 		if pauseErr := e.DB.PauseRoutineRecipient(version.Name); pauseErr != nil {
 			return pauseErr
@@ -304,6 +314,9 @@ func (e *Engine) checkRoutineOutput(version runtimedb.RoutineExecutionVersion, d
 		member := strings.TrimSpace(params["member"])
 		if member == "" {
 			member = d.Subject
+		}
+		if member == "" {
+			return errRoutineNoRecipient
 		}
 		person, err := e.DB.GetButlerMember(member)
 		if err != nil || !person.Active() {

@@ -94,6 +94,80 @@ type Lists struct {
 	// restart and removing it stops the tools at once (ADR-W026 A8's
 	// posture, as Filedrop.Enabled). nil means "do not ask".
 	Enabled func() (bool, error)
+	// Groceries, when set, is where the grocery list goes while PantryOS
+	// is installed (ADR-W042 A3, #383). nil keeps every list here.
+	Groceries GroceryList
+}
+
+// GroceryList is a grocery list kept by another capability — PantryOS,
+// in practice; *Pantry is the implementation.
+type GroceryList interface {
+	// Installed is the routing question: is the owner installed? Asked
+	// per call, never answered from whether the last call worked.
+	Installed() (bool, error)
+	ShowGroceries(ctx context.Context) (Result, error)
+	AddGroceries(ctx context.Context, items []string) (Result, error)
+	CheckGroceries(ctx context.Context, items []string) (Result, error)
+}
+
+// groceryListNames are the list names that mean the grocery list. The
+// household lists call it "shopping" (it is their own example), PantryOS
+// calls it "groceries"; a person says either.
+var groceryListNames = map[string]bool{
+	"groceries": true, "grocery": true, "shopping": true,
+	"grocery list": true, "shopping list": true, "groceries list": true,
+}
+
+// IsGroceryList reports whether a list name means the grocery list —
+// the lists a move to PantryOS takes across (#387).
+func IsGroceryList(name string) bool { return isGroceryList(name) }
+
+func isGroceryList(name string) bool {
+	return groceryListNames[strings.ToLower(strings.Join(strings.Fields(name), " "))]
+}
+
+// errGroceriesElsewhere answers the list tools PantryOS has no match for.
+var errGroceriesElsewhere = errors.New("the grocery list lives in PantryOS, which can show it, add items and " +
+	"tick them off; removing or clearing items is done in PantryOS itself")
+
+// routeGroceries sends a call about the grocery list to PantryOS while
+// PantryOS is installed (ADR-W042 A3). routed=false means the call is this
+// store's to answer. There is no fallback: when PantryOS is installed, a
+// grocery call is PantryOS's whatever happens next — a PantryOS that is
+// down is reported down, because quietly writing here would leave the
+// household two half-lists.
+func (l *Lists) routeGroceries(ctx context.Context, tool string, c Call) (bool, Result, error) {
+	if l.Groceries == nil || tool == ListToolShowAll {
+		return false, Result{}, nil
+	}
+	name := strings.TrimSpace(c.Params["list"])
+	if name == "" || !isGroceryList(name) {
+		return false, Result{}, nil
+	}
+	installed, err := l.Groceries.Installed()
+	if err != nil {
+		return true, Result{}, fmt.Errorf("checking whether the household has PantryOS: %w", err)
+	}
+	if !installed {
+		return false, Result{}, nil
+	}
+	switch tool {
+	case ListToolShow:
+		r, err := l.Groceries.ShowGroceries(ctx)
+		return true, r, err
+	case ListToolAdd, ListToolCheck:
+		items := splitItems(c.Params["items"])
+		if len(items) == 0 {
+			return true, Result{}, fmt.Errorf("param %q is required: which items (separate several with commas)", "items")
+		}
+		if tool == ListToolAdd {
+			r, err := l.Groceries.AddGroceries(ctx, items)
+			return true, r, err
+		}
+		r, err := l.Groceries.CheckGroceries(ctx, items)
+		return true, r, err
+	}
+	return true, Result{}, errGroceriesElsewhere
 }
 
 // Executors returns one registration per tool, in a stable order.
@@ -120,7 +194,8 @@ func (t *listTool) Name() string { return ListsCapability + "." + t.tool }
 // listsUsage is each tool's params, in the words a model reads.
 var listsUsage = map[string]string{
 	ListToolShowAll: "The household's lists and how many items each has left. No params.",
-	ListToolShow:    "What is on one list. params: list (required, e.g. shopping).",
+	ListToolShow: "What is on one list. params: list (required, e.g. shopping). While PantryOS is installed, the " +
+		"grocery list (groceries or shopping) is PantryOS's.",
 	ListToolAdd: "Put items on a list; the list is created if it does not exist yet, and an item " +
 		"that was ticked off is put back. params: list (required, e.g. shopping), items (required; " +
 		"separate several with commas or new lines).",
@@ -147,9 +222,20 @@ func (t *listTool) Execute(ctx context.Context, c Call) (Result, error) {
 	if err := t.lists.ready(); err != nil {
 		return Result{}, err
 	}
+	if routed, r, err := t.lists.routeGroceries(ctx, t.tool, c); routed {
+		return r, err
+	}
 	switch t.tool {
 	case ListToolShowAll:
-		return t.lists.showAll()
+		r, err := t.lists.showAll()
+		if err == nil && t.lists.Groceries != nil {
+			// Said on every overview, so a Butler reading "Shopping (3
+			// left)" from an older list does not take it for the groceries.
+			if on, ierr := t.lists.Groceries.Installed(); ierr == nil && on {
+				r.Summary += " The grocery list is kept in PantryOS."
+			}
+		}
+		return r, err
 	case ListToolShow:
 		return t.lists.show(c)
 	case ListToolAdd:
@@ -171,11 +257,16 @@ func (t *listTool) Execute(ctx context.Context, c Call) (Result, error) {
 // person is asked about a list rather than about a tool call. It
 // resolves the list first: nobody is asked to approve deleting something
 // that is not there.
-func (t *listTool) Describe(_ context.Context, c Call) (string, error) {
+func (t *listTool) Describe(ctx context.Context, c Call) (string, error) {
 	if t.tool != ListToolDelete {
 		return "", nil
 	}
 	if err := t.lists.ready(); err != nil {
+		return "", err
+	}
+	// Nobody is asked to approve deleting a grocery list that lives in
+	// PantryOS: the call would be refused after the yes.
+	if routed, _, err := t.lists.routeGroceries(ctx, t.tool, c); routed {
 		return "", err
 	}
 	name, err := listParam(c)

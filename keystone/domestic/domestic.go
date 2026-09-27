@@ -341,6 +341,18 @@ func (g *Gateway) dispatch(ctx context.Context, c Call) (Result, error) {
 			return Result{}, err
 		}
 	}
+	// The same, for an executor that must ASK something to bind the call —
+	// e.g. which cook a "finish cooking" means, so an approval given for
+	// one dish can never finish another.
+	if preparer, ok := e.(interface {
+		PrepareContext(context.Context, Call) (Call, error)
+	}); ok {
+		var err error
+		c, err = preparer.PrepareContext(ctx, c)
+		if err != nil {
+			return Result{}, err
+		}
+	}
 	if c.Tier == TierConfirm {
 		if err := g.confirmed(ctx, c, e); err != nil {
 			return Result{}, err

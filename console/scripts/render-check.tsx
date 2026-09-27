@@ -2576,5 +2576,60 @@ check("a secret field has a named Show control", secretOut.includes('aria-label=
   secretOut.includes('aria-pressed="false"') && secretOut.includes('type="button"'));
 check("a secret field is never spell-checked", secretOut.includes('spellCheck="false"') || secretOut.includes('spellcheck="false"'));
 
+// Pairing with PantryOS (ADR-W042 A6). The screen must never hold either
+// secret, must say where the code comes from, and must survive the
+// password confirmation a consequential pairing can ask for.
+import { GroceryMoveView, PantryPairingView } from "../src/views/PantryPairing";
+import { clearStepUp, rememberStepUp } from "../src/api";
+
+const unpaired = renderToString(
+  h(PantryPairingView, { status: { paired: false }, onChanged: () => {}, origin: "https://console.example.internal" }),
+);
+check("an unpaired pantry says so", unpaired.includes("not paired"), unpaired);
+check("it asks for PantryOS's address and the one-time code",
+  unpaired.includes("PantryOS address") && unpaired.includes("Pairing code"));
+check("it says where the code comes from in PantryOS", unpaired.includes("Admin → Integrations"));
+check("the address PantryOS should send events to defaults to this Console",
+  unpaired.includes('value="https://console.example.internal"'));
+check("the pairing code field is not autofilled", unpaired.includes('autoComplete="off"') || unpaired.includes('autocomplete="off"'));
+
+const paired = renderToString(
+  h(PantryPairingView, {
+    status: { paired: true, pairing: { capability: "pantry", endpoint: "https://pantry.example.internal",
+      pairedAt: "2026-09-27T03:00:00Z", pairedBy: "tom" } },
+    onChanged: () => {},
+  }),
+);
+check("a paired pantry shows where it is reached", paired.includes("https://pantry.example.internal"), paired);
+check("and who paired it", paired.includes("tom"));
+check("it offers to pair again and to unpair", paired.includes("Pair again") && paired.includes("Unpair"));
+check("no secret-shaped field appears once paired", !paired.includes("Pairing code"));
+
+store.set("wst.console.pantry-pairing-draft",
+  JSON.stringify({ address: "https://pantry.example.internal", code: "KCTW-X54C", keystoneUrl: "https://k.example.internal" }));
+rememberStepUp("POST", "/api/v1/pantry/pairing");
+const resumed = renderToString(h(PantryPairingView, { status: { paired: false }, onChanged: () => {} }));
+check("back from a password confirmation, the pairing is one click from done",
+  resumed.includes("Password confirmed") && resumed.includes('value="KCTW-X54C"'), resumed);
+clearStepUp();
+store.delete("wst.console.pantry-pairing-draft");
+
+// Moving the old grocery list (#387): offered with what it will move,
+// and nothing at all when there is nothing to move.
+const toMove = renderToString(
+  h(GroceryMoveView, { lists: [{ name: "Shopping", items: ["milk", "eggs"] }], onMoved: () => {} }),
+);
+check("the old grocery list's open items are shown before anything moves",
+  toMove.includes("Shopping") && toMove.includes("milk, eggs"), toMove);
+check("the move says how much it will move", toMove.includes("Move 2 items to PantryOS"));
+check("and that nothing leaves the old list before PantryOS has it", toMove.includes("only once PantryOS has it"));
+check("with nothing to move there is no offer",
+  renderToString(h(GroceryMoveView, { lists: [], onMoved: () => {} })) === "");
+rememberStepUp("POST", "/api/v1/pantry/grocery-move");
+check("back from a password confirmation, the move is one click from done",
+  renderToString(h(GroceryMoveView, { lists: [{ name: "Shopping", items: ["milk"] }], onMoved: () => {} }))
+    .includes("Password confirmed. Move now to finish."));
+clearStepUp();
+
 console.log(failures === 0 ? "\nALL CHECKS PASSED" : `\n${failures} CHECK(S) FAILED`);
 process.exit(failures === 0 ? 0 : 1);

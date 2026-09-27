@@ -143,13 +143,31 @@ func subjects(t *testing.T) []subject {
 		readOnly: true,
 	})
 
-	// PantryOS, against the versioned fake standing in for an API that
-	// does not exist yet.
+	// PantryOS: the fake, and the real HTTP upstream against a server
+	// that speaks pantry-1. An empty pantry is its own subject because,
+	// under pantry-1, the only list PantryOS has is the grocery list — a
+	// list it does not keep is a refused request, not an empty one.
 	out = append(out, subject{
-		name:   "pantryos (versioned fake)",
+		name:   "pantryos (fake)",
 		up:     pantry.NewFake(),
 		aQuery: pantry.CapList, aQueryReq: `{"list":"groceries"}`,
-		anEmptyQuery: pantry.CapList, emptyReq: `{"list":"hardware"}`,
+	})
+	out = append(out, subject{
+		name:         "pantryos (fake, empty pantry)",
+		up:           pantry.NewEmptyFake(),
+		anEmptyQuery: pantry.CapList, emptyReq: `{"list":"groceries"}`,
+	})
+	stocked := fakePantryOS(t, []string{"milk", "bread"})
+	out = append(out, subject{
+		name:   "pantryos (http, stocked)",
+		up:     &pantry.HTTP{BaseURL: stocked.URL, AgentKey: "REPLACED-agent-key"},
+		aQuery: pantry.CapList, aQueryReq: `{"list":"groceries"}`,
+	})
+	bare := fakePantryOS(t, nil)
+	out = append(out, subject{
+		name:         "pantryos (http, empty pantry)",
+		up:           &pantry.HTTP{BaseURL: bare.URL, AgentKey: "REPLACED-agent-key"},
+		anEmptyQuery: pantry.CapList, emptyReq: `{"list":"groceries"}`,
 	})
 
 	// Real deployments, enrolled by environment. When set, they run the
@@ -176,7 +194,47 @@ func subjects(t *testing.T) []subject {
 			readOnly: true,
 		})
 	}
+	if base, key := os.Getenv("WILDSTONE_TEST_PANTRY_URL"), os.Getenv("WILDSTONE_TEST_PANTRY_KEY"); base != "" && key != "" {
+		out = append(out, subject{
+			name:   "pantryos (real)",
+			up:     &pantry.HTTP{BaseURL: base, AgentKey: key},
+			aQuery: pantry.CapSummary, aQueryReq: `{}`,
+		})
+	}
 	return out
+}
+
+// fakePantryOS serves the three pantry-1 routes the suite touches, in
+// PantryOS's own response shapes.
+func fakePantryOS(t *testing.T, groceries []string) *httptest.Server {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/integrations/wildstone/v1/capabilities", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"contract":"pantry-1","capabilities":[
+		  {"kind":"query","name":"pantry.list","version":"pantry-1","available":true},
+		  {"kind":"query","name":"pantry.summary","version":"pantry-1","available":true},
+		  {"kind":"action","name":"pantry.add","version":"pantry-1","available":true}]}`))
+	})
+	mux.HandleFunc("GET /api/integrations/wildstone/v1/query/{capability}", func(w http.ResponseWriter, r *http.Request) {
+		switch r.PathValue("capability") {
+		case "pantry.list":
+			items, _ := json.Marshal(append([]string{}, groceries...))
+			status := "ok"
+			if len(groceries) == 0 {
+				status = "empty"
+			}
+			_, _ = w.Write([]byte(`{"contract":"pantry-1","capability":"pantry.list","status":"` + status +
+				`","observedAt":"2026-09-09T08:00:00Z","data":{"list":"groceries","items":` + string(items) + `}}`))
+		case "pantry.summary":
+			_, _ = w.Write([]byte(`{"contract":"pantry-1","capability":"pantry.summary","status":"ok","data":{"locations":1}}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"detail":"PantryOS has no query '` + r.PathValue("capability") + `'"}`))
+		}
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv
 }
 
 func TestAdapterContract(t *testing.T) {
@@ -266,6 +324,8 @@ func TestUnreachableSourcesAreUnavailable(t *testing.T) {
 		"home assistant refusing": &homeassistant.Upstream{BaseURL: refusing.URL, Token: "stale"},
 		"caldav refusing":         &caldav.Upstream{CollectionURL: refusing.URL, Username: "sam"},
 		"home assistant gone":     &homeassistant.Upstream{BaseURL: "http://127.0.0.1:1", Token: "x"},
+		"pantryos refusing":       &pantry.HTTP{BaseURL: refusing.URL, AgentKey: "REPLACED-revoked"},
+		"pantryos gone":           &pantry.HTTP{BaseURL: "http://127.0.0.1:1", AgentKey: "REPLACED-agent-key"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := up.Query(ctx, firstQuery(up), json.RawMessage(`{}`))
@@ -302,6 +362,8 @@ func firstQuery(up adapter.Upstream) string {
 	switch up.(type) {
 	case *caldav.Upstream:
 		return caldav.CapToday
+	case *pantry.HTTP:
+		return pantry.CapInventory
 	default:
 		return homeassistant.CapStates
 	}

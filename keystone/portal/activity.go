@@ -68,12 +68,13 @@ type line struct {
 // They are real events about real work, and none of them is something
 // a family is being asked to know. Absence here is the filter.
 var lines = map[string]line{
-	"person.arrived_home": {withSubject: "%s got home", tone: ToneOK},
-	"person.left_home":    {withSubject: "%s went out", tone: ToneOK},
-	"presence.arrived":    {withSubject: "%s got home", without: "somebody got home", tone: ToneOK},
-	"pantry.meal_logged":  {withSubject: "%s put a meal on the list", without: "a meal went on the list", tone: ToneOK},
-	"bins.collected":      {without: "the bins went out", tone: ToneOK},
-	"calendar.school_day": {without: "it is a school day", tone: ToneOK},
+	"person.arrived_home":   {withSubject: "%s got home", tone: ToneOK},
+	"person.left_home":      {withSubject: "%s went out", tone: ToneOK},
+	"presence.arrived":      {withSubject: "%s got home", without: "somebody got home", tone: ToneOK},
+	"pantry.meal_logged":    {withSubject: "%s put a meal on the list", without: "a meal went on the list", tone: ToneOK},
+	"pantry.timer_finished": {withSubject: "%s's kitchen timer went off", without: "a kitchen timer went off", tone: ToneOK},
+	"bins.collected":        {without: "the bins went out", tone: ToneOK},
+	"calendar.school_day":   {without: "it is a school day", tone: ToneOK},
 	// The routine engine. "acted" is the successful case and reads as
 	// the house doing something on its own; "fired" is the trigger
 	// landing, which is only worth a sentence when nothing followed it.

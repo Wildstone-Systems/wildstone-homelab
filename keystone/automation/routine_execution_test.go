@@ -363,3 +363,65 @@ func TestInFlightRunHaltsAtItsNextBoundary(t *testing.T) {
 		t.Fatalf("disabled routine reclaimed occurrence: %+v %v", run, err)
 	}
 }
+
+// A routine that sends to "whoever the event is about" meets an event
+// about nobody (a timer set on the tablet by no linked profile). That run
+// stops; the routine is not paused, and the next event that names
+// somebody is delivered.
+func TestAnEventNamingNobodyStopsThatRunOnly(t *testing.T) {
+	e, db := harness(t)
+	if err := db.RecordButlerMember("mika", runtimedb.RoleOwner, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AdmitButlerMember("mika", "root-admin"); err != nil {
+		t.Fatal(err)
+	}
+	r := rule("kitchen-timer")
+	r.Automation.Escalation = nil
+	r.Automation.Trigger = resource.AutomationTrigger{EventType: "pantry.timer_finished"}
+	r.Automation.Action.Tool = "chat-test.send"
+	r.Automation.Action.Params = map[string]string{"message": "Your kitchen timer is done."}
+	raw, err := resource.Marshal(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.CreateHouseholdRoutine(runtimedb.HouseholdRoutine{Name: "kitchen-timer", Ownership: runtimedb.RoutineWildstone, Author: "mika", Document: string(raw)}); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := db.SubmitRoutinePlan("kitchen-timer", "mika", "", runtimedb.AudienceHousehold, "chat", string(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.ApproveRoutinePlan(plan, "mika"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.AcquireCoordinator("kitchen-timer-test"); err != nil {
+		t.Fatal(err)
+	}
+	actions := &routineActions{available: true}
+	e.ReviewedActions = actions
+	emit(t, db, "old-timer", "pantry.timer_finished", "mika", t0.Add(-time.Hour))
+	if err := e.TickReviewed(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	emit(t, db, "nobodys-timer", "pantry.timer_finished", "", t0)
+	if err := e.TickReviewed(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(actions.calls) != 0 {
+		t.Fatalf("an event naming nobody was delivered: %+v", actions.calls)
+	}
+	routine, err := db.GetHouseholdRoutine("kitchen-timer")
+	if err != nil || routine.State != runtimedb.RoutineEnabled {
+		t.Fatalf("an event naming nobody changed the routine: %+v %v", routine, err)
+	}
+
+	emit(t, db, "mikas-timer", "pantry.timer_finished", "mika", t0.Add(time.Minute))
+	if err := e.TickReviewed(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(actions.calls) != 1 || actions.calls[0].Subject != "mika" {
+		t.Fatalf("the next timer, set by mika, was not delivered to him: %+v", actions.calls)
+	}
+}
