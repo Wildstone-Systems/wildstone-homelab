@@ -113,6 +113,34 @@
 
   const say = (text, bad) => { note.textContent = text || ""; note.className = bad ? "bad" : ""; };
 
+  // ---- which conversation this widget is in, across reloads.
+  //
+  // Keystone continues a conversation on its own only when exactly one
+  // recent one could be meant, and otherwise asks (design §7, "Ambiguous
+  // continuation"). Remembering the one this widget was in keeps a
+  // reload from turning into a question: sending to it is not a guess.
+  // Only for as long as a conversation counts as recent. The same code is in home.html and
+  // assistant.html; change one, change all three.
+  //
+  // Keyed by the signed-in member as well as the assistant, so two
+  // people sharing a browser keep their own. recentMs is the server's
+  // own window (sessionRecencySeconds).
+  let recentMs = 30 * 60 * 1000, whose = "";
+  const memoryKey = (name) => "wildstone.assistant.session." + whose + "." + name;
+  const remembered = (name) => {
+    if (!whose) return "";
+    try {
+      const v = JSON.parse(localStorage.getItem(memoryKey(name)) || "null");
+      if (v && v.session && Date.now() - v.at < recentMs) return v.session;
+    } catch (e) {}
+    return "";
+  };
+  const remember = (name, id) => {
+    if (!whose) return;
+    try { localStorage.setItem(memoryKey(name), JSON.stringify({ session: id, at: Date.now() })); } catch (e) {}
+  };
+  const forget = (name) => { try { localStorage.removeItem(memoryKey(name)); } catch (e) {} };
+
   // ============================================================ dictation
   // The mic button (ADR-W042). It records in the browser, posts the clip
   // to Keystone, and puts the words it gets back into the text box. It
@@ -312,6 +340,9 @@
       return;
     }
     const chosen = agents[0];
+    whose = body.member || "";
+    if (body.sessionRecencySeconds > 0) recentMs = body.sessionRecencySeconds * 1000;
+    session = remembered(chosen.name);
     maxDictation = body.dictationMaxSeconds || 0;
     dict.show(canDictate(chosen.name));
     if (!chosen.reachable) say(chosen.name + " is not answering right now", true);
@@ -332,13 +363,39 @@
     else say(chosen && chosen.leavesTheHouse ? "This assistant runs outside the house" : "");
   };
 
+  // chooser asks which conversation a message is for, when Keystone
+  // answered that several could be: each by its subject and last
+  // activity, most recent first, and a new one. pick(id) gets the chosen
+  // conversation, or "" for a new one.
+  const chooser = (choices, pick) => {
+    const box = el("suggestions");
+    box.replaceChildren();
+    say("Which conversation is this for?");
+    for (const c of choices) {
+      const b = document.createElement("button");
+      b.type = "button";
+      let label = c.subject || "Recent conversation";
+      if (c.at) {
+        try { label += " · " + new Date(c.at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }); } catch (e) {}
+      }
+      b.textContent = label;
+      b.onclick = () => { box.replaceChildren(); say(""); pick(c.session); };
+      box.append(b);
+    }
+    const fresh = document.createElement("button");
+    fresh.type = "button";
+    fresh.textContent = "New conversation";
+    fresh.onclick = () => { box.replaceChildren(); say(""); pick(""); };
+    box.append(fresh);
+  };
+
   el("ask").onsubmit = async (e) => {
     e.preventDefault();
     const text = el("text").value.trim();
     if (!text) return;
     el("text").value = "";
     el("suggestions").replaceChildren();
-    add("user", text);
+    const mine = add("user", text);
     const waiting = add("assistant", "thinking…", true);
     el("send").disabled = true;
     say("");
@@ -349,6 +406,30 @@
         body: JSON.stringify({ agent: el("agent").value, session, text, new: fresh }),
       });
       const body = await r.json().catch(() => ({}));
+      const agent = el("agent").value;
+      if (r.status === 404 && session && session === remembered(agent)) {
+        // The conversation this widget remembered is gone: forget it and
+        // send the message again, as a message with none named.
+        forget(agent);
+        session = "";
+        mine.remove();
+        waiting.remove();
+        el("text").value = text;
+        setTimeout(() => el("ask").requestSubmit(), 0);
+        return;
+      }
+      if (r.status === 409 && body.choose && body.choose.length) {
+        // Several recent conversations could be meant. Ask here, put what
+        // was typed back, and send it to the one picked.
+        mine.remove();
+        waiting.remove();
+        el("text").value = text;
+        chooser(body.choose, (id) => {
+          if (id) { session = id; fresh = false; } else { session = ""; fresh = true; }
+          el("ask").requestSubmit();
+        });
+        return;
+      }
       if (!r.ok) throw new Error(body.error || r.statusText);
       if (body.command) {
         // A slash command: answered without the assistant. /new and
@@ -356,12 +437,14 @@
         if (body.newConversation) {
           session = "";
           fresh = true;
+          forget(agent);
           log.replaceChildren();
           add("assistant", body.reply || "");
         } else {
           if (body.session) {
             session = body.session;
             fresh = false;
+            remember(agent, session);
           }
           waiting.classList.remove("pending");
           waiting.textContent = body.reply || "";
@@ -370,6 +453,7 @@
       }
       session = body.session || session;
       fresh = false;
+      if (session) remember(agent, session);
       waiting.classList.remove("pending");
       waiting.textContent = body.reply || "(no answer)";
       if (body.proposals) {

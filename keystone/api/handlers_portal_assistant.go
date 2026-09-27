@@ -103,7 +103,12 @@ func (s *Server) assistantAgents(_ http.ResponseWriter, r *http.Request, member 
 			Dictation:      s.canDictate(b.Name),
 		})
 	}
-	out := map[string]any{"agents": agents, "member": member}
+	out := map[string]any{"agents": agents, "member": member,
+		// How long a conversation counts as recent: the pages remember
+		// the one they were in for exactly this long, so a remembered
+		// conversation never outlives the window the server continues
+		// by (design §7).
+		"sessionRecencySeconds": int(s.sessionRecencyWindow() / time.Second)}
 	if s.Speech.Enabled() {
 		// How long the mic records before stopping on its own: the
 		// same limit the server enforces.
@@ -300,12 +305,19 @@ func (s *Server) assistantAsk(_ http.ResponseWriter, r *http.Request, member str
 		return nil, http.StatusServiceUnavailable, fmt.Errorf("no assistant is configured on this deployment")
 	}
 	if prior == nil && !req.New {
-		found, n, err := s.trustedContinuation(member, agent, portal.Connection)
+		found, candidates, err := s.trustedContinuation(member, agent, portal.Connection)
 		if err != nil {
 			return nil, http.StatusInternalServerError, err
 		}
-		if n > 1 {
-			return nil, http.StatusConflict, continuationChoiceError(n)
+		if len(candidates) > 1 {
+			// Ask, don't guess (design §7): nothing is continued, and the
+			// dashboard is handed the candidates to offer, so the Person
+			// picks one and the same message is sent to it — rather than
+			// being told to go and find it in their history.
+			return map[string]any{
+				"error":  continuationChoiceError(len(candidates)).Error(),
+				"choose": continuationChoices(candidates),
+			}, http.StatusConflict, nil
 		}
 		prior = found
 	}

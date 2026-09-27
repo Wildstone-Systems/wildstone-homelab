@@ -170,19 +170,57 @@ func (s *Server) sessionCandidates(identity, agent string, current continuationC
 // trustedContinuation is the trusted-UI resolver. Homepage uses it for
 // automatic continuation; Console already presents the same sessions in its
 // conversation rail and continues the one the Owner explicitly opens.
-func (s *Server) trustedContinuation(identity, agent, connection string) (*turnContext, int, error) {
+//
+// With more than one candidate nothing is continued and the candidates
+// are returned, already filtered, so the surface can ask which one
+// (design §7 "Ambiguous continuation").
+func (s *Server) trustedContinuation(identity, agent, connection string) (*turnContext, []safeSessionCandidate, error) {
 	candidates, _, err := s.sessionCandidates(identity, agent, trustedContinuationConnection(connection), time.Time{})
 	if err != nil {
-		return nil, 0, err
+		return nil, nil, err
 	}
 	if len(candidates) != 1 {
-		return nil, len(candidates), nil
+		return nil, candidates, nil
 	}
 	sess, err := s.DB.GetButlerSession(candidates[0].SessionID)
 	if err != nil {
-		return nil, 0, err
+		return nil, nil, err
 	}
-	return &turnContext{SessionID: sess.ID, History: historyFrom(sess.Turns)}, 1, nil
+	return &turnContext{SessionID: sess.ID, History: historyFrom(sess.Turns)}, candidates, nil
+}
+
+// continuationChoice is one conversation a trusted surface may offer when
+// a message could continue several: the id to send it to, and the subject
+// and last activity the Person recognises it by, each only where the
+// disclosure filter allowed it (safeSessionCandidate).
+type continuationChoice struct {
+	Session string `json:"session"`
+	Subject string `json:"subject,omitempty"`
+	At      string `json:"at,omitempty"`
+}
+
+// continuationChoices is the choice list for candidates, most recent first
+// (their own order), at most one page of them.
+func continuationChoices(candidates []safeSessionCandidate) []continuationChoice {
+	out := make([]continuationChoice, 0, min(len(candidates), sessionChoicesPerPage))
+	for _, c := range candidates {
+		if len(out) == sessionChoicesPerPage {
+			break
+		}
+		choice := continuationChoice{Session: c.SessionID}
+		if c.ShowSubject {
+			subject := strings.TrimSpace(c.Subject)
+			if len([]rune(subject)) > 72 {
+				subject = string([]rune(subject)[:72]) + "…"
+			}
+			choice.Subject = subject
+		}
+		if c.ShowTime {
+			choice.At = c.LastTurnAt.UTC().Format(time.RFC3339)
+		}
+		out = append(out, choice)
+	}
+	return out
 }
 
 func continuationChoiceError(n int) error {
