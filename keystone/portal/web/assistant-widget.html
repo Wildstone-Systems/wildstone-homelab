@@ -119,19 +119,24 @@
   // recent one could be meant, and otherwise asks (design §7, "Ambiguous
   // continuation"). Remembering the one this widget was in keeps a
   // reload from turning into a question: sending to it is not a guess.
-  // Only for as long as a conversation counts as recent (Keystone's
-  // default 30 minutes). The same code is in home.html and
+  // Only for as long as a conversation counts as recent. The same code is in home.html and
   // assistant.html; change one, change all three.
-  const RECENT_MS = 30 * 60 * 1000;
-  const memoryKey = (name) => "wildstone.assistant.session." + name;
+  //
+  // Keyed by the signed-in member as well as the assistant, so two
+  // people sharing a browser keep their own. recentMs is the server's
+  // own window (sessionRecencySeconds).
+  let recentMs = 30 * 60 * 1000, whose = "";
+  const memoryKey = (name) => "wildstone.assistant.session." + whose + "." + name;
   const remembered = (name) => {
+    if (!whose) return "";
     try {
       const v = JSON.parse(localStorage.getItem(memoryKey(name)) || "null");
-      if (v && v.session && Date.now() - v.at < RECENT_MS) return v.session;
+      if (v && v.session && Date.now() - v.at < recentMs) return v.session;
     } catch (e) {}
     return "";
   };
   const remember = (name, id) => {
+    if (!whose) return;
     try { localStorage.setItem(memoryKey(name), JSON.stringify({ session: id, at: Date.now() })); } catch (e) {}
   };
   const forget = (name) => { try { localStorage.removeItem(memoryKey(name)); } catch (e) {} };
@@ -335,6 +340,8 @@
       return;
     }
     const chosen = agents[0];
+    whose = body.member || "";
+    if (body.sessionRecencySeconds > 0) recentMs = body.sessionRecencySeconds * 1000;
     session = remembered(chosen.name);
     maxDictation = body.dictationMaxSeconds || 0;
     dict.show(canDictate(chosen.name));

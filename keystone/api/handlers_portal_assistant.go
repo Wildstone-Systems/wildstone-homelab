@@ -103,7 +103,12 @@ func (s *Server) assistantAgents(_ http.ResponseWriter, r *http.Request, member 
 			Dictation:      s.canDictate(b.Name),
 		})
 	}
-	out := map[string]any{"agents": agents, "member": member}
+	out := map[string]any{"agents": agents, "member": member,
+		// How long a conversation counts as recent: the pages remember
+		// the one they were in for exactly this long, so a remembered
+		// conversation never outlives the window the server continues
+		// by (design §7).
+		"sessionRecencySeconds": int(s.sessionRecencyWindow() / time.Second)}
 	if s.Speech.Enabled() {
 		// How long the mic records before stopping on its own: the
 		// same limit the server enforces.

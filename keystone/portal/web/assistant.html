@@ -278,19 +278,25 @@
   // recent one could be meant, and otherwise asks (design §7, "Ambiguous
   // continuation"). Remembering the one this page was in keeps a reload
   // from turning into a question: it is reopened, not guessed at. Only
-  // for as long as a conversation counts as recent (Keystone's default
-  // 30 minutes). The same code is in home.html and assistant-widget.html;
+  // for as long as a conversation counts as recent. The same code is in home.html and assistant-widget.html;
   // change one, change all three.
-  var RECENT_MS = 30 * 60 * 1000;
-  function memoryKey(name) { return "wildstone.assistant.session." + name; }
+  //
+  // Keyed by the signed-in member as well as the assistant, so two
+  // people sharing a browser keep their own. recentMs is the server's
+  // own window (sessionRecencySeconds), and "at" is when the
+  // conversation last had a turn — a quiet reopen does not move it.
+  var recentMs = 30 * 60 * 1000, whose = "";
+  function memoryKey(name) { return "wildstone.assistant.session." + whose + "." + name; }
   function remembered(name) {
+    if (!whose) { return ""; }
     try {
       var v = JSON.parse(localStorage.getItem(memoryKey(name)) || "null");
-      if (v && v.session && Date.now() - v.at < RECENT_MS) { return v.session; }
+      if (v && v.session && Date.now() - v.at < recentMs) { return v.session; }
     } catch (e) {}
     return "";
   }
   function remember(name, id) {
+    if (!whose) { return; }
     try { localStorage.setItem(memoryKey(name), JSON.stringify({ session: id, at: Date.now() })); } catch (e) {}
   }
   function forget(name) {
@@ -506,6 +512,8 @@
       .then(function (res) {
         if (!res.ok) { throw new Error(res.j.error || "no assistant is set up yet"); }
         member = res.j.member || "";
+        whose = member;
+        if (res.j.sessionRecencySeconds > 0) { recentMs = res.j.sessionRecencySeconds * 1000; }
         text("member", member);
         text("caps-head", member ? "What it may do as " + member : "What it may do");
         agents = res.j.agents || [];
@@ -739,7 +747,9 @@
         text("session-id", session);
         text("thread-title", "Conversation");
         thread.scrollTop = thread.scrollHeight;
-        remember(agent, session);
+        // An explicit open is where the person now is. A quiet reopen of
+        // the remembered one changes nothing: its clock is its last turn.
+        if (!quiet) { remember(agent, session); }
         loadConversations();
       })
       .catch(function (err) {

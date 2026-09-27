@@ -2203,20 +2203,27 @@
   // continuation"). Remembering the one this page was in keeps a reload
   // from turning into a question: sending to it is not a guess, it is
   // where the person was. Only for as long as a conversation counts as
-  // recent (Keystone's default 30 minutes); after that the next message
-  // starts fresh, as the server would. The same code is in
+  // recent; after that the next message starts fresh, as the server
+  // would. The same code is in
   // assistant.html and assistant-widget.html; change one, change all
   // three.
-  var RECENT_MS = 30 * 60 * 1000;
-  function memoryKey(name) { return "wildstone.assistant.session." + name; }
+  //
+  // Keyed by the signed-in member as well as the assistant, so two
+  // people sharing a browser keep their own. recentMs is the server's
+  // own window (sessionRecencySeconds), and "at" is when the
+  // conversation last had a turn — a quiet reopen does not move it.
+  var recentMs = 30 * 60 * 1000, whose = "";
+  function memoryKey(name) { return "wildstone.assistant.session." + whose + "." + name; }
   function remembered(name) {
+    if (!whose) { return ""; }
     try {
       var v = JSON.parse(localStorage.getItem(memoryKey(name)) || "null");
-      if (v && v.session && Date.now() - v.at < RECENT_MS) { return v.session; }
+      if (v && v.session && Date.now() - v.at < recentMs) { return v.session; }
     } catch (e) {}
     return "";
   }
   function remember(name, id) {
+    if (!whose) { return; }
     try { localStorage.setItem(memoryKey(name), JSON.stringify({ session: id, at: Date.now() })); } catch (e) {}
   }
   function forget(name) {
@@ -2296,6 +2303,8 @@
           return;
         }
         agent = agents[0].name;
+        whose = res.j.member || "";
+        if (res.j.sessionRecencySeconds > 0) { recentMs = res.j.sessionRecencySeconds * 1000; }
         session = remembered(agent);
         if (session) { el("open-conversation").href = "/assistant/?session=" + encodeURIComponent(session); }
         maxDictation = res.j.dictationMaxSeconds || 0;

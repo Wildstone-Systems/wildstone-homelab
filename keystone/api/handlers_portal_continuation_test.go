@@ -74,3 +74,25 @@ func TestTheDashboardIsHandedTheConversationsToChooseFrom(t *testing.T) {
 		t.Fatalf("choices = %+v, want each conversation with its subject", out.Choose)
 	}
 }
+
+// The pages remember a conversation for exactly as long as the server
+// continues one, and by whom: the agents list carries both.
+func TestTheAgentsListCarriesTheRecencyWindowAndTheMember(t *testing.T) {
+	h, _ := portalHarness(t)
+	webCommandAgents(t, h)
+	res := h.member(http.MethodGet, "/api/v1/assistant/agents", "sam", "assistant_users", nil, "")
+	defer res.Body.Close()
+	var out struct {
+		Member  string `json:"member"`
+		Recency int    `json:"sessionRecencySeconds"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Member != "sam" {
+		t.Errorf("member = %q, want sam", out.Member)
+	}
+	if want := int(h.s.sessionRecencyWindow().Seconds()); out.Recency != want {
+		t.Errorf("sessionRecencySeconds = %d, want the server's window %d", out.Recency, want)
+	}
+}
