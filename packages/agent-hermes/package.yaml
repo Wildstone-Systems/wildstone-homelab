@@ -323,11 +323,19 @@ templates:
         # talks to the Agent, so a skill learned in one person's
         # conversation would reach every other person's turn, the same
         # crossing that turned off memory and session_search above
-        # (#389). write_approval stages every skill write, from a turn
-        # or from Hermes's background review, and an unattended install
-        # has nobody to approve one, so none is committed. Members change
-        # after install without a re-render, so this is not conditional
-        # on how many people the Agent serves.
+        # (#389). write_approval stages every skill write Hermes makes
+        # through its skill tools, from a turn or from its background
+        # review, and an unattended install has nobody to approve one, so
+        # none is committed. Members change after install without a
+        # re-render, so this is not conditional on how many people the
+        # Agent serves.
+        #
+        # It does not bound a shell. Under sandboxed and host-admin the
+        # terminal and file toolsets can write anywhere in /opt/data,
+        # skills/ included, and Hermes has no setting that confines them
+        # (its docs: the OS and the backend are the only boundaries).
+        # What a shell-bearing profile may persist across people is part
+        # of the pass-through design, #390.
         skills:
           write_approval: true
         database:
