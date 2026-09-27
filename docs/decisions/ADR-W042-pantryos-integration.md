@@ -129,6 +129,7 @@ Declared in the package's `publishes:` block, shape `native`:
 | `pantry.recipe_cooked` | — | `recipe, recipe_id, servings_made \| batches, leftover_servings` |
 | `pantry.stock_low` | — | `item, item_id, on_hand, threshold, unit` |
 | `pantry.item_expiring` | — | `item, item_id, expires_on, days_left, quantity, unit` |
+| `pantry.timer_finished` | — | `label, duration_seconds, recipe, step_number` (A5.1) |
 
 - **Subject mapping (W024 A8):** PantryOS links each household profile to a
   member name. Unlinked profiles publish with no subject — a valid event that
@@ -156,7 +157,12 @@ policy validates them and an Owner may make them stricter, never weaker
 | `get_recipe` | `pantry.recipe` | read |
 | `start_cooking` | `pantry.cook.start` | read |
 | `current_step` | `pantry.cook.current` | read |
-| `cooking_step` (next / previous / repeat / goto) | `pantry.cook.step` | read |
+| `cooking_step` (next / previous / repeat / goto / complete) | `pantry.cook.step` | read |
+| `complete_step` | `pantry.cook.step` (complete) | read |
+| `read_steps` | `pantry.cook.current` | read |
+| `set_timer` | `pantry.timer.set` | read |
+| `list_timers` | `pantry.timers` | read |
+| `cancel_timer` | `pantry.timer.cancel` | read |
 | `stop_cooking` | `pantry.cook.abandon` | read |
 | `add_to_grocery_list` | `pantry.add` | domestic |
 | `check_grocery_item` | `pantry.check` | domestic |
@@ -165,6 +171,21 @@ policy validates them and an Owner may make them stricter, never weaker
 - Moving through a cook-along is `read`: it changes no stock. Only
   `finish_cooking` removes ingredients, so it is `confirm` — a person is
   asked, and a routine cannot run it alone.
+- **A5.1, cooking along (chickenrat17/PantryOS#76):** the kitchen tablet
+  and the agent drive ONE cook session in PantryOS, so "next" said to the
+  agent moves the tablet, and a tick on the tablet is what the agent reads
+  back.
+  - `complete_step` ticks off a step and reads the next one not yet done
+    ("done, what's next?"); `read_steps` reads them all, marking what is done.
+  - Kitchen timers live in PantryOS: `set_timer` ties one to the cook and its
+    step, and the tablet shows and rings it. A step's own words suggest a
+    time ("simmer 20 minutes"), which the agent offers and never starts on
+    its own. A timer that goes off is `pantry.timer_finished`, so a routine
+    can announce it where nobody is near the tablet.
+  - Ticking and timers are `read`, like moving a step: they change no stock.
+  - The plan set on the tablet (amounts changed, ingredients left out,
+    "use it all") is kept in the session, so an agent's `finish_cooking`
+    cooks what was set up there.
 - **Not in v1:** `log_meal` and `delete_meal` (they need a food-name →
   catalog-item resolution step PantryOS does not expose yet), fetching
   product URLs (outbound fetches), receipt/cloud AI, and anything admin.

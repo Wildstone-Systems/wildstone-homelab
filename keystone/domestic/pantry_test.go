@@ -311,3 +311,113 @@ func TestPantryWritesAreHeldByTheExecutionAuthority(t *testing.T) {
 		t.Fatalf("PantryOS was asked: %v", up.asked)
 	}
 }
+
+// A cook-along session as PantryOS answers it after "done" on step 1 of 3,
+// with the step's own words suggesting a timer (ADR-W042 A5.1).
+const afterTickingOne = `{"session":{"recipe_name":"Pasta","step_number":2,"total_steps":3,
+ "step_text":"Cook the pasta 9 minutes.","is_last_step":false,"step_done":false,"steps_left":2,
+ "step_timers":[{"seconds":540,"label":"9 minutes"}],
+ "steps":[{"number":1,"text":"Boil the water.","done":true},{"number":2,"text":"Cook the pasta 9 minutes.","done":false},
+          {"number":3,"text":"Drain.","done":false}]}}`
+
+func TestTickingOffAStepReadsTheNextOne(t *testing.T) {
+	up := &scriptedPantry{answers: map[string]func(map[string]any) (adapter.Answer, error){
+		pantry.CapCookStep:    ok(afterTickingOne),
+		pantry.CapCookCurrent: ok(afterTickingOne),
+	}}
+	g, asked, _ := pantryGateway(t, up, true)
+	ctx := context.Background()
+
+	r, err := g.Dispatch(ctx, pantryCall(PantryToolCompleteStep, nil))
+	want := "Done. Next — Pasta, step 2 of 3: Cook the pasta 9 minutes. I can set a 9 minutes timer for this step."
+	if err != nil || r.Summary != want {
+		t.Fatalf("complete = %q %v", r.Summary, err)
+	}
+	if got := up.asked[0]; got != "act pantry.cook.step map[action:complete]" {
+		t.Fatalf("PantryOS was asked %q", got)
+	}
+	// cooking_step's "complete" is the same thing.
+	if _, err := g.Dispatch(ctx, pantryCall(PantryToolCookingStep, map[string]string{"action": "complete"})); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := g.Dispatch(ctx, pantryCall(PantryToolCompleteStep, map[string]string{"step": "zero"})); err == nil {
+		t.Fatal("a step that is not a number was sent to PantryOS")
+	}
+
+	r, err = g.Dispatch(ctx, pantryCall(PantryToolReadSteps, nil))
+	want = "Pasta has 3 steps, 2 left. Step 1 (done): Boil the water. Step 2: Cook the pasta 9 minutes. Step 3: Drain."
+	if err != nil || r.Summary != want {
+		t.Fatalf("read steps = %q %v", r.Summary, err)
+	}
+	// Ticking steps is a read-tier act: nobody was asked to confirm it.
+	if len(*asked) != 0 {
+		t.Fatalf("ticking a step asked for confirmation: %v", *asked)
+	}
+}
+
+func TestTheLastTickSaysEverythingIsDone(t *testing.T) {
+	up := &scriptedPantry{answers: map[string]func(map[string]any) (adapter.Answer, error){
+		pantry.CapCookStep: ok(`{"session":{"recipe_name":"Pasta","step_number":3,"total_steps":3,"step_text":"Drain.",
+			"is_last_step":true,"step_done":true,"steps_left":0}}`),
+	}}
+	g, _, _ := pantryGateway(t, up, true)
+	r, err := g.Dispatch(context.Background(), pantryCall(PantryToolCompleteStep, nil))
+	if err != nil || !strings.HasPrefix(r.Summary, "Done — that's every step of Pasta.") {
+		t.Fatalf("last tick = %q %v", r.Summary, err)
+	}
+}
+
+func TestKitchenTimers(t *testing.T) {
+	up := &scriptedPantry{answers: map[string]func(map[string]any) (adapter.Answer, error){
+		pantry.CapTimerSet: ok(`{"timer":{"id":"t1","label":"Pasta","remaining_seconds":540,"state":"running"}}`),
+		pantry.CapTimers: ok(`{"timers":[{"label":"Garlic bread","remaining_seconds":0,"state":"ringing"},
+			{"label":"Pasta","remaining_seconds":5390,"state":"running"}]}`),
+		pantry.CapTimerCancel: ok(`{"timer":{"label":"Pasta","stopped":"cancelled"}}`),
+	}}
+	g, _, _ := pantryGateway(t, up, true)
+	ctx := context.Background()
+
+	r, err := g.Dispatch(ctx, pantryCall(PantryToolSetTimer, map[string]string{"minutes": "9", "label": "pasta"}))
+	if err != nil || r.Summary != "Started a 9 minutes timer for Pasta. The kitchen tablet will ring." || !r.EffectConfirmed {
+		t.Fatalf("set = %q %v", r.Summary, err)
+	}
+	if got := up.asked[0]; got != "act pantry.timer.set map[label:pasta seconds:540]" {
+		t.Fatalf("PantryOS was asked %q", got)
+	}
+	for _, bad := range []string{"", "0", "-3", "soon", "2000"} {
+		if _, err := g.Dispatch(ctx, pantryCall(PantryToolSetTimer, map[string]string{"minutes": bad})); err == nil {
+			t.Fatalf("minutes %q was sent to PantryOS", bad)
+		}
+	}
+
+	r, err = g.Dispatch(ctx, pantryCall(PantryToolListTimers, nil))
+	if err != nil || r.Summary != "Garlic bread is ringing and Pasta has 1 hour 30 minutes left." {
+		t.Fatalf("list = %q %v", r.Summary, err)
+	}
+	r, err = g.Dispatch(ctx, pantryCall(PantryToolCancelTimer, map[string]string{"label": "pasta"}))
+	if err != nil || r.Summary != "Cancelled the Pasta timer." {
+		t.Fatalf("cancel = %q %v", r.Summary, err)
+	}
+}
+
+func TestNoTimersIsSaidPlainly(t *testing.T) {
+	up := &scriptedPantry{answers: map[string]func(map[string]any) (adapter.Answer, error){
+		pantry.CapTimers: empty(`{"timers":[]}`),
+	}}
+	g, _, _ := pantryGateway(t, up, true)
+	r, err := g.Dispatch(context.Background(), pantryCall(PantryToolListTimers, nil))
+	if err != nil || r.Summary != "No kitchen timers are running." {
+		t.Fatalf("no timers = %q %v", r.Summary, err)
+	}
+}
+
+func TestDurationsAreSpoken(t *testing.T) {
+	for in, want := range map[int]string{
+		1: "1 second", 45: "45 seconds", 60: "1 minute", 540: "9 minutes", 3600: "1 hour",
+		5400: "1 hour 30 minutes", 7170: "2 hours",
+	} {
+		if got := duration(in); got != want {
+			t.Errorf("duration(%d) = %q, want %q", in, got, want)
+		}
+	}
+}

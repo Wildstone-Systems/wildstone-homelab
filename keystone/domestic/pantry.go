@@ -54,6 +54,11 @@ const (
 	PantryToolStartCooking   = "start_cooking"
 	PantryToolCurrentStep    = "current_step"
 	PantryToolCookingStep    = "cooking_step"
+	PantryToolCompleteStep   = "complete_step"
+	PantryToolReadSteps      = "read_steps"
+	PantryToolSetTimer       = "set_timer"
+	PantryToolListTimers     = "list_timers"
+	PantryToolCancelTimer    = "cancel_timer"
 	PantryToolStopCooking    = "stop_cooking"
 	PantryToolAddGroceries   = "add_to_grocery_list"
 	PantryToolCheckGroceries = "check_grocery_item"
@@ -72,6 +77,13 @@ var PantryTools = map[string]string{
 	PantryToolStartCooking:   TierRead,
 	PantryToolCurrentStep:    TierRead,
 	PantryToolCookingStep:    TierRead,
+	// Ticking steps and kitchen timers change nothing in the pantry, like
+	// moving a step (ADR-W042 A5.1).
+	PantryToolCompleteStep:   TierRead,
+	PantryToolReadSteps:      TierRead,
+	PantryToolSetTimer:       TierRead,
+	PantryToolListTimers:     TierRead,
+	PantryToolCancelTimer:    TierRead,
 	PantryToolStopCooking:    TierRead,
 	PantryToolAddGroceries:   TierDomestic,
 	PantryToolCheckGroceries: TierDomestic,
@@ -90,8 +102,18 @@ var pantryUsage = map[string]string{
 	PantryToolStartCooking: "Start cooking a recipe step by step; answers with step 1. Takes nothing out of the pantry. " +
 		"params: recipe_id (required), servings (optional; servings to make, default the recipe as written).",
 	PantryToolCurrentStep: "Which step of the recipe being cooked we are on (\"where was I?\"). No params.",
-	PantryToolCookingStep: "Move through the recipe being cooked. params: action (required: next, previous, repeat or goto), " +
-		"step (required for goto; 1 is the first step).",
+	PantryToolCookingStep: "Move through the recipe being cooked without ticking anything off. params: action (required: " +
+		"next, previous, repeat or goto), step (required for goto; 1 is the first step).",
+	PantryToolCompleteStep: "Tick off a step of the recipe being cooked (\"done, what's next?\") and read the next step not " +
+		"yet done. params: step (optional; default the step we are on). The kitchen tablet shows the tick at once.",
+	PantryToolReadSteps: "Read every step of the recipe being cooked, saying which are done — for \"what's left?\" or " +
+		"\"read me the whole thing\". No params.",
+	PantryToolSetTimer: "Start a kitchen timer; the kitchen tablet shows it and rings. While a recipe is being cooked, the " +
+		"timer is tied to its step, and the step may suggest a time (\"simmer 20 minutes\"). params: minutes (required; " +
+		"may be a fraction, 0.5 is 30 seconds), label (optional, e.g. pasta).",
+	PantryToolListTimers: "The kitchen timers running or ringing, with the time left on each. No params.",
+	PantryToolCancelTimer: "Stop a kitchen timer: cancels one still running, silences one ringing. params: label (optional; " +
+		"which timer, e.g. pasta — omit when there is only one).",
 	PantryToolStopCooking:    "Stop cooking without finishing; nothing is taken out of the pantry. No params.",
 	PantryToolAddGroceries:   "Put items on the grocery list; an item already on it is not added twice. params: items (required; separate several with commas).",
 	PantryToolCheckGroceries: "Tick items off the grocery list (bought). params: items (required; separate several with commas).",
@@ -170,6 +192,16 @@ func (t *pantryTool) Execute(ctx context.Context, c Call) (Result, error) {
 		return p.currentStep(ctx)
 	case PantryToolCookingStep:
 		return p.cookingStep(ctx, c)
+	case PantryToolCompleteStep:
+		return p.completeStep(ctx, c)
+	case PantryToolReadSteps:
+		return p.readSteps(ctx)
+	case PantryToolSetTimer:
+		return p.setTimer(ctx, c)
+	case PantryToolListTimers:
+		return p.listTimers(ctx)
+	case PantryToolCancelTimer:
+		return p.cancelTimer(ctx, c)
 	case PantryToolStopCooking:
 		return p.stopCooking(ctx)
 	case PantryToolAddGroceries:
@@ -428,6 +460,19 @@ type cookSession struct {
 	Text        string
 	Last        bool
 	Uses        []string
+	// Done is whether the current step is ticked off; Left is how many
+	// steps are not; Steps is every step, for read_steps.
+	Done  bool
+	Left  int
+	Steps []cookStep
+	// Suggest is the timer the step's own words name ("20 minutes").
+	Suggest string
+}
+
+type cookStep struct {
+	Number int
+	Text   string
+	Done   bool
 }
 
 func sessionOf(v any) *cookSession {
@@ -441,6 +486,14 @@ func sessionOf(v any) *cookSession {
 		Total:  intOf(m["total_steps"], 0),
 		Text:   str(m["step_text"]),
 		Last:   m["is_last_step"] == true,
+		Done:   m["step_done"] == true,
+		Left:   intOf(m["steps_left"], -1),
+	}
+	for _, st := range listOf(m["steps"]) {
+		s.Steps = append(s.Steps, cookStep{Number: intOf(st["number"], 0), Text: str(st["text"]), Done: st["done"] == true})
+	}
+	if timers := listOf(m["step_timers"]); len(timers) > 0 {
+		s.Suggest = str(timers[0]["label"])
 	}
 	if f, ok := number(m["servings_made"]); ok {
 		s.Servings = f
@@ -463,7 +516,16 @@ func (s *cookSession) read() string {
 	if !strings.HasSuffix(out, ".") {
 		out += "."
 	}
-	if s.Last {
+	if s.Done {
+		out += " (Already done.)"
+	}
+	if s.Suggest != "" {
+		out += fmt.Sprintf(" I can set a %s timer for this step.", s.Suggest)
+	}
+	switch {
+	case s.Left == 0:
+		out += " That's every step done — say when to finish, and I'll take the ingredients out of the pantry."
+	case s.Last:
 		out += " That's the last step — say when it's done and I'll take the ingredients out of the pantry."
 	}
 	return out
@@ -520,6 +582,8 @@ func (p *Pantry) cookingStep(ctx context.Context, c Call) (Result, error) {
 	req := map[string]any{"action": action}
 	switch action {
 	case "next", "previous", "repeat":
+	case "complete":
+		return p.completeStep(ctx, c)
 	case "goto":
 		n, err := strconv.Atoi(strings.TrimSpace(c.Params["step"]))
 		if err != nil || n < 1 {
@@ -538,6 +602,159 @@ func (p *Pantry) cookingStep(ctx context.Context, c Call) (Result, error) {
 		return Result{}, errors.New("PantryOS moved the step but did not say which it is now")
 	}
 	return Result{Summary: s.read()}, nil
+}
+
+// completeStep ticks a step off and reads the next one not yet done.
+func (p *Pantry) completeStep(ctx context.Context, c Call) (Result, error) {
+	req := map[string]any{"action": "complete"}
+	if v := strings.TrimSpace(c.Params["step"]); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 {
+			return Result{}, errors.New("step is a step number, 1 or more")
+		}
+		req["step"] = n
+	}
+	d, _, err := p.ask(ctx, true, pantry.CapCookStep, req)
+	if err != nil {
+		return Result{}, err
+	}
+	s := sessionOf(d["session"])
+	if s == nil {
+		return Result{}, errors.New("PantryOS ticked the step but did not say which step is next")
+	}
+	if s.Left == 0 {
+		return Result{Summary: fmt.Sprintf("Done — that's every step of %s. Say when to finish, and I'll take the "+
+			"ingredients out of the pantry.", s.Recipe)}, nil
+	}
+	return Result{Summary: "Done. Next — " + s.read()}, nil
+}
+
+// readSteps reads the whole recipe being cooked, marking what is done.
+func (p *Pantry) readSteps(ctx context.Context) (Result, error) {
+	s, err := p.session(ctx)
+	if err != nil {
+		return Result{}, err
+	}
+	if s == nil {
+		return Result{Summary: "Nothing is being cooked right now."}, nil
+	}
+	if len(s.Steps) == 0 {
+		return Result{Summary: fmt.Sprintf("%s has no written steps.", s.Recipe)}, nil
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s has %d steps", s.Recipe, len(s.Steps))
+	if s.Left >= 0 {
+		fmt.Fprintf(&b, ", %d left", s.Left)
+	}
+	b.WriteString(".")
+	for _, st := range s.Steps {
+		mark := ""
+		if st.Done {
+			mark = " (done)"
+		}
+		fmt.Fprintf(&b, " Step %d%s: %s", st.Number, mark, strings.TrimSpace(st.Text))
+		if !strings.HasSuffix(b.String(), ".") {
+			b.WriteString(".")
+		}
+	}
+	return Result{Summary: b.String()}, nil
+}
+
+// maxTimerMinutes matches PantryOS's own bound: a day.
+const maxTimerMinutes = 24 * 60
+
+func (p *Pantry) setTimer(ctx context.Context, c Call) (Result, error) {
+	raw := strings.TrimSpace(c.Params["minutes"])
+	minutes, err := strconv.ParseFloat(raw, 64)
+	if err != nil || minutes <= 0 || minutes > maxTimerMinutes {
+		return Result{}, fmt.Errorf("minutes must be a number above zero and at most a day, not %q", raw)
+	}
+	seconds := int(minutes*60 + 0.5)
+	if seconds < 1 {
+		seconds = 1
+	}
+	req := map[string]any{"seconds": seconds}
+	if label := strings.TrimSpace(c.Params["label"]); label != "" {
+		req["label"] = label
+	}
+	d, _, err := p.ask(ctx, true, pantry.CapTimerSet, req)
+	if err != nil {
+		return Result{}, err
+	}
+	t, _ := d["timer"].(map[string]any)
+	return Result{EffectConfirmed: true, Summary: fmt.Sprintf("Started a %s timer for %s. The kitchen tablet will ring.",
+		duration(seconds), timerName(t)), Detail: map[string]string{"timer_id": str(t["id"])}}, nil
+}
+
+func (p *Pantry) listTimers(ctx context.Context) (Result, error) {
+	d, empty, err := p.ask(ctx, false, pantry.CapTimers, nil)
+	if err != nil {
+		return Result{}, err
+	}
+	timers := listOf(d["timers"])
+	if empty || len(timers) == 0 {
+		return Result{Summary: "No kitchen timers are running."}, nil
+	}
+	parts := make([]string, 0, len(timers))
+	for _, t := range timers {
+		if str(t["state"]) == "ringing" {
+			parts = append(parts, timerName(t)+" is ringing")
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("%s has %s left", timerName(t), duration(intOf(t["remaining_seconds"], 0))))
+	}
+	return Result{Summary: capitalise(spoken(parts)) + "."}, nil
+}
+
+func (p *Pantry) cancelTimer(ctx context.Context, c Call) (Result, error) {
+	req := map[string]any{}
+	if label := strings.TrimSpace(c.Params["label"]); label != "" {
+		req["label"] = label
+	}
+	d, _, err := p.ask(ctx, true, pantry.CapTimerCancel, req)
+	if err != nil {
+		return Result{}, err
+	}
+	t, _ := d["timer"].(map[string]any)
+	verb := "Cancelled"
+	if str(t["stopped"]) == "dismissed" {
+		verb = "Silenced"
+	}
+	return Result{EffectConfirmed: true, Summary: fmt.Sprintf("%s the %s timer.", verb, timerName(t))}, nil
+}
+
+// timerName is how a timer is spoken of: its label, as given.
+func timerName(t map[string]any) string {
+	if name := strings.TrimSpace(str(t["label"])); name != "" {
+		return name
+	}
+	return "kitchen"
+}
+
+// duration speaks a number of seconds: "9 minutes", "1 hour 30 minutes",
+// "45 seconds".
+func duration(seconds int) string {
+	if seconds < 60 {
+		return counted(seconds, "second")
+	}
+	h, m := seconds/3600, (seconds%3600+30)/60
+	if m == 60 {
+		h, m = h+1, 0
+	}
+	switch {
+	case h == 0:
+		return counted(m, "minute")
+	case m == 0:
+		return counted(h, "hour")
+	}
+	return counted(h, "hour") + " " + counted(m, "minute")
+}
+
+func counted(n int, noun string) string {
+	if n == 1 {
+		return "1 " + noun
+	}
+	return fmt.Sprintf("%d %ss", n, noun)
 }
 
 func (p *Pantry) stopCooking(ctx context.Context) (Result, error) {

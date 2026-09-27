@@ -30,7 +30,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: pantry-pantryos
-  version: 0.1.0
+  version: 0.2.0
   capability: pantry
   profile: pantryos
   # One pantry. A second PantryOS would be a second grocery list.
@@ -95,13 +95,21 @@ publishes:
         - { name: days_left, type: number }
         - { name: quantity, type: number }
         - { name: unit, type: string }
+    - type: pantry.timer_finished
+      subject: household
+      description: A kitchen timer went off — set on the tablet or by an agent. Sent once per timer.
+      fields:
+        - { name: label, type: string, required: true }
+        - { name: duration_seconds, type: number }
+        - { name: recipe, type: string }
+        - { name: step_number, type: number }
 
 # The household actions this capability offers (ADR-W042 A5).
 # keystone/domestic.PantryTools is the other half of this list, and
 # TestPantryToolsAreDeclaredByThePackage fails if the two ever drift.
 #
-# Reads, and every cook-along step short of finishing, are `read`: they
-# change nothing in the pantry. Adding and ticking off groceries are
+# Reads, and every cook-along step short of finishing — ticking steps off
+# and kitchen timers included — are `read`: they change nothing in the pantry. Adding and ticking off groceries are
 # `domestic`: small, visible, repeat-safe. Finishing a cook takes every
 # ingredient out of stock at once, so it is `confirm`: a person is asked,
 # naming the dish, and a rule firing on its own cannot carry it.
@@ -115,6 +123,11 @@ agentTools:
   - { name: start_cooking, risk: read }
   - { name: current_step, risk: read }
   - { name: cooking_step, risk: read }
+  - { name: complete_step, risk: read }
+  - { name: read_steps, risk: read }
+  - { name: set_timer, risk: read }
+  - { name: list_timers, risk: read }
+  - { name: cancel_timer, risk: read }
   - { name: stop_cooking, risk: read }
   - { name: add_to_grocery_list, risk: domestic }
   - { name: check_grocery_item, risk: domestic }

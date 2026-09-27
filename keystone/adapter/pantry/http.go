@@ -39,12 +39,15 @@ const (
 	CapRecipes     = "pantry.recipes"
 	CapRecipe      = "pantry.recipe"
 	CapCookCurrent = "pantry.cook.current"
+	CapTimers      = "pantry.timers"
 
 	CapCheck       = "pantry.check"
 	CapCookStart   = "pantry.cook.start"
 	CapCookStep    = "pantry.cook.step"
 	CapCookFinish  = "pantry.cook.finish"
 	CapCookAbandon = "pantry.cook.abandon"
+	CapTimerSet    = "pantry.timer.set"
+	CapTimerCancel = "pantry.timer.cancel"
 )
 
 // ErrRejected is PantryOS refusing a request it understood: a list that
@@ -60,10 +63,11 @@ var knownCapabilities = []adapter.Capability{
 	{Kind: "query", Name: CapList}, {Kind: "query", Name: CapInventory},
 	{Kind: "query", Name: CapExpiring}, {Kind: "query", Name: CapSummary},
 	{Kind: "query", Name: CapRecipes}, {Kind: "query", Name: CapRecipe},
-	{Kind: "query", Name: CapCookCurrent},
+	{Kind: "query", Name: CapCookCurrent}, {Kind: "query", Name: CapTimers},
 	{Kind: "action", Name: CapAdd}, {Kind: "action", Name: CapCheck},
 	{Kind: "action", Name: CapCookStart}, {Kind: "action", Name: CapCookStep},
 	{Kind: "action", Name: CapCookFinish}, {Kind: "action", Name: CapCookAbandon},
+	{Kind: "action", Name: CapTimerSet}, {Kind: "action", Name: CapTimerCancel},
 }
 
 // HTTP is a running PantryOS.
