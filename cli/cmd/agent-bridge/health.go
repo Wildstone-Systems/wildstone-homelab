@@ -33,25 +33,33 @@ var errNoHealthEndpoint = errors.New("hermes: no /health endpoint")
 type healthGate struct {
 	mu sync.Mutex
 	up bool
+	// known is false until the first probe has answered.
+	known bool
 	// ready is closed while up and replaced when Hermes goes down.
 	ready chan struct{}
 }
 
-// newHealthGate starts up: the first probe runs before either loop does
-// anything, and a gate that started down would hold the first poll back
-// for nothing.
+// newHealthGate starts closed, with nothing known. The heartbeat and
+// delivery loops start together, so a gate that started open would let
+// the first deliveries poll reach Keystone before the first probe had
+// said whether Hermes was there, and Keystone would count that poll as
+// the runtime arriving.
 func newHealthGate() *healthGate {
-	ready := make(chan struct{})
-	close(ready)
-	return &healthGate{up: true, ready: ready}
+	return &healthGate{ready: make(chan struct{})}
 }
 
-// set records a probe's result and reports whether it changed.
+// set records a probe's result and reports whether it changed, which
+// the first result always does.
 func (g *healthGate) set(up bool) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if g.up == up {
+	if g.known && g.up == up {
 		return false
+	}
+	g.known = true
+	if g.up == up {
+		// The first probe found Hermes down: the gate is closed already.
+		return true
 	}
 	g.up = up
 	if up {
@@ -101,7 +109,7 @@ func (b *bridge) probeHermes(ctx context.Context) bool {
 	up := err == nil
 	if b.health.set(up) {
 		if up {
-			b.log.Info("hermes is answering again; resuming heartbeats and deliveries")
+			b.log.Info("hermes is answering; heartbeats and deliveries running")
 		} else {
 			b.log.Warn("hermes is not answering; pausing heartbeats and deliveries so Wildstone marks this runtime offline",
 				"err", err)

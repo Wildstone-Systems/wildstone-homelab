@@ -79,7 +79,7 @@ func TestBridgeGoesQuietWhileHermesIsDown(t *testing.T) {
 		t.Fatalf("after hermes recovered: heartbeats=%d polls=%d, want both resumed", beats.Load(), polls.Load())
 	}
 	stop() // the loops write the log; stop them before reading it
-	for _, want := range []string{"hermes is not answering", "hermes is answering again"} {
+	for _, want := range []string{"hermes is not answering", "hermes is answering;"} {
 		if !strings.Contains(logBuf.String(), want) {
 			t.Errorf("log is missing %q:\n%s", want, logBuf.String())
 		}
@@ -102,5 +102,38 @@ func TestHermesWithoutAHealthEndpointCountsAsUp(t *testing.T) {
 	br.probeHermes(t.Context())
 	if n := strings.Count(logBuf.String(), "no /health endpoint"); n != 1 {
 		t.Errorf("\"no /health endpoint\" logged %d times, want once:\n%s", n, logBuf.String())
+	}
+}
+
+// The delivery loop waits for the first probe. It starts alongside the
+// heartbeat loop, and a poll that went out before anybody had asked
+// Hermes would tell Keystone the runtime had arrived.
+func TestNoDeliveriesPollBeforeTheFirstProbe(t *testing.T) {
+	var polls atomic.Int32
+	ks := &fakeClient{deliveriesFn: func(ctx context.Context, after string, wait time.Duration) ([]agentapi.Delivery, error) {
+		polls.Add(1)
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}}
+	br, _ := testBridge(t, ks, &fakeHermes{})
+	br.health = newHealthGate()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() { br.deliveryLoop(ctx); close(done) }()
+	time.Sleep(100 * time.Millisecond)
+	if n := polls.Load(); n != 0 {
+		t.Errorf("deliveries polls before any probe = %d, want 0", n)
+	}
+
+	br.probeHermes(ctx)
+	deadline := time.Now().Add(2 * time.Second)
+	for polls.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	<-done
+	if polls.Load() == 0 {
+		t.Fatal("no deliveries poll once the first probe found hermes up")
 	}
 }
