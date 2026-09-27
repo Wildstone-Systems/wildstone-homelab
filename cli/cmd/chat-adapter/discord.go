@@ -22,9 +22,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -54,6 +56,10 @@ type discord struct {
 
 	mu    sync.Mutex
 	botID string
+
+	// cdn replaces the attachment-host check in tests, which serve
+	// attachments from httptest rather than Discord's CDN.
+	cdn func(*url.URL) bool
 }
 
 func newDiscord(token string, pollWait time.Duration) (Transport, error) {
@@ -243,7 +249,19 @@ func (d *discord) dispatch(ctx context.Context, f discordFrame) {
 			ChannelID string `json:"channel_id"`
 			GuildID   string `json:"guild_id"`
 			Content   string `json:"content"`
-			Mentions  []struct {
+			// Flags carries IS_VOICE_MESSAGE; a voice message has one
+			// audio attachment and no content (ADR-W042).
+			Flags       int                 `json:"flags"`
+			Attachments []discordAttachment `json:"attachments"`
+			// ReferencedMessage is the message this one replies to: a
+			// voice message cannot @mention, so in a server channel a
+			// reply to the bot is how it is addressed.
+			ReferencedMessage *struct {
+				Author struct {
+					ID string `json:"id"`
+				} `json:"author"`
+			} `json:"referenced_message"`
+			Mentions []struct {
 				ID string `json:"id"`
 			} `json:"mentions"`
 			Author struct {
@@ -261,8 +279,12 @@ func (d *discord) dispatch(ctx context.Context, f discordFrame) {
 		d.mu.Unlock()
 		self := m.Author.ID == botID
 		// Its own replies, and other bots, are not people talking to it.
-		if self || m.Author.Bot || strings.TrimSpace(m.Content) == "" {
+		if self || m.Author.Bot {
 			return
+		}
+		voice := d.voiceIn(m.Flags, m.Attachments)
+		if voice == nil && strings.TrimSpace(m.Content) == "" {
+			return // an image, a sticker, an embed: nothing to relay
 		}
 		name := m.Author.GlobalName
 		if name == "" {
@@ -283,15 +305,111 @@ func (d *discord) dispatch(ctx context.Context, f discordFrame) {
 					mentioned = true
 				}
 			}
+			if m.ReferencedMessage != nil && m.ReferencedMessage.Author.ID == botID {
+				mentioned = true
+			}
 			addressed = mentioned
 		}
+		if voice != nil {
+			// The recording is the message; any caption is not relayed.
+			text = ""
+		}
 		in := Incoming{Account: m.Author.ID, Conversation: m.ChannelID, Group: group, Addressed: addressed,
-			Text: text, MessageID: m.ID, DisplayName: name}
+			Text: text, MessageID: m.ID, DisplayName: name, Voice: voice}
 		select {
 		case d.events <- in:
 		case <-ctx.Done():
 		}
 	}
+}
+
+// discordAttachment is the part of a message attachment the adapter
+// reads to relay a recording.
+type discordAttachment struct {
+	URL          string  `json:"url"`
+	ContentType  string  `json:"content_type"`
+	Size         int64   `json:"size"`
+	DurationSecs float64 `json:"duration_secs"`
+}
+
+// discordVoiceFlag is IS_VOICE_MESSAGE on a message's flags.
+const discordVoiceFlag = 1 << 13
+
+// voiceIn turns a voice message — or a message that is only an audio
+// file — into a VoiceNote, or nil. Only the first audio attachment is
+// taken; a voice message has exactly one.
+func (d *discord) voiceIn(flags int, attachments []discordAttachment) *VoiceNote {
+	for _, a := range attachments {
+		ct := strings.ToLower(a.ContentType)
+		if !strings.HasPrefix(ct, "audio/") && !(flags&discordVoiceFlag != 0 && ct == "") {
+			continue
+		}
+		if ct == "" {
+			ct = "audio/ogg" // a voice message is Ogg/Opus
+		}
+		link := a.URL
+		return &VoiceNote{
+			MIME: ct, Seconds: a.DurationSecs, Size: a.Size,
+			Fetch: func(ctx context.Context, limit int64) ([]byte, error) {
+				return d.fetchAttachment(ctx, link, limit)
+			},
+		}
+	}
+	return nil
+}
+
+// discordCDNHosts are where Discord serves attachments. A URL anywhere
+// else is not fetched: the adapter follows links Discord gave it, to
+// Discord, and nowhere a crafted message might point.
+var discordCDNHosts = []string{"cdn.discordapp.com", "media.discordapp.net"}
+
+func (d *discord) cdnAllowed(u *url.URL) bool {
+	if d.cdn != nil {
+		return d.cdn(u)
+	}
+	if u.Scheme != "https" {
+		return false
+	}
+	for _, h := range discordCDNHosts {
+		if strings.EqualFold(u.Hostname(), h) {
+			return true
+		}
+	}
+	return false
+}
+
+// fetchAttachment downloads a recording from Discord's CDN. The URL is
+// already signed, so no credential is sent: the bot token never leaves
+// for a host that does not need it.
+func (d *discord) fetchAttachment(ctx context.Context, link string, limit int64) ([]byte, error) {
+	u, err := url.Parse(link)
+	if err != nil || !d.cdnAllowed(u) {
+		return nil, errors.New("discord: an attachment URL that is not Discord's CDN")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	if err != nil {
+		return nil, errors.New("discord: building the attachment request")
+	}
+	res, err := d.client().Do(req)
+	if err != nil {
+		// The signed URL is a credential of sorts; keep it out of logs.
+		return nil, withoutURL("discord attachment download", err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("discord attachment download: %s", res.Status)
+	}
+	if res.ContentLength > limit {
+		return nil, errVoiceTooLarge
+	}
+	data, err := io.ReadAll(io.LimitReader(res.Body, limit+1))
+	if err != nil {
+		return nil, withoutURL("discord attachment download", err)
+	}
+	if int64(len(data)) > limit {
+		return nil, errVoiceTooLarge
+	}
+	return data, nil
 }
 
 func (d *discord) Send(ctx context.Context, conversation, body string) error {

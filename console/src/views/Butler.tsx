@@ -35,6 +35,7 @@ import { Confirm } from "../ui/Confirm";
 import { Dot, Kind, StatusPill } from "../ui/status";
 import { PendingPlan } from "./Plans";
 import { ButlerPicker, openingFor, preferred, SURFACE_LABEL } from "./butler/picker";
+import { dictationSupported, MicButton } from "../ui/MicButton";
 
 // The two surfaces, as the operator picks between them (ADR-W026 A1).
 // The copy differs because the ceilings differ, and a screen that
@@ -125,6 +126,11 @@ export function Butler({
     [butlerName],
   );
   const me = useLoad(() => api.whoami());
+  // The mic, where it works for this Butler (ADR-W042).
+  const dictation: Dictation | null =
+    butlerName && status.data?.dictation && dictationSupported()
+      ? { butler: butlerName, maxSeconds: status.data.dictationMaxSeconds ?? 120 }
+      : null;
   // The list is a sidebar on a desk and a sheet over the thread on a
   // phone, so it starts open on one and closed on the other.
   const [railOpen, setRailOpen] = useState(() => !narrow());
@@ -393,7 +399,14 @@ export function Butler({
             <StatusCard status={status.data} loading={status.loading} />
           </div>
         ) : thread === null && pending === null ? (
-          <EmptyState row={current} busy={busy} onSend={send} error={askError} notice={commandReply} />
+          <EmptyState
+            row={current}
+            busy={busy}
+            onSend={send}
+            error={askError}
+            notice={commandReply}
+            dictation={dictation}
+          />
         ) : (
           <>
             <Thread
@@ -409,7 +422,7 @@ export function Butler({
               </div>
             )}
             {commandReply && <CommandReply text={commandReply} />}
-            <Composer surface={surface} busy={busy} onSend={send} />
+            <Composer surface={surface} busy={busy} onSend={send} dictation={dictation} />
           </>
         )}
       </section>
@@ -664,6 +677,7 @@ export function EmptyState({
   onSend,
   error,
   notice,
+  dictation,
 }: {
   row?: ButlerRow;
   busy: boolean;
@@ -671,8 +685,10 @@ export function EmptyState({
   error?: string | null;
   // A slash command's reply, shown where the conversation would be.
   notice?: string | null;
+  dictation?: Dictation | null;
 }) {
   const [text, setText] = useState("");
+  const [micNote, setMicNote] = useState<{ message: string; bad?: boolean }>({ message: "" });
   // Every string on this screen is the selected Butler's, derived from
   // its own record. There is a fallback for the moment before the
   // roster has loaded, and it says nothing it cannot know.
@@ -683,6 +699,7 @@ export function EmptyState({
   const submit = () => {
     onSend(text);
     setText("");
+    setMicNote({ message: "" });
   };
   return (
     <div className="opening">
@@ -704,6 +721,15 @@ export function EmptyState({
             disabled={busy}
             aria-label="Ask the Butler"
           />
+          {dictation && (
+            <MicButton
+              butler={dictation.butler}
+              maxSeconds={dictation.maxSeconds}
+              disabled={busy}
+              onText={(words) => setText((had) => (had.trim() ? had.trim() + " " + words : words))}
+              onNote={(message, bad) => setMicNote({ message, bad })}
+            />
+          )}
           <button
             className="btn btn-primary"
             disabled={busy || blocked || text.trim() === ""}
@@ -726,6 +752,7 @@ export function EmptyState({
             </button>
           ))}
         </div>
+        <MicNote note={micNote} />
         {notice && <CommandReply text={notice} />}
         <ErrorLine error={error ?? null} />
         <div className="muted">⌘/Ctrl + Enter sends</div>
@@ -911,15 +938,19 @@ export function Composer({
   surface,
   busy,
   onSend,
+  dictation,
 }: {
   surface: ButlerSurface;
   busy: boolean;
   onSend: (text: string) => void;
+  dictation?: Dictation | null;
 }) {
   const [text, setText] = useState("");
+  const [micNote, setMicNote] = useState<{ message: string; bad?: boolean }>({ message: "" });
   const submit = () => {
     onSend(text);
     setText("");
+    setMicNote({ message: "" });
   };
   return (
     <div className="composer">
@@ -935,6 +966,15 @@ export function Composer({
           disabled={busy}
           aria-label="Ask the Butler"
         />
+        {dictation && (
+          <MicButton
+            butler={dictation.butler}
+            maxSeconds={dictation.maxSeconds}
+            disabled={busy}
+            onText={(words) => setText((had) => (had.trim() ? had.trim() + " " + words : words))}
+            onNote={(message, bad) => setMicNote({ message, bad })}
+          />
+        )}
         <button
           className="btn btn-primary"
           disabled={busy || text.trim() === ""}
@@ -944,7 +984,22 @@ export function Composer({
           {busy ? <Wrench size={15} /> : <ArrowUp size={15} />}
         </button>
       </div>
+      <MicNote note={micNote} />
       <div className="muted">⌘/Ctrl + Enter sends. A follow-up stays in the same conversation.</div>
+    </div>
+  );
+}
+
+// Dictation says the mic works for the selected Butler (ADR-W042).
+type Dictation = { butler: string; maxSeconds: number };
+
+// MicNote is the mic's status line under the text box: listening,
+// writing it down, check and send, or why it could not.
+function MicNote({ note }: { note: { message: string; bad?: boolean } }) {
+  if (!note.message) return null;
+  return (
+    <div className={"mic-note" + (note.bad ? " mic-note-bad" : "")} aria-live="polite">
+      {note.message}
     </div>
   );
 }

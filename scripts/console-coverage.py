@@ -67,6 +67,8 @@ def main():
     client = open("console/src/api.ts").read()
     cpaths = set()
     for raw in re.findall(r"[`\"](/api/v1/[^`\"]*)[`\"]", client):
+        # A query string is not part of the route: /x?seconds=${n} is /x.
+        raw = raw.split("?", 1)[0]
         cpaths.add(re.sub(r"\$\{[^}]*\}", "{}", raw).rstrip("/"))
 
     gaps, machine = [], []

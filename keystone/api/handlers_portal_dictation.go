@@ -26,6 +26,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
 	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 	"github.com/chickenrat17/wildstone-homelab/keystone/speech"
@@ -201,4 +202,103 @@ func dictationMessage(err error, r *speech.Router) string {
 		return "Dictation is still getting ready. Try again in a few minutes, or type."
 	}
 	return voiceReply(err, r)
+}
+
+// transcribeForButler is POST /api/v1/butlers/{name}/transcribe, the
+// Console's dictation (ADR-W042). The body IS the recording, typed by
+// its Content-Type — the same shape as the Console's wallpaper upload,
+// so the Console keeps its one fetch path. ?seconds= carries the length
+// the browser measured. It answers {"text"} and asks the Butler
+// nothing: the words go into the Console's text box to be checked.
+//
+// Access is the ask path's, exactly: the Butler is resolved by
+// butlerlive's own Resolve for the person the caller acts for, owner
+// or not, so the mic reaches precisely the Butlers the text box does.
+// The engine follows that Butler's privacy class.
+func (s *Server) transcribeForButler(r *http.Request, id principal.Identity) (any, int, error) {
+	if s.Butlers == nil || !s.butlersConfigured() {
+		return nil, http.StatusServiceUnavailable, fmt.Errorf("no butler is configured on this deployment")
+	}
+	b, err := s.consoleDictationButler(r.PathValue("name"), id)
+	if err != nil {
+		return nil, http.StatusNotFound, fmt.Errorf("no butler answers there for you")
+	}
+	seconds := 0.0
+	if v := strings.TrimSpace(r.URL.Query().Get("seconds")); v != "" {
+		if seconds, err = strconv.ParseFloat(v, 64); err != nil || seconds < 0 {
+			return nil, http.StatusBadRequest, fmt.Errorf("seconds must be a number of seconds")
+		}
+	}
+	audio, err := io.ReadAll(http.MaxBytesReader(nil, r.Body, speech.MaxAudioBytes))
+	if err != nil {
+		var mbe *http.MaxBytesError
+		if errors.As(err, &mbe) {
+			return nil, http.StatusRequestEntityTooLarge, errors.New(dictationMessage(speech.ErrTooLarge, s.Speech))
+		}
+		return nil, http.StatusBadRequest, fmt.Errorf("reading the recording: %w", err)
+	}
+
+	res, terr := s.Speech.Transcribe(r.Context(), s.dictationMayLeaveHouse(b.Name), audio, r.Header.Get("Content-Type"), seconds)
+	outcome := "transcribed"
+	if terr != nil {
+		outcome = voiceOutcome(terr)
+	}
+	attrs := map[string]string{
+		"member": actingMember(id), "agent": b.Name, "outcome": outcome, "surface": "console",
+		"seconds": strconv.FormatFloat(seconds, 'f', 1, 64),
+	}
+	if res.Processing != "" {
+		attrs["engine"] = string(res.Processing)
+	}
+	s.recordEvent("console.dictation", b.Name, "dictation in the Console: "+outcome, attrs)
+	if terr != nil {
+		if outcome == "failed" {
+			s.Log.Error("transcribing Console dictation", "agent", b.Name, "err", terr)
+		}
+		return nil, dictationStatus(terr), errors.New(dictationMessage(terr, s.Speech))
+	}
+	return map[string]any{"text": res.Text, "engine": string(res.Processing)}, http.StatusOK, nil
+}
+
+// consoleDictationButler resolves the Butler a Console caller may
+// dictate to by the same two cases butlerlive.Butlers.Resolve applies
+// to a named Console turn: the Console holder acting as owner reaches
+// any live Butler, and anyone else only a Butler they were granted.
+// Unlike asking, a Butler whose model is down still takes dictation;
+// the words wait in the text box.
+func (s *Server) consoleDictationButler(name string, id principal.Identity) (runtimedb.Butler, error) {
+	if actingAsOwner(id) {
+		b, err := s.DB.GetButler(name)
+		if err != nil {
+			return runtimedb.Butler{}, err
+		}
+		if !b.Live() {
+			return runtimedb.Butler{}, runtimedb.ErrButlerUnreachable
+		}
+		return b, nil
+	}
+	b, err := s.DB.ResolveButlerFor(name, actingMember(id))
+	if errors.Is(err, runtimedb.ErrButlerUnreachable) {
+		// Access passed; only the Butler's model is down, or the Butler
+		// is retired. ResolveButlerFor returns no record with this error,
+		// so read it again, and still refuse a retired one.
+		b, err = s.DB.GetButler(name)
+		if err == nil && !b.Live() {
+			err = runtimedb.ErrButlerUnreachable
+		}
+	}
+	return b, err
+}
+
+// dictationInfo is what a Butler's status tells the Console about its
+// mic: whether it works for this Butler, and how long it may record.
+func (s *Server) dictationInfo(name string) (bool, int) {
+	max := 0
+	if s.Speech != nil {
+		max = s.Speech.MaxSeconds
+		if max <= 0 {
+			max = speech.DefaultMaxSeconds
+		}
+	}
+	return s.canDictate(name), max
 }

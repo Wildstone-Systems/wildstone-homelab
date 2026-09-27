@@ -351,6 +351,10 @@
     // the assistant changed belongs to the old one, so it is dropped
     // rather than typed into a conversation with the new one.
     var generation = 0;
+    // recGeneration and recAgent are fixed when the mic is asked for,
+    // before the browser's permission prompt: a switch while the prompt
+    // is open must not send one assistant's audio to another.
+    var recGeneration = 0, recAgent = "";
     // No microphone API, a page not on HTTPS, or a frame the parent did
     // not allow the microphone: the button is never shown, rather than
     // shown and failing when pressed.
@@ -366,7 +370,7 @@
       b.setAttribute("aria-pressed", next === "recording" ? "true" : "false");
       b.setAttribute("aria-label", next === "recording" ? "Stop dictating" : "Dictate");
       b.title = next === "recording" ? "Stop and write down what you said" : "Dictate instead of typing";
-      b.disabled = next === "working";
+      b.disabled = next === "working" || next === "starting";
     }
     function release() {
       if (stream) { stream.getTracks().forEach(function (t) { t.stop(); }); stream = null; }
@@ -390,7 +394,16 @@
       return "The microphone couldn't start. You can still type.";
     }
     function start() {
+      recGeneration = generation;
+      recAgent = o.agent();
+      set("starting");
       navigator.mediaDevices.getUserMedia({ audio: true }).then(function (s) {
+        if (recGeneration !== generation) {
+          // The assistant changed while the prompt was open.
+          s.getTracks().forEach(function (t) { t.stop(); });
+          set("idle");
+          return;
+        }
         stream = s;
         chunks = [];
         var type = pickType();
@@ -409,7 +422,7 @@
       }).catch(function (err) {
         release();
         set("idle");
-        o.say(micError(err), true);
+        if (recGeneration === generation) { o.say(micError(err), true); }
       });
     }
     function stop() {
@@ -422,13 +435,13 @@
       var blob = new Blob(chunks, { type: (rec && rec.mimeType) || "audio/webm" });
       rec = null;
       chunks = [];
-      if (discard) { discard = false; set("idle"); o.say(""); return; }
+      if (discard || recGeneration !== generation) { discard = false; set("idle"); o.say(""); return; }
       if (!blob.size) { set("idle"); o.say("Nothing was recorded. Try again.", true); return; }
       set("working");
       o.say("Writing down what you said…");
-      var mine = generation;
+      var mine = recGeneration;
       var form = new FormData();
-      form.append("agent", o.agent());
+      form.append("agent", recAgent);
       form.append("seconds", seconds.toFixed(1));
       form.append("audio", blob, "dictation");
       fetch("/api/v1/assistant/transcribe", { method: "POST", body: form, headers: { accept: "application/json" } })

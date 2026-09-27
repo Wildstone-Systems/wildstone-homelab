@@ -85,7 +85,7 @@ var chatPlatforms = []chatPlatform{
 	}},
 	{Name: "slack", Label: "Slack", Fields: []chatField{
 		{Key: "botToken", Label: "Bot token", Secret: "bot", Prefix: "xoxb-",
-			Hint: "api.slack.com/apps → your app → OAuth & Permissions. Needs chat:write and im:history, and the message.im event."},
+			Hint: "api.slack.com/apps → your app → OAuth & Permissions. Needs chat:write, im:history and files:read (files:read lets it hear voice clips), and the message.im event."},
 		{Key: "appToken", Label: "App-level token", Secret: "app", Prefix: "xapp-",
 			Hint: "Basic Information → App-Level Tokens, with connections:write. Turn on Socket Mode too."},
 	}},

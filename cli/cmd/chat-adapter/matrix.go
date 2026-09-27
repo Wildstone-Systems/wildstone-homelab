@@ -20,6 +20,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -92,6 +93,17 @@ type syncResponse struct {
 						Mentions      struct {
 							UserIDs []string `json:"user_ids"`
 						} `json:"m.mentions"`
+						// A recording (msgtype m.audio, ADR-W042): where
+						// the homeserver keeps it, and what it says it
+						// is. An encrypted room sends File instead of
+						// URL, which this bot cannot decrypt.
+						URL  string    `json:"url"`
+						File *struct{} `json:"file"`
+						Info struct {
+							MimeType string `json:"mimetype"`
+							Size     int64  `json:"size"`
+							Duration int64  `json:"duration"` // milliseconds
+						} `json:"info"`
 					} `json:"content"`
 				} `json:"events"`
 			} `json:"timeline"`
@@ -141,17 +153,37 @@ func (m *matrix) Receive(ctx context.Context) ([]Incoming, error) {
 	var out []Incoming
 	for roomID, room := range sync.Rooms.Join {
 		for _, ev := range room.Timeline.Events {
-			if ev.Type != "m.room.message" || ev.Content.MsgType != "m.text" {
-				continue // an image, a reaction, a membership change
+			if ev.Type != "m.room.message" {
+				continue // a reaction, a membership change
 			}
 			if ev.Sender == m.userID {
 				continue // our own reply, echoed back by the homeserver
 			}
-			if strings.TrimSpace(ev.Content.Body) == "" {
-				continue
+			var voice *VoiceNote
+			switch ev.Content.MsgType {
+			case "m.text":
+				if strings.TrimSpace(ev.Content.Body) == "" {
+					continue
+				}
+			case "m.audio":
+				c := ev.Content
+				if c.File != nil || c.URL == "" {
+					continue // encrypted media this bot cannot read
+				}
+				voice = m.voiceIn(c.URL, c.Info.MimeType, c.Info.Size, c.Info.Duration)
+				if voice == nil {
+					continue
+				}
+			default:
+				continue // an image, a file, a location
 			}
 			group := room.Summary.JoinedMemberCount != 2
 			text, addressed := ev.Content.Body, !group
+			if voice != nil {
+				// The body of an audio event is its file name, not
+				// something said; the recording is the message.
+				text = ""
+			}
 			if group {
 				// Addressed by the m.mentions list, a pill link to the
 				// bot, or its user id in the text (ADR-W033 B9.1).
@@ -168,6 +200,9 @@ func (m *matrix) Receive(ctx context.Context) ([]Incoming, error) {
 					addressed = true
 				}
 			}
+			if voice != nil {
+				text = ""
+			}
 			out = append(out, Incoming{
 				Account:      ev.Sender,
 				Conversation: roomID,
@@ -181,10 +216,115 @@ func (m *matrix) Receive(ctx context.Context) ([]Incoming, error) {
 				Text:        text,
 				MessageID:   ev.EventID,
 				DisplayName: ev.Sender,
+				Voice:       voice,
 			})
 		}
 	}
 	return out, nil
+}
+
+// voiceIn turns an m.audio event into a VoiceNote, or nil when its
+// media URI is not one this adapter will fetch. Matrix reports duration
+// in milliseconds; voice messages from Element are Ogg/Opus.
+func (m *matrix) voiceIn(mxc, mimeType string, size, durationMS int64) *VoiceNote {
+	server, media, ok := parseMXC(mxc)
+	if !ok {
+		return nil
+	}
+	if mimeType == "" {
+		mimeType = "audio/ogg"
+	}
+	return &VoiceNote{
+		MIME: mimeType, Seconds: float64(durationMS) / 1000, Size: size,
+		Fetch: func(ctx context.Context, limit int64) ([]byte, error) {
+			return m.fetchMedia(ctx, server, media, limit)
+		},
+	}
+}
+
+// parseMXC splits mxc://<server-name>/<media-id>, refusing anything
+// else: the two parts become a URL path, so each must be exactly one
+// segment of the characters the spec allows.
+func parseMXC(uri string) (server, media string, ok bool) {
+	rest, found := strings.CutPrefix(uri, "mxc://")
+	if !found {
+		return "", "", false
+	}
+	server, media, found = strings.Cut(rest, "/")
+	if !found || server == "" || media == "" || strings.Contains(media, "/") {
+		return "", "", false
+	}
+	for _, r := range server {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune(".-:[]", r)) {
+			return "", "", false
+		}
+	}
+	if strings.Contains(server, "..") {
+		return "", "", false
+	}
+	for _, r := range media {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' || r == '-') {
+			return "", "", false
+		}
+	}
+	return server, media, true
+}
+
+// fetchMedia downloads a recording from this bot's own homeserver.
+// Authenticated media (Matrix v1.11) first, with the bot's token; an
+// older homeserver that does not know that endpoint is asked on the
+// legacy one.
+func (m *matrix) fetchMedia(ctx context.Context, server, media string, limit int64) ([]byte, error) {
+	paths := []string{
+		"/_matrix/client/v1/media/download/" + url.PathEscape(server) + "/" + url.PathEscape(media),
+		"/_matrix/media/v3/download/" + url.PathEscape(server) + "/" + url.PathEscape(media),
+	}
+	for i, path := range paths {
+		data, status, err := m.download(ctx, path, limit)
+		// Only "this endpoint does not exist here" moves on to the
+		// legacy one; any other answer is the answer.
+		if i == 0 && (status == http.StatusNotFound || status == http.StatusMethodNotAllowed || status == http.StatusBadRequest) && errors.Is(err, errMediaUnrecognized) {
+			continue
+		}
+		return data, err
+	}
+	return nil, errors.New("matrix media download: no endpoint answered")
+}
+
+var errMediaUnrecognized = errors.New("matrix: the homeserver does not recognise this media endpoint")
+
+func (m *matrix) download(ctx context.Context, path string, limit int64) ([]byte, int, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, m.homeserver+path, nil)
+	if err != nil {
+		return nil, 0, err
+	}
+	req.Header.Set("Authorization", "Bearer "+m.token)
+	res, err := m.client().Do(req)
+	if err != nil {
+		return nil, 0, withoutURL("matrix media download", err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(res.Body, 4<<10))
+		if strings.Contains(string(body), "M_UNRECOGNIZED") {
+			return nil, res.StatusCode, errMediaUnrecognized
+		}
+		if res.StatusCode == http.StatusRequestEntityTooLarge || strings.Contains(string(body), "M_TOO_LARGE") {
+			return nil, res.StatusCode, errVoiceTooLarge
+		}
+		return nil, res.StatusCode, fmt.Errorf("matrix media download: %s", res.Status)
+	}
+	if res.ContentLength > limit {
+		return nil, res.StatusCode, errVoiceTooLarge
+	}
+	data, err := io.ReadAll(io.LimitReader(res.Body, limit+1))
+	if err != nil {
+		return nil, res.StatusCode, withoutURL("matrix media download", err)
+	}
+	if int64(len(data)) > limit {
+		return nil, res.StatusCode, errVoiceTooLarge
+	}
+	return data, res.StatusCode, nil
 }
 
 // whoami reads this bot's own MXID. It is not optional: without it the

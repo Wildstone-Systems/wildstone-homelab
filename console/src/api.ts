@@ -404,6 +404,11 @@ export interface ButlerStatus {
   mode?: string;
   reason?: string;
   tools?: string[];
+  // Whether the Console's mic works for this Butler, and how long it
+  // may record (ADR-W042). Absent when voice is off or no engine this
+  // Butler's privacy class allows is installed.
+  dictation?: boolean;
+  dictationMaxSeconds?: number;
 }
 
 // --- Agent runtime (ADR-W039 §3.3). What reasons for an Agent, as
@@ -1685,6 +1690,15 @@ export const api = {
   // moment there were several.
   oneButlerStatus: (name: string) =>
     call<ButlerStatus>("GET", `/api/v1/butlers/${encodeURIComponent(name)}/status`),
+  // Dictation: the recording goes up as the body, typed by the Blob's
+  // own type, and the words come back for the text box. The Butler is
+  // asked nothing (ADR-W042).
+  transcribeForButler: (name: string, audio: Blob, seconds: number) =>
+    call<{ text: string; engine: string }>(
+      "POST",
+      `/api/v1/butlers/${encodeURIComponent(name)}/transcribe?seconds=${seconds.toFixed(1)}`,
+      audio,
+    ),
   butlerSessionsFor: (name: string, limit = 20) =>
     call<ButlerSession[]>(
       "GET",
