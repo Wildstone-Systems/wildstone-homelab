@@ -16,8 +16,11 @@
 # provider. Password registration and guest access are disabled. A household
 # member signs in through the same account and two-factor policy as the other
 # Wildstone applications, and Synapse creates the Matrix account on first
-# login. The OIDC client secret is written to a narrow credential volume by a
-# Job because Synapse drops to uid 991 before reading configuration.
+# login. The OIDC client secret enters only the Synapse container. A small
+# package-owned Python startup module writes it to a 0600 file in the
+# container's private /tmp, removes it from the inherited environment, and
+# then execs Synapse as uid 991. Re-creating the container after a rotation
+# therefore materializes the new value before Synapse reads its config.
 #
 # CONFIGURATION. The official image no longer builds homeserver.yaml at every
 # startup. matrix-synapse-generate runs its supported migrate_config mode once,
@@ -29,8 +32,7 @@
 #
 # STORAGE AND RESTORE. Synapse media/signing/config data and PostgreSQL are the
 # durable service. Both are backed up daily into an encrypted repository. The
-# OIDC credential volume is deliberately excluded: it is derived from the
-# identity provider's OidcClient secret and can be materialized again.
+# OIDC credential file is ephemeral and is re-materialized on every start.
 #
 # Upstream validation (2026-09-27): Synapse v1.161.0's official Docker image
 # documents PostgreSQL for production, uid/gid 991, /data persistence, the
@@ -40,7 +42,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: matrix-synapse
-  version: 1.0.0
+  version: 1.0.1
   capability: matrix-homeserver
   profile: synapse
 requires:
@@ -79,11 +81,6 @@ templates:
     kind: Volume
     metadata: { name: matrix-pgdata, node: "{{ .Params.node }}" }
     spec: { name: matrix-pgdata }
-  - |
-    apiVersion: wildstone.dev/v1
-    kind: Volume
-    metadata: { name: matrix-credentials, node: "{{ .Params.node }}" }
-    spec: { name: matrix-credentials }
   - |
     apiVersion: wildstone.dev/v1
     kind: Volume
@@ -127,7 +124,7 @@ templates:
             idp_name: Wildstone
             issuer: "{{ .Resolved.IssuerURL }}"
             client_id: matrix-synapse
-            client_secret_path: /run/matrix/oidc-client-secret
+            client_secret_path: /tmp/matrix-oidc-client-secret
             scopes: [openid, profile, email]
             user_mapping_provider:
               config:
@@ -146,33 +143,41 @@ templates:
         url_preview_enabled: false
         max_upload_size: 50M
 
-  # Materialize the OIDC client secret into a file readable only by Synapse.
-  # Reconciliation reruns this Job whenever its spec changes; writing is
-  # atomic enough for this one-file volume, and the main container's restart
-  # policy converges a first tick where the Job has not completed yet.
+  # Synapse accepts client_secret_path, but its image drops from root to uid
+  # 991 before parsing configuration. This non-secret startup module therefore
+  # runs under that same uid, writes the environment-materialized credential
+  # into the container's private /tmp, removes it from the environment, and
+  # replaces itself with the official homeserver module. Because the secret
+  # reference belongs to the Synapse container itself, set/rotate re-creates
+  # the actual consumer and the new file always exists before config parsing.
   - |
     apiVersion: wildstone.dev/v1
-    kind: Job
-    metadata: { name: matrix-oidc-secret-file, node: "{{ .Params.node }}" }
+    kind: ConfigFile
+    metadata: { name: matrix-oidc-start, node: "{{ .Params.node }}" }
     spec:
-      run:
-        image: "alpine@sha256:48b0309ca019d89d40f670aa1bc06e426dc0931948452e8491e3d65087abc07d"
-        command:
-          - /bin/sh
-          - -ec
-          - |
-            umask 077
-            [ -n "${OIDC_CLIENT_SECRET:-}" ] || {
-              echo "matrix: generated OIDC client secret is empty" >&2
-              exit 1
-            }
-            printf '%s' "$OIDC_CLIENT_SECRET" > /run/matrix/oidc-client-secret
-            chown 991:991 /run/matrix/oidc-client-secret
-            chmod 400 /run/matrix/oidc-client-secret
-        env:
-          OIDC_CLIENT_SECRET: "{{ .Resolved.OidcSecretRef }}"
-        mounts:
-          - { source: matrix-credentials, target: /run/matrix }
+      filename: matrix_oidc_start.py
+      content: |
+        """Materialize Synapse's OIDC secret, then become the homeserver."""
+        import os
+        from pathlib import Path
+        import sys
+
+        secret = os.environ.pop("MATRIX_OIDC_CLIENT_SECRET", "")
+        if not secret:
+            raise SystemExit("matrix: generated OIDC client secret is empty")
+
+        target = Path("/tmp/matrix-oidc-client-secret")
+        temporary = target.with_suffix(".tmp")
+        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as credential:
+            credential.write(secret)
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, target)
+
+        os.execv(
+            sys.executable,
+            [sys.executable, "-m", "synapse.app.homeserver", *sys.argv[1:]],
+        )
 
   # Generate the official base configuration and signing keys. migrate_config
   # uses the image's maintained template and preserves its generated secrets
@@ -224,18 +229,19 @@ templates:
       env:
         SYNAPSE_CONFIG_DIR: /data
         SYNAPSE_CONFIG_PATH: /data/homeserver.yaml
+        PYTHONPATH: /etc/wildstone/matrix-homeserver
+        MATRIX_OIDC_CLIENT_SECRET: "{{ .Resolved.OidcSecretRef }}"
         UID: "991"
         GID: "991"
         TZ: "{{ .Params.timezone }}"
       command:
         - run
         - -m
-        - synapse.app.homeserver
+        - matrix_oidc_start
         - --config-path=/data/homeserver.yaml
         - --config-path=/etc/wildstone/matrix-homeserver/private.yaml
       mounts:
         - { source: matrix-data, target: /data }
-        - { source: matrix-credentials, target: /run/matrix, readOnly: true }
         - { source: /etc/wildstone/matrix-homeserver, target: /etc/wildstone/matrix-homeserver, readOnly: true }
       restart: unless-stopped
       noNewPrivileges: true
@@ -255,8 +261,8 @@ templates:
     apiVersion: wildstone.dev/v1
     kind: OidcClient
     # Keep this on the application node: the generated client secret is
-    # node-local and the credential Job above has to materialize that same
-    # value for Synapse. Keystone merges OIDC clients into the identity
+    # node-local and the Synapse container above consumes that same value.
+    # Keystone merges OIDC clients into the identity
     # provider across nodes, so split-node identity needs no second copy.
     metadata: { name: matrix-synapse, node: "{{ .Params.node }}" }
     spec:

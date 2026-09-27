@@ -44,8 +44,8 @@ data.
 
 ## Try it from a native client
 
-1. Wait until `matrix-postgres`, `matrix-synapse-generate`,
-   `matrix-oidc-secret-file`, and `matrix-synapse` have converged.
+1. Wait until `matrix-postgres`, `matrix-synapse-generate`, and
+   `matrix-synapse` have converged.
 2. In Element or another Matrix client that supports SSO, choose a custom
    homeserver and enter the Matrix route shown by Wildstone. Tailnet installs
    include the assigned HTTPS port in that origin.

@@ -65,7 +65,7 @@ func TestMatrixOidcSecretTravelsByFile(t *testing.T) {
 	if strings.Contains(config, "secret/") {
 		t.Fatal("Matrix's uid-991 config contains a secret reference and would be materialized 0600 root-only")
 	}
-	if !strings.Contains(config, "client_secret_path: /run/matrix/oidc-client-secret") {
+	if !strings.Contains(config, "client_secret_path: /tmp/matrix-oidc-client-secret") {
 		t.Fatal("Matrix config does not read the OIDC secret file")
 	}
 	if !strings.Contains(config, `localpart_template: '{{ user.preferred_username }}'`) ||
@@ -73,30 +73,40 @@ func TestMatrixOidcSecretTravelsByFile(t *testing.T) {
 		t.Fatal("Synapse's Jinja OIDC mappings did not survive the outer package template")
 	}
 
-	job := matrixResource(t, resource.KindJob, "matrix-oidc-secret-file").Job.Run
-	if job.Env["OIDC_CLIENT_SECRET"] == "" || !strings.HasPrefix(job.Env["OIDC_CLIENT_SECRET"], "secret/") {
-		t.Fatalf("OIDC credential job does not receive a secret reference: %q", job.Env["OIDC_CLIENT_SECRET"])
-	}
-	if !mountsVolume(&job, "matrix-credentials", "/run/matrix") {
-		t.Fatal("OIDC credential job does not write the matrix-credentials volume")
-	}
-
 	synapse := matrixResource(t, resource.KindContainer, "matrix-synapse").Container
-	if !mountsVolume(synapse, "matrix-credentials", "/run/matrix") {
-		t.Fatal("Synapse does not read the credential volume populated by the Job")
+	secretRef := synapse.Env["MATRIX_OIDC_CLIENT_SECRET"]
+	if secretRef == "" || !strings.HasPrefix(secretRef, "secret/") {
+		t.Fatalf("Synapse does not directly receive its OIDC secret reference: %q", secretRef)
+	}
+	if synapse.Env["PYTHONPATH"] != "/etc/wildstone/matrix-homeserver" {
+		t.Fatalf("Synapse cannot import its managed startup module: PYTHONPATH=%q", synapse.Env["PYTHONPATH"])
+	}
+	if !slices.Contains(synapse.Command, "matrix_oidc_start") {
+		t.Fatalf("Synapse bypasses the OIDC startup module: %v", synapse.Command)
+	}
+	startup := matrixResource(t, resource.KindConfigFile, "matrix-oidc-start").ConfigFile
+	for _, want := range []string{
+		`os.environ.pop("MATRIX_OIDC_CLIENT_SECRET", "")`,
+		`Path("/tmp/matrix-oidc-client-secret")`,
+		`os.execv(`,
+		`"synapse.app.homeserver"`,
+	} {
+		if !strings.Contains(startup.Content, want) {
+			t.Errorf("Matrix startup module is missing %q", want)
+		}
 	}
 	oidc := matrixResource(t, resource.KindOidcClient, "matrix-synapse").OidcClient
-	if oidc.SecretRef != job.Env["OIDC_CLIENT_SECRET"] {
-		t.Errorf("Authelia and the credential Job use different OIDC secrets: %q vs %q", oidc.SecretRef, job.Env["OIDC_CLIENT_SECRET"])
+	if oidc.SecretRef != secretRef {
+		t.Errorf("Authelia and Synapse use different OIDC secrets: %q vs %q", oidc.SecretRef, secretRef)
 	}
 	if len(oidc.RedirectUris) != 1 || !strings.HasSuffix(oidc.RedirectUris[0], "/_synapse/client/oidc/callback") {
 		t.Errorf("unexpected Synapse OIDC callback: %v", oidc.RedirectUris)
 	}
 	oidcResource := matrixResource(t, resource.KindOidcClient, "matrix-synapse")
-	jobResource := matrixResource(t, resource.KindJob, "matrix-oidc-secret-file")
-	if oidcResource.Metadata.Node != jobResource.Metadata.Node {
-		t.Errorf("OIDC secret is synthesized on node %q but its credential Job runs on %q",
-			oidcResource.Metadata.Node, jobResource.Metadata.Node)
+	synapseResource := matrixResource(t, resource.KindContainer, "matrix-synapse")
+	if oidcResource.Metadata.Node != synapseResource.Metadata.Node {
+		t.Errorf("OIDC secret is synthesized on node %q but Synapse runs on %q",
+			oidcResource.Metadata.Node, synapseResource.Metadata.Node)
 	}
 }
 
@@ -134,9 +144,6 @@ func TestMatrixPostgresCredentialAndBackupAreComplete(t *testing.T) {
 		if !slices.Contains(backup.Volumes, volume) {
 			t.Errorf("Matrix backup omits durable volume %q", volume)
 		}
-	}
-	if slices.Contains(backup.Volumes, "matrix-credentials") {
-		t.Error("Matrix backup includes the re-materializable OIDC credential volume")
 	}
 	if backup.Schedule != "daily" {
 		t.Errorf("Matrix backup schedule is %q, want daily", backup.Schedule)
