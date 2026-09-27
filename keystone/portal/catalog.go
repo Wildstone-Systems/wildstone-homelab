@@ -151,6 +151,7 @@ var categoryOf = map[string]string{
 	"mail":            "talk",
 	"ai-chat":         "talk",
 	"language-models": "talk",
+	"speech":          "talk",
 	// Everything else, named rather than defaulted, so a capability
 	// landing in "other" is a gap in this table rather than a decision.
 	"code":      "other",

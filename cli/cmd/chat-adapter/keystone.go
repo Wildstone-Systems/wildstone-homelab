@@ -14,7 +14,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
+	"net/textproto"
 	"net/url"
 	"strconv"
 	"strings"
@@ -46,6 +48,15 @@ type keystoneInbound struct {
 	DisplayName  string `json:"displayName,omitempty"`
 }
 
+// keystoneVoice is the "message" part of a voice upload: the same
+// fields as text, the duration the vendor reported, and whether the
+// recording was left unfetched for being too large.
+type keystoneVoice struct {
+	keystoneInbound
+	AudioSeconds float64 `json:"audioSeconds,omitempty"`
+	TooLarge     bool    `json:"tooLarge,omitempty"`
+}
+
 // outboundMessage is one queued reply, as the adapter needs it. The
 // queue carries more (surface, binding, correlation id); an adapter has
 // no use for any of it, so it reads only what it delivers.
@@ -59,6 +70,49 @@ type outboundMessage struct {
 // account: bound is false for somebody the household never introduced.
 func (k *keystoneClient) send(ctx context.Context, msg keystoneInbound) (bound bool, err error) {
 	data, err := k.call(ctx, http.MethodPost, "/api/v1/chat/messages", msg)
+	if err != nil {
+		return false, err
+	}
+	var out struct {
+		Bound bool `json:"bound"`
+	}
+	if json.Unmarshal(data, &out) != nil {
+		return false, nil
+	}
+	return out.Bound, nil
+}
+
+// sendVoice posts a recording to /api/v1/chat/voice as
+// multipart/form-data: a "message" part carrying msg, and an "audio"
+// part carrying the bytes with their content type. It reports bound as
+// send does.
+func (k *keystoneClient) sendVoice(ctx context.Context, msg keystoneVoice, audio []byte, mimeType string) (bool, error) {
+	meta, err := json.Marshal(msg)
+	if err != nil {
+		return false, err
+	}
+	var body bytes.Buffer
+	w := multipart.NewWriter(&body)
+	if err := w.WriteField("message", string(meta)); err != nil {
+		return false, err
+	}
+	if mimeType == "" {
+		mimeType = "application/octet-stream"
+	}
+	part, err := w.CreatePart(textproto.MIMEHeader{
+		"Content-Disposition": {`form-data; name="audio"; filename="voice"`},
+		"Content-Type":        {mimeType},
+	})
+	if err != nil {
+		return false, err
+	}
+	if _, err := part.Write(audio); err != nil {
+		return false, err
+	}
+	if err := w.Close(); err != nil {
+		return false, err
+	}
+	data, err := k.do(ctx, http.MethodPost, "/api/v1/chat/voice", w.FormDataContentType(), &body)
 	if err != nil {
 		return false, err
 	}
@@ -155,21 +209,24 @@ func (k *keystoneClient) ack(ctx context.Context, seq int64) error {
 }
 
 func (k *keystoneClient) call(ctx context.Context, method, path string, body any) ([]byte, error) {
-	var buf io.Reader
-	if body != nil {
-		data, err := json.Marshal(body)
-		if err != nil {
-			return nil, err
-		}
-		buf = bytes.NewReader(data)
+	if body == nil {
+		return k.do(ctx, method, path, "", nil)
 	}
-	req, err := http.NewRequestWithContext(ctx, method, strings.TrimRight(k.Base, "/")+path, buf)
+	data, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	return k.do(ctx, method, path, "application/json", bytes.NewReader(data))
+}
+
+func (k *keystoneClient) do(ctx context.Context, method, path, contentType string, body io.Reader) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, method, strings.TrimRight(k.Base, "/")+path, body)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+k.Token)
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
 	}
 	res, err := k.client().Do(req)
 	if err != nil {

@@ -24,6 +24,7 @@ import re
 MACHINE_FACING = {
     "/api/v1/chat/adapters/self",
     "/api/v1/chat/messages",
+    "/api/v1/chat/voice",
     "/api/v1/chat/outbound/{}/ack",
     "/api/v1/chat/bindings/redeem",
     "/api/v1/integration-work/claim",

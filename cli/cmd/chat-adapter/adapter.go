@@ -24,6 +24,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/chickenrat17/wildstone-homelab/keystone/speech"
 )
 
 var version = "dev" // set via -ldflags at release
@@ -51,7 +53,44 @@ type Incoming struct {
 	// DisplayName is what the transport calls this account, recorded on
 	// a binding for the operator's list.
 	DisplayName string
+	// Voice is set when the message is a recording rather than text
+	// (ADR-W042). Text is then empty, or a caption.
+	Voice *VoiceNote
 }
+
+// VoiceNote is a recording a transport heard but has NOT yet fetched.
+//
+// Fetching is deferred on purpose: the adapter downloads only after its
+// own checks have passed — the flood guard, and "is this addressed to
+// the bot" in a group — so other people's voice notes in a room, and a
+// stranger flooding the bot, never cost a download. Keystone then makes
+// the checks that matter (who is speaking, may this leave the house)
+// before anything is transcribed.
+type VoiceNote struct {
+	// MIME is the container as the vendor labelled it, e.g. audio/ogg.
+	MIME string
+	// Seconds and Size are what the vendor reported, or 0 when it did
+	// not say. They are checked before anything is fetched.
+	Seconds float64
+	Size    int64
+	// Fetch downloads the recording, reading at most limit bytes. It
+	// returns errVoiceTooLarge for anything bigger.
+	Fetch func(ctx context.Context, limit int64) ([]byte, error)
+}
+
+// Limits on what the adapter will download. The size is Keystone's own
+// bound; the length is the longest Keystone can be configured to
+// accept, since the adapter does not know the configured value —
+// Keystone applies that, and says so to the person.
+const (
+	maxVoiceBytes   = speech.MaxAudioBytes
+	maxVoiceSeconds = 600
+)
+
+// errVoiceTooLarge is a recording over maxVoiceBytes, found out while
+// fetching it (the vendor did not report its size, or reported it
+// wrong, or refused to hand over a file that big).
+var errVoiceTooLarge = errors.New("voice message too large to fetch")
 
 // Transport is one messaging vendor. Everything vendor-specific lives
 // behind these three methods; adding a transport is implementing them
@@ -292,7 +331,7 @@ func (a *adapter) handle(ctx context.Context, m Incoming) {
 		a.log.Info("account bound", "account", m.Account)
 		return
 	}
-	bound, err := a.keystone.send(ctx, keystoneInbound{
+	inbound := keystoneInbound{
 		Transport:    a.transport.Name(),
 		Account:      m.Account,
 		Conversation: m.Conversation,
@@ -301,7 +340,16 @@ func (a *adapter) handle(ctx context.Context, m Incoming) {
 		Text:         m.Text,
 		MessageID:    m.MessageID,
 		DisplayName:  m.DisplayName,
-	})
+	}
+	var (
+		bound bool
+		err   error
+	)
+	if m.Voice != nil {
+		bound, err = a.relayVoice(ctx, inbound, m.Voice)
+	} else {
+		bound, err = a.keystone.send(ctx, inbound)
+	}
 	switch {
 	case err == nil && bound && a.guard != nil:
 		a.guard.markKnown(m.Account)
@@ -314,6 +362,34 @@ func (a *adapter) handle(ctx context.Context, m Incoming) {
 		// from an outage either.
 		a.log.Error("relaying message", "account", m.Account, "err", err)
 	}
+}
+
+// relayVoice fetches a recording and posts it to Keystone's voice door
+// (ADR-W042). A recording the vendor reports as too long or too big is
+// not downloaded, but is still posted — marked tooLarge, with no audio
+// — so that a person Keystone knows is told to send something shorter,
+// and a stranger is told nothing, exactly as for any other message.
+func (a *adapter) relayVoice(ctx context.Context, msg keystoneInbound, v *VoiceNote) (bool, error) {
+	msg.Text = ""
+	tooLarge := v.Size > maxVoiceBytes || v.Seconds > maxVoiceSeconds
+	var audio []byte
+	if !tooLarge {
+		var err error
+		audio, err = v.Fetch(ctx, maxVoiceBytes)
+		switch {
+		case errors.Is(err, errVoiceTooLarge):
+			tooLarge, audio = true, nil
+		case err != nil:
+			// Nothing reached Keystone, so nothing can be said back:
+			// the adapter does not know whether this is somebody the
+			// household knows. Logged without the vendor URL, which
+			// carries the bot token (see telegram.do).
+			return false, fmt.Errorf("fetching voice message: %w", err)
+		}
+	}
+	return a.keystone.sendVoice(ctx, keystoneVoice{
+		keystoneInbound: msg, AudioSeconds: v.Seconds, TooLarge: tooLarge,
+	}, audio, v.MIME)
 }
 
 // reply sends one message directly, for the two cases that never reach

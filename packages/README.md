@@ -93,6 +93,7 @@ one mechanism, which is worth deciding before any of them individually.
 | `vpn-gluetun` | vpn | Gluetun VPN client with a kill switch and an HTTP proxy for other containers | internal |
 | `passwords-vaultwarden` | passwords | Vaultwarden, Bitwarden-compatible | app OIDC |
 | `ai-ollama` | language-models | Ollama, models at home | internal |
+| `speech-speaches` | speech | Speaches, voice messages to text at home (ADR-W042) | internal |
 | `ai-open-webui` | ai-chat | Open WebUI, the chat page over Ollama | app OIDC |
 | `media-jellyfin`, `media-plex` | media | Jellyfin (LDAP) or Plex | app LDAP / own |
 | `photos-immich` | photos | Immich | app OIDC |
