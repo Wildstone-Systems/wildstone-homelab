@@ -399,6 +399,31 @@ func (bs *Butlers) runtimeOffline(b runtimedb.Butler) (bool, string, error) {
 	return false, "", nil
 }
 
+// heldByExternalRuntime reports whether task is work b's external
+// runtime holds: running (the runtime has it and has not answered), or
+// parked in waiting(runtime-offline) to be re-offered to it. A task
+// waiting for anything else, such as the person's reply to a question,
+// is not held and is resumed by the next message as usual.
+func (bs *Butlers) heldByExternalRuntime(b runtimedb.Butler, task runtimedb.ButlerTask) (bool, error) {
+	switch task.State {
+	case runtimedb.ButlerTaskRunning, runtimedb.ButlerTaskWaiting:
+	default:
+		return false, nil
+	}
+	if _, external, err := bs.externalRuntime(b); err != nil || !external {
+		return false, err
+	}
+	if task.State == runtimedb.ButlerTaskRunning {
+		return true, nil
+	}
+	waits, err := bs.DB.ListButlerTaskWaits(task.ID)
+	if err != nil || len(waits) == 0 {
+		return false, err
+	}
+	last := waits[len(waits)-1]
+	return last.Reason == runtimedb.ButlerWaitRuntimeOffline && last.ResolvedAt.IsZero(), nil
+}
+
 // queueForOfflineRuntime moves task to waiting(runtime-offline). It
 // first moves a pending task to running (mirroring the runtime's own
 // first Work call, Client.Start) so the transition to waiting is legal
@@ -462,8 +487,21 @@ func (bs *Butlers) task(b runtimedb.Butler, t Turn) (runtimedb.ButlerTask, bool,
 			// cancelled" is the true answer to a follow-up on a
 			// conversation somebody stopped, and inventing a fresh task
 			// would quietly restart work that was deliberately halted.
-			switch existing.State {
-			case runtimedb.ButlerTaskCompleted, runtimedb.ButlerTaskFailed:
+			held, herr := bs.heldByExternalRuntime(b, existing)
+			if herr != nil {
+				return runtimedb.ButlerTask{}, false, herr
+			}
+			switch {
+			case existing.State == runtimedb.ButlerTaskCompleted, existing.State == runtimedb.ButlerTaskFailed:
+			case held:
+				// An external runtime is still working on the previous
+				// message, or it was parked for that runtime to come
+				// back (#389). Resuming would re-issue the task's handle
+				// and invalidate the one the runtime holds, so its
+				// answer would be refused and lost. This message is a
+				// new turn with its own task instead; the earlier one
+				// keeps its handle, and its answer reaches the
+				// conversation when it arrives (LateAnswer).
 			default:
 				// THE CALLER MUST BE THE ORIGIN, checked here rather
 				// than only when a tool runs.
