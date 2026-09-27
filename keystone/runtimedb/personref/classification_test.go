@@ -47,6 +47,7 @@ var dismissed = map[string]string{
 	"ldap_group":          "names a DIRECTORY group — a set of people, which is not itself a party; who is in it lives in projected_memberships.person_id (design §4)",
 	"origin_connection":   "names the CONNECTION a task arrived over ('console', 'matrix:!room:example.org') — a route into the house, not a party; who came through it is butler_tasks.author_person_id (design §8.1, §10.1)",
 	"placed_at":           "a timestamp",
+	"paired_at":           "a timestamp",
 	"assigned_at":         "a timestamp",
 	"since":               "a timestamp — when an agent became default-deny",
 	"effect":              "an enum: whether an entitlement allows or restricts",
