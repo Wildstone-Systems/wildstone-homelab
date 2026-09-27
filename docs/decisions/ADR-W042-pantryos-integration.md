@@ -1,7 +1,8 @@
 # ADR-W042: PantryOS integration
 
-- **Status:** proposed. The PantryOS half is implemented (PantryOS ADR 0026);
-  the Wildstone half below is the next work.
+- **Status:** proposed. The PantryOS half is implemented (PantryOS ADR 0026).
+  Wildstone: A2 implemented (#380 — `keystone/adapter/pantry/http.go`); the
+  rest is tracked in #379.
 - **Builds on:** ADR-W024 (household events, A8 subject mapping, A10 shims),
   ADR-W025 / `docs/catalog-integration-contract.md` (the `integrates:` block),
   ADR-W030 A5/A5.1/A8 (connections, adapters, action classes, P12's PantryOS
@@ -52,16 +53,23 @@ Mapping onto the runtime's result types:
 |---|---|
 | 200, `status: ok` | `Answer{Data}` |
 | 200, `status: empty` | `Answer{Empty: true, Data}` |
-| 404 | `ErrNoSuchCapability` |
-| 422 | an error naming PantryOS's message (a wrong request, not an outage) |
+| 404 whose detail is PantryOS naming the capability | `ErrNoSuchCapability` |
+| any other 404 (a wrong address, a proxy page) | `ErrUnavailable` |
+| 422 | `pantry.ErrRejected` with PantryOS's message (a wrong request, not an outage) |
 | network error, 5xx, 401/403 | `ErrUnavailable` |
+
+One honest limit: the runtime's result set is closed at four (`ok`, `empty`,
+`stale`, `unavailable`), so the runner reports an `ErrRejected` as
+`unavailable` carrying PantryOS's refusal text. The adapter keeps the two
+apart; the work record does not. A fifth result type is a W030 change and
+is not made here.
 
 The adapter records `Version: "pantry-1"` from the capability list, so "which
 contract is this" keeps its answer. `keystone/adapter/pantry` keeps the fake
 beside a new `HTTP` upstream; the fake moves to `pantry-1` semantics (below)
 so the contract suite keeps meaning the same thing for both.
 
-**Contract-test change.** The fake treats an unknown list (`hardware`) as
+**Contract-test change.** The fake treated an unknown list (`hardware`) as
 empty. `pantry-1` refuses it (422), because PantryOS keeps only the grocery
 list and a routing mistake must not read as "nothing on it". The suite's
 empty case for PantryOS becomes `{"list":"groceries"}` against an empty
