@@ -45,7 +45,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: agent-hermes
-  version: 0.1.2
+  version: 0.1.3
   capability: agent-hermes
   profile: hermes
   instanced: true
@@ -355,6 +355,11 @@ templates:
         API_SERVER_PORT: "8642"
         API_SERVER_KEY: "secret/{{ .Capability }}-api-server"
         HERMES_PROVIDER_KEY: "secret/{{ .Capability }}-provider-key"
+        # What config.yaml's mcp_servers.wildstone header expands
+        # (${MCP_SHARED_SECRET}); the bridge checks the same secret.
+        # Without it Hermes sends an empty bearer, every MCP connect is
+        # refused 401, and Hermes parks its Wildstone tools.
+        MCP_SHARED_SECRET: "secret/{{ .Capability }}-mcp-secret"
         HERMES_DASHBOARD: "0"
         HERMES_DISABLE_LAZY_INSTALLS: "1"
         # The image's own default UID/GID for the "hermes" account,

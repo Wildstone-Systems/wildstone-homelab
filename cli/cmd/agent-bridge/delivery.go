@@ -173,6 +173,7 @@ func (b *bridge) handleTurn(ctx context.Context, d agentapi.Delivery) bool {
 	}
 	b.runs.set(runID, d.Handle)
 	defer b.runs.delete(runID)
+	b.log.Info("hermes run started", "delivery", d.ID, "kind", d.Kind, "run", runID)
 
 	outcome, err := b.hermes.WaitForRun(ctx, runID)
 	if err != nil {
@@ -193,6 +194,7 @@ func (b *bridge) handleTurn(ctx context.Context, d agentapi.Delivery) bool {
 			b.log.Error("reporting the run's answer", "delivery", d.ID, "run", runID, "err", err)
 			return false
 		}
+		b.log.Info("hermes run answered", "delivery", d.ID, "run", runID)
 	} else {
 		reason := outcome.Terminal
 		if outcome.Detail != "" {
@@ -201,6 +203,7 @@ func (b *bridge) handleTurn(ctx context.Context, d agentapi.Delivery) bool {
 		if outcome.Terminal == "completed" {
 			reason = "the hermes run completed with no answer"
 		}
+		b.log.Warn("hermes run did not answer", "delivery", d.ID, "run", runID, "reason", reason)
 		if err := b.keystone.Fail(ctx, agentapi.WorkFail{Handle: d.Handle, Reason: reason}); err != nil {
 			b.log.Error("failing task", "delivery", d.ID, "run", runID, "err", err)
 			return false
