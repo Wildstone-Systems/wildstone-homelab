@@ -386,7 +386,7 @@ func TestKitchenTimers(t *testing.T) {
 	if got := up.asked[0]; got != "act pantry.timer.set map[label:pasta member:sam seconds:540]" {
 		t.Fatalf("PantryOS was asked %q", got)
 	}
-	for _, bad := range []string{"", "0", "-3", "soon", "2000"} {
+	for _, bad := range []string{"", "0", "-3", "soon", "2000", "NaN", "Inf", "-Inf"} {
 		if _, err := g.Dispatch(ctx, pantryCall(PantryToolSetTimer, map[string]string{"minutes": bad})); err == nil {
 			t.Fatalf("minutes %q was sent to PantryOS", bad)
 		}

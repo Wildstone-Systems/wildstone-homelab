@@ -62,6 +62,14 @@ func pairingURL(field, raw string) (string, error) {
 		u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 		return "", fmt.Errorf("%s must be an http(s) address such as https://pantry.example.internal", field)
 	}
+	// Both long-lived credentials cross this address: the publisher token
+	// to PantryOS, the agent key back on every call, the token again on
+	// every event. Plain http is accepted only on the household's own
+	// network — this machine, the LAN, the tailnet (itself encrypted) or a
+	// local name; anywhere else it must be https.
+	if u.Scheme == "http" && !privateHost(u.Hostname()) {
+		return "", fmt.Errorf("%s must use https: %s is not on this network, and pairing sends credentials to it", field, u.Hostname())
+	}
 	return strings.TrimRight(u.String(), "/"), nil
 }
 
@@ -111,8 +119,8 @@ func (s *Server) pairPantry(r *http.Request, id principal.Identity) (any, int, e
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
-	// Until the new pairing is proven, the minted token is the only thing
-	// to undo; the current pairing and its token stay as they are.
+	// Until PantryOS may hold the minted token, it is the only thing to
+	// undo; the current pairing and its token stay as they are.
 	fail := func(status int, err error) (any, int, error) {
 		if rerr := s.Principals.Revoke(token); rerr != nil && s.Log != nil {
 			s.Log.Error("pantry pairing: revoking the unused token", "err", rerr)
@@ -120,9 +128,21 @@ func (s *Server) pairPantry(r *http.Request, id principal.Identity) (any, int, e
 		s.appendEvent("integration.pair-failed", "", PantryCapability, id.Name)
 		return nil, status, err
 	}
+	// Once PantryOS may have stored it (it accepted the code, or the answer
+	// was lost on the way back), it has replaced its old token with this
+	// one: revoking it now would stop PantryOS's events while Keystone
+	// still shows the old pairing. It stays valid; pairing again finishes
+	// the job and revokes whatever is left over.
+	failAfterHandoff := func(status int, err error) (any, int, error) {
+		s.appendEvent("integration.pair-incomplete", "", PantryCapability, id.Name)
+		return nil, status, fmt.Errorf("%w — PantryOS may already be using its new event token, which was kept working; pair again to finish", err)
+	}
 
-	agentKey, err := s.exchangeWithPantry(r.Context(), address, code, keystoneURL, token)
+	agentKey, handedOver, err := s.exchangeWithPantry(r.Context(), address, code, keystoneURL, token)
 	if err != nil {
+		if handedOver {
+			return failAfterHandoff(http.StatusBadGateway, err)
+		}
 		return fail(http.StatusBadGateway, err)
 	}
 	caps, err := (&pantry.HTTP{BaseURL: address, AgentKey: agentKey, HTTP: s.pairingClient()}).Capabilities(r.Context())
@@ -133,10 +153,10 @@ func (s *Server) pairPantry(r *http.Request, id principal.Identity) (any, int, e
 		} else if len(caps) > 0 && caps[0].Detail != "" {
 			detail = caps[0].Detail
 		}
-		return fail(http.StatusBadGateway, fmt.Errorf("PantryOS paired but its key does not work: %s", detail))
+		return failAfterHandoff(http.StatusBadGateway, fmt.Errorf("PantryOS paired but its key does not work: %s", detail))
 	}
 	if err := s.SecretVault.SavePairing(PantryCapability, address, agentKey, id.Name); err != nil {
-		return fail(http.StatusInternalServerError, err)
+		return failAfterHandoff(http.StatusInternalServerError, err)
 	}
 	if _, err := s.Principals.RevokeOthers(name, token); err != nil {
 		// The new pairing is saved and works, but a token it replaced may
@@ -166,16 +186,20 @@ func anyAvailable(caps []adapter.Capability) bool {
 
 // exchangeWithPantry performs PantryOS's half of the handshake and returns
 // the agent key it answers with.
-func (s *Server) exchangeWithPantry(ctx context.Context, address, code, keystoneURL, token string) (string, error) {
+// exchangeWithPantry hands PantryOS the publisher token and takes its agent
+// key. handedOver reports whether PantryOS may now hold the token: true
+// once the request went out, unless PantryOS clearly refused it.
+func (s *Server) exchangeWithPantry(ctx context.Context, address, code, keystoneURL, token string) (agentKey string, handedOver bool, err error) {
 	body, _ := json.Marshal(map[string]string{"code": code, "keystone_url": keystoneURL, "publisher_token": token})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, address+pantryExchangePath, bytes.NewReader(body))
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	res, err := s.pairingClient().Do(req)
 	if err != nil {
-		return "", fmt.Errorf("PantryOS could not be reached at %s: %v", address, err)
+		// The request may have arrived and only the answer been lost.
+		return "", true, fmt.Errorf("PantryOS could not be reached at %s: %v", address, err)
 	}
 	defer res.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(res.Body, 64<<10))
@@ -185,27 +209,27 @@ func (s *Server) exchangeWithPantry(ctx context.Context, address, code, keystone
 	_ = json.Unmarshal(raw, &detail)
 	switch {
 	case res.StatusCode == http.StatusUnauthorized:
-		return "", errors.New("PantryOS refused the code: it is wrong, expired, or already used — ask PantryOS for a new one")
+		return "", false, errors.New("PantryOS refused the code: it is wrong, expired, or already used — ask PantryOS for a new one")
 	case res.StatusCode == http.StatusTooManyRequests:
-		return "", errors.New("PantryOS has seen too many wrong codes; wait a few minutes and try again")
+		return "", false, errors.New("PantryOS has seen too many wrong codes; wait a few minutes and try again")
 	case res.StatusCode != http.StatusOK:
 		msg := strings.TrimSpace(detail.Detail)
 		if msg == "" {
 			msg = res.Status
 		}
-		return "", fmt.Errorf("PantryOS answered %d: %s", res.StatusCode, msg)
+		return "", false, fmt.Errorf("PantryOS answered %d: %s", res.StatusCode, msg)
 	}
 	var out struct {
 		AgentKey string `json:"agent_key"`
 		Contract string `json:"contract"`
 	}
 	if err := json.Unmarshal(raw, &out); err != nil || out.AgentKey == "" {
-		return "", errors.New("PantryOS accepted the code but sent no agent key")
+		return "", true, errors.New("PantryOS accepted the code but sent no agent key")
 	}
 	if out.Contract != pantry.Contract {
-		return "", fmt.Errorf("PantryOS speaks contract %q; this Keystone speaks %q — update one of them", out.Contract, pantry.Contract)
+		return "", true, fmt.Errorf("PantryOS speaks contract %q; this Keystone speaks %q — update one of them", out.Contract, pantry.Contract)
 	}
-	return out.AgentKey, nil
+	return out.AgentKey, true, nil
 }
 
 // ensurePublisherPrincipal creates the publisher principal on first use,

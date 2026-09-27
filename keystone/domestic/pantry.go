@@ -30,6 +30,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -725,7 +726,8 @@ const maxTimerMinutes = 24 * 60
 func (p *Pantry) setTimer(ctx context.Context, c Call) (Result, error) {
 	raw := strings.TrimSpace(c.Params["minutes"])
 	minutes, err := strconv.ParseFloat(raw, 64)
-	if err != nil || minutes <= 0 || minutes > maxTimerMinutes {
+	// NaN and ±Inf parse fine and slip past both comparisons.
+	if err != nil || math.IsNaN(minutes) || math.IsInf(minutes, 0) || minutes <= 0 || minutes > maxTimerMinutes {
 		return Result{}, fmt.Errorf("minutes must be a number above zero and at most a day, not %q", raw)
 	}
 	seconds := int(minutes*60 + 0.5)

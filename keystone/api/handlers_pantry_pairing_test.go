@@ -196,11 +196,14 @@ func TestAFailedPairingLeavesTheCurrentOneAlone(t *testing.T) {
 	broken := newFakePantryOS(t, "CCCC-CCCC", "REPLACED-agent-key-3")
 	broken.capsStatus = http.StatusUnauthorized
 	resp, out = pair(h, broken.srv.URL, "CCCC-CCCC")
-	if resp.StatusCode != http.StatusBadGateway || !strings.Contains(out["error"].(string), "does not work") {
+	if resp.StatusCode != http.StatusBadGateway || !strings.Contains(out["error"].(string), "does not work") ||
+		!strings.Contains(out["error"].(string), "pair again") {
 		t.Fatalf("broken key = %d %v", resp.StatusCode, out)
 	}
-	if h.publisherTokenWorks(broken.gotToken) {
-		t.Fatal("the token minted for a failed pairing still works")
+	// PantryOS took the new token and dropped its old one, so revoking it
+	// would silence PantryOS: it is kept, and pairing again tidies up.
+	if !h.publisherTokenWorks(broken.gotToken) {
+		t.Fatal("the token PantryOS already stored was revoked")
 	}
 	if !h.publisherTokenWorks(good.gotToken) {
 		t.Fatal("a failed pairing revoked the working one's token")
@@ -237,6 +240,9 @@ func TestPairingRefusesBadInputAndNonAdmins(t *testing.T) {
 		{"address": "https://user:pw@pantry.example.internal", "code": "X", "keystoneUrl": "https://k.example.internal"},
 		{"address": "https://pantry.example.internal", "code": "", "keystoneUrl": "https://k.example.internal"},
 		{"address": "https://pantry.example.internal", "code": "X", "keystoneUrl": "ftp://k"},
+		// Credentials never cross plain http off the household's network.
+		{"address": "http://pantry.example.com", "code": "X", "keystoneUrl": "https://k.example.internal"},
+		{"address": "https://pantry.example.internal", "code": "X", "keystoneUrl": "http://203.0.113.7:9441"},
 	} {
 		if resp := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/pantry/pairing", body, nil); resp.StatusCode != http.StatusBadRequest {
 			t.Errorf("%v = %d", body, resp.StatusCode)
@@ -350,5 +356,21 @@ func TestPairingFillsTheInstalledPackagesPublisherSecret(t *testing.T) {
 	}
 	if got := agent.values[capability.PublisherSecretName(PantryCapability)]; got == "" || got != second.gotToken {
 		t.Fatal("the placed secret is not the token PantryOS was given")
+	}
+}
+
+// Plain http is fine on the household's own network: this machine, the
+// LAN, the tailnet, or a local name.
+func TestPairingURLAllowsHTTPOnlyOnTheHouseholdNetwork(t *testing.T) {
+	for _, ok := range []string{"http://127.0.0.1:8000", "http://192.168.1.20", "http://100.101.102.103:9441",
+		"http://pantry.lan", "http://pantry", "https://pantry.example.com"} {
+		if _, err := pairingURL("address", ok); err != nil {
+			t.Errorf("%s refused: %v", ok, err)
+		}
+	}
+	for _, bad := range []string{"http://pantry.example.com", "http://8.8.8.8"} {
+		if _, err := pairingURL("address", bad); err == nil || !strings.Contains(err.Error(), "https") {
+			t.Errorf("%s accepted (%v)", bad, err)
+		}
 	}
 }
