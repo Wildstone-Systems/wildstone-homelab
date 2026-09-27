@@ -129,6 +129,7 @@ func (f *fakeClient) Ack(ctx context.Context, id string) error {
 type fakeHermes struct {
 	startRunFn   func(ctx context.Context, req hermesRunRequest, idempotencyKey string) (string, error)
 	waitForRunFn func(ctx context.Context, runID string) (runOutcome, error)
+	healthFn     func(ctx context.Context) error
 }
 
 var _ hermesRunner = (*fakeHermes)(nil)
@@ -145,4 +146,11 @@ func (f *fakeHermes) WaitForRun(ctx context.Context, runID string) (runOutcome, 
 		return f.waitForRunFn(ctx, runID)
 	}
 	return runOutcome{Terminal: "completed"}, nil
+}
+
+func (f *fakeHermes) Health(ctx context.Context) error {
+	if f.healthFn != nil {
+		return f.healthFn(ctx)
+	}
+	return nil
 }

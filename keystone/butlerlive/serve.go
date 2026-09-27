@@ -113,6 +113,12 @@ func (bs *Butlers) Serve(ctx context.Context, t Turn) (Answer, error) {
 		if err := bs.queueForOfflineRuntime(task.ID); err != nil {
 			return bs.blank(b), err
 		}
+		// Without this a parked turn is invisible in the journal: the
+		// answered paths log, and this one returns an answer too.
+		if bs.Log != nil {
+			bs.Log.Info("butler turn parked for its runtime", "butler", b.Name, "task", task.ID,
+				"member", t.Member, "resumed", resumed, "reason", detail)
+		}
 		answer := bs.blank(b)
 		answer.TaskID, answer.Resumed = task.ID, resumed
 		answer.FinalText = detail
