@@ -9,8 +9,10 @@ package agentgateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -301,5 +303,88 @@ func TestAFencedVerdictStillCompletesTheTurn(t *testing.T) {
 	}
 	if task.State != runtimedb.ButlerTaskCompleted {
 		t.Fatalf("task state = %s, want completed", task.State)
+	}
+}
+
+// flakyJudge is a Butler route that fails while broken is set, standing
+// in for an objective check (or anything after it) that cannot settle.
+type flakyJudge struct {
+	judge
+	broken atomic.Bool
+}
+
+func (j *flakyJudge) Chat(ctx context.Context, req provider.ChatRequest) (*provider.ChatResponse, error) {
+	if j.broken.Load() {
+		return nil, errors.New("the route is down")
+	}
+	return j.judge.Chat(ctx, req)
+}
+
+func flakyFixture(t *testing.T) (*fixture, *butlerlive.Butlers, *flakyJudge) {
+	t.Helper()
+	f, bs, _ := externalFixture(t, `{"kind":"informational"}`)
+	j := &flakyJudge{judge: judge{verdict: `{"kind":"informational"}`}}
+	bs.Providers = func(runtimedb.Butler) (provider.Provider, error) { return j, nil }
+	return f, bs, j
+}
+
+// A runtime's Complete reports whether its answer SETTLED, not merely that
+// it was handed over: the bridge acknowledges its delivery on success, so
+// an answer that could not be judged or recorded must come back as an
+// error, or it is lost with the delivery.
+func TestAnAnswerThatCannotSettleIsNotReportedAsAccepted(t *testing.T) {
+	f, bs, j := flakyFixture(t)
+	j.broken.Store(true)
+
+	completed := make(chan error, 1)
+	go func() {
+		d, _ := nextTurn(t, f.g)
+		ctx := WithPrincipal(context.Background(), "rt-alfred")
+		completed <- f.g.Complete(ctx, agentapi.WorkComplete{Handle: d.Handle, Reply: "n1 is fine"})
+	}()
+	if _, err := bs.Serve(context.Background(), butlerlive.Turn{
+		Butler: "alfred", Member: "mika", Text: "is n1 healthy?",
+		Connection: butlerlive.ConnectionScope{Name: butlerlive.ConsoleConnection},
+	}); err == nil {
+		t.Error("Serve succeeded with a route that cannot judge the answer")
+	}
+	if err := <-completed; err == nil {
+		t.Fatal("Complete reported an answer that never settled as accepted")
+	}
+}
+
+// A late answer settles under the runtime's own handle, so one that fails
+// to settle can be reported again with the same delivery.
+func TestALateAnswerThatFailsCanBeRetriedWithTheSameHandle(t *testing.T) {
+	f, bs, j := flakyFixture(t)
+	bs.ExternalReplyWait = 50 * time.Millisecond
+	answer, err := bs.Serve(context.Background(), butlerlive.Turn{
+		Butler: "alfred", Member: "mika", Text: "is n1 healthy?",
+		Connection: butlerlive.ConnectionScope{Name: butlerlive.ConsoleConnection},
+	})
+	if err != nil {
+		t.Fatalf("Serve: %v", err)
+	}
+	d, _ := nextTurn(t, f.g)
+	ctx := WithPrincipal(context.Background(), "rt-alfred")
+
+	j.broken.Store(true)
+	if err := f.g.Complete(ctx, agentapi.WorkComplete{Handle: d.Handle, Reply: "n1 is fine"}); err == nil {
+		t.Fatal("a late answer that could not settle was reported as accepted")
+	}
+	// The retry the bridge makes: the same delivery, the same handle.
+	j.broken.Store(false)
+	if _, err := f.g.Manifest(ctx, d.Handle); err != nil {
+		t.Fatalf("the delivery's handle was invalidated by the failed attempt: %v", err)
+	}
+	if err := f.g.Complete(ctx, agentapi.WorkComplete{Handle: d.Handle, Reply: "n1 is fine"}); err != nil {
+		t.Fatalf("retrying the late answer: %v", err)
+	}
+	task, err := f.db.GetButlerTask(answer.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.State != runtimedb.ButlerTaskCompleted {
+		t.Fatalf("task state = %s, want completed by the retried answer", task.State)
 	}
 }

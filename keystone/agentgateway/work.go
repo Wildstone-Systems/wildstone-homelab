@@ -170,7 +170,7 @@ func (g *Gateway) Complete(ctx context.Context, w agentapi.WorkComplete) error {
 		if err := g.Ledger.Authorize(s.hc.Task.ID); err != nil {
 			return fmt.Errorf("%w: %v", ErrRefused, err)
 		}
-		return g.Replies.RuntimeReplied(ctx, s.hc.Task.ID, w.Reply)
+		return g.Replies.RuntimeReplied(ctx, w.Handle, w.Reply)
 	}
 	evidence := make([]butler.LedgerEvidence, 0, len(w.Evidence))
 	for _, e := range w.Evidence {

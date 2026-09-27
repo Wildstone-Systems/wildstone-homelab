@@ -54,9 +54,24 @@ type ExternalUtterance struct {
 
 // runtimeReply is what a runtime reported for a task a turn is waiting
 // on: its answer, or why it could not produce one.
+//
+// An answer carries the handle the runtime presented and a done channel
+// the settlement result is sent on: the runtime's Complete returns only
+// once the answer has been judged and recorded, so a failure there
+// reaches the runtime, which leaves its delivery unacknowledged and
+// tries again under the same handle.
 type runtimeReply struct {
 	text   string
 	failed string
+	handle agentapi.Handle
+	done   chan error
+}
+
+// settled reports a settlement result to whoever is waiting on r.
+func (r runtimeReply) settled(err error) {
+	if r.done != nil {
+		r.done <- err
+	}
 }
 
 // externalRuntime reports whether b answers through a runtime other
@@ -116,7 +131,9 @@ func (bs *Butlers) runExternal(ctx context.Context, runner *legacy.Runner,
 			tr.FinalText = fmt.Sprintf("%s's %s runtime could not finish this: %s", b.Name, rtType, r.failed)
 			return tr, nil
 		}
-		return s.Transcript(), s.Finish(ctx, r.text)
+		err := s.Finish(ctx, r.text)
+		r.settled(err)
+		return s.Transcript(), err
 	case <-timer.C:
 		tr := s.Transcript()
 		tr.FinalText = externalStillWorking
@@ -162,9 +179,11 @@ func (bs *Butlers) stopAwaiting(taskID string, ch chan runtimeReply) {
 	case r := <-ch:
 		if r.failed == "" {
 			go func() {
-				if err := bs.settleLateReply(context.Background(), taskID, r.text); err != nil && bs.Log != nil {
+				err := bs.settleLateReply(context.Background(), r.handle, r.text)
+				if err != nil && bs.Log != nil {
 					bs.Log.Error("settling a runtime's late answer", "task", taskID, "err", err)
 				}
+				r.settled(err)
 			}()
 		}
 	default:
@@ -184,22 +203,45 @@ func (bs *Butlers) deliverReply(taskID string, r runtimeReply) bool {
 	case ch <- r:
 		return true
 	default:
-		// Something is already waiting to be read; the first report
-		// stands.
-		return true
+		// Something is already waiting to be read. The first report
+		// stands; a second answer is refused (RuntimeReplied) rather
+		// than accepted and dropped.
+		return false
 	}
 }
 
-// RuntimeReplied accepts an external runtime's final answer for taskID
-// (agentapi.WorkComplete.Reply). The turn waiting on it finishes the
-// task; with none waiting — the person was told it is still going, or
-// the turn was re-offered after a reconnect — it is finished here, by
+// waitingOn reports whether a turn is waiting on taskID.
+func (bs *Butlers) waitingOn(taskID string) bool {
+	bs.mu.Lock()
+	defer bs.mu.Unlock()
+	_, ok := bs.waiting[taskID]
+	return ok
+}
+
+// RuntimeReplied accepts an external runtime's final answer for the task
+// on h (agentapi.WorkComplete.Reply). The turn waiting on it finishes
+// the task; with none waiting — the person was told it is still going,
+// or the turn was re-offered after a reconnect — it is finished here, by
 // the same Slice.Finish, so the evidence rule is the same either way.
-func (bs *Butlers) RuntimeReplied(ctx context.Context, taskID, reply string) error {
-	if bs.deliverReply(taskID, runtimeReply{text: reply}) {
-		return nil
+//
+// Either way it returns only once the answer is settled, with the
+// settlement's own error: the runtime acknowledges its delivery on a
+// nil, and an answer that failed to settle must stay retryable.
+func (bs *Butlers) RuntimeReplied(ctx context.Context, h agentapi.Handle, reply string) error {
+	taskID := h.TaskID()
+	r := runtimeReply{text: reply, handle: h, done: make(chan error, 1)}
+	if bs.deliverReply(taskID, r) {
+		select {
+		case err := <-r.done:
+			return err
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
-	return bs.settleLateReply(ctx, taskID, reply)
+	if bs.waitingOn(taskID) {
+		return fmt.Errorf("butlerlive: an answer for %s is already being settled", taskID)
+	}
+	return bs.settleLateReply(ctx, h, reply)
 }
 
 // RuntimeFailed tells the turn waiting on taskID, if any, that its
@@ -212,9 +254,15 @@ func (bs *Butlers) RuntimeFailed(taskID, reason string) {
 // It can only be done through the Agent Gateway: the runtime reached the
 // task through it, and the closure path has no session to rebuild here.
 //
+// It settles under the runtime's own handle h rather than issuing a new
+// one: a new handle would invalidate the one the runtime's delivery
+// carries, so a transient failure here would leave a retry of that
+// delivery refused, and the answer stranded.
+//
 // Nobody is shown the answer yet; it is recorded as the task's result.
 // Delivering it back to the conversation is follow-up work.
-func (bs *Butlers) settleLateReply(ctx context.Context, taskID, reply string) error {
+func (bs *Butlers) settleLateReply(ctx context.Context, h agentapi.Handle, reply string) error {
+	taskID := h.TaskID()
 	if bs.AgentClient == nil {
 		return fmt.Errorf("butlerlive: %s has no turn waiting for its answer and no agent gateway to settle it through", taskID)
 	}
@@ -235,16 +283,12 @@ func (bs *Butlers) settleLateReply(ctx context.Context, taskID, reply string) er
 		return fmt.Errorf("%w: %s runs on %s, which could not be reached: %v (ADR-W031 A6)",
 			runtimedb.ErrButlerUnreachable, b.Name, b.Model, err)
 	}
-	handle, err := bs.Ledger.IssueHandle(taskID)
-	if err != nil {
-		return err
-	}
 	if bs.UseAgentGateway && bs.WithPrincipal != nil {
 		ctx = bs.WithPrincipal(ctx, b.Name)
 	}
 	runner := &legacy.Runner{
 		Client:          bs.AgentClient,
-		Handle:          handle,
+		Handle:          h,
 		Ledger:          bs.Ledger,
 		VerifyObjective: true,
 		MaxSliceRounds:  conversationSliceRounds,

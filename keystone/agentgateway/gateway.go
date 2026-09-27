@@ -110,7 +110,7 @@ type Gateway struct {
 // Replies accepts what an external runtime reports about a turn it was
 // handed. butlerlive.Butlers implements it.
 type Replies interface {
-	RuntimeReplied(ctx context.Context, taskID, reply string) error
+	RuntimeReplied(ctx context.Context, h agentapi.Handle, reply string) error
 	RuntimeFailed(taskID, reason string)
 }
 
