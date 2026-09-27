@@ -122,6 +122,9 @@ func (a *Authority) AuthorizeTool(q butler.ToolAuthorityQuery) (butler.ToolDecis
 		Tool:          q.Tool,
 		Structural:    q.Structural,
 		GrantRequired: q.GrantRequired,
+		Service:       q.Service,
+		ToolClass:     q.ToolClass,
+		OptIn:         q.OptIn,
 		TaskID:        q.TaskID,
 		RoutineName:   q.RoutineName,
 	}
@@ -142,6 +145,7 @@ func (a *Authority) AuthorizeTool(q butler.ToolAuthorityQuery) (butler.ToolDecis
 		Reason:      res.Reason,
 		Requestable: res.Requestable,
 		GrantSeq:    res.GrantSeq,
+		Unassigned:  !res.Allowed && res.Source == "assignment",
 	}, nil
 }
 

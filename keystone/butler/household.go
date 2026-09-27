@@ -320,6 +320,9 @@ func (gw *HouseholdGateway) checkTool(tool string, entry householdEntry) ToolDec
 		// (ADR-W030 A7).
 		Structural:    true,
 		GrantRequired: entry.GrantRequired,
+		Service:       ServiceSystem,
+		ToolClass:     string(AgentClassMember),
+		OptIn:         entry.OptIn,
 		TaskID:        gw.SessionTask,
 		Resource:      ResourceRef{Kind: entry.Reaches},
 	}

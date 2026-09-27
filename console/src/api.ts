@@ -1219,8 +1219,14 @@ export interface CapabilityTool {
   mutating?: boolean;
   grantRequired?: boolean;
   untrusted?: boolean;
+  // Opt-in tools are reached only by being named (ADR-W033 §6.2);
+  // assigning one asks for a fresh sign-in.
+  optIn?: boolean;
   available: boolean;
   reason?: string;
+  // Wired here, and withheld only because this governed Agent has not
+  // been given it: assigning it is what would make it available.
+  unassigned?: boolean;
 }
 
 // What one Butler may do, as the engine resolves it. The console does
@@ -1236,6 +1242,8 @@ export interface ButlerTools {
   actions: { tool: string; tier: string }[] | null;
   // Tool name to the reason it was narrowed, "" when none was given.
   narrowedTools: Record<string, string> | null;
+  // Whether assignments decide this Agent's reach at all.
+  governed?: boolean;
 }
 
 export interface ButlerAddress {
@@ -1693,6 +1701,14 @@ export const api = {
       "PUT",
       `/api/v1/butlers/${encodeURIComponent(name)}/tool`,
       { tool, allow, reason },
+    ),
+  // Assigning ADDS a tool to a governed Agent, where setButlerTool only
+  // takes one away (#389). A narrowing still subtracts on top.
+  setButlerAssignment: (name: string, tool: string, assign: boolean) =>
+    call<{ butler: string; tool: string; assigned: boolean }>(
+      "PUT",
+      `/api/v1/butlers/${encodeURIComponent(name)}/assignment`,
+      { tool, assign },
     ),
   setButlerConnection: (name: string, connection: string, allow: boolean) =>
     call<{ butler: string; connections: string[] | null }>(

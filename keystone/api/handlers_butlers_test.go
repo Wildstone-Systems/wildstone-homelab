@@ -6,6 +6,7 @@ package api
 
 import (
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
@@ -144,6 +145,7 @@ func TestShapingAButlerNeedsManage(t *testing.T) {
 		{http.MethodPut, "/api/v1/butlers/health/model", map[string]any{"model": "cloud"}},
 		{http.MethodPut, "/api/v1/butlers/health/access", map[string]any{"member": "sam", "allow": true}},
 		{http.MethodPut, "/api/v1/butlers/health/tool", map[string]any{"tool": "send_message", "allow": false}},
+		{http.MethodPut, "/api/v1/butlers/health/assignment", map[string]any{"tool": "recall", "assign": true}},
 		{http.MethodDelete, "/api/v1/butlers/health", nil},
 	} {
 		res := h.do(runtimedb.RoleConcierge, c.method, c.path, c.body, nil)
@@ -294,6 +296,76 @@ func TestButlerToolsComeFromTheGatewayNotTheClient(t *testing.T) {
 	}
 	if back := read(); back.Narrowed["do_household_action"] != "" {
 		t.Fatalf("the narrowing outlived its removal: %+v", back.Narrowed)
+	}
+}
+
+// A governed Agent can be given a tool after it was created, and the
+// Tools view says which of its missing tools assigning would fix
+// (#389). Before this, assignments were written only at creation, and
+// an unassigned tool looked the same as one nothing here provides.
+func TestAToolCanBeAssignedToAnExistingAgent(t *testing.T) {
+	h := butlerConsole(t)
+	if res := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/butlers", map[string]any{
+		"name": "health", "agentClass": "member", "model": "kitchen-box",
+	}, nil); res.StatusCode != http.StatusCreated {
+		t.Fatalf("create = %d", res.StatusCode)
+	}
+	type toolView struct {
+		Name       string `json:"name"`
+		Available  bool   `json:"available"`
+		Reason     string `json:"reason"`
+		Unassigned bool   `json:"unassigned"`
+	}
+	read := func() (bool, map[string]toolView) {
+		t.Helper()
+		var out struct {
+			Governed bool       `json:"governed"`
+			Tools    []toolView `json:"tools"`
+		}
+		if res := h.do(runtimedb.RoleAdmin, http.MethodGet, "/api/v1/butlers/health/tools", nil, &out); res.StatusCode != http.StatusOK {
+			t.Fatalf("reading the tools = %d", res.StatusCode)
+		}
+		byName := map[string]toolView{}
+		for _, tv := range out.Tools {
+			byName[tv.Name] = tv
+		}
+		return out.Governed, byName
+	}
+	assign := func(tool string, on bool) int {
+		t.Helper()
+		return h.do(runtimedb.RoleAdmin, http.MethodPut, "/api/v1/butlers/health/assignment",
+			map[string]any{"tool": tool, "assign": on}, nil).StatusCode
+	}
+
+	governed, tools := read()
+	if !governed {
+		t.Fatal("a newly created Agent is not governed")
+	}
+	const tool = "recall"
+	if tv, ok := tools[tool]; !ok || !tv.Available {
+		t.Fatalf("%s before = %+v, want seeded and available", tool, tv)
+	}
+
+	if code := assign(tool, false); code != http.StatusOK {
+		t.Fatalf("unassigning = %d", code)
+	}
+	_, tools = read()
+	if tv := tools[tool]; tv.Available || !tv.Unassigned || !strings.Contains(tv.Reason, "has not been given") {
+		t.Fatalf("%s after unassigning = %+v, want unavailable, unassigned, and said so", tool, tv)
+	}
+
+	if code := assign(tool, true); code != http.StatusOK {
+		t.Fatalf("assigning = %d", code)
+	}
+	_, tools = read()
+	if tv := tools[tool]; !tv.Available || tv.Unassigned {
+		t.Fatalf("%s after assigning = %+v, want available again", tool, tv)
+	}
+
+	// A name this Agent's class does not have is refused, not recorded
+	// as an assignment covering nothing.
+	if code := assign("no_such_tool", true); code != http.StatusBadRequest {
+		t.Fatalf("assigning an unknown tool = %d, want 400", code)
 	}
 }
 
