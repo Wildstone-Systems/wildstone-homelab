@@ -1322,34 +1322,41 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 		for _, e := range filedrop.Executors() {
 			actions.Register(e)
 		}
-		// The household lists (packages/lists-wildstone). Registered
-		// unconditionally and gated per call on the install, for the
-		// drop box's reason: installing or removing the package takes
-		// effect without a restart.
-		lists := &domestic.Lists{Authority: db, Store: db,
-			Enabled: func() (bool, error) { return apiSrv.CapabilityEnabled(domestic.ListsCapability) },
-		}
-		for _, e := range lists.Executors() {
-			actions.Register(e)
-		}
 		// PantryOS (packages/pantry-pantryos, ADR-W042). The calendar's
 		// road (ADR-W034 A5): Keystone holds the upstream, an operator
 		// who set -pantry-url and PANTRY_AGENT_KEY has said the
 		// household's agents may use it, and each call is also gated on
 		// the package being installed, as the lists are.
+		//
+		// Built whether or not it is configured, because the household
+		// lists ask it one question either way — is PantryOS installed —
+		// and an installed PantryOS owns the grocery list even before
+		// anyone connects it (ADR-W042 A3): a grocery request is then
+		// told PantryOS is not connected, never written somewhere else.
+		pantryActions := &domestic.Pantry{Authority: db,
+			Enabled: func() (bool, error) { return apiSrv.CapabilityEnabled(domestic.PantryCapability) },
+		}
 		if householdCfg.PantryURL != "" {
-			key := os.Getenv("PANTRY_AGENT_KEY")
-			if key == "" {
+			if key := os.Getenv("PANTRY_AGENT_KEY"); key == "" {
 				log.Warn("pantry: -pantry-url is set but PANTRY_AGENT_KEY is empty; the pantry actions are not registered")
 			} else {
-				pantryActions := &domestic.Pantry{Authority: db,
-					Upstream: &pantry.HTTP{BaseURL: householdCfg.PantryURL, AgentKey: key},
-					Enabled:  func() (bool, error) { return apiSrv.CapabilityEnabled(domestic.PantryCapability) },
-				}
+				pantryActions.Upstream = &pantry.HTTP{BaseURL: householdCfg.PantryURL, AgentKey: key}
 				for _, e := range pantryActions.Executors() {
 					actions.Register(e)
 				}
 			}
+		}
+		// The household lists (packages/lists-wildstone). Registered
+		// unconditionally and gated per call on the install, for the
+		// drop box's reason: installing or removing the package takes
+		// effect without a restart. A grocery list goes to PantryOS
+		// while PantryOS is installed (#383).
+		lists := &domestic.Lists{Authority: db, Store: db,
+			Enabled:   func() (bool, error) { return apiSrv.CapabilityEnabled(domestic.ListsCapability) },
+			Groceries: pantryActions,
+		}
+		for _, e := range lists.Executors() {
+			actions.Register(e)
 		}
 	}
 	// Wire the chat delivery executors now that the API server exists:

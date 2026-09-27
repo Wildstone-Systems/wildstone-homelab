@@ -77,20 +77,29 @@ empty case for PantryOS becomes `{"list":"groceries"}` against an empty
 pantry, and the real deployment is enrolled with
 `WILDSTONE_TEST_PANTRY_URL` + `WILDSTONE_TEST_PANTRY_KEY`, like HA and CalDAV.
 
-### A3. PantryOS owns the grocery list when it is connected
+### A3. PantryOS owns the grocery list when it is installed
 
-- **Connected:** grocery items go to PantryOS (`pantry.add` / `pantry.check`).
+- **Installed:** grocery items go to PantryOS (`pantry.add` / `pantry.check`).
   `lists-wildstone` keeps every other list.
 - **Not installed:** the `lists-wildstone` `groceries` list is used.
-- **Connected but not answering:** no silent fallback to `lists-wildstone`
+- **Installed but not answering:** no silent fallback to `lists-wildstone`
   — that creates two half-lists. The tool reports PantryOS unavailable and
   the Butler says so.
-- The routing decision is "is a PantryOS connection **installed**", never
-  "did the last call work". It lives in `keystone/domestic` beside
-  `ListsTools`, and a test pins the unavailable case.
-- On first connect, the Plan offers a one-time import of the existing
-  `groceries` list into PantryOS (each item through `pantry.add`, which is
-  repeat-safe).
+- The routing decision is "is PantryOS **installed**", never "did the last
+  call work". It lives in `keystone/domestic` (`Lists.Groceries`), and
+  `TestAnInstalledPantryOSThatIsDownIsNeverFallenBackFrom` pins the
+  unavailable case — and installed-but-not-connected, which is also
+  PantryOS's list and says why it cannot answer. *(Implemented, #383.)*
+- The grocery list is any list called `groceries`, `grocery` or `shopping`
+  (with or without "list"). `show_list`, `add_items` and `check_items` go to
+  PantryOS; `remove_items`, `clear_checked` and `delete_list` have no
+  PantryOS match and are refused, saying where the list lives — a delete is
+  refused before anyone is asked to confirm it. The lists overview notes
+  that the grocery list is kept in PantryOS.
+- **Not yet:** a one-time import of an existing household `shopping` list
+  into PantryOS on first connect (each item through `pantry.add`, which is
+  repeat-safe). Until then, the old list stays in Wildstone, untouched and
+  still visible on the Lists card.
 
 ### A4. Events
 

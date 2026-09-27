@@ -204,6 +204,22 @@ func (t *pantryTool) Describe(ctx context.Context, _ Call) (string, error) {
 		s.Recipe, servingsPhrase(s.Servings)), nil
 }
 
+// Installed reports whether the household has PantryOS INSTALLED — the
+// question grocery routing turns on (ADR-W042 A3). Not "is it answering":
+// a PantryOS that is installed but down still owns the grocery list, and
+// the answer to a grocery request is then that it is down, never a quiet
+// write to some other list. Installed-but-not-connected likewise routes
+// here and says so.
+func (p *Pantry) Installed() (bool, error) {
+	if p == nil {
+		return false, nil
+	}
+	if p.Enabled == nil {
+		return p.Upstream != nil, nil
+	}
+	return p.Enabled()
+}
+
 func (p *Pantry) ready() error {
 	if p == nil || p.Upstream == nil {
 		return errors.New("PantryOS is not connected to this control plane")
@@ -330,6 +346,14 @@ func (p *Pantry) expiring(ctx context.Context, c Call) (Result, error) {
 		lines = append(lines, fmt.Sprintf("%s (%s)", str(r["item"]), whenLeft(intOf(r["days_left"], 0))))
 	}
 	return Result{Summary: fmt.Sprintf("Expiring in the next %d days: %s.", days, spoken(lines))}, nil
+}
+
+// ShowGroceries reads PantryOS's grocery list (see AddGroceries).
+func (p *Pantry) ShowGroceries(ctx context.Context) (Result, error) {
+	if err := p.ready(); err != nil {
+		return Result{}, err
+	}
+	return p.showGroceries(ctx)
 }
 
 func (p *Pantry) showGroceries(ctx context.Context) (Result, error) {
@@ -537,6 +561,16 @@ func (p *Pantry) addGroceries(ctx context.Context, c Call) (Result, error) {
 	if len(items) == 0 {
 		return Result{}, errors.New("add_to_grocery_list needs items")
 	}
+	return p.AddGroceries(ctx, items)
+}
+
+// AddGroceries puts items on PantryOS's grocery list. Exported for the
+// household lists, which send a grocery list here while PantryOS is
+// installed (ADR-W042 A3).
+func (p *Pantry) AddGroceries(ctx context.Context, items []string) (Result, error) {
+	if err := p.ready(); err != nil {
+		return Result{}, err
+	}
 	var added, already []string
 	for _, item := range items {
 		d, _, err := p.ask(ctx, true, pantry.CapAdd, map[string]any{"list": "groceries", "item": item})
@@ -566,6 +600,14 @@ func (p *Pantry) checkGroceries(ctx context.Context, c Call) (Result, error) {
 	items := splitItems(c.Params["items"])
 	if len(items) == 0 {
 		return Result{}, errors.New("check_grocery_item needs items")
+	}
+	return p.CheckGroceries(ctx, items)
+}
+
+// CheckGroceries ticks items off PantryOS's grocery list (see AddGroceries).
+func (p *Pantry) CheckGroceries(ctx context.Context, items []string) (Result, error) {
+	if err := p.ready(); err != nil {
+		return Result{}, err
 	}
 	var checked, missing []string
 	for _, item := range items {
