@@ -11,7 +11,7 @@ import {
 import { ErrorLine, useAction, useLoad, when } from "../lib";
 import { StatusPill } from "../ui/status";
 
-// Pairing with PantryOS (ADR-W042 A6, #384), in the pantry service's
+// Pairing with PantryOS (ADR-W044 A6, #384), in the pantry service's
 // detail panel.
 //
 // ONE CODE, NO SECRETS. PantryOS shows a one-time code; the Owner types it

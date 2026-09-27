@@ -1,5 +1,5 @@
 # PantryOS — the household's pantry, grocery list and cook-along
-# (ADR-W042, #382).
+# (ADR-W044, #382).
 #
 # WHAT IT IS. PantryOS keeps what is in the kitchen: stock, expiry dates,
 # recipes, meals, and the grocery list. Installing this package lets the
@@ -9,11 +9,11 @@
 # (a meal logged, groceries bought, something running low).
 #
 # PANTRYOS RUNS WHERE IT ALREADY RUNS. This is the connection-only shape
-# (ADR-W030 A5, ADR-W042 A1): PantryOS may be on its own machine or VM,
+# (ADR-W030 A5, ADR-W044 A1): PantryOS may be on its own machine or VM,
 # and this package installs no container for it. Removing the package
 # stops the tools and the events; it never touches PantryOS itself.
 #
-# CONNECTING IT (ADR-W042 A6):
+# CONNECTING IT (ADR-W044 A6):
 #   Pair (recommended): in PantryOS ask for a pairing code, then
 #   POST /api/v1/pantry/pairing {address, code, keystoneUrl}. PantryOS gets
 #   its publisher token and Keystone its agent key, machine to machine;
@@ -25,12 +25,12 @@
 # THE GROCERY LIST. While PantryOS is installed it owns the household's
 # grocery list; the household lists (lists-wildstone) keep every other
 # list. When PantryOS is not answering, the tools say so — they never
-# quietly fall back to another list (ADR-W042 A3, #383).
+# quietly fall back to another list (ADR-W044 A3, #383).
 apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: pantry-pantryos
-  version: 0.2.0
+  version: 0.2.1
   capability: pantry
   profile: pantryos
   # One pantry. A second PantryOS would be a second grocery list.
@@ -104,7 +104,7 @@ publishes:
         - { name: recipe, type: string }
         - { name: step_number, type: number }
 
-# The household actions this capability offers (ADR-W042 A5).
+# The household actions this capability offers (ADR-W044 A5).
 # keystone/domestic.PantryTools is the other half of this list, and
 # TestPantryToolsAreDeclaredByThePackage fails if the two ever drift.
 #

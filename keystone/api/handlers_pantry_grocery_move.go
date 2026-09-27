@@ -1,6 +1,6 @@
 package api
 
-// Moving the household's old grocery list into PantryOS (ADR-W042 A3.1,
+// Moving the household's old grocery list into PantryOS (ADR-W044 A3.1,
 // #387).
 //
 // While PantryOS is installed it owns the grocery list (A3), so a

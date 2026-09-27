@@ -1,7 +1,7 @@
 package pantry
 
 // The translation table between pantry-1 and the adapter's result types
-// (ADR-W042 A2). The shared contract suite checks the four ways an
+// (ADR-W044 A2). The shared contract suite checks the four ways an
 // integration can lie; this checks the PantryOS-specific edges: which
 // 404 is "no such capability" and which is "wrong address", that a
 // refused request is neither empty nor an outage, and that requests

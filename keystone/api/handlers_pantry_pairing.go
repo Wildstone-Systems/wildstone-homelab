@@ -1,6 +1,6 @@
 package api
 
-// Pairing with PantryOS (ADR-W042 A6, #384).
+// Pairing with PantryOS (ADR-W044 A6, #384).
 //
 // An Owner types PantryOS's address and the one-time code PantryOS shows.
 // Keystone then, in one call:

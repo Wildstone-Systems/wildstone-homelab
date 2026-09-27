@@ -1,4 +1,4 @@
-# ADR-W042: PantryOS integration
+# ADR-W044: PantryOS integration
 
 - **Status:** proposed. The PantryOS half is implemented (PantryOS ADR 0026).
   Wildstone: A2 implemented (#380 — `keystone/adapter/pantry/http.go`); A4/A5

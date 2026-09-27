@@ -418,7 +418,7 @@ func touchList(tx *sql.Tx, seq int64, stamp string, changed bool) error {
 }
 
 // RetireMovedListItems finishes moving a list's items somewhere else —
-// PantryOS's grocery list, in practice (ADR-W042 A3.1, #387). It takes
+// PantryOS's grocery list, in practice (ADR-W044 A3.1, #387). It takes
 // the moved items off the list and, once nothing open is left on it,
 // removes the list altogether so the household is not shown two grocery
 // lists. Ticked items are the old list's history and go with it.

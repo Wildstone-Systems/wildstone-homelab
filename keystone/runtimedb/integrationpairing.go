@@ -1,6 +1,6 @@
 package runtimedb
 
-// Paired integration credentials (ADR-W042 A6, #384): what Keystone keeps
+// Paired integration credentials (ADR-W044 A6, #384): what Keystone keeps
 // after pairing with an app it does not run. See migration 0090.
 //
 // Sealed with the household secret key, but outside the household secret

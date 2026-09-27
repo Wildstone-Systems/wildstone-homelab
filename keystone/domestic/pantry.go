@@ -1,7 +1,7 @@
 package domestic
 
 // The PantryOS executors: the household's pantry, grocery list and
-// cook-along, as an Agent reaches them (ADR-W042 A5, #382).
+// cook-along, as an Agent reaches them (ADR-W044 A5, #382).
 //
 // They are a thin layer over the pantry adapter (keystone/adapter/pantry,
 // contract pantry-1). PantryOS does the pantry logic — what "already on
@@ -68,7 +68,7 @@ const (
 )
 
 // PantryTools maps each tool to the tier it must be declared at
-// (ADR-W042 A5).
+// (ADR-W044 A5).
 var PantryTools = map[string]string{
 	PantryToolSummary:        TierRead,
 	PantryToolCheckStock:     TierRead,
@@ -80,7 +80,7 @@ var PantryTools = map[string]string{
 	PantryToolCurrentStep:    TierRead,
 	PantryToolCookingStep:    TierRead,
 	// Ticking steps and kitchen timers change nothing in the pantry, like
-	// moving a step (ADR-W042 A5.1).
+	// moving a step (ADR-W044 A5.1).
 	PantryToolCompleteStep:   TierRead,
 	PantryToolReadSteps:      TierRead,
 	PantryToolSetTimer:       TierRead,
@@ -289,7 +289,7 @@ func (t *pantryTool) Describe(ctx context.Context, c Call) (string, error) {
 }
 
 // Installed reports whether the household has PantryOS INSTALLED — the
-// question grocery routing turns on (ADR-W042 A3). Not "is it answering":
+// question grocery routing turns on (ADR-W044 A3). Not "is it answering":
 // a PantryOS that is installed but down still owns the grocery list, and
 // the answer to a grocery request is then that it is down, never a quiet
 // write to some other list. Installed-but-not-connected likewise routes
@@ -897,7 +897,7 @@ func (p *Pantry) addGroceries(ctx context.Context, c Call) (Result, error) {
 
 // AddGroceries puts items on PantryOS's grocery list. Exported for the
 // household lists, which send a grocery list here while PantryOS is
-// installed (ADR-W042 A3).
+// installed (ADR-W044 A3).
 func (p *Pantry) AddGroceries(ctx context.Context, items []string) (Result, error) {
 	if err := p.ready(); err != nil {
 		return Result{}, err

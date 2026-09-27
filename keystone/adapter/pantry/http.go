@@ -1,6 +1,6 @@
 package pantry
 
-// The real PantryOS upstream: contract pantry-1 over HTTP (ADR-W042 A2).
+// The real PantryOS upstream: contract pantry-1 over HTTP (ADR-W044 A2).
 //
 // PantryOS publishes a surface shaped exactly like adapter.Upstream —
 // capabilities, query, act — and answers in this runtime's own result

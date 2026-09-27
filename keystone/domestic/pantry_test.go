@@ -314,7 +314,7 @@ func TestPantryWritesAreHeldByTheExecutionAuthority(t *testing.T) {
 }
 
 // A cook-along session as PantryOS answers it after "done" on step 1 of 3,
-// with the step's own words suggesting a timer (ADR-W042 A5.1).
+// with the step's own words suggesting a timer (ADR-W044 A5.1).
 const afterTickingOne = `{"session":{"recipe_name":"Pasta","step_number":2,"total_steps":3,
  "step_text":"Cook the pasta 9 minutes.","is_last_step":false,"step_done":false,"steps_left":2,
  "step_timers":[{"seconds":540,"label":"9 minutes"}],

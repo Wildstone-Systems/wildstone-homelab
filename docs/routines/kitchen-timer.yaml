@@ -1,4 +1,4 @@
-# Tell whoever set a kitchen timer that it went off (ADR-W042 A5.1).
+# Tell whoever set a kitchen timer that it went off (ADR-W044 A5.1).
 #
 # PantryOS sends pantry.timer_finished when a timer ends, naming as its
 # subject whoever set it: the member who asked the agent, or the member

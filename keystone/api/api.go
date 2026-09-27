@@ -183,7 +183,7 @@ type Server struct {
 	calendarBookingsMu sync.Mutex
 	// pantryPairingMu serializes pairing and unpairing PantryOS: each mints,
 	// exchanges and revokes publisher tokens, and two at once could revoke
-	// each other's new token (ADR-W042 A6).
+	// each other's new token (ADR-W044 A6).
 	pantryPairingMu sync.Mutex
 
 	// Butlers serves conversations as named specialists (ADR-W031) —
@@ -445,7 +445,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/household/events", s.handle(principal.VerbEmit, s.emitHouseholdEvent))
 	mux.Handle("GET /api/v1/household/events", s.handle(principal.VerbRead, s.listHouseholdEvents))
 	mux.Handle("POST /api/v1/household/publishers/{capability}", s.handle(principal.VerbManage, s.consequential(s.mintPublisher)))
-	// Pairing with PantryOS (ADR-W042 A6): the only way a PantryOS on
+	// Pairing with PantryOS (ADR-W044 A6): the only way a PantryOS on
 	// another machine receives its publisher token. No route returns
 	// either secret.
 	mux.Handle("GET /api/v1/pantry/pairing", s.handle(principal.VerbRead, s.pantryPairingStatus))
