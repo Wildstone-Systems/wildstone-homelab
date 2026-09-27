@@ -55,6 +55,11 @@ var imageArgv0 = map[string][]string{
 	// published Dockerfile at NousResearch/Hermes@main.
 	"nousresearch/hermes-agent": {""},
 
+	// The official Synapse image declares ENTRYPOINT ["/start.py"]. Its
+	// supported run and migrate_config modes are arguments to that entrypoint.
+	// Evidence: element-hq/synapse v1.161.0 docker/Dockerfile and start.py.
+	"matrixdotorg/synapse": {""},
+
 	// Caddy with the caddy-dns/cloudflare module compiled in, for the
 	// DNS-01 profile (ADR-W019 A9). Same shape as stock caddy, and
 	// checked rather than assumed: the image config blob at

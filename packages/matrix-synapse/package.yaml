@@ -1,0 +1,280 @@
+# Matrix homeserver capability, profile "synapse": a private household
+# messaging service that speaks the open Matrix client protocol.
+#
+# THIS IS NOT chat-matrix. packages/chat-matrix runs one Agent's bot adapter
+# against a homeserver supplied by somebody else. This package runs the
+# homeserver itself. They compose: install this once, then point any number of
+# chat-matrix instances at its Route.
+#
+# PHASE 1 IS PRIVATE ON PURPOSE. Only the client API is mounted on Synapse's
+# listener, the federation allowlist is empty, and the Route requires private
+# ingress. A later public/federated profile needs its own DNS, delegation,
+# abuse, registration and upgrade decisions; none of those should appear just
+# because somebody checked "Matrix Messaging" in the installer.
+#
+# IDENTITY. Synapse is an OIDC client of Wildstone's existing identity
+# provider. Password registration and guest access are disabled. A household
+# member signs in through the same account and two-factor policy as the other
+# Wildstone applications, and Synapse creates the Matrix account on first
+# login. The OIDC client secret is written to a narrow credential volume by a
+# Job because Synapse drops to uid 991 before reading configuration.
+#
+# CONFIGURATION. The official image no longer builds homeserver.yaml at every
+# startup. matrix-synapse-generate runs its supported migrate_config mode once,
+# producing the base file, random signing key and macaroon/registration keys in
+# matrix-data. private.yaml is Wildstone-owned and loaded second, overriding
+# the listener, public URL, authentication and federation posture. The split
+# leaves generated signing material persistent without putting secret values
+# in desired state.
+#
+# STORAGE AND RESTORE. Synapse media/signing/config data and PostgreSQL are the
+# durable service. Both are backed up daily into an encrypted repository. The
+# OIDC credential volume is deliberately excluded: it is derived from the
+# identity provider's OidcClient secret and can be materialized again.
+#
+# Upstream validation (2026-09-27): Synapse v1.161.0's official Docker image
+# documents PostgreSQL for production, uid/gid 991, /data persistence, the
+# /health endpoint, and an ENTRYPOINT whose run/migrate_config modes are used
+# below. The multi-arch image digest was resolved from Docker Hub.
+apiVersion: wildstone.dev/v1
+kind: Package
+metadata:
+  name: matrix-synapse
+  version: 1.0.0
+  capability: matrix-homeserver
+  profile: synapse
+requires:
+  - { trait: identity, mode: oidc }
+  - { trait: ingress, mode: private }
+params:
+  - { name: public_domain, required: true, description: "The domain your services are named under, e.g. home.example.com. Under a tailnet this is a label rather than an address you type.", source: domain }
+  - { name: matrix_subdomain, default: matrix, description: "The name of the Matrix client endpoint, e.g. matrix." }
+  - { name: server_name, default: "", description: "The permanent domain in Matrix IDs. Leave empty to use matrix_subdomain.public_domain. Do not change it after first install." }
+  - { name: node, required: true, description: "Which machine to install this on.", source: node }
+  - { name: timezone, default: UTC, source: timezone, validate: iana_timezone, description: "Your timezone, e.g. America/Chicago." }
+accessGroups: [family]
+policies:
+  classifications: [family_private]
+  dataSensitivity: high
+templates:
+  # PostgreSQL and the restic repository each get independent generated
+  # credentials. The OIDC secret is synthesized with the OidcClient below.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: matrix-postgres-password, node: "{{ .Params.node }}" }
+    spec: { name: matrix-postgres-password }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: restic-matrix, node: "{{ .Params.node }}" }
+    spec: { name: restic-matrix }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: matrix-data, node: "{{ .Params.node }}" }
+    spec: { name: matrix-data }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: matrix-pgdata, node: "{{ .Params.node }}" }
+    spec: { name: matrix-pgdata }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: matrix-credentials, node: "{{ .Params.node }}" }
+    spec: { name: matrix-credentials }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: matrix-backup-repo, node: "{{ .Params.node }}" }
+    spec: { name: matrix-backup-repo }
+
+  # Loaded after the generated base file. Lists replace their base values, so
+  # this listener exposes the client API and health endpoint, not federation.
+  # There are no secret references here: materialized secret-bearing configs
+  # are 0600 root-owned, while Synapse deliberately runs as uid 991.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: ConfigFile
+    metadata: { name: matrix-private, node: "{{ .Params.node }}" }
+    spec:
+      filename: private.yaml
+      content: |
+        # Managed by Wildstone — change package parameters, not this file.
+        server_name: "{{ or .Params.server_name (printf "%s.%s" .Params.matrix_subdomain .Params.public_domain) }}"
+        public_baseurl: '{{ origin (printf "%s.%s" .Params.matrix_subdomain .Params.public_domain) }}/'
+        serve_server_wellknown: false
+        report_stats: false
+
+        listeners:
+          - port: 8008
+            type: http
+            tls: false
+            x_forwarded: true
+            resources:
+              - names: [client]
+                compress: true
+
+        enable_registration: false
+        enable_registration_without_verification: false
+        allow_guest_access: false
+        password_config:
+          enabled: false
+
+        oidc_providers:
+          - idp_id: wildstone
+            idp_name: Wildstone
+            issuer: "{{ .Resolved.IssuerURL }}"
+            client_id: matrix-synapse
+            client_secret_path: /run/matrix/oidc-client-secret
+            scopes: [openid, profile, email]
+            user_mapping_provider:
+              config:
+                localpart_template: '{{`{{ user.preferred_username }}`}}'
+                display_name_template: '{{`{{ user.name }}`}}'
+
+        # Both halves matter. Omitting federation from the listener closes the
+        # inbound server API; the empty outbound allowlist prevents a local
+        # client from turning a private install into a federated one by joining
+        # a remote room.
+        federation_domain_whitelist: []
+        allow_profile_lookup_over_federation: false
+        allow_public_rooms_over_federation: false
+        trusted_key_servers: []
+
+        url_preview_enabled: false
+        max_upload_size: 50M
+
+  # Materialize the OIDC client secret into a file readable only by Synapse.
+  # Reconciliation reruns this Job whenever its spec changes; writing is
+  # atomic enough for this one-file volume, and the main container's restart
+  # policy converges a first tick where the Job has not completed yet.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Job
+    metadata: { name: matrix-oidc-secret-file, node: "{{ .Params.node }}" }
+    spec:
+      run:
+        image: "alpine@sha256:48b0309ca019d89d40f670aa1bc06e426dc0931948452e8491e3d65087abc07d"
+        command:
+          - /bin/sh
+          - -ec
+          - |
+            umask 077
+            [ -n "${OIDC_CLIENT_SECRET:-}" ] || {
+              echo "matrix: generated OIDC client secret is empty" >&2
+              exit 1
+            }
+            printf '%s' "$OIDC_CLIENT_SECRET" > /run/matrix/oidc-client-secret
+            chown 991:991 /run/matrix/oidc-client-secret
+            chmod 400 /run/matrix/oidc-client-secret
+        env:
+          OIDC_CLIENT_SECRET: "{{ .Resolved.OidcSecretRef }}"
+        mounts:
+          - { source: matrix-credentials, target: /run/matrix }
+
+  # Generate the official base configuration and signing keys. migrate_config
+  # uses the image's maintained template and preserves its generated secrets
+  # in /data; the Wildstone override above owns policy choices.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Job
+    metadata: { name: matrix-synapse-generate, node: "{{ .Params.node }}" }
+    spec:
+      run:
+        image: "matrixdotorg/synapse@sha256:6b95dd129e35e97e8032cb759e5db4a516a5f7ef6c98d34d716fea1ae239b62a"
+        command: ["migrate_config"]
+        env:
+          SYNAPSE_SERVER_NAME: "{{ or .Params.server_name (printf "%s.%s" .Params.matrix_subdomain .Params.public_domain) }}"
+          SYNAPSE_REPORT_STATS: "no"
+          SYNAPSE_NO_TLS: "yes"
+          POSTGRES_HOST: matrix-postgres
+          POSTGRES_PORT: "5432"
+          POSTGRES_DB: synapse
+          POSTGRES_USER: synapse
+          POSTGRES_PASSWORD: "secret/matrix-postgres-password"
+          UID: "991"
+          GID: "991"
+        mounts:
+          - { source: matrix-data, target: /data }
+
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: matrix-postgres, node: "{{ .Params.node }}" }
+    spec:
+      image: "postgres@sha256:c1b3783309b6499c795eed7c20135a1a4d25cae1b575c3d52c6f536129a1b109"
+      env:
+        POSTGRES_DB: synapse
+        POSTGRES_USER: synapse
+        POSTGRES_PASSWORD: "secret/matrix-postgres-password"
+        POSTGRES_INITDB_ARGS: "--encoding=UTF-8 --lc-collate=C --lc-ctype=C"
+      mounts:
+        - { source: matrix-pgdata, target: /var/lib/postgresql/data }
+      restart: unless-stopped
+      resources: { memory: 768m, cpus: "1", pidsLimit: 256 }
+
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: matrix-synapse, node: "{{ .Params.node }}" }
+    spec:
+      image: "matrixdotorg/synapse@sha256:6b95dd129e35e97e8032cb759e5db4a516a5f7ef6c98d34d716fea1ae239b62a"
+      env:
+        SYNAPSE_CONFIG_DIR: /data
+        SYNAPSE_CONFIG_PATH: /data/homeserver.yaml
+        UID: "991"
+        GID: "991"
+        TZ: "{{ .Params.timezone }}"
+      command:
+        - run
+        - -m
+        - synapse.app.homeserver
+        - --config-path=/data/homeserver.yaml
+        - --config-path=/etc/wildstone/matrix-homeserver/private.yaml
+      mounts:
+        - { source: matrix-data, target: /data }
+        - { source: matrix-credentials, target: /run/matrix, readOnly: true }
+        - { source: /etc/wildstone/matrix-homeserver, target: /etc/wildstone/matrix-homeserver, readOnly: true }
+      restart: unless-stopped
+      noNewPrivileges: true
+      resources: { memory: 1536m, cpus: "2", pidsLimit: 512 }
+
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Route
+    metadata: { name: matrix, node: "{{ .Params.node }}" }
+    spec:
+      host: "{{ .Params.matrix_subdomain }}.{{ .Params.public_domain }}"
+      upstream: "container/matrix-synapse:8008"
+      auth: app_oidc
+      classification: family_private
+
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: OidcClient
+    # Keep this on the application node: the generated client secret is
+    # node-local and the credential Job above has to materialize that same
+    # value for Synapse. Keystone merges OIDC clients into the identity
+    # provider across nodes, so split-node identity needs no second copy.
+    metadata: { name: matrix-synapse, node: "{{ .Params.node }}" }
+    spec:
+      clientId: matrix-synapse
+      clientName: Matrix
+      redirectUris:
+        - '{{ origin (printf "%s.%s" .Params.matrix_subdomain .Params.public_domain) }}/_synapse/client/oidc/callback'
+      scopes: [openid, profile, email]
+      authPolicy: two_factor
+      secretRef: "{{ .Resolved.OidcSecretRef }}"
+
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: BackupPlan
+    metadata: { name: matrix, node: "{{ .Params.node }}" }
+    spec:
+      volumes: [matrix-data, matrix-pgdata]
+      repository: matrix-backup-repo
+      passwordSecret: secret/restic-matrix
+      schedule: daily
+      retention: { keepDaily: 7, keepWeekly: 4, keepMonthly: 6 }

@@ -173,6 +173,10 @@ var wellKnown = map[string]int{
 	// mail-roundcube's Davis surface above, and a pin is a preference
 	// the assigner honours first, not a claim two hosts can share.
 	"cal": 51443,
+
+	// matrix-synapse. Matrix clients keep this origin as their homeserver
+	// address, so installing an unrelated service must never move it.
+	"matrix": 52443,
 }
 
 // Of derives the addressing posture from desired state.

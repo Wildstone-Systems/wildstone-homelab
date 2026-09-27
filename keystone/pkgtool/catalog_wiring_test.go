@@ -395,7 +395,7 @@ func TestCatalogShipsTheLaunchServiceSet(t *testing.T) {
 		// unblocked by protocol minor 12 (F98)
 		"vpn-gluetun",
 		// asked for after the expansion
-		"podcasts-podgrab",
+		"podcasts-podgrab", "matrix-synapse",
 		// The household's own calendar (ADR-W034). Listed here rather
 		// than left to the count because it is the only calendar a
 		// household can run that does not need a mail provider behind
@@ -684,7 +684,9 @@ func sortedNames(m map[string]shipped) []string {
 // side of a conversation between two containers.
 //
 // Checked per package rather than per resource, because a single
-// container can say nothing about whether anyone is listening.
+// container can say nothing about whether anyone is listening. Jobs count as
+// consumers too: a supported pattern is to materialize an application's
+// configuration with a one-shot Job, then let the app read that file.
 func TestAPasswordSetOnADatabaseIsGivenToItsApp(t *testing.T) {
 	// The env names that CREATE a database credential, by image family.
 	creators := map[string]bool{
@@ -696,20 +698,27 @@ func TestAPasswordSetOnADatabaseIsGivenToItsApp(t *testing.T) {
 	checked := 0
 	for name, rendered := range renderShippedPackages(t) {
 		t.Run(name, func(t *testing.T) {
-			// Every secret reference this package's containers make.
+			// Every secret reference this package's containers and Jobs make.
 			refs := map[string]int{}
 			created := map[string]string{} // secret -> the container that creates it
 			for _, r := range rendered {
-				if r.Kind != resource.KindContainer || r.Container == nil {
+				var spec *resource.ContainerSpec
+				isContainer := false
+				switch {
+				case r.Kind == resource.KindContainer && r.Container != nil:
+					spec, isContainer = r.Container, true
+				case r.Kind == resource.KindJob && r.Job != nil:
+					spec = &r.Job.Run
+				default:
 					continue
 				}
-				for k, v := range r.Container.Env {
+				for k, v := range spec.Env {
 					ref, ok := strings.CutPrefix(strings.TrimSpace(v), "secret/")
 					if !ok {
 						continue
 					}
 					refs[ref]++
-					if creators[k] {
+					if isContainer && creators[k] {
 						created[ref] = r.Metadata.Name
 					}
 				}

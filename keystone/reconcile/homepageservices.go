@@ -151,7 +151,8 @@ var homepageApps = map[string]homepageApp{
 	// as a broken image — the same reasoning as Davis above. The
 	// description says which password to type, because this one is the
 	// household sign-in and Davis's, one card away, is not.
-	"radicale": {"Calendar", "mdi-calendar-blank", "The household's own calendars, on every phone — your household sign-in"},
+	"radicale":       {"Calendar", "mdi-calendar-blank", "The household's own calendars, on every phone — your household sign-in"},
+	"matrix-synapse": {"Matrix", "matrix", "Private household messaging — sign in with your household account"},
 }
 
 // homepageFallbackIcon is what an app with no row gets. A generic
