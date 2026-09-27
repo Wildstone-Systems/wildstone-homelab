@@ -655,7 +655,11 @@ fields, with the recording in place of the text (ADR-W042). Keystone
 checks the sender, the room and the redelivery exactly as for text,
 and only then transcribes; the words become an ordinary turn, except
 that they can never store a secret, answer a rule, or run a slash
-command.
+command. When the deployment reads replies aloud (`-speech-replies`),
+the answer to a voice message is marked to be spoken too: the adapter
+delivers the text, then takes the audio once from
+`POST /api/v1/chat/outbound/{seq}/speech` and sends it as a voice
+message (ADR-W043).
 
 Group chats: the operator surface answers in a direct message only. The
 family surface may answer in a group, and is told in its prompt that the
