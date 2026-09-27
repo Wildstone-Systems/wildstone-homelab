@@ -1,4 +1,4 @@
--- 0089: credentials Keystone received by PAIRING with an app it does not
+-- 0090: credentials Keystone received by PAIRING with an app it does not
 -- run (ADR-W042 A6, #384) — today, the agent key PantryOS hands back when
 -- an Owner pairs it.
 --

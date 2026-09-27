@@ -256,7 +256,7 @@ machine has no way to receive it. So:
      `/api/integrations/wildstone/pairing/exchange` once, never following a
      redirect. PantryOS stores the connection and answers with an agent key.
   4. Keystone checks that key against PantryOS's capability list, seals it
-     in `integration_pairings` (migration 0089: the household secret key,
+     in `integration_pairings` (migration 0090: the household secret key,
      bound to capability and endpoint, refused at startup with a missing or
      wrong key), and only then revokes the publisher tokens it replaces.
 
