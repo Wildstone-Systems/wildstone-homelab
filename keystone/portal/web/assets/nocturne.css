@@ -626,3 +626,7 @@ a:hover { color: var(--color-accent-200); text-decoration: underline; }
      no padding of its own to grow. */
   input[type="checkbox"] { width: 20px; height: 20px; }
 }
+/* The listen button under a reply (ADR-W042): quiet until wanted. */
+.listen { display: inline-flex; align-items: center; justify-content: center; margin-top: var(--space-2); padding: 4px 6px; border: 1px solid var(--hair); border-radius: var(--radius-sm); background: none; color: var(--muted, inherit); cursor: pointer; }
+.listen:hover, .listen[aria-pressed="true"] { color: var(--color-accent-300); border-color: currentColor; }
+.spread > .listen { margin-top: 0; }

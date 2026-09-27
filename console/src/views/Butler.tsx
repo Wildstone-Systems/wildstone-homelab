@@ -35,6 +35,7 @@ import { Confirm } from "../ui/Confirm";
 import { Dot, Kind, StatusPill } from "../ui/status";
 import { PendingPlan } from "./Plans";
 import { ButlerPicker, openingFor, preferred, SURFACE_LABEL } from "./butler/picker";
+import { ListenButton } from "../ui/ListenButton";
 import { dictationSupported, MicButton } from "../ui/MicButton";
 
 // The two surfaces, as the operator picks between them (ADR-W026 A1).
@@ -131,6 +132,9 @@ export function Butler({
     butlerName && status.data?.dictation && dictationSupported()
       ? { butler: butlerName, maxSeconds: status.data.dictationMaxSeconds ?? 120 }
       : null;
+  // The listen button under each reply, when this Butler's replies can
+  // be read aloud here.
+  const listenTo = butlerName && status.data?.readAloud && typeof Audio !== "undefined" ? butlerName : null;
   // The list is a sidebar on a desk and a sheet over the thread on a
   // phone, so it starts open on one and closed on the other.
   const [railOpen, setRailOpen] = useState(() => !narrow());
@@ -149,6 +153,9 @@ export function Butler({
   const [pending, setPending] = useState<string | null>(null);
   // The pending message was dictated: its bubble carries the 🎙️ too.
   const [pendingVoice, setPendingVoice] = useState(false);
+  // The answer to a dictated question, to be read aloud once it is in
+  // the thread.
+  const [speakNext, setSpeakNext] = useState<string | null>(null);
   // A follow-up lands in the SAME session, so openID does not change
   // and the effect below would not re-run. Bumping this is what makes
   // "reload the thread" mean it.
@@ -245,6 +252,7 @@ export function Butler({
           setCommandReply(res.finalText);
           return;
         }
+        if (voice) setSpeakNext(res.finalText);
         setOpenID(res.sessionId);
         setReloads((n) => n + 1);
       })
@@ -421,6 +429,9 @@ export function Butler({
               pendingVoice={pendingVoice}
               proposals={proposals}
               onProposalResolved={refreshProposal}
+              listenTo={listenTo}
+              speakNext={speakNext}
+              onSpoken={() => setSpeakNext(null)}
             />
             {askError && (
               <div className="thread-error">
@@ -783,6 +794,9 @@ export function Thread({
   pendingVoice,
   proposals,
   onProposalResolved,
+  listenTo,
+  speakNext,
+  onSpoken,
 }: {
   surface: ButlerSurface;
   session: ButlerSession | null;
@@ -790,6 +804,12 @@ export function Thread({
   pendingVoice?: boolean;
   proposals: PlanRecord[];
   onProposalResolved: (id: string) => void;
+  // The Butler whose replies get a listen button, or null for none.
+  listenTo?: string | null;
+  // A reply to read aloud as soon as it appears, and the call that says
+  // it has started.
+  speakNext?: string | null;
+  onSpoken?: () => void;
 }) {
   const end = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -805,8 +825,16 @@ export function Thread({
           {SURFACES[surface].blurb}
         </div>
       )}
-      {turns.map((t) => (
-        <Turn key={t.ordinal} turn={t} proposals={proposals} onResolved={onProposalResolved} />
+      {turns.map((t, i) => (
+        <Turn
+          key={t.ordinal}
+          turn={t}
+          proposals={proposals}
+          onResolved={onProposalResolved}
+          listenTo={listenTo}
+          autoPlay={i === turns.length - 1 && t.role === "assistant" && !!speakNext && t.text === speakNext}
+          onSpoken={onSpoken}
+        />
       ))}
       {pending !== null && (
         <>
@@ -855,10 +883,16 @@ export function Turn({
   turn,
   proposals,
   onResolved,
+  listenTo,
+  autoPlay,
+  onSpoken,
 }: {
   turn: ButlerTurn;
   proposals: PlanRecord[];
   onResolved: (id: string) => void;
+  listenTo?: string | null;
+  autoPlay?: boolean;
+  onSpoken?: () => void;
 }) {
   const made = proposals.filter((p) => (turn.planIds ?? []).includes(p.id));
   if (turn.role === "user") {
@@ -906,6 +940,9 @@ export function Turn({
   return (
     <TurnRow>
       <div className="msg msg-butler">{turn.text || "(no answer text)"}</div>
+      {listenTo && turn.text && (
+        <ListenButton butler={listenTo} text={turn.text} autoPlay={autoPlay} onStarted={onSpoken} />
+      )}
       <ToolTrace turn={turn} />
       {turn.capped && (
         <div className="msg-note">

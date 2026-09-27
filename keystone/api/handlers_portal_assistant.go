@@ -70,6 +70,9 @@ type assistantAgent struct {
 	// Dictation says the mic button works for this assistant: voice is
 	// on, and an engine its privacy class allows exists (ADR-W042).
 	Dictation bool `json:"dictation"`
+	// ReadAloud says the listen button works for this assistant: replies
+	// are read aloud here, and a voice its privacy class allows exists.
+	ReadAloud bool `json:"readAloud"`
 }
 
 // assistantAgents answers "which assistants may I talk to from here",
@@ -101,6 +104,7 @@ func (s *Server) assistantAgents(_ http.ResponseWriter, r *http.Request, member 
 			Reachable:      b.Reachable(),
 			CarriesActions: b.CarriesActionAuthority(),
 			Dictation:      s.canDictate(b.Name),
+			ReadAloud:      s.canReadAloud(b.Name),
 		})
 	}
 	out := map[string]any{"agents": agents, "member": member,

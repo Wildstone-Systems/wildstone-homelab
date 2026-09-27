@@ -277,6 +277,11 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
     onUnauthorized();
     throw new ApiError(401, "unauthenticated");
   }
+  // A reply read aloud comes back as the audio itself (ADR-W042), the
+  // one body that is not JSON.
+  if (res.ok && (res.headers.get("Content-Type") ?? "").startsWith("audio/")) {
+    return (await res.blob()) as T;
+  }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     const failed = data as { error?: string; sessionId?: string; proposalErrors?: string[]; stepUp?: string };
@@ -409,6 +414,8 @@ export interface ButlerStatus {
   // Butler's privacy class allows is installed.
   dictation?: boolean;
   dictationMaxSeconds?: number;
+  // Whether its replies can be read aloud here (the listen button).
+  readAloud?: boolean;
 }
 
 // --- Agent runtime (ADR-W039 §3.3). What reasons for an Agent, as
@@ -1713,6 +1720,9 @@ export const api = {
       `/api/v1/butlers/${encodeURIComponent(name)}/transcribe?seconds=${seconds.toFixed(1)}`,
       audio,
     ),
+  // A Butler's reply read aloud, as audio (ADR-W042 part two).
+  speakForButler: (name: string, text: string) =>
+    call<Blob>("POST", `/api/v1/butlers/${encodeURIComponent(name)}/speak`, { text }),
   butlerSessionsFor: (name: string, limit = 20) =>
     call<ButlerSession[]>(
       "GET",
