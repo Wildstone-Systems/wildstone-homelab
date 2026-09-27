@@ -121,29 +121,32 @@ export function PantryPairingView({
             <strong>{status.paired ? "Pair again" : "Pair with Wildstone"}</strong>. It shows a code and its own
             address. The code works once and lasts five minutes.
           </div>
-          <div>
+          <div className="field" style={{ marginBottom: 0 }}>
             <label htmlFor="pantry-address">PantryOS address</label>
             <input
               id="pantry-address"
+              type="text"
               value={draft.address}
               placeholder="e.g. https://pantry.example.internal"
               onChange={(e) => setDraft((d) => ({ ...d, address: e.target.value }))}
             />
           </div>
-          <div>
+          <div className="field" style={{ marginBottom: 0 }}>
             <label htmlFor="pantry-code">Pairing code</label>
             <input
               id="pantry-code"
+              type="text"
               value={draft.code}
               placeholder="ABCD-EFGH"
               autoComplete="off"
               onChange={(e) => setDraft((d) => ({ ...d, code: e.target.value }))}
             />
           </div>
-          <div>
+          <div className="field" style={{ marginBottom: 0 }}>
             <label htmlFor="pantry-keystone">This Wildstone's address, as PantryOS reaches it</label>
             <input
               id="pantry-keystone"
+              type="text"
               value={draft.keystoneUrl}
               onChange={(e) => setDraft((d) => ({ ...d, keystoneUrl: e.target.value }))}
             />
