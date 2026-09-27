@@ -42,6 +42,15 @@ type Router struct {
 	// Timeout bounds one engine call; <= 0 means DefaultTimeout.
 	Timeout time.Duration
 
+	// ReplyMode is how replies are read aloud (part two), chosen apart
+	// from Mode so a house can transcribe without speaking or the
+	// reverse. LocalVoice and CloudVoice are its engines, checked by
+	// their own Processing like Local and Cloud.
+	ReplyMode              Mode
+	LocalVoice, CloudVoice Speaker
+	// ReplyTimeout bounds one synthesis; <= 0 means DefaultReplyTimeout.
+	ReplyTimeout time.Duration
+
 	once sync.Once
 	// slot serialises transcriptions: one at a time per Keystone. On a
 	// CPU engine two at once each take twice as long, and a queue is
@@ -106,13 +115,11 @@ func (r *Router) Transcribe(ctx context.Context, allowCloud bool, audio []byte, 
 		return Result{}, ErrUnavailable
 	}
 
-	r.once.Do(func() { r.slot = make(chan struct{}, 1) })
-	select {
-	case r.slot <- struct{}{}:
-		defer func() { <-r.slot }()
-	case <-ctx.Done():
-		return Result{}, ctx.Err()
+	release, err := r.take(ctx)
+	if err != nil {
+		return Result{}, err
 	}
+	defer release()
 
 	timeout := r.Timeout
 	if timeout <= 0 {
@@ -140,26 +147,52 @@ func (r *Router) Transcribe(ctx context.Context, allowCloud bool, audio []byte, 
 	return Result{}, last
 }
 
+// take waits for the engine slot, shared by transcription and speech:
+// both run on the same CPU.
+func (r *Router) take(ctx context.Context) (release func(), err error) {
+	r.once.Do(func() { r.slot = make(chan struct{}, 1) })
+	select {
+	case r.slot <- struct{}{}:
+		return func() { <-r.slot }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
 // Warm downloads the local engine's model ahead of the first voice
 // message, retrying until it succeeds or ctx ends. Keystone runs it in
 // the background at startup; the Speaches container may start after
 // Keystone does, and a model download is minutes, not something to make
 // the first person who speaks wait for.
+//
+// It warms the local voice's model too when replies are read aloud
+// locally, one model after the other.
 func (r *Router) Warm(ctx context.Context, log *slog.Logger) {
-	if r == nil || !r.Mode.usesLocal() {
+	if r == nil {
 		return
 	}
-	c, ok := r.Local.(*Client)
-	if !ok || !c.DownloadsModels {
-		return
+	if r.Mode.usesLocal() {
+		if c, ok := r.Local.(*Client); ok && c.DownloadsModels {
+			warmClient(ctx, log, c, "speech")
+		}
 	}
+	if r.ReplyMode.usesLocal() {
+		if c, ok := r.LocalVoice.(*Client); ok && c.DownloadsModels {
+			warmClient(ctx, log, c, "voice")
+		}
+	}
+}
+
+// warmClient downloads one Client's model, retrying until it succeeds
+// or ctx ends. what names the model in the log: "speech" or "voice".
+func warmClient(ctx context.Context, log *slog.Logger, c *Client, what string) {
 	backoff := 10 * time.Second
 	for {
 		wctx, cancel := context.WithTimeout(ctx, warmTimeout)
 		err := c.download(wctx)
 		cancel()
 		if err == nil {
-			log.Info("speech: local model ready", "model", c.Model)
+			log.Info("speech: local "+what+" model ready", "model", c.Model)
 			return
 		}
 		if ctx.Err() != nil {
@@ -176,7 +209,7 @@ func (r *Router) Warm(ctx context.Context, log *slog.Logger) {
 			}
 			continue
 		}
-		log.Warn("speech: local model not ready yet; voice messages will say so until it is", "model", c.Model, "err", err, "retry", backoff)
+		log.Warn("speech: local "+what+" model not ready yet; it is retried, and until then the engine says so", "model", c.Model, "err", err, "retry", backoff)
 		select {
 		case <-time.After(backoff):
 		case <-ctx.Done():

@@ -123,6 +123,11 @@ func main() {
 	speechLanguage := flag.String("speech-language", "auto", "two-letter language hint for transcription, e.g. en, or auto to detect")
 	speechMaxSeconds := flag.Int("speech-max-seconds", speech.DefaultMaxSeconds, "longest voice message accepted, in seconds (5-600)")
 	speechTimeout := flag.Duration("speech-timeout", speech.DefaultTimeout, "how long one transcription may take before it is abandoned")
+	speechReplies := flag.String("speech-replies", "off", "how the Agent's replies are read aloud (ADR-W042 part two): off | local | local-then-cloud | cloud, with the same privacy rule as -speech-mode. When on, a chat voice message is answered with a voice message too, and the dashboard and Console offer a listen button on each reply")
+	speechReplyModel := flag.String("speech-reply-model", defaultReplyModel, "local text-to-speech model, served by the engine at -speech-url; Keystone asks it to download the model at startup")
+	speechReplyVoice := flag.String("speech-reply-voice", defaultReplyVoice, "voice the local model reads replies with, e.g. af_heart, am_micah, bf_emma")
+	speechReplyCloudModel := flag.String("speech-reply-cloud-model", defaultReplyCloudModel, "OpenAI text-to-speech model used when -speech-replies allows the cloud")
+	speechReplyCloudVoice := flag.String("speech-reply-cloud-voice", defaultReplyCloudVoice, "OpenAI voice used when -speech-replies allows the cloud, e.g. coral, alloy, sage")
 	hostOpsEnabled := flag.Bool("hostops-enabled", false, "enable the host.* executor family (ADR-W039 Phase 6/H7, #353): Tier 3 host administration (container logs/stats/restart, disk usage, systemd unit status, image pruning, a reconcile poke) through existing Wardstone ops, never a privileged container or a shell. Off by default; an Owner still has to grant the family to a specific Agent (opt-in) and confirm every mutating call before anything runs")
 	flag.Parse()
 
@@ -143,6 +148,8 @@ func main() {
 	speechRtr, speechWarnings, err := speechRouter(speechConfig{
 		Mode: *speechMode, URL: *speechURL, Model: *speechModel, CloudModel: *speechCloudModel,
 		Language: *speechLanguage, MaxSeconds: *speechMaxSeconds, Timeout: *speechTimeout,
+		ReplyMode: *speechReplies, ReplyModel: *speechReplyModel, ReplyVoice: *speechReplyVoice,
+		ReplyCloudModel: *speechReplyCloudModel, ReplyCloudVoice: *speechReplyCloudVoice,
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "keystone:", err)
@@ -1213,7 +1220,8 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	}
 	apiSrv.ConsoleEntryWindow, apiSrv.ConsoleStepUpWindow = householdCfg.ConsoleEntryWindow, householdCfg.ConsoleStepUpWindow
 	apiSrv.Speech = householdCfg.Speech
-	// Fetch the local model now rather than when somebody first speaks;
+	// Fetch the local models (hearing, and the voice when replies are
+	// read aloud) now rather than when somebody first speaks;
 	// the engine may still be starting, so this retries in the background.
 	go householdCfg.Speech.Warm(context.Background(), log)
 	apiSrv.HouseholdLoc = householdLoc

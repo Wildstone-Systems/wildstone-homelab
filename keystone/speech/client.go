@@ -24,8 +24,13 @@ type Client struct {
 	// https://api.openai.com/v1.
 	BaseURL string
 	// Model is the engine's own model id, e.g.
-	// Systran/faster-whisper-small or gpt-4o-mini-transcribe.
+	// Systran/faster-whisper-small or gpt-4o-mini-transcribe, or for a
+	// Client that speaks, speaches-ai/Kokoro-82M-v1.0-ONNX or
+	// gpt-4o-mini-tts.
 	Model string
+	// Voice is the voice a speaking Client reads with, e.g. af_heart
+	// (Kokoro) or coral (OpenAI). Unused for transcription.
+	Voice string
 	// Key returns the API key, sent as a Bearer token. It is a function
 	// because an Owner can enter or replace the OpenAI key in the Console
 	// while Keystone runs. nil means the engine takes no key (Speaches);
