@@ -1114,6 +1114,35 @@ func TestReconnectingRuntimeReOffersItsWaitingTasks(t *testing.T) {
 		t.Fatalf("manifest on the re-offered handle = %d", res.StatusCode)
 	}
 
+	// And the runtime can use it as the WIRE hands it over (#364): the
+	// deliveries body is redacted like every other, and a handle's
+	// secret is exactly the shape redaction catches — a runtime handed
+	// "bt-N.[REDACTED]" had every delivery refused.
+	var wire deliveriesResponse
+	if res := h.doToken(cred.Secret, http.MethodGet, "/api/v1/agent/deliveries", nil, &wire); res.StatusCode != http.StatusOK {
+		t.Fatalf("deliveries = %d", res.StatusCode)
+	}
+	if len(wire.Deliveries) != 1 {
+		t.Fatalf("deliveries over the wire = %+v, want the one re-offer", wire.Deliveries)
+	}
+	if string(wire.Deliveries[0].Handle) != payload.Handle {
+		t.Fatalf("handle over the wire = %q, want the one issued (redaction must not touch it)", string(wire.Deliveries[0].Handle))
+	}
+	var wirePayload struct {
+		Handle string `json:"handle"`
+		Text   string `json:"text"`
+	}
+	if err := json.Unmarshal(wire.Deliveries[0].Payload, &wirePayload); err != nil {
+		t.Fatalf("wire payload: %v", err)
+	}
+	if wirePayload.Handle != payload.Handle || wirePayload.Text == "" {
+		t.Fatalf("wire payload = %+v, want the handle intact and the text kept", wirePayload)
+	}
+	if res := h.doToken(cred.Secret, http.MethodPost, "/api/v1/agent/manifest",
+		map[string]any{"handle": string(wire.Deliveries[0].Handle)}, nil); res.StatusCode != http.StatusOK {
+		t.Fatalf("manifest on the handle as delivered over HTTP = %d", res.StatusCode)
+	}
+
 	// A second reconnect (already connected) must not re-offer again:
 	// only the arrival that actually flips health does.
 	if res := h.doToken(cred.Secret, http.MethodPost, "/api/v1/agent/heartbeat",

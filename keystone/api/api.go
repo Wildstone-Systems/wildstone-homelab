@@ -1144,6 +1144,15 @@ func (s *Server) writeJSON(w http.ResponseWriter, status int, body any) {
 		// §4.1): a newly minted API token, join token or runtime
 		// credential, each in the only moment it ever exists in a
 		// response.
+	case deliveriesResponse:
+		// Redacted everywhere but each delivery's task handle, which the
+		// runtime must present back (deliveriesResponse.redacted).
+		d := body.(deliveriesResponse)
+		if raw, err = d.redacted(); err != nil {
+			s.Log.Error("response redaction failed", "err", err)
+			http.Error(w, `{"error":"internal"}`, http.StatusInternalServerError)
+			return
+		}
 	default:
 		raw = []byte(redact.String(string(raw)))
 	}

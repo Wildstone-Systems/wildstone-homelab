@@ -308,6 +308,28 @@ func (db *DB) SetRuntimeHealth(butler int64, health agentapi.RuntimeHealth) erro
 	return nil
 }
 
+// MarkRuntimeArrived flips a runtime that is unregistered or offline to
+// connected, and reports whether THIS call did it. The check and the
+// write are one statement, so of two calls arriving together (a
+// runtime's heartbeat and its deliveries poll, say) exactly one sees
+// the arrival: the one that must re-offer the tasks left waiting on it
+// (#364). A read-then-write let both re-offer, and the second handle
+// issued made the first delivery's stale.
+func (db *DB) MarkRuntimeArrived(butler int64) (bool, error) {
+	res, err := db.sql.Exec(
+		`UPDATE butler_runtimes SET health = ?, updated_at = ? WHERE butler = ? AND health IN (?, ?)`,
+		string(agentapi.HealthConnected), now(), butler,
+		string(agentapi.HealthUnregistered), string(agentapi.HealthOffline))
+	if err != nil {
+		return false, fmt.Errorf("runtimedb: marking runtime arrival for butler %d: %w", butler, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("runtimedb: marking runtime arrival for butler %d: %w", butler, err)
+	}
+	return n == 1, nil
+}
+
 // TouchRuntimeHeartbeat stamps the runtime's last heartbeat. It carries
 // no health claim (Phase 0: a heartbeat is a sign of life, not a
 // self-assessment); whoever observes the beat decides what health it

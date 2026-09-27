@@ -46,6 +46,7 @@ import (
 	"github.com/chickenrat17/wildstone-homelab/keystone/butlerlive"
 	"github.com/chickenrat17/wildstone-homelab/keystone/butlerstore"
 	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
+	"github.com/chickenrat17/wildstone-homelab/keystone/redact"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 )
 
@@ -102,20 +103,18 @@ func (s *Server) agentContext(r *http.Request, id principal.Identity) (context.C
 // error this needs to surface; ErrNotFound (its only failure mode
 // besides a real database error) is ignored for the same reason.
 func (s *Server) touchRuntimeArrival(butlerSeq int64) error {
-	rt, err := s.DB.GetButlerRuntime(butlerSeq)
-	if err != nil {
+	if _, err := s.DB.GetButlerRuntime(butlerSeq); err != nil {
 		return err
 	}
 	// unregistered → connected is the runtime's first ever call;
 	// offline → connected is a reconnect after the heartbeat sweeper
 	// (or an outage) flipped it (ADR-W039 §3.7, Phase 4, #340). Both
 	// are an arrival, and both re-offer whatever this Agent's tasks
-	// were left waiting on it.
-	reconnected := rt.Health == agentapi.HealthUnregistered || rt.Health == agentapi.HealthOffline
-	if reconnected {
-		if err := s.DB.SetRuntimeHealth(butlerSeq, agentapi.HealthConnected); err != nil {
-			return err
-		}
+	// were left waiting on it — once: MarkRuntimeArrived lets only the
+	// one call that made the flip see it, however many arrive together.
+	reconnected, err := s.DB.MarkRuntimeArrived(butlerSeq)
+	if err != nil {
+		return err
 	}
 	if err := s.DB.TouchRuntimeHeartbeat(butlerSeq); err != nil && !errors.Is(err, runtimedb.ErrNotFound) {
 		return err
@@ -446,6 +445,59 @@ func (s *Server) agentHeartbeat(r *http.Request, id principal.Identity) (any, in
 // exactly as agentapi.Delivery carries one over the wire.
 type deliveriesResponse struct {
 	Deliveries []agentapi.Delivery `json:"deliveries"`
+}
+
+// redacted is this response as writeJSON sends it: every delivery
+// redacted like any other body EXCEPT its task handle (#364). A handle
+// is the bearer the runtime works the task with — its secret half is
+// exactly the base64 shape redaction exists to catch, so a redacted
+// handle ("bt-33.[REDACTED]") is refused on the runtime's very next
+// call, and no delivery over HTTP could ever be acted on. It goes only
+// to the runtime principal it was issued for, the same carve-out
+// runtimeCredentialResponse makes for the credential itself. Everything
+// else — the payload's text, history, ids — is still redacted.
+func (d deliveriesResponse) redacted() ([]byte, error) {
+	out := deliveriesResponse{Deliveries: make([]agentapi.Delivery, 0, len(d.Deliveries))}
+	for _, dl := range d.Deliveries {
+		handle := dl.Handle
+		dl.Handle = ""
+		// The payload may carry the handle too (a turn's, a re-offer's):
+		// held out the same way and put back after.
+		var fields map[string]json.RawMessage
+		payloadHandle := json.RawMessage(nil)
+		if len(dl.Payload) > 0 && json.Unmarshal(dl.Payload, &fields) == nil {
+			if h, ok := fields["handle"]; ok {
+				payloadHandle = h
+				delete(fields, "handle")
+				raw, err := json.Marshal(fields)
+				if err != nil {
+					return nil, err
+				}
+				dl.Payload = raw
+			}
+		}
+		raw, err := json.Marshal(dl)
+		if err != nil {
+			return nil, err
+		}
+		var clean agentapi.Delivery
+		if err := json.Unmarshal([]byte(redact.String(string(raw))), &clean); err != nil {
+			return nil, err
+		}
+		clean.Handle = handle
+		if payloadHandle != nil {
+			fields = nil
+			if err := json.Unmarshal(clean.Payload, &fields); err != nil {
+				return nil, err
+			}
+			fields["handle"] = payloadHandle
+			if clean.Payload, err = json.Marshal(fields); err != nil {
+				return nil, err
+			}
+		}
+		out.Deliveries = append(out.Deliveries, clean)
+	}
+	return json.Marshal(out)
 }
 
 // runtimeButlerSeq resolves id to the Agent it is bound to, the same
