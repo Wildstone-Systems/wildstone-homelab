@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/agentapi"
+	"github.com/chickenrat17/wildstone-homelab/keystone/agentapi/httpclient"
 )
 
 func testBridge(t *testing.T, ks *fakeClient, hc *fakeHermes) (*bridge, *bytes.Buffer) {
@@ -50,14 +51,14 @@ func TestHandleTurnCompletesAndAcksInOrder(t *testing.T) {
 			if idempotencyKey != "d1" {
 				t.Errorf("idempotency key = %q, want the delivery id", idempotencyKey)
 			}
-			if req.System != "be helpful" {
-				t.Errorf("run request system = %q, want the manifest's system prompt", req.System)
+			if req.Instructions != "be helpful" {
+				t.Errorf("run request instructions = %q, want the manifest's system prompt", req.Instructions)
 			}
 			return "run-1", nil
 		},
 		waitForRunFn: func(ctx context.Context, runID string) (runOutcome, error) {
 			order = append(order, "run-wait")
-			return runOutcome{Terminal: "completed"}, nil
+			return runOutcome{Terminal: "completed", Output: "all quiet"}, nil
 		},
 	}
 	br, _ := testBridge(t, ks, hc)
@@ -65,6 +66,9 @@ func TestHandleTurnCompletesAndAcksInOrder(t *testing.T) {
 	ok := br.handleDelivery(context.Background(), turnDelivery("d1", "task1"))
 	if !ok {
 		t.Fatal("handleDelivery returned false, want true")
+	}
+	if len(ks.completeCalls) != 1 || ks.completeCalls[0].Reply != "all quiet" {
+		t.Fatalf("completeCalls = %+v, want one carrying the run's answer as its Reply", ks.completeCalls)
 	}
 	want := []string{"manifest", "start", "run-start", "run-wait", "complete", "ack"}
 	if len(order) != len(want) {
@@ -125,6 +129,58 @@ func TestHandleTurnRunFailureFailsTask(t *testing.T) {
 	}
 	if len(ks.ackCalls) != 1 {
 		t.Fatalf("ackCalls = %v, want one", ks.ackCalls)
+	}
+}
+
+// TestHandleTurnCompletedWithoutAnswerFailsTask: a run that finished
+// with nothing to say has no answer to report, and Complete without one
+// would be a runtime certifying its own work.
+func TestHandleTurnCompletedWithoutAnswerFailsTask(t *testing.T) {
+	ks := &fakeClient{}
+	hc := &fakeHermes{
+		waitForRunFn: func(ctx context.Context, runID string) (runOutcome, error) {
+			return runOutcome{Terminal: "completed", Output: "  "}, nil
+		},
+	}
+	br, _ := testBridge(t, ks, hc)
+
+	if !br.handleDelivery(context.Background(), turnDelivery("d1", "task1")) {
+		t.Fatal("handleDelivery returned false, want true (the delivery itself was settled)")
+	}
+	if len(ks.completeCalls) != 0 {
+		t.Fatalf("completeCalls = %v, want none", ks.completeCalls)
+	}
+	if len(ks.failCalls) != 1 || ks.failCalls[0].Reason != "the hermes run completed with no answer" {
+		t.Fatalf("failCalls = %+v, want one saying the run had no answer", ks.failCalls)
+	}
+}
+
+// TestHandleTurnRefusedHandleIsAcked: a handle Keystone no longer
+// accepts can never succeed, and an unacked delivery blocks every one
+// queued behind it.
+func TestHandleTurnRefusedHandleIsAcked(t *testing.T) {
+	ks := &fakeClient{
+		manifestFn: func(ctx context.Context, h agentapi.Handle) (agentapi.Manifest, error) {
+			return agentapi.Manifest{}, &httpclient.RefusedError{Message: "the task handle was refused"}
+		},
+	}
+	ran := false
+	hc := &fakeHermes{
+		startRunFn: func(ctx context.Context, req hermesRunRequest, idempotencyKey string) (string, error) {
+			ran = true
+			return "run-1", nil
+		},
+	}
+	br, _ := testBridge(t, ks, hc)
+
+	if !br.handleDelivery(context.Background(), turnDelivery("d1", "task1")) {
+		t.Fatal("handleDelivery returned false on a refused handle, want it settled")
+	}
+	if len(ks.ackCalls) != 1 || ks.ackCalls[0] != "d1" {
+		t.Fatalf("ackCalls = %v, want [d1]", ks.ackCalls)
+	}
+	if ran {
+		t.Fatal("a run was started for a task whose handle was refused")
 	}
 }
 

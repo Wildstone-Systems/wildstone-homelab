@@ -200,16 +200,23 @@ func TestActiveChatPointerRechecksDisclosureBeforeLoadingHistory(t *testing.T) {
 			if err != nil || prior != nil || reply != trustedSurfaceRedirect {
 				t.Fatalf("protected active pointer: prior=%+v reply=%q err=%v", prior, reply, err)
 			}
-			resp, _ := h.send(runtimedb.RoleConcierge, map[string]any{"transport": "telegram", "account": "12345", "text": "continue", "messageId": "return-to-external"})
-			if resp.StatusCode != http.StatusAccepted {
-				t.Fatalf("status=%d", resp.StatusCode)
+			// The same person's own one-to-one chat on a Connection they
+			// bound is verified, and continues it: the conversation is
+			// theirs, and nobody else reads the reply.
+			binding, err := h.s.DB.LookupChatBinding(at, "12345")
+			if err != nil {
+				t.Fatal(err)
 			}
-			if calls := h.providerCalls(t); calls != 0 {
-				t.Fatalf("protected history reached model: %d calls", calls)
+			verified := chatCommandCtx{At: at, Identity: "sam", Conversation: "12345", Binding: binding}
+			prior, reply, err = h.s.resolveChatContinuation(verified)
+			if err != nil || prior == nil || prior.SessionID != id || reply != "" {
+				t.Fatalf("verified active pointer: prior=%+v reply=%q err=%v", prior, reply, err)
 			}
-			sess, err := h.s.DB.GetButlerSession(id)
-			if err != nil || len(sess.Turns) != 3 {
-				t.Fatalf("protected session changed: turns=%d err=%v", len(sess.Turns), err)
+			// A room is never verified, however its speaker is bound.
+			room := verified
+			room.Group = true
+			if prior, reply, err = h.s.resolveChatContinuation(room); err != nil || prior != nil || reply != trustedSurfaceRedirect {
+				t.Fatalf("group chat continued a protected conversation: prior=%+v reply=%q err=%v", prior, reply, err)
 			}
 		})
 	}
@@ -290,7 +297,7 @@ func TestContinuationContentRequiresAllDisclosureClassifications(t *testing.T) {
 			if err = h.s.DB.NoteButlerSessionConnection(id, "inbound", current.Name(), current.Seq); err != nil {
 				t.Fatal(err)
 			}
-			loaded, allowed, err := h.s.loadChatContinuation(id, current)
+			loaded, allowed, err := h.s.loadChatContinuation(id, current, false)
 			if err != nil || allowed != (classification == "compatible") {
 				t.Fatalf("allowed=%v err=%v", allowed, err)
 			}
@@ -326,7 +333,7 @@ func TestContinuationRejectsAStaleDestination(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			loaded, allowed, err := h.s.loadChatContinuation(id, stale)
+			loaded, allowed, err := h.s.loadChatContinuation(id, stale, false)
 			if err != nil || allowed != (change == "compatible") {
 				t.Fatalf("allowed=%v err=%v", allowed, err)
 			}

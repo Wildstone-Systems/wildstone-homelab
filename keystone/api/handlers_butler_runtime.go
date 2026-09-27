@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -34,6 +35,7 @@ import (
 	"github.com/chickenrat17/wildstone-homelab/keystone/pkgspec"
 	"github.com/chickenrat17/wildstone-homelab/keystone/plan"
 	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
+	"github.com/chickenrat17/wildstone-homelab/keystone/proposals"
 	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 )
@@ -317,7 +319,7 @@ func (s *Server) liveAgentRuntime(name string) (runtimedb.Butler, runtimedb.Butl
 // runtime record in the Agent API's shape (§3.3). A read, like the rest
 // of what the Console shows about an Agent; the credential is a
 // reference here and never a secret.
-func (s *Server) butlerRuntime(r *http.Request, _ principal.Identity) (any, int, error) {
+func (s *Server) butlerRuntime(r *http.Request, id principal.Identity) (any, int, error) {
 	name := r.PathValue("name")
 	rt, err := s.DB.GetButlerRuntimeByName(name)
 	if errors.Is(err, runtimedb.ErrNotFound) {
@@ -326,7 +328,93 @@ func (s *Server) butlerRuntime(r *http.Request, _ principal.Identity) (any, int,
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
-	return rt.Record(), http.StatusOK, nil
+	out := butlerRuntimeResponse{RuntimeRecord: rt.Record()}
+	if b, err := s.DB.GetButler(name); err == nil {
+		if pr, ok := s.packagedRuntimeFor(b, rt, id); ok {
+			out.Package = &pr
+		}
+	}
+	return out, http.StatusOK, nil
+}
+
+// butlerRuntimeResponse is the runtime record, plus the package it runs
+// from when Wildstone installed it, so the Console can say when that
+// package is behind the catalog and offer to upgrade it.
+type butlerRuntimeResponse struct {
+	agentapi.RuntimeRecord
+	Package *packagedRuntime `json:"package,omitempty"`
+}
+
+// packagedRuntime is the installed package behind an Agent's runtime.
+type packagedRuntime struct {
+	Name     string `json:"name"`
+	Instance string `json:"instance"`
+	// Installed is the version the install was last applied at, and
+	// Available the catalog's current one.
+	Installed string `json:"installedVersion"`
+	Available string `json:"availableVersion,omitempty"`
+	// Upgradable is whether upgrading to Available would change what
+	// runs (a dry run of the upgrade Plan).
+	Upgradable bool `json:"upgradable,omitempty"`
+}
+
+// packagedRuntimeFor describes the packaged install behind b's runtime,
+// if it has one still in desired state. Upgradable is decided by a dry
+// run of the upgrade Plan rather than by comparing versions: a release
+// that changes nothing this install renders is not an upgrade to offer,
+// and one offered anyway would fail as a no-op every time it was
+// pressed while the version stayed behind forever.
+func (s *Server) packagedRuntimeFor(b runtimedb.Butler, rt runtimedb.ButlerRuntime, id principal.Identity) (packagedRuntime, bool) {
+	r, ok, err := s.renderPackagedRuntime(rt.Principal, rt)
+	if err != nil || !ok {
+		return packagedRuntime{}, false
+	}
+	out := packagedRuntime{
+		Name: r.pkg.Metadata.Name, Instance: r.instance,
+		Installed: r.installed, Available: r.pkg.Metadata.Version,
+	}
+	if out.Available != out.Installed {
+		_, err := s.fileRuntimeRender(b, rt.Principal, rt, id, out.Installed, true)
+		out.Upgradable = err == nil
+	}
+	return out, true
+}
+
+// upgradeButlerRuntime is POST /api/v1/butlers/{name}/runtime/upgrade:
+// file a Plan that re-renders the Agent's packaged runtime at the
+// catalog's current version and restarts it (#389).
+//
+// Before this, a new agent-hermes version could not reach an installed
+// runtime. The Runtime tab re-renders only when the profile or class
+// changes, and the Packages screen's reconfigure expands the version the
+// install was made from, so it found nothing to change. Nothing is
+// applied here: the Owner approves the Plan, as for any install.
+func (s *Server) upgradeButlerRuntime(r *http.Request, id principal.Identity) (any, int, error) {
+	b, current, code, err := s.liveAgentRuntime(r.PathValue("name"))
+	if err != nil {
+		return nil, code, err
+	}
+	pr, ok := s.packagedRuntimeFor(b, current, id)
+	if !ok {
+		return nil, http.StatusNotFound, fmt.Errorf("%s's runtime is not a Wildstone-installed package, so there is nothing to upgrade", b.Name)
+	}
+	if pr.Available == pr.Installed {
+		return nil, http.StatusConflict, fmt.Errorf("%s's runtime already runs %s %s, the catalog's current version", b.Name, pr.Name, pr.Installed)
+	}
+	planID, err := s.reRenderPackagedRuntime(b, current.Principal, current, id, pr.Installed)
+	if errors.Is(err, proposals.ErrNoOp) {
+		// The new version renders exactly what is running, so there is
+		// nothing to restart. The install still reads as the old version
+		// until something about it changes.
+		return nil, http.StatusConflict, fmt.Errorf(
+			"%s %s renders exactly what %s's runtime already runs, so there is nothing to restart", pr.Name, pr.Available, b.Name)
+	}
+	if err != nil {
+		return nil, http.StatusBadGateway, fmt.Errorf("re-rendering %s's runtime at %s: %w", b.Name, pr.Available, err)
+	}
+	s.event("butler.runtime", planID, id, fmt.Sprintf("upgrade of %s's runtime filed: %s %s to %s",
+		b.Name, pr.Name, pr.Installed, pr.Available))
+	return map[string]any{"plan": planID, "from": pr.Installed, "to": pr.Available}, http.StatusOK, nil
 }
 
 // packagedRuntimePackage is the one Wildstone-packaged Agent runtime
@@ -361,32 +449,59 @@ const packagedRuntimePackage = "agent-hermes"
 // minted — the same convention chat-telegram's own instance uses, read
 // back with installedFromPlans exactly as disableCapability's sibling
 // check reads it.
-func (s *Server) reRenderPackagedRuntime(b runtimedb.Butler, principalName string, next runtimedb.ButlerRuntime, id principal.Identity) (string, error) {
+//
+// upgradeFrom, when set, is the version the install runs now: the Plan
+// is filed as an upgrade to the catalog's current version rather than
+// as a profile change (upgradeButlerRuntime, #389). The re-render is the
+// same either way, because it always expands the catalog's current
+// version with the install's own params.
+func (s *Server) reRenderPackagedRuntime(b runtimedb.Butler, principalName string, next runtimedb.ButlerRuntime, id principal.Identity, upgradeFrom string) (string, error) {
+	return s.fileRuntimeRender(b, principalName, next, id, upgradeFrom, false)
+}
+
+// runtimeRender is a packaged runtime's install, re-rendered at the
+// catalog's current version with its own recorded params.
+type runtimeRender struct {
+	pkg      *pkgspec.Package
+	params   map[string]string
+	instance string
+	// installed is the version the install was last applied at.
+	installed string
+	docs      []string
+	deletes   []plan.DeletionRef
+	capName   string
+}
+
+// renderPackagedRuntime finds the packaged install bound to the runtime
+// principal principalName and renders it at the catalog's version, with
+// next's profile and class overriding the install's own. ok is false
+// when there is none: a native Agent, a runtime Wildstone does not
+// manage the container for, or an install that has since been removed
+// (#389). Removal through the Services screen files a plan with no
+// capability origin, so the install's origin outlives it; only desired
+// state says whether it is still there.
+func (s *Server) renderPackagedRuntime(principalName string, next runtimedb.ButlerRuntime) (runtimeRender, bool, error) {
 	if s.Catalog == nil || principalName == "" {
-		return "", nil
+		return runtimeRender{}, false, nil
 	}
 	instance := strings.TrimPrefix(runtimePrincipalStem(principalName), runtimePrincipalPrefix)
 	if instance == "" {
-		return "", nil
+		return runtimeRender{}, false, nil
 	}
-	_, installedParams := s.installedFromPlans()
-	installed, ok := installedParams[packagedRuntimePackage+"#"+instance]
+	origin, ok := s.installOrigin(packagedRuntimePackage, instance)
 	if !ok {
-		// No packaged capability names this Butler: native, or a
-		// runtime this deployment does not manage the container for.
-		return "", nil
+		return runtimeRender{}, false, nil
 	}
-
 	pkg, err := s.Catalog.Get(packagedRuntimePackage, "")
 	if err != nil {
-		return "", fmt.Errorf("%s is installed for %s but is no longer in the catalog: %w", packagedRuntimePackage, b.Name, err)
+		return runtimeRender{}, false, fmt.Errorf("%s is installed but is no longer in the catalog: %w", packagedRuntimePackage, err)
 	}
-	// The install's own recorded params, with only the two fields this
-	// change touches overridden — everything else about the runtime
-	// (node, model, instance) is untouched, the same "replaces one
-	// field" discipline setButlerRuntime itself follows.
-	params := make(map[string]string, len(installed)+2)
-	for k, v := range installed {
+	// The install's own recorded params, with only the two fields a
+	// runtime change touches overridden — everything else about the
+	// runtime (node, model, instance) is untouched, the same "replaces
+	// one field" discipline setButlerRuntime itself follows.
+	params := make(map[string]string, len(origin.Params)+2)
+	for k, v := range origin.Params {
 		params[k] = v
 	}
 	if next.ExecutionProfile != "" {
@@ -398,40 +513,107 @@ func (s *Server) reRenderPackagedRuntime(b runtimedb.Butler, principalName strin
 
 	enabled, err := s.enabledCapabilities()
 	if err != nil {
-		return "", err
+		return runtimeRender{}, false, err
 	}
 	providers := append([]*pkgspec.Package{pkg}, s.Catalog.ProvidersFor(enabled)...)
 	current, err := s.State.Load()
 	if err != nil {
-		return "", fmt.Errorf("loading statefile: %w", err)
+		return runtimeRender{}, false, fmt.Errorf("loading statefile: %w", err)
 	}
 	rendered, err := capability.NewEngine().Expand(pkg, params, capability.NewCatalog(providers...).WithCurrent(current))
 	if err != nil {
-		return "", fmt.Errorf("re-rendering %s: %w", pkg.Metadata.Name, err)
+		return runtimeRender{}, false, fmt.Errorf("re-rendering %s: %w", pkg.Metadata.Name, err)
+	}
+	if !anyDesired(rendered, current) {
+		return runtimeRender{}, false, nil
 	}
 	if err := claimedByAnotherCapability(pkg, current, rendered); err != nil {
-		return "", err
+		return runtimeRender{}, false, err
 	}
 	docs := make([]string, 0, len(rendered))
 	for _, res := range rendered {
 		data, err := resource.Marshal(res)
 		if err != nil {
-			return "", err
+			return runtimeRender{}, false, err
 		}
 		docs = append(docs, string(data))
 	}
 	capName, _ := pkg.CapabilityFor(params) // Expand already refused a bad instance
+	return runtimeRender{
+		pkg: pkg, params: params, instance: instance, installed: origin.Version,
+		docs: docs, deletes: droppedByUpgrade(pkg, current, rendered), capName: capName,
+	}, true, nil
+}
 
+// anyDesired reports whether any container the install renders is in
+// desired state. Containers, because removing an install keeps its data
+// Volume (data is never proposed for deletion), and a kept Volume is not
+// a runtime anybody could restart.
+func anyDesired(rendered, current []resource.Resource) bool {
+	have := map[string]bool{}
+	for _, r := range current {
+		if r.Kind == resource.KindContainer {
+			have[r.Metadata.Name] = true
+		}
+	}
+	for _, r := range rendered {
+		if r.Kind == resource.KindContainer && have[r.Metadata.Name] {
+			return true
+		}
+	}
+	return false
+}
+
+// installOrigin is the capability origin one instance of a package was
+// last applied with: its version and params.
+func (s *Server) installOrigin(pkg, instance string) (plan.CapabilityOrigin, bool) {
+	docs, err := s.DB.AppliedPlanJSONMentioning(`"package":` + strconv.Quote(pkg))
+	if err != nil {
+		return plan.CapabilityOrigin{}, false
+	}
+	for _, doc := range docs { // newest first
+		var stored plan.StoredProposal
+		if json.Unmarshal([]byte(doc), &stored) != nil || stored.Origin == nil {
+			continue
+		}
+		if stored.Origin.Package == pkg && stored.Origin.Params[pkgspec.InstanceParam] == instance {
+			return *stored.Origin, true
+		}
+	}
+	return plan.CapabilityOrigin{}, false
+}
+
+// fileRuntimeRender files (or, with dryRun, only checks) the Plan that
+// re-renders b's packaged runtime. planID is "" with a nil error when
+// there is no packaged runtime; a dry run returns "" with a nil error
+// when the Plan would change something, and proposals.ErrNoOp when not.
+func (s *Server) fileRuntimeRender(b runtimedb.Butler, principalName string, next runtimedb.ButlerRuntime, id principal.Identity, upgradeFrom string, dryRun bool) (string, error) {
+	r, ok, err := s.renderPackagedRuntime(principalName, next)
+	if err != nil {
+		return "", fmt.Errorf("%s's runtime: %w", b.Name, err)
+	}
+	if !ok {
+		return "", nil
+	}
+	summary := fmt.Sprintf("restart %s's runtime (%s): execution profile %s, processing class %s",
+		b.Name, r.capName, r.params["execution_profile"], r.params["processing_class"])
+	if upgradeFrom != "" {
+		summary = fmt.Sprintf("upgrade %s's runtime (%s) from %s %s to %s",
+			b.Name, r.capName, r.pkg.Metadata.Name, upgradeFrom, r.pkg.Metadata.Version)
+	}
 	out, code, err := s.submitProposalOpts(id, proposalRequest{
-		Summary: fmt.Sprintf("restart %s's runtime (%s): execution profile %s, processing class %s",
-			b.Name, capName, params["execution_profile"], params["processing_class"]),
-		Put:    docs,
-		Delete: droppedByUpgrade(pkg, current, rendered),
+		Summary: summary,
+		Put:     r.docs,
+		Delete:  r.deletes,
 	}, proposalOpts{
-		Origin: &plan.CapabilityOrigin{Package: pkg.Metadata.Name, Version: pkg.Metadata.Version, Params: params},
+		Origin: &plan.CapabilityOrigin{Package: r.pkg.Metadata.Name, Version: r.pkg.Metadata.Version, Params: r.params},
+		DryRun: dryRun,
 	})
 	if err != nil {
 		return "", fmt.Errorf("filing the restart plan (status %d): %w", code, err)
+	}
+	if dryRun {
+		return "", nil
 	}
 	view, ok := out.(planView)
 	if !ok {
@@ -558,7 +740,7 @@ func (s *Server) setButlerRuntime(r *http.Request, id principal.Identity) (any, 
 		// change needs it: an endpoint or delivery edit does not touch
 		// what the container renders.
 		if next.ExecutionProfile != current.ExecutionProfile || next.ProcessingClass != current.ProcessingClass {
-			planID, err := s.reRenderPackagedRuntime(b, current.Principal, next, id)
+			planID, err := s.reRenderPackagedRuntime(b, current.Principal, next, id, "")
 			if err != nil {
 				return nil, http.StatusBadGateway, fmt.Errorf(
 					"the runtime record was updated, but re-rendering its packaged runtime for the restart failed: %w", err)

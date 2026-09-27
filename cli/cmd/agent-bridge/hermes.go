@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -27,6 +28,7 @@ import (
 type hermesRunner interface {
 	StartRun(ctx context.Context, req hermesRunRequest, idempotencyKey string) (runID string, err error)
 	WaitForRun(ctx context.Context, runID string) (runOutcome, error)
+	Health(ctx context.Context) error
 }
 
 var _ hermesRunner = (*hermesClient)(nil)
@@ -39,6 +41,8 @@ type hermesClient struct {
 	// APIKey is Hermes's own API_SERVER_KEY.
 	APIKey string
 	HTTP   *http.Client
+	// Log, when set, records each tool a run calls (logToolCall).
+	Log *slog.Logger
 }
 
 func (c *hermesClient) httpClient() *http.Client {
@@ -48,46 +52,45 @@ func (c *hermesClient) httpClient() *http.Client {
 	return &http.Client{Timeout: defaultHermesTimeout}
 }
 
-// turnPayload is this bridge's best-effort read of a turn/subscription
-// delivery's payload. TODO(spike S3): as of implementation-scope.md's
-// Phase 4 outcomes, agentapi.Delivery's payload for these kinds carries
-// only {"handle": "<taskID>.<secret>"} — there is no field yet naming
-// what the person said or what a matched subscription is meant to do,
-// because Wildstone's own turn dispatch (keystone/butlerlive/serve.go)
-// answers every turn in-process today and only ever externalises one
-// through the reoffer path for a task that was already waiting before
-// any text reached this boundary. Read defensively anyway: a later phase
-// adding a "text" field here should light this up with no bridge change.
+// turnPayload is this bridge's read of a turn/subscription delivery's
+// payload: butlerlive.ExternalTurn for a turn (#364) — the handle, what
+// the person said and the conversation so far. A subscription delivery
+// carries only the handle. Read defensively: an absent or malformed
+// field just means less context for the run.
 type turnPayload struct {
-	Handle string `json:"handle"`
-	Text   string `json:"text,omitempty"`
+	Handle  string `json:"handle"`
+	Text    string `json:"text,omitempty"`
+	History []struct {
+		Role string `json:"role"`
+		Text string `json:"text"`
+	} `json:"history,omitempty"`
 }
 
 // defaultRunInput is what this bridge asks Hermes to do when the
-// delivery carries no turn text of its own (see turnPayload's doc
-// comment) — today, always. It tells the runtime to reach for its
+// delivery carries no turn text of its own (a subscription). It tells the runtime to reach for its
 // Wildstone tools rather than inventing an answer from nothing.
 const defaultRunInput = "A Wildstone task is waiting on you. Use the wildstone MCP tools available " +
 	"to you to read what is being asked and to act; do not answer from assumption."
 
-// hermesRunRequest is this bridge's request body for POST /v1/runs.
-//
-// TODO(spike S3): the exact shape of a /v1/runs request is undocumented
-// upstream — the hermes.md research brief §6 confirms only that the call
-// returns a run_id and accepts an Idempotency-Key header. The fields
-// below are the ones every other Hermes text-in surface documents
-// (model/provider overrides shared with /v1/chat/completions and
-// /v1/responses; "input" is the field /v1/responses itself uses for free
-// text). TestBuildRunRequestShape pins exactly what this bridge sends
-// today, so a correction once S3 confirms or corrects the real shape is
-// a deliberate, reviewed diff rather than a silent behaviour change.
+// hermesRunRequest is this bridge's request body for POST /v1/runs, in
+// the shape Hermes's API server reads it (gateway/platforms/
+// api_server_runs.py upstream). TestBuildRunRequestShape pins exactly
+// what this bridge sends.
 type hermesRunRequest struct {
 	// Input is the text this run answers. See defaultRunInput.
 	Input string `json:"input"`
-	// System is the manifest's own system prompt (agentapi.Manifest.
-	// SystemPrompt): Wildstone's instruction hierarchy for this task,
-	// carried as Hermes's system-level context for the run.
-	System string `json:"system,omitempty"`
+	// Instructions is the manifest's own system prompt (agentapi.
+	// Manifest.SystemPrompt): Wildstone's instruction hierarchy for this
+	// task. Hermes adds it as an ephemeral system prompt beside its own.
+	Instructions string `json:"instructions,omitempty"`
+	// ConversationHistory is the conversation before this turn.
+	ConversationHistory []hermesMessage `json:"conversation_history,omitempty"`
+}
+
+// hermesMessage is one conversation_history entry.
+type hermesMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
 }
 
 // buildRunRequest assembles the run body from a fetched Manifest and the
@@ -99,7 +102,13 @@ func buildRunRequest(m agentapi.Manifest, payload []byte) hermesRunRequest {
 	if input == "" {
 		input = defaultRunInput
 	}
-	return hermesRunRequest{Input: input, System: m.SystemPrompt}
+	req := hermesRunRequest{Input: input, Instructions: m.SystemPrompt}
+	for _, u := range tp.History {
+		if (u.Role == "user" || u.Role == "assistant") && strings.TrimSpace(u.Text) != "" {
+			req.ConversationHistory = append(req.ConversationHistory, hermesMessage{Role: u.Role, Content: u.Text})
+		}
+	}
+	return req
 }
 
 type hermesRunResponse struct {
@@ -152,6 +161,8 @@ type runOutcome struct {
 	Terminal string
 	// Detail is whatever reason/error text the terminal event carried.
 	Detail string
+	// Output is a completed run's final answer.
+	Output string
 }
 
 // sseEvent is the handful of fields this bridge reads off a run event.
@@ -163,18 +174,31 @@ type runOutcome struct {
 // surface should never gate a Wildstone tool call; a sandbox-command
 // approval on Tier 2/3 is denied by `unattended_mode: deny` before it
 // would ever reach this stream as something to answer).
+//
+// Hermes names the event in an "event" key ({"event":"run.completed",
+// "run_id":…,"output":…}); "type" is read too, as a fallback for a
+// runtime that follows the more common SSE-JSON convention.
 type sseEvent struct {
+	Event  string `json:"event"`
 	Type   string `json:"type"`
 	Reason string `json:"reason,omitempty"`
 	Error  string `json:"error,omitempty"`
+	Output string `json:"output,omitempty"`
+}
+
+func (ev sseEvent) name() string {
+	if ev.Event != "" {
+		return ev.Event
+	}
+	return ev.Type
 }
 
 // terminalOutcome maps a parsed sseEvent to a runOutcome, or reports it
 // is not a terminal event at all.
 func terminalOutcome(ev sseEvent) (runOutcome, bool) {
-	switch ev.Type {
+	switch ev.name() {
 	case "run.completed":
-		return runOutcome{Terminal: "completed"}, true
+		return runOutcome{Terminal: "completed", Output: ev.Output}, true
 	case "run.failed":
 		return runOutcome{Terminal: "failed", Detail: ev.Error}, true
 	case "run.cancelled":
@@ -228,6 +252,7 @@ func (c *hermesClient) WaitForRun(ctx context.Context, runID string) (runOutcome
 		}
 		joined := strings.Join(data, "\n")
 		data = data[:0]
+		c.logToolCall(runID, []byte(joined))
 		var ev sseEvent
 		if err := json.Unmarshal([]byte(joined), &ev); err != nil {
 			return runOutcome{}, false // an SSE comment or a shape we don't decode; not an error
@@ -257,6 +282,31 @@ func (c *hermesClient) WaitForRun(ctx context.Context, runID string) (runOutcome
 	return runOutcome{}, fmt.Errorf("hermes: run %s's events stream ended with no terminal event", runID)
 }
 
+// logToolCall logs the tool a run calls, from its tool.started event:
+// the tool's name only, never its arguments or result. It is how a turn
+// that ended "not done" can be told apart from one whose tool was
+// refused, and a Hermes-native tool from a Wildstone one.
+func (c *hermesClient) logToolCall(runID string, data []byte) {
+	if c.Log == nil {
+		return
+	}
+	var ev struct {
+		Event string `json:"event"`
+		Type  string `json:"type"`
+		Tool  string `json:"tool"`
+	}
+	if json.Unmarshal(data, &ev) != nil {
+		return
+	}
+	name := ev.Event
+	if name == "" {
+		name = ev.Type
+	}
+	if name == "tool.started" && ev.Tool != "" {
+		c.Log.Info("hermes tool call", "run", runID, "tool", ev.Tool)
+	}
+}
+
 // Health probes Hermes's own liveness endpoint.
 func (c *hermesClient) Health(ctx context.Context) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(c.Base, "/")+"/health", nil)
@@ -268,6 +318,9 @@ func (c *hermesClient) Health(ctx context.Context) error {
 		return fmt.Errorf("hermes: GET /health: %w", err)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return errNoHealthEndpoint
+	}
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("hermes: GET /health: %s", resp.Status)
 	}

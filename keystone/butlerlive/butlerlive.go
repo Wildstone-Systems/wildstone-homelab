@@ -292,8 +292,23 @@ type Butlers struct {
 	// switch-parity tests.
 	UseAgentGateway bool
 
-	// mu guards clients.
+	// ExternalReplyWait bounds how long a turn waits for an external
+	// runtime's answer (#364). Zero means externalReplyWait.
+	ExternalReplyWait time.Duration
+
+	// LateAnswer shows the person an answer that was settled after its
+	// turn stopped waiting: the turn timed out, or it was parked for an
+	// offline runtime and answered after a re-offer (#389). It is given
+	// the task and the answer as the objective check left it. cmd/keystone
+	// wires it to the api package, which owns sessions and the chat
+	// queue; nil records the answer on the task and shows it to nobody.
+	LateAnswer func(taskID, text string) error
+
+	// mu guards clients and waiting.
 	mu sync.Mutex
+	// waiting holds, per task, the turn waiting on its external
+	// runtime's answer (see external.go).
+	waiting map[string]chan runtimeReply
 	// clients caches one provider per ROUTE, keyed by the route's seq
 	// and the backend it resolved to. Building an HTTP client per
 	// message is waste; caching across a reconfiguration would be worse

@@ -363,14 +363,36 @@ Switch the Agent to `local_only` and the payload comes through in full.
    `platform-only`, pointed at a local model endpoint you already run.
 2. Approve the resulting Plan.
 3. Confirm the bridge's health shows `connected`, and send it a chat
-   turn.
+   turn. Expected: the answer is Hermes's, not the in-process model's.
+   Keystone logs `butler answered … loop=external` for it (never
+   `loop=native` or `loop=runner` for an Agent whose runtime is Hermes),
+   and the bridge's log shows the delivery being run and acknowledged.
+   A turn Hermes takes longer than two minutes over answers "still
+   working on it"; the task stays open and completes when Hermes
+   reports back (#364). The answer then appears in the same
+   conversation: an open portal page shows it within about 10 seconds,
+   and a Telegram chat gets it as a new message (#389). Keystone logs
+   `butler answered after its turn stopped waiting` for it.
+   Stop the `hermes` container and the bridge logs `hermes is not
+   answering`; within about 90 seconds the Agent's runtime shows
+   `offline`, and a new message is parked at once with "not connected
+   right now" (Keystone logs `butler turn parked for its runtime`).
+   Start it again: the parked turn is re-offered and its answer arrives
+   the same way as a late one.
 4. Watch the bridge's logs for the MCP calls Hermes makes back through
    it, and confirm `disabled_toolsets` appears in its rendered config.
-5. Change the profile to `sandboxed` (H6, #352): from the Agent's
+5. Upgrade the package (#389): with a newer `agent-hermes` in the
+   catalog than the install was made from, the Agent's Runtime tab shows
+   "Installed from agent-hermes <old> · <new> is available" and an
+   **Upgrade to <new>** button. Pressing it files one Plan, titled
+   `upgrade <agent>'s runtime (agent-hermes#<instance>) from agent-hermes
+   <old> to <new>`, and changes nothing until it is approved. Once it is
+   approved and applied, the tab shows the new version and no button.
+6. Change the profile to `sandboxed` (H6, #352): from the Agent's
    Runtime tab, change execution profile (or processing class) and
    save. Check the Plans screen before touching anything else.
 
-Expected for step 5: a new Plan appears, titled something like
+Expected for step 6: a new Plan appears, titled something like
 `restart <agent>'s runtime (agent-hermes#<instance>): execution
 profile sandboxed, processing class <class>` — filed under your own
 identity, exactly like a Console-driven install or reconfigure. The
@@ -384,8 +406,11 @@ Known open points, honestly: the Hermes image is pinned to the
 `v2026.9.21` index digest (package 0.1.1; an install made from 0.1.0
 recorded a placeholder digest that 404s, and must be reconfigured with
 the new `hermes_image_digest`); the `/v1/runs` body
-shape is only pinned by a unit test, never verified against a live
-Hermes (design-doc spike S3 was never run); the bridge's
+(`input`, `instructions`, `conversation_history`) and event shape
+(`{"event":"run.completed","output":…}`) follow Hermes's API server
+source but are pinned only by unit tests (design-doc spike S3 was never
+run); an answer that arrives after the two-minute wait completes the
+task but is not yet shown in the conversation; the bridge's
 `identity_header` is static, leaning on `max_concurrent_runs: 1`
 instead of per-call identity; there is no egress allowlist yet; and an
 external runtime's escalation deliveries are acknowledged as a no-op

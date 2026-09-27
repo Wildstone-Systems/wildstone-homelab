@@ -173,6 +173,10 @@ type ToolDecision struct {
 	Requestable bool
 	// GrantSeq names the grant that allowed it, for the work trace.
 	GrantSeq int64
+	// Unassigned is a refusal only because a governed Agent has not been
+	// given the tool (design §6.3). It is the one refusal an Owner can
+	// fix by assigning it, so the Console offers that and nothing else.
+	Unassigned bool
 }
 
 // ToolAuthorityQuery is what the resolver needs. The gateway supplies
@@ -216,6 +220,14 @@ type ToolAuthorityQuery struct {
 	Structural bool
 	// GrantRequired is the tool's own metadata.
 	GrantRequired bool
+	// Service and ToolClass are what a service bundle matches on, and
+	// OptIn keeps a tool out of every bundle (ADR-W033 design §6.2,
+	// §6.3). The gateway supplies them because only it knows which tool
+	// it registered. Without them a governed Agent's resolver cannot
+	// tell an opt-in tool from an unassigned one.
+	Service   string
+	ToolClass string
+	OptIn     bool
 	// TaskID and RoutineName scope a work-bound grant. Empty means no
 	// grant can apply, which is the right default for a one-shot
 	// question that is not durable work.

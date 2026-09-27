@@ -70,6 +70,13 @@ looks good.
   manifest, resolved through that Butler's authority, and each
   unavailable tool carries the resolver's words rather than a sentence
   the Console made up.
+- **Assigning a tool to an existing Agent** (#389) —
+  `PUT /butlers/{name}/assignment`. A governed Agent reaches only what
+  it was assigned, and assignments were written only at creation, so a
+  tool that arrived later could not reach it. The manifest marks a wired
+  tool withheld only for want of an assignment as `unassigned`, and the
+  Tools tab offers "assign" on exactly those rows. The on/off switch
+  still narrows on top.
 - **The rest of the Butlers screen** — `POST /butlers/{name}/restore`
   and `POST /butlers/{name}/duplicate`, because "retiring is not
   deleting" was a sentence with no button behind it and a client-side

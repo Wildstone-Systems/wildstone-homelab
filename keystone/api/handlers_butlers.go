@@ -139,7 +139,7 @@ func (s *Server) availableToolDetails(class string, readOnly bool) []butler.Capa
 	var manifest butler.CapabilityManifest
 	switch class {
 	case runtimedb.AgentClassMember:
-		manifest = butler.NewHouseholdGateway("", s.ButlerHost.householdSeams()).
+		manifest = butler.NewHouseholdGateway("", s.ButlerHost.inventorySeams()).
 			ForAdministration().Capabilities(readOnly)
 	case runtimedb.AgentClassOwner:
 		_, live, _, _, _ := s.ButlerHost.Current()
@@ -189,6 +189,52 @@ func (s *Server) BackfillAgentTools() error {
 		}
 		if err := s.seedAgentTools(b, "system"); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+// memoryTools are the tools no governed Agent could be given before #364:
+// the inventory it was seeded from never listed them, and there is no
+// assign path after creation (butler.InventoryMemory has the why).
+var memoryTools = []string{"recall", "remember"}
+
+// BackfillMemoryTools gives every governed Agent the memory tools it
+// would have been seeded with, had the inventory listed them (#364).
+//
+// Run at startup after BackfillAgentTools, and idempotent. It assigns
+// only a tool the Agent has NEVER had — a revoked assignment is somebody
+// having taken it away, and stays taken — and only to a governed Agent,
+// since an ungoverned one already reaches every tool its surface
+// registers. A narrowing still subtracts on top, so the Console's own
+// switch takes memory away again.
+func (s *Server) BackfillMemoryTools() error {
+	if s.DB == nil {
+		return nil
+	}
+	butlers, err := s.DB.ListButlers()
+	if err != nil {
+		return err
+	}
+	for _, b := range butlers {
+		if !b.RetiredAt.IsZero() {
+			continue
+		}
+		governed, err := s.DB.AgentIsGoverned(b.Seq)
+		if err != nil {
+			return err
+		}
+		if !governed {
+			continue
+		}
+		for _, tool := range memoryTools {
+			added, err := s.DB.AssignToolIfNeverAssigned(b.Seq, tool, "system")
+			if err != nil {
+				return err
+			}
+			if added && s.Log != nil {
+				s.Log.Info("gave an agent a memory tool it could never be assigned before", "butler", b.Name, "tool", tool)
+			}
 		}
 	}
 	return nil
@@ -669,6 +715,92 @@ func (s *Server) setButlerTool(r *http.Request, id principal.Identity) (any, int
 	}, http.StatusOK, nil
 }
 
+// setButlerAssignment gives a governed Agent a tool by name, or takes
+// an explicit assignment away (ADR-W033 design §6.3, #389).
+//
+// Assignments were written only when an Agent was created, so a tool
+// that arrived later (a new package, or recall/remember before they
+// were in the inventory) could not reach an existing Agent short of
+// recreating it. A narrowing still subtracts on top of an assignment,
+// so the Tools tab's on/off switch keeps its meaning.
+//
+// Only a tool this Agent's class can hold is accepted: a name the
+// inventory does not list would be an assignment covering nothing,
+// which silently became real if a later package registered that name.
+// An opt-in tool may be assigned, because being named is how one is
+// reached (§6.2), but it needs a fresh sign-in, as changing an Agent's
+// class does.
+func (s *Server) setButlerAssignment(r *http.Request, id principal.Identity) (any, int, error) {
+	name := r.PathValue("name")
+	var req struct {
+		Tool   string `json:"tool"`
+		Assign bool   `json:"assign"`
+	}
+	if code, err := decodeStrict(r, &req); err != nil {
+		return nil, code, err
+	}
+	b, err := s.DB.GetButler(name)
+	if errors.Is(err, runtimedb.ErrNotFound) {
+		return nil, http.StatusNotFound, fmt.Errorf("no butler named %q", name)
+	}
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	governed, err := s.DB.AgentIsGoverned(b.Seq)
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	if !governed {
+		return nil, http.StatusBadRequest, fmt.Errorf(
+			"%s reaches every tool its class has, so there is nothing to assign; use the on/off switch to take one away", b.Name)
+	}
+	tool, ok := s.assignableTool(b, req.Tool)
+	if !ok {
+		return nil, http.StatusBadRequest, fmt.Errorf("%s is not a tool a %s agent can hold", req.Tool, b.AgentClass)
+	}
+	by := actingMember(id)
+	if req.Assign {
+		if tool.OptIn {
+			if body, code, err := s.stepUpRefusal(id); err != nil {
+				return body, code, err
+			}
+		}
+		err = s.DB.AssignTool(b.Seq, tool.Name, by)
+	} else {
+		err = s.DB.UnassignTool(b.Seq, tool.Name, by)
+	}
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	verb := "assigned to"
+	if !req.Assign {
+		verb = "unassigned from"
+	}
+	s.event("butler.tool-assignment", "", id, fmt.Sprintf("%s %s %s", tool.Name, verb, b.Name))
+	return map[string]any{"butler": b.Name, "tool": tool.Name, "assigned": req.Assign}, http.StatusOK, nil
+}
+
+// assignableTool finds name in the inventory of the classes b can hold:
+// member tools for any Agent, and owner tools too for an Owner Agent.
+func (s *Server) assignableTool(b runtimedb.Butler, name string) (butler.CapabilityTool, bool) {
+	classes := []string{runtimedb.AgentClassMember}
+	if b.AgentClass == runtimedb.AgentClassOwner {
+		classes = append(classes, runtimedb.AgentClassOwner)
+	}
+	inventory := s.ToolInventory
+	if inventory == nil {
+		inventory = s.availableToolDetails
+	}
+	for _, class := range classes {
+		for _, t := range inventory(class, false) {
+			if t.Name == name {
+				return t, true
+			}
+		}
+	}
+	return butler.CapabilityTool{}, false
+}
+
 // restoreButler brings a retired Butler back.
 //
 // Retiring is reversible by design — the whole reason it is not a
@@ -799,6 +931,11 @@ func (s *Server) butlerStatus(r *http.Request, _ principal.Identity) (any, int, 
 		"endpoint":   b.Endpoint,
 		"mode":       mode,
 	}
+	// Whether the Console's mic works for this Butler (ADR-W042).
+	if ok, max := s.dictationInfo(b.Name); ok {
+		out["dictation"] = true
+		out["dictationMaxSeconds"] = max
+	}
 	// A Butler that cannot answer says why, and says it from the model's
 	// own readiness rather than from a sentence this handler invented.
 	if !b.Reachable() {
@@ -864,7 +1001,7 @@ func (s *Server) butlerTools(r *http.Request, _ principal.Identity) (any, int, e
 	var manifest butler.CapabilityManifest
 	switch b.AgentClass {
 	case runtimedb.AgentClassMember:
-		gw := butler.NewHouseholdGateway("", s.ButlerHost.householdSeams()).ForAdministration()
+		gw := butler.NewHouseholdGateway("", s.ButlerHost.inventorySeams()).ForAdministration()
 		gw.SetAuthorizer(authority)
 		manifest = gw.Capabilities(readOnly)
 	case runtimedb.AgentClassOwner:
@@ -880,7 +1017,7 @@ func (s *Server) butlerTools(r *http.Request, _ principal.Identity) (any, int, e
 		// (ADR-W033 B3) — the same union its sessions are built from
 		// (butler.OwnerToolset), so this screen lists what it can
 		// actually reach and an Owner can narrow a household tool on it.
-		member := butler.NewHouseholdGateway("", s.ButlerHost.householdSeams()).ForAdministration()
+		member := butler.NewHouseholdGateway("", s.ButlerHost.inventorySeams()).ForAdministration()
 		member.SetAuthorizer(authority)
 		manifest = butler.NewOwnerToolset(live.Scoped(authority).ForAdministration(), member).Capabilities(readOnly)
 	default:
@@ -897,8 +1034,15 @@ func (s *Server) butlerTools(r *http.Request, _ principal.Identity) (any, int, e
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
+	// Governed says whether assignments decide this Agent's reach at
+	// all; each tool's own `unassigned` says which ones it lacks.
+	governed, err := s.DB.AgentIsGoverned(b.Seq)
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
 	return map[string]any{
 		"butler":        b.Name,
+		"governed":      governed,
 		"agentClass":    b.AgentClass,
 		"surface":       b.Surface,
 		"modelVerdict":  manifest.ModelVerdict,

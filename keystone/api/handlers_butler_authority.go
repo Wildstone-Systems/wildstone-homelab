@@ -83,9 +83,9 @@ func (s *Server) toolExistsOnClass(class, tool string) bool {
 		// Owner and Member tools both: "Member tools may be granted to
 		// either Agent class" (ADR-W033 B3).
 		manifest = butler.NewOwnerToolset(butler.NewToolGateway(nil, nil).ForAdministration(),
-			butler.NewHouseholdGateway("", butler.HouseholdSeams{}).ForAdministration()).Capabilities(false)
+			butler.NewHouseholdGateway("", butler.HouseholdSeams{Memory: butler.InventoryMemory()}).ForAdministration()).Capabilities(false)
 	case runtimedb.AgentClassMember:
-		manifest = butler.NewHouseholdGateway("", butler.HouseholdSeams{}).
+		manifest = butler.NewHouseholdGateway("", butler.HouseholdSeams{Memory: butler.InventoryMemory()}).
 			ForAdministration().Capabilities(false)
 	default:
 		return false

@@ -27,6 +27,11 @@ import { Say } from "./ButlerDrawer";
 // There is deliberately no third "ask first" state: the Butler loop has
 // no such thing, and a control the engine ignores is worse than no
 // control at all.
+//
+// Assigning is the one way to ADD. A governed Agent reaches only what it
+// has been given, so a wired tool it was never given is neither off nor
+// unavailable-for-lack-of-a-package: it is unassigned, and the row says
+// so and offers to assign it (#389).
 export function TabTools({
   row,
   tools,
@@ -47,7 +52,9 @@ export function TabTools({
   const rows = tools?.tools ?? [];
   const narrowed = tools?.narrowedTools ?? {};
   const on = rows.filter((t) => t.available).length;
-  const unwired = rows.filter((t) => !t.available && narrowed[t.name] === undefined);
+  const unwired = rows.filter(
+    (t) => !t.available && !t.unassigned && narrowed[t.name] === undefined,
+  );
 
   async function set(tool: string, allow: boolean) {
     setBusy(tool);
@@ -60,6 +67,20 @@ export function TabTools({
           : `${tool} taken away from ${b.name}`,
         allow ? "ok" : "warn",
       );
+      onChanged();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function assign(tool: string) {
+    setBusy(tool);
+    setError(null);
+    try {
+      await api.setButlerAssignment(b.name, tool, true);
+      say(`${tool} given to ${b.name}`, "ok");
       onChanged();
     } catch (e) {
       setError((e as Error).message);
@@ -82,6 +103,8 @@ export function TabTools({
         These are the tools a {tools ? agentClassLabel(tools.agentClass).toLowerCase() : "agent"}{" "}
         has. A switch here can take one away and give it back; it can never add one this class does
         not have.
+        {tools?.governed &&
+          " A tool marked not assigned is one this class has that this agent was never given; assign gives it."}
       </div>
 
       <ErrorLine error={loadError} />
@@ -110,6 +133,7 @@ export function TabTools({
             narrowedReason={narrowed[t.name]}
             busy={busy === t.name}
             onSet={(allow) => void set(t.name, allow)}
+            onAssign={() => void assign(t.name)}
           />
         ))}
       </div>
@@ -148,15 +172,18 @@ export function Tool({
   narrowedReason,
   busy,
   onSet,
+  onAssign,
 }: {
   tool: CapabilityTool;
   narrowedReason?: string;
   busy: boolean;
   onSet: (allow: boolean) => void;
+  onAssign?: () => void;
 }) {
   const off = narrowedReason !== undefined;
+  const unassigned = !off && !tool.available && !!tool.unassigned;
   return (
-    <div className={`tool-row${off || tool.available ? "" : " tool-locked"}`}>
+    <div className={`tool-row${off || tool.available || unassigned ? "" : " tool-locked"}`}>
       <div className="cell">
         <div className="row tool-name">
           <code>{tool.name}</code>
@@ -164,6 +191,8 @@ export function Tool({
             <StatusPill kind="mute">off</StatusPill>
           ) : tool.available ? (
             <StatusPill kind="ok">on</StatusPill>
+          ) : unassigned ? (
+            <StatusPill kind="mute">not assigned</StatusPill>
           ) : (
             <StatusPill kind="warn">unavailable</StatusPill>
           )}
@@ -176,6 +205,13 @@ export function Tool({
           <div className="muted tool-why">{tool.reason}</div>
         )}
       </div>
+      {unassigned && onAssign && (
+        <div className="tri">
+          <button type="button" disabled={busy} onClick={onAssign}>
+            assign
+          </button>
+        </div>
+      )}
       {(off || tool.available) && (
         <div className="tri">
           <button

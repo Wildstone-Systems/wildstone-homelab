@@ -502,6 +502,35 @@ func (db *DB) ButlerTaskForSession(sessionID string) (ButlerTask, error) {
 		butlerTaskColumns+` WHERE t.session = ? OR EXISTS (SELECT 1 FROM session_task_sources l WHERE l.session=? AND l.task=t.seq) ORDER BY t.seq DESC LIMIT 1`, seq, seq))
 }
 
+// OpenButlerTasksForSession returns a session's tasks that are neither
+// completed nor failed, newest first. A session can hold more than one:
+// a follow-up to an external runtime that still holds the previous
+// message's task gets a task of its own (#389), and the older one may
+// later wait on the person, who answers with the next message.
+func (db *DB) OpenButlerTasksForSession(sessionID string) ([]ButlerTask, error) {
+	var seq int64
+	if _, err := fmt.Sscanf(sessionID, "bs-%d", &seq); err != nil {
+		return nil, fmt.Errorf("runtimedb: malformed butler session id %q", sessionID)
+	}
+	rows, err := db.sql.Query(butlerTaskColumns+
+		` WHERE (t.session = ? OR EXISTS (SELECT 1 FROM session_task_sources l WHERE l.session=? AND l.task=t.seq))
+		  AND t.state NOT IN (?, ?) ORDER BY t.seq DESC`,
+		seq, seq, string(ButlerTaskCompleted), string(ButlerTaskFailed))
+	if err != nil {
+		return nil, fmt.Errorf("runtimedb: listing a session's open tasks: %w", err)
+	}
+	defer rows.Close()
+	var out []ButlerTask
+	for rows.Next() {
+		t, err := scanButlerTask(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
 // Author and owner come back as the handles those people carry now, so
 // a task reads the same after either of them is renamed.
 const butlerTaskColumns = `SELECT t.seq, t.created_at, t.updated_at, t.kind, t.state,

@@ -199,7 +199,7 @@ func (db *DB) routineMemoryIDs(p *RoutinePrincipal, destination MemoryDestinatio
 	}
 	if !destination.BuiltIn {
 		disclosure, disclosureArgs := memoryDisclosureClause("m", &MemoryReadContext{
-			person: destination.RecipientPerson, agent: v.agent, destination: destination,
+			person: destination.RecipientPerson, agent: v.agent, destination: destination, routine: true,
 		})
 		query += disclosure
 		args = append(args, disclosureArgs...)

@@ -1094,12 +1094,16 @@ func TestReconnectingRuntimeReOffersItsWaitingTasks(t *testing.T) {
 	}
 	var payload struct {
 		Handle string `json:"handle"`
+		Text   string `json:"text"`
 	}
 	if err := json.Unmarshal([]byte(deliveries[0].Payload), &payload); err != nil {
 		t.Fatalf("delivery payload did not decode: %v", err)
 	}
 	if payload.Handle == "" {
 		t.Error("the re-offered delivery carries no handle")
+	}
+	if payload.Text == "" {
+		t.Error("the re-offered delivery does not say what was asked")
 	}
 
 	// The fresh handle actually works — the runtime that follows it up
@@ -1108,6 +1112,35 @@ func TestReconnectingRuntimeReOffersItsWaitingTasks(t *testing.T) {
 	if res := h.doToken(cred.Secret, http.MethodPost, "/api/v1/agent/manifest",
 		map[string]any{"handle": payload.Handle}, &manifest); res.StatusCode != http.StatusOK {
 		t.Fatalf("manifest on the re-offered handle = %d", res.StatusCode)
+	}
+
+	// And the runtime can use it as the WIRE hands it over (#364): the
+	// deliveries body is redacted like every other, and a handle's
+	// secret is exactly the shape redaction catches — a runtime handed
+	// "bt-N.[REDACTED]" had every delivery refused.
+	var wire deliveriesResponse
+	if res := h.doToken(cred.Secret, http.MethodGet, "/api/v1/agent/deliveries", nil, &wire); res.StatusCode != http.StatusOK {
+		t.Fatalf("deliveries = %d", res.StatusCode)
+	}
+	if len(wire.Deliveries) != 1 {
+		t.Fatalf("deliveries over the wire = %+v, want the one re-offer", wire.Deliveries)
+	}
+	if string(wire.Deliveries[0].Handle) != payload.Handle {
+		t.Fatalf("handle over the wire = %q, want the one issued (redaction must not touch it)", string(wire.Deliveries[0].Handle))
+	}
+	var wirePayload struct {
+		Handle string `json:"handle"`
+		Text   string `json:"text"`
+	}
+	if err := json.Unmarshal(wire.Deliveries[0].Payload, &wirePayload); err != nil {
+		t.Fatalf("wire payload: %v", err)
+	}
+	if wirePayload.Handle != payload.Handle || wirePayload.Text == "" {
+		t.Fatalf("wire payload = %+v, want the handle intact and the text kept", wirePayload)
+	}
+	if res := h.doToken(cred.Secret, http.MethodPost, "/api/v1/agent/manifest",
+		map[string]any{"handle": string(wire.Deliveries[0].Handle)}, nil); res.StatusCode != http.StatusOK {
+		t.Fatalf("manifest on the handle as delivered over HTTP = %d", res.StatusCode)
 	}
 
 	// A second reconnect (already connected) must not re-offer again:
@@ -1203,4 +1236,25 @@ func TestHTTPClientIsConformant(t *testing.T) {
 	target.Client = client
 	target.Deliveries = client
 	conformance.Run(t, target)
+}
+
+// GET /api/v1/agent/tools (#364): the runtime's own Agent's tools, with
+// no task, over the wire — what Hermes lists when it connects.
+func TestAgentToolsListsTheAgentsToolsOverHTTP(t *testing.T) {
+	h, _, _, cred := conformanceRunHarness(t)
+	var body toolsResponse
+	if res := h.doToken(cred.Secret, http.MethodGet, "/api/v1/agent/tools", nil, &body); res.StatusCode != http.StatusOK {
+		t.Fatalf("tools = %d", res.StatusCode)
+	}
+	if len(body.Tools) == 0 {
+		t.Fatal("the Agent's tool list is empty")
+	}
+	for _, tool := range body.Tools {
+		if tool.Name == "" {
+			t.Fatalf("a tool with no name: %+v", body.Tools)
+		}
+	}
+	if res := h.doToken("", http.MethodGet, "/api/v1/agent/tools", nil, nil); res.StatusCode == http.StatusOK {
+		t.Fatal("tools listed with no credential")
+	}
 }

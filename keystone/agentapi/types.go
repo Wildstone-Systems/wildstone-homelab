@@ -486,10 +486,18 @@ type Evidence struct {
 }
 
 // WorkComplete writes evidence and completes the task, atomically.
+//
+// Reply is an external runtime's final answer to a conversation turn
+// (#364). A Complete carrying one does not complete the task itself:
+// Wildstone accepts the answer the way it accepts its own runtime's —
+// the objective check, then completion with evidence drawn from the
+// ledger — so Evidence is ignored and the task may instead end not done
+// or waiting on review.
 type WorkComplete struct {
 	Handle   Handle     `json:"handle"`
 	Summary  string     `json:"summary,omitempty"`
 	Evidence []Evidence `json:"evidence,omitempty"`
+	Reply    string     `json:"reply,omitempty"`
 }
 
 // WorkFail moves the task to failed.

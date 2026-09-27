@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/agentapi"
@@ -14,6 +15,7 @@ import (
 // zero-value success.
 type fakeClient struct {
 	manifestFn   func(ctx context.Context, h agentapi.Handle) (agentapi.Manifest, error)
+	toolsFn      func(ctx context.Context) ([]agentapi.ToolSpec, error)
 	invokeFn     func(ctx context.Context, req agentapi.InvokeRequest) (agentapi.InvokeResult, error)
 	startFn      func(ctx context.Context, w agentapi.WorkStart) error
 	waitFn       func(ctx context.Context, w agentapi.WorkWait) error
@@ -72,6 +74,13 @@ func (f *fakeClient) Wait(ctx context.Context, w agentapi.WorkWait) error {
 	return nil
 }
 
+func (f *fakeClient) Tools(ctx context.Context) ([]agentapi.ToolSpec, error) {
+	if f.toolsFn != nil {
+		return f.toolsFn(ctx)
+	}
+	return nil, errors.New("fakeClient: no toolsFn")
+}
+
 func (f *fakeClient) Complete(ctx context.Context, w agentapi.WorkComplete) error {
 	f.completeCalls = append(f.completeCalls, w)
 	if f.completeFn != nil {
@@ -120,6 +129,7 @@ func (f *fakeClient) Ack(ctx context.Context, id string) error {
 type fakeHermes struct {
 	startRunFn   func(ctx context.Context, req hermesRunRequest, idempotencyKey string) (string, error)
 	waitForRunFn func(ctx context.Context, runID string) (runOutcome, error)
+	healthFn     func(ctx context.Context) error
 }
 
 var _ hermesRunner = (*fakeHermes)(nil)
@@ -136,4 +146,11 @@ func (f *fakeHermes) WaitForRun(ctx context.Context, runID string) (runOutcome, 
 		return f.waitForRunFn(ctx, runID)
 	}
 	return runOutcome{Terminal: "completed"}, nil
+}
+
+func (f *fakeHermes) Health(ctx context.Context) error {
+	if f.healthFn != nil {
+		return f.healthFn(ctx)
+	}
+	return nil
 }

@@ -8,6 +8,8 @@ package runtimedb
 import (
 	"errors"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -206,6 +208,48 @@ func TestRuntimeHealthTransitions(t *testing.T) {
 	}
 	if err := db.TouchRuntimeHeartbeat(b.Seq); !errors.Is(err, ErrNotFound) {
 		t.Errorf("a revoked runtime's heartbeat = %v, want refused", err)
+	}
+}
+
+// MarkRuntimeArrived is the one arrival among calls that land together
+// (#364): exactly one of them flips offline → connected and re-offers.
+func TestMarkRuntimeArrivedFlipsOnce(t *testing.T) {
+	db, b := runtimeFixture(t)
+	if err := db.SetButlerRuntime(b.Seq, ButlerRuntime{Type: agentapi.RuntimeHermes}, "mika"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SetRuntimeHealth(b.Seq, agentapi.HealthOffline); err != nil {
+		t.Fatal(err)
+	}
+	const callers = 8
+	var wg sync.WaitGroup
+	var arrived atomic.Int32
+	for range callers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ok, err := db.MarkRuntimeArrived(b.Seq)
+			if err != nil {
+				t.Errorf("MarkRuntimeArrived: %v", err)
+			}
+			if ok {
+				arrived.Add(1)
+			}
+		}()
+	}
+	wg.Wait()
+	if n := arrived.Load(); n != 1 {
+		t.Fatalf("%d of %d concurrent calls saw the arrival, want exactly 1", n, callers)
+	}
+	if rt, _ := db.GetButlerRuntime(b.Seq); rt.Health != agentapi.HealthConnected {
+		t.Fatalf("health = %q, want connected", rt.Health)
+	}
+	// Revoked is not an arrival: a revoked runtime stays revoked.
+	if err := db.SetRuntimeHealth(b.Seq, agentapi.HealthRevoked); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := db.MarkRuntimeArrived(b.Seq); err != nil || ok {
+		t.Fatalf("MarkRuntimeArrived on a revoked runtime = %v, %v; want false, nil", ok, err)
 	}
 }
 

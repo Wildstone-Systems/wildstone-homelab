@@ -134,6 +134,9 @@ const GROUP_OF: Record<string, Group> = {
 
   "ai-chat": "AI",
   "language-models": "AI",
+  // Voice messages to text (ADR-W042): a model the Agents use, beside
+  // the language models, not a service a person opens.
+  speech: "AI",
   // The household's chat surface for the Butlers it already has (#198).
   // It configures no model and installs nothing; what it is, to a person
   // looking for it, is the assistant.

@@ -194,6 +194,11 @@ type askResponse struct {
 	// NewConversation tells a web chat to drop the conversation it is
 	// in and start its next message fresh (/new, /reset, /clear).
 	NewConversation bool `json:"newConversation,omitempty"`
+	// Pending says FinalText is not the answer: the turn's external
+	// runtime is still working, or is offline and the turn will resume.
+	// The answer arrives later as a new turn in the same conversation
+	// (DeliverLateAnswer), which a web chat can wait for (#389).
+	Pending bool `json:"pending,omitempty"`
 }
 
 // transcriptRecord is the persisted form of one audited tool call: only

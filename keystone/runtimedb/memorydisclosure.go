@@ -24,6 +24,10 @@ type MemoryReadContext struct {
 	person      string
 	agent       int64
 	destination MemoryDestination
+	// routine is unattended work reading on nobody's request: a
+	// verified chat is the reader's own conversation, which a routine's
+	// delivery is not, so it keeps the classification rule.
+	routine bool
 }
 
 func (db *DB) BindMemoryRead(person, agent string, destination MemoryDestination) *MemoryReadContext {
@@ -100,6 +104,11 @@ func memoryDisclosureClause(alias string, read *MemoryReadContext) (string, []an
 	if d.ConnectionRef <= 0 {
 		return " AND 0", nil
 	}
+	verified := `EXISTS (SELECT 1 FROM chat_bindings cb
+                      WHERE cb.connection=da.seq AND cb.person_id=recipient.person_id AND cb.revoked_at='')`
+	if read.routine {
+		verified = "0"
+	}
 	// UNION (not UNION ALL) terminates even if a malformed lineage contains a
 	// cycle. Corrections retain their predecessors as well as derivations.
 	return fmt.Sprintf(` AND EXISTS (
@@ -108,7 +117,14 @@ func memoryDisclosureClause(alias string, read *MemoryReadContext) (string, []an
       JOIN butler_members recipient ON recipient.person_id=?
       WHERE da.seq=? AND da.butler=? AND da.revoked_at='' AND admission.subject_kind='person'
         AND (admission.admits='household' OR (admission.admits='owners' AND recipient.role='owner'))
-        AND dest.retention IN ('none','provider')
+        -- A VERIFIED ONE-TO-ONE CHAT: the reader's own live binding on
+        -- this Connection (the claim-code flow; a group destination was
+        -- refused above). Their memory reaches them here wherever it was
+        -- recorded, as their conversations do (agent-system-design §7).
+        -- The person's own per-item marks (local-only, trusted-UI-only)
+        -- are PrivacyPolicy's and still apply.
+        AND ((%s)
+        OR (dest.retention IN ('none','provider')
         AND dest.reach IN ('local','external')
         AND dest.encryption IN ('none','transport','end_to_end')
         AND dest.surface IN ('trusted_ui','external_messaging')
@@ -129,7 +145,7 @@ func memoryDisclosureClause(alias string, read *MemoryReadContext) (string, []an
                   AND o.retention=dest.retention AND o.surface=dest.surface
                   AND live.reach=dest.reach AND live.encryption=dest.encryption
                   AND live.retention=dest.retention AND live.surface=dest.surface,0)
-        ))`, alias), []any{read.person, d.ConnectionRef, read.agent}
+        ))))`, verified, alias), []any{read.person, d.ConnectionRef, read.agent}
 }
 
 // DisclosureAllowsContent is stricter than permission to list neutral session

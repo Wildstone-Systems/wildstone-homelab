@@ -15,6 +15,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -45,6 +46,10 @@ type slack struct {
 
 	mu    sync.Mutex
 	botID string
+
+	// files replaces the file-host check in tests, which serve files
+	// from httptest rather than Slack.
+	files func(*url.URL) bool
 }
 
 func newSlack(botToken, appToken string, pollWait time.Duration) (Transport, error) {
@@ -179,6 +184,9 @@ func (s *slack) event(ctx context.Context, raw json.RawMessage) {
 		Channel     string `json:"channel"`
 		ChannelType string `json:"channel_type"`
 		TS          string `json:"ts"`
+		// Files come with subtype file_share: an audio clip recorded in
+		// Slack, or an audio file (ADR-W042).
+		Files []slackFile `json:"files"`
 	}
 	if json.Unmarshal(raw, &e) != nil || e.Type != "message" {
 		return
@@ -186,10 +194,23 @@ func (s *slack) event(ctx context.Context, raw json.RawMessage) {
 	s.mu.Lock()
 	self := e.User != "" && e.User == s.botID
 	s.mu.Unlock()
-	// Edits, joins and the like carry a subtype; bots carry a bot_id.
-	// Neither is a person talking to it.
-	if e.Subtype != "" || e.BotID != "" || self || e.User == "" || strings.TrimSpace(e.Text) == "" {
-		return
+	if e.BotID != "" || self || e.User == "" {
+		return // bots, and its own replies, are not people talking to it
+	}
+	var voice *VoiceNote
+	switch e.Subtype {
+	case "":
+		if strings.TrimSpace(e.Text) == "" {
+			return
+		}
+	case "file_share":
+		// A shared file is relayed only when it is a recording; a photo
+		// or a document is still nothing to relay.
+		if voice = s.voiceIn(e.Files); voice == nil {
+			return
+		}
+	default:
+		return // edits, joins and the like
 	}
 	group := e.ChannelType != "im"
 	text, addressed := e.Text, !group
@@ -203,12 +224,115 @@ func (s *slack) event(ctx context.Context, raw json.RawMessage) {
 			text, addressed = stripMention(e.Text, "<@"+botID+">")
 		}
 	}
+	if voice != nil {
+		// A clip's caption may carry the mention; the recording is the
+		// message.
+		text = ""
+	}
 	in := Incoming{Account: e.User, Conversation: e.Channel, Group: group, Addressed: addressed,
-		Text: text, MessageID: e.TS, DisplayName: e.User}
+		Text: text, MessageID: e.TS, DisplayName: e.User, Voice: voice}
 	select {
 	case s.events <- in:
 	case <-ctx.Done():
 	}
+}
+
+// slackFile is the part of a shared file the adapter reads to relay a
+// recording.
+type slackFile struct {
+	Subtype    string `json:"subtype"` // slack_audio for a clip recorded in Slack
+	Mimetype   string `json:"mimetype"`
+	Size       int64  `json:"size"`
+	DurationMS int64  `json:"duration_ms"`
+	Download   string `json:"url_private_download"`
+	Private    string `json:"url_private"`
+}
+
+// voiceIn picks the first recording among a message's files: a Slack
+// audio clip (which Slack labels video/mp4 although it is sound only)
+// or an audio file. A video clip or anything else is not one.
+func (s *slack) voiceIn(files []slackFile) *VoiceNote {
+	for _, f := range files {
+		mt := strings.ToLower(f.Mimetype)
+		if f.Subtype != "slack_audio" && !strings.HasPrefix(mt, "audio/") {
+			continue
+		}
+		if mt == "" {
+			mt = "audio/mp4"
+		}
+		link := f.Download
+		if link == "" {
+			link = f.Private
+		}
+		if link == "" {
+			continue
+		}
+		return &VoiceNote{
+			MIME: mt, Seconds: float64(f.DurationMS) / 1000, Size: f.Size,
+			Fetch: func(ctx context.Context, limit int64) ([]byte, error) {
+				return s.fetchFile(ctx, link, limit)
+			},
+		}
+	}
+	return nil
+}
+
+// slackFileHosts are where Slack serves private files. The bot token
+// goes with the request, so it is sent to these hosts and no others.
+var slackFileHosts = []string{"files.slack.com"}
+
+func (s *slack) fileAllowed(u *url.URL) bool {
+	if s.files != nil {
+		return s.files(u)
+	}
+	if u.Scheme != "https" {
+		return false
+	}
+	for _, h := range slackFileHosts {
+		if strings.EqualFold(u.Hostname(), h) {
+			return true
+		}
+	}
+	return false
+}
+
+// errSlackFilesScope is what a download without the files:read scope
+// gets: Slack answers 200 with its sign-in page rather than the file.
+var errSlackFilesScope = errors.New("slack: the bot cannot download files; add the files:read scope to the Slack app and reinstall it")
+
+// fetchFile downloads a private file with the bot token.
+func (s *slack) fetchFile(ctx context.Context, link string, limit int64) ([]byte, error) {
+	u, err := url.Parse(link)
+	if err != nil || !s.fileAllowed(u) {
+		return nil, errors.New("slack: a file URL that is not Slack's file host")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	if err != nil {
+		return nil, errors.New("slack: building the file request")
+	}
+	req.Header.Set("Authorization", "Bearer "+s.botToken)
+	res, err := s.client().Do(req)
+	if err != nil {
+		return nil, withoutURL("slack file download", err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("slack file download: %s", res.Status)
+	}
+	if strings.HasPrefix(strings.ToLower(res.Header.Get("Content-Type")), "text/html") {
+		return nil, errSlackFilesScope
+	}
+	if res.ContentLength > limit {
+		return nil, errVoiceTooLarge
+	}
+	data, err := io.ReadAll(io.LimitReader(res.Body, limit+1))
+	if err != nil {
+		return nil, withoutURL("slack file download", err)
+	}
+	if int64(len(data)) > limit {
+		return nil, errVoiceTooLarge
+	}
+	return data, nil
 }
 
 func (s *slack) Send(ctx context.Context, conversation, body string) error {

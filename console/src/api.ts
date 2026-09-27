@@ -404,6 +404,11 @@ export interface ButlerStatus {
   mode?: string;
   reason?: string;
   tools?: string[];
+  // Whether the Console's mic works for this Butler, and how long it
+  // may record (ADR-W042). Absent when voice is off or no engine this
+  // Butler's privacy class allows is installed.
+  dictation?: boolean;
+  dictationMaxSeconds?: number;
 }
 
 // --- Agent runtime (ADR-W039 §3.3). What reasons for an Agent, as
@@ -432,6 +437,18 @@ export interface RuntimeRecord {
     processingClass?: "local_only" | "cloud";
   };
   executionProfileRef?: string;
+  // The Wildstone package this runtime was installed from, when it was
+  // (GET only). installedVersion is what it runs; availableVersion is the
+  // catalog's current one, and a difference is an upgrade to offer.
+  package?: {
+    name: string;
+    instance: string;
+    installedVersion: string;
+    availableVersion?: string;
+    // Whether upgrading to availableVersion would change what runs. A
+    // release that renders the same resources is not offered.
+    upgradable?: boolean;
+  };
 }
 
 // One row of the runtime inventory across every live Agent (#355,
@@ -1244,8 +1261,14 @@ export interface CapabilityTool {
   mutating?: boolean;
   grantRequired?: boolean;
   untrusted?: boolean;
+  // Opt-in tools are reached only by being named (ADR-W033 §6.2);
+  // assigning one asks for a fresh sign-in.
+  optIn?: boolean;
   available: boolean;
   reason?: string;
+  // Wired here, and withheld only because this governed Agent has not
+  // been given it: assigning it is what would make it available.
+  unassigned?: boolean;
 }
 
 // What one Butler may do, as the engine resolves it. The console does
@@ -1261,6 +1284,8 @@ export interface ButlerTools {
   actions: { tool: string; tier: string }[] | null;
   // Tool name to the reason it was narrowed, "" when none was given.
   narrowedTools: Record<string, string> | null;
+  // Whether assignments decide this Agent's reach at all.
+  governed?: boolean;
 }
 
 export interface ButlerAddress {
@@ -1702,6 +1727,15 @@ export const api = {
   // moment there were several.
   oneButlerStatus: (name: string) =>
     call<ButlerStatus>("GET", `/api/v1/butlers/${encodeURIComponent(name)}/status`),
+  // Dictation: the recording goes up as the body, typed by the Blob's
+  // own type, and the words come back for the text box. The Butler is
+  // asked nothing (ADR-W042).
+  transcribeForButler: (name: string, audio: Blob, seconds: number) =>
+    call<{ text: string; engine: string }>(
+      "POST",
+      `/api/v1/butlers/${encodeURIComponent(name)}/transcribe?seconds=${seconds.toFixed(1)}`,
+      audio,
+    ),
   butlerSessionsFor: (name: string, limit = 20) =>
     call<ButlerSession[]>(
       "GET",
@@ -1718,6 +1752,14 @@ export const api = {
       "PUT",
       `/api/v1/butlers/${encodeURIComponent(name)}/tool`,
       { tool, allow, reason },
+    ),
+  // Assigning ADDS a tool to a governed Agent, where setButlerTool only
+  // takes one away (#389). A narrowing still subtracts on top.
+  setButlerAssignment: (name: string, tool: string, assign: boolean) =>
+    call<{ butler: string; tool: string; assigned: boolean }>(
+      "PUT",
+      `/api/v1/butlers/${encodeURIComponent(name)}/assignment`,
+      { tool, assign },
     ),
   setButlerConnection: (name: string, connection: string, allow: boolean) =>
     call<{ butler: string; connections: string[] | null }>(
@@ -1923,6 +1965,15 @@ export const api = {
       "POST",
       `/api/v1/butlers/${encodeURIComponent(name)}/runtime/credential`,
       node ? { node } : {},
+    ),
+  // Files a Plan re-rendering the Agent's packaged runtime at the
+  // catalog's current version (#389). Nothing restarts until the Plan
+  // is approved.
+  upgradeButlerRuntime: (name: string) =>
+    call<{ plan: string; from: string; to: string }>(
+      "POST",
+      `/api/v1/butlers/${encodeURIComponent(name)}/runtime/upgrade`,
+      {},
     ),
   // Every credential the runtime ever held stops working from the next
   // request; the Agent itself is untouched.

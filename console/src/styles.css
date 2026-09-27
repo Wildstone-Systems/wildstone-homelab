@@ -1172,6 +1172,11 @@ tr.clickable:hover { background: var(--faint); }
 .composer-box textarea:hover, .composer-box textarea:focus-visible { border: 0; outline: none; }
 .composer-box .btn { flex: none; width: 36px; height: 36px; padding: 0; border-radius: 999px; }
 .composer .muted { margin-top: 6px; text-align: center; }
+/* Dictation (ADR-W042): red while it is listening, so nobody talks to a
+   microphone they think is off. */
+.composer-box .mic-recording { background: var(--st-bad-bg); color: var(--st-bad); border-color: var(--st-bad); }
+.mic-note { margin-top: 6px; text-align: center; font-size: 12.5px; color: var(--muted); }
+.mic-note-bad { color: var(--st-bad); }
 
 /* The empty state: the composer IS the screen, and the asks sit under
    it. margin-block:auto on the inner block rather than justify-content

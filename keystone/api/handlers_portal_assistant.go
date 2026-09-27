@@ -44,6 +44,7 @@ import (
 	"github.com/chickenrat17/wildstone-homelab/keystone/portal"
 	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
+	"github.com/chickenrat17/wildstone-homelab/keystone/speech"
 )
 
 // maxPortalMessage bounds one message from the widget.
@@ -66,6 +67,9 @@ type assistantAgent struct {
 	LeavesTheHouse bool   `json:"leavesTheHouse"`
 	Reachable      bool   `json:"reachable"`
 	CarriesActions bool   `json:"carriesActions"`
+	// Dictation says the mic button works for this assistant: voice is
+	// on, and an engine its privacy class allows exists (ADR-W042).
+	Dictation bool `json:"dictation"`
 }
 
 // assistantAgents answers "which assistants may I talk to from here",
@@ -96,9 +100,24 @@ func (s *Server) assistantAgents(_ http.ResponseWriter, r *http.Request, member 
 			LeavesTheHouse: b.ModelKind == runtimedb.ModelCloud,
 			Reachable:      b.Reachable(),
 			CarriesActions: b.CarriesActionAuthority(),
+			Dictation:      s.canDictate(b.Name),
 		})
 	}
-	out := map[string]any{"agents": agents, "member": member}
+	out := map[string]any{"agents": agents, "member": member,
+		// How long a conversation counts as recent: the pages remember
+		// the one they were in for exactly this long, so a remembered
+		// conversation never outlives the window the server continues
+		// by (design §7).
+		"sessionRecencySeconds": int(s.sessionRecencyWindow() / time.Second)}
+	if s.Speech.Enabled() {
+		// How long the mic records before stopping on its own: the
+		// same limit the server enforces.
+		max := s.Speech.MaxSeconds
+		if max <= 0 {
+			max = speech.DefaultMaxSeconds
+		}
+		out["dictationMaxSeconds"] = max
+	}
 	if len(agents) == 0 {
 		out["setup"] = s.assistantSetup(r, member, desired)
 	}
@@ -286,12 +305,19 @@ func (s *Server) assistantAsk(_ http.ResponseWriter, r *http.Request, member str
 		return nil, http.StatusServiceUnavailable, fmt.Errorf("no assistant is configured on this deployment")
 	}
 	if prior == nil && !req.New {
-		found, n, err := s.trustedContinuation(member, agent, portal.Connection)
+		found, candidates, err := s.trustedContinuation(member, agent, portal.Connection)
 		if err != nil {
 			return nil, http.StatusInternalServerError, err
 		}
-		if n > 1 {
-			return nil, http.StatusConflict, continuationChoiceError(n)
+		if len(candidates) > 1 {
+			// Ask, don't guess (design §7): nothing is continued, and the
+			// dashboard is handed the candidates to offer, so the Person
+			// picks one and the same message is sent to it — rather than
+			// being told to go and find it in their history.
+			return map[string]any{
+				"error":  continuationChoiceError(len(candidates)).Error(),
+				"choose": continuationChoices(candidates),
+			}, http.StatusConflict, nil
 		}
 		prior = found
 	}
@@ -314,13 +340,24 @@ func (s *Server) assistantAsk(_ http.ResponseWriter, r *http.Request, member str
 	if !ok {
 		return body, status, nil
 	}
-	return map[string]any{
+	out := map[string]any{
 		"session":   ans.SessionID,
 		"agent":     agent,
 		"reply":     ans.FinalText,
 		"capped":    ans.Capped,
 		"proposals": len(ans.PlanIDs),
-	}, status, nil
+	}
+	// The reply is a stand-in and the answer comes later as a new turn
+	// (#389). seen is how many messages the page already shows, so it
+	// waits for the one after them, even if it lands before the page
+	// first looks.
+	if ans.Pending && ans.SessionID != "" {
+		if sess, err := s.DB.GetButlerSession(ans.SessionID); err == nil {
+			out["pending"] = true
+			out["seen"] = seenThroughLastAsk(assistantMessages(sess))
+		}
+	}
+	return out, status, nil
 }
 
 // assistantConversation replays one conversation into a reloaded
@@ -340,6 +377,26 @@ func (s *Server) assistantConversation(_ http.ResponseWriter, r *http.Request, m
 	if !strings.EqualFold(sess.ActingFor, member) || sess.Surface != runtimedb.ButlerSurfaceFamily {
 		return nil, http.StatusNotFound, fmt.Errorf("that conversation is not here any more")
 	}
+	return map[string]any{"session": sess.ID, "agent": sess.Butler, "messages": assistantMessages(sess)}, http.StatusOK, nil
+}
+
+// seenThroughLastAsk counts messages up to and including the reply to
+// the newest question: that question, and the stand-in reply the page
+// has just drawn. The late answer can already be in the conversation by
+// the time this is read, and counting it as seen would leave the page
+// waiting for a message after it that never comes.
+func seenThroughLastAsk(messages []assistantMessage) int {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == runtimedb.ButlerRoleUser {
+			return min(i+2, len(messages))
+		}
+	}
+	return len(messages)
+}
+
+// assistantMessages is a conversation's turns as the page renders them:
+// every turn with text, in order.
+func assistantMessages(sess runtimedb.ButlerSession) []assistantMessage {
 	messages := make([]assistantMessage, 0, len(sess.Turns))
 	for _, t := range sess.Turns {
 		if t.Text == "" {
@@ -356,7 +413,7 @@ func (s *Server) assistantConversation(_ http.ResponseWriter, r *http.Request, m
 			Proposals: len(t.PlanIDs),
 		})
 	}
-	return map[string]any{"session": sess.ID, "agent": sess.Butler, "messages": messages}, http.StatusOK, nil
+	return messages
 }
 
 // assistantMessage is one turn as the full page renders it.

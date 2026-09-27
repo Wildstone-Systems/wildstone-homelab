@@ -45,7 +45,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: agent-hermes
-  version: 0.1.1
+  version: 0.1.6
   capability: agent-hermes
   profile: hermes
   instanced: true
@@ -236,10 +236,20 @@ templates:
             # making "the one run in flight" unambiguous
             # (cli/cmd/agent-bridge/runs.go documents the fallback).
 
+        # No `memory`: Hermes's own MEMORY.md/USER.md is not this Agent's
+        # memory — Wildstone's is (design doc §3.5), through the MCP
+        # server's recall/remember, which are audited, permission-scoped
+        # and enforced by processing class. With both offered, a model
+        # asked to "remember" reached for the native one, Wildstone saw
+        # no tool call, and the turn ended "not done" (#364).
+        #
+        # No `session_search` either, for the same reason one step
+        # removed: it searches every past conversation this install has
+        # had, and one install serves every person who talks to the
+        # Agent, so on a family Agent one member's conversation could
+        # surface in another's turn. Wildstone's recall is per person.
         platform_toolsets:
           api_server:
-            - memory
-            - session_search
             - skills
             - todo
             - delegation
@@ -261,7 +271,7 @@ templates:
           # cron is operator-edited config, not an agent-callable grant;
           # `connections` (manage_connections) is Wildstone's own to
           # manage, never Hermes's.
-          disabled_toolsets: [browser, homeassistant, image_gen, computer_use, kanban, cronjob, a2a, connections]
+          disabled_toolsets: [browser, homeassistant, image_gen, computer_use, kanban, cronjob, a2a, connections, memory, session_search]
 
         {{- if ne .Params.execution_profile "platform-only" }}
 
@@ -296,10 +306,38 @@ templates:
           allow_private_urls: true
           redact_secrets: true
 
+        # Hermes's built-in memory, off: not written (the toolset above)
+        # and not injected into the prompt either — the notes are read
+        # from these switches, not from the toolset, so an install that
+        # already wrote a USER.md would otherwise keep carrying it.
         memory:
+          memory_enabled: false
+          user_profile_enabled: false
+          nudge_interval: 0
           write_approval: false
+        # Skills stay readable (the bundled ones are how Hermes works),
+        # but none it writes lands. Hermes keeps the skills it writes in
+        # one store per install and lists them in every session's
+        # prompt; they are its "procedural memory", including
+        # "user-corrected approaches". One install serves everyone who
+        # talks to the Agent, so a skill learned in one person's
+        # conversation would reach every other person's turn, the same
+        # crossing that turned off memory and session_search above
+        # (#389). write_approval stages every skill write Hermes makes
+        # through its skill tools, from a turn or from its background
+        # review, and an unattended install has nobody to approve one, so
+        # none is committed. Members change after install without a
+        # re-render, so this is not conditional on how many people the
+        # Agent serves.
+        #
+        # It does not bound a shell. Under sandboxed and host-admin the
+        # terminal and file toolsets can write anywhere in /opt/data,
+        # skills/ included, and Hermes has no setting that confines them
+        # (its docs: the OS and the backend are the only boundaries).
+        # What a shell-bearing profile may persist across people is part
+        # of the pass-through design, #390.
         skills:
-          write_approval: false
+          write_approval: true
         database:
           # Crash-consistent rather than WAL, so an external volume
           # snapshot (the BackupPlan below) is a valid restore point
@@ -355,6 +393,11 @@ templates:
         API_SERVER_PORT: "8642"
         API_SERVER_KEY: "secret/{{ .Capability }}-api-server"
         HERMES_PROVIDER_KEY: "secret/{{ .Capability }}-provider-key"
+        # What config.yaml's mcp_servers.wildstone header expands
+        # (${MCP_SHARED_SECRET}); the bridge checks the same secret.
+        # Without it Hermes sends an empty bearer, every MCP connect is
+        # refused 401, and Hermes parks its Wildstone tools.
+        MCP_SHARED_SECRET: "secret/{{ .Capability }}-mcp-secret"
         HERMES_DASHBOARD: "0"
         HERMES_DISABLE_LAZY_INSTALLS: "1"
         # The image's own default UID/GID for the "hermes" account,
@@ -368,16 +411,23 @@ templates:
         - { source: "/etc/wildstone/{{ .Capability }}", target: /etc/hermes, readOnly: true }
       restart: unless-stopped
       # H1 hardening (protocol minor 18, keystone/resource/resource.go).
-      # `capDrop`/`noNewPrivileges` cost this app nothing — it drops to
-      # UID 10000 and needs no Linux capability at all — so both are on
-      # unconditionally. `readOnlyRootfs` is NOT set here: the design
+      # Hermes itself runs as UID 10000 and holds no capability, but the
+      # image's s6 init starts as root and must chown /opt/data and drop
+      # to that user first (s6-applyuidgid: setgroups/setgid/setuid).
+      # `capDrop: [ALL]` made every init step exit 111 and the container
+      # restart forever, so this drops everything in Docker's default
+      # set EXCEPT what that hand-off needs: CHOWN, DAC_OVERRIDE, FOWNER
+      # (the ownership fix-up), SETUID/SETGID (the drop itself) and KILL
+      # (root's s6 supervising processes it no longer owns). None of
+      # them survives into the UID-10000 process. `noNewPrivileges` is
+      # on unconditionally. `readOnlyRootfs` is NOT set here: the design
       # doc's own spike S1 ("try --read-only with a tmpfs /tmp by hand")
       # was written to answer whether the official image's s6 supervision
       # tolerates a read-only rootfs, and this environment could not run
       # that spike (no way to pull and boot the real image here) — so
       # this ships without a claim this package cannot back up. Flip it
       # once S1 confirms the image starts clean under it.
-      capDrop: [ALL]
+      capDrop: [AUDIT_WRITE, FSETID, MKNOD, NET_BIND_SERVICE, NET_RAW, SETFCAP, SETPCAP, SYS_CHROOT]
       noNewPrivileges: true
       resources: { memory: 4g, cpus: "2", pidsLimit: 512 }
       # NEW: an egress allowlist restricted to Keystone and the model

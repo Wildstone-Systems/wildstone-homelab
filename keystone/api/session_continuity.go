@@ -38,10 +38,26 @@ type continuationConnection struct {
 	Name       string
 	Disclosure runtimedb.Disclosure
 	Trusted    bool
+	// Verified is a person's own one-to-one chat on a Connection they
+	// bound to themselves (the claim-code flow): the person asking is
+	// the person every candidate belongs to, and nobody else reads the
+	// reply. For continuation it is treated like a trusted surface — its
+	// own conversations and the dashboard's are offered and continued
+	// rather than hidden behind the Connection's classification. It is
+	// not a trusted surface for anything else: the privacy check on each
+	// candidate (processing class, memory disclosure) still applies, and
+	// a group chat is never verified.
+	Verified bool
 }
 
 func externalContinuationConnection(c runtimedb.Connection) continuationConnection {
 	return continuationConnection{Ref: c.Seq, Name: c.Name(), Disclosure: c.Disclosure}
+}
+
+// verifiedDirect reports whether a chat message is a verified person's
+// one-to-one chat: a binding made through the claim flow, not a room.
+func verifiedDirect(c chatCommandCtx) bool {
+	return !c.Group && c.Identity != "" && c.Binding.ID != 0 && strings.EqualFold(c.Binding.Identity, c.Identity)
 }
 
 func trustedContinuationConnection(name string) continuationConnection {
@@ -80,7 +96,7 @@ func (s *Server) noteBuiltInSessionReply(sessionID, connection string) {
 // hides the candidate's existence; callers must not let count or ordering from
 // the unfiltered set escape.
 func candidateOnConnection(c runtimedb.SessionCandidate, current continuationConnection) (safeSessionCandidate, bool) {
-	if current.Trusted {
+	if current.Trusted || current.Verified {
 		return safeSessionCandidate{SessionCandidate: c, ShowSubject: true, ShowTime: true}, true
 	}
 	shown := safeSessionCandidate{SessionCandidate: c, ShowSubject: true, ShowTime: true}
@@ -125,7 +141,9 @@ func (s *Server) chatSessionCandidates(c chatCommandCtx) ([]safeSessionCandidate
 	if err != nil {
 		return nil, false, err
 	}
-	return s.sessionCandidates(c.Identity, c.At.Butler, externalContinuationConnection(c.At), broken)
+	current := externalContinuationConnection(c.At)
+	current.Verified = verifiedDirect(c)
+	return s.sessionCandidates(c.Identity, c.At.Butler, current, broken)
 }
 
 func (s *Server) sessionCandidates(identity, agent string, current continuationConnection, after time.Time) ([]safeSessionCandidate, bool, error) {
@@ -152,19 +170,57 @@ func (s *Server) sessionCandidates(identity, agent string, current continuationC
 // trustedContinuation is the trusted-UI resolver. Homepage uses it for
 // automatic continuation; Console already presents the same sessions in its
 // conversation rail and continues the one the Owner explicitly opens.
-func (s *Server) trustedContinuation(identity, agent, connection string) (*turnContext, int, error) {
+//
+// With more than one candidate nothing is continued and the candidates
+// are returned, already filtered, so the surface can ask which one
+// (design §7 "Ambiguous continuation").
+func (s *Server) trustedContinuation(identity, agent, connection string) (*turnContext, []safeSessionCandidate, error) {
 	candidates, _, err := s.sessionCandidates(identity, agent, trustedContinuationConnection(connection), time.Time{})
 	if err != nil {
-		return nil, 0, err
+		return nil, nil, err
 	}
 	if len(candidates) != 1 {
-		return nil, len(candidates), nil
+		return nil, candidates, nil
 	}
 	sess, err := s.DB.GetButlerSession(candidates[0].SessionID)
 	if err != nil {
-		return nil, 0, err
+		return nil, nil, err
 	}
-	return &turnContext{SessionID: sess.ID, History: historyFrom(sess.Turns)}, 1, nil
+	return &turnContext{SessionID: sess.ID, History: historyFrom(sess.Turns)}, candidates, nil
+}
+
+// continuationChoice is one conversation a trusted surface may offer when
+// a message could continue several: the id to send it to, and the subject
+// and last activity the Person recognises it by, each only where the
+// disclosure filter allowed it (safeSessionCandidate).
+type continuationChoice struct {
+	Session string `json:"session"`
+	Subject string `json:"subject,omitempty"`
+	At      string `json:"at,omitempty"`
+}
+
+// continuationChoices is the choice list for candidates, most recent first
+// (their own order), at most one page of them.
+func continuationChoices(candidates []safeSessionCandidate) []continuationChoice {
+	out := make([]continuationChoice, 0, min(len(candidates), sessionChoicesPerPage))
+	for _, c := range candidates {
+		if len(out) == sessionChoicesPerPage {
+			break
+		}
+		choice := continuationChoice{Session: c.SessionID}
+		if c.ShowSubject {
+			subject := strings.TrimSpace(c.Subject)
+			if len([]rune(subject)) > 72 {
+				subject = string([]rune(subject)[:72]) + "…"
+			}
+			choice.Subject = subject
+		}
+		if c.ShowTime {
+			choice.At = c.LastTurnAt.UTC().Format(time.RFC3339)
+		}
+		out = append(out, choice)
+	}
+	return out
 }
 
 func continuationChoiceError(n int) error {
@@ -228,8 +284,14 @@ func (s *Server) offerChatSessions(c chatCommandCtx, candidates []safeSessionCan
 
 // loadChatContinuation checks disclosure and loads history in the same database
 // snapshot, for both explicit pointers and newly selected sole candidates.
-func (s *Server) loadChatContinuation(id string, at runtimedb.Connection) (runtimedb.ButlerSession, bool, error) {
+// verified: the message is a verified person's one-to-one chat
+// (verifiedDirect), whose own conversations continue here whatever
+// Connection they began on.
+func (s *Server) loadChatContinuation(id string, at runtimedb.Connection, verified bool) (runtimedb.ButlerSession, bool, error) {
 	return s.DB.GetButlerSessionForContinuation(id, at.Seq, func(provenance []runtimedb.SessionConnection, destination runtimedb.Connection) bool {
+		if verified {
+			return true
+		}
 		for i := range provenance {
 			// Legacy runners saved only a name. Only the exact current
 			// Connection can resolve that spelling, never another origin.
@@ -252,7 +314,7 @@ func (s *Server) loadChatContinuation(id string, at runtimedb.Connection) (runti
 // resolveChatContinuation decides without loading any candidate transcript.
 // Context is fetched only after the candidate set has become exactly one.
 func (s *Server) resolveChatContinuation(c chatCommandCtx) (*turnContext, string, error) {
-	if prior, protected := s.chatThread(c.At, c.Conversation, c.Identity); prior != nil {
+	if prior, protected := s.chatThread(c.At, c.Conversation, c.Identity, verifiedDirect(c)); prior != nil {
 		return prior, "", nil
 	} else if protected {
 		return nil, trustedSurfaceRedirect, nil
@@ -271,7 +333,7 @@ func (s *Server) resolveChatContinuation(c chatCommandCtx) (*turnContext, string
 		}
 		return nil, "", nil
 	case 1:
-		sess, allowed, err := s.loadChatContinuation(candidates[0].SessionID, c.At)
+		sess, allowed, err := s.loadChatContinuation(candidates[0].SessionID, c.At, verifiedDirect(c))
 		if err != nil {
 			return nil, "", err
 		}

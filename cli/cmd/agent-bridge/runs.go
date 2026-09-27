@@ -64,6 +64,13 @@ func (r *runRegistry) delete(runID string) {
 	delete(r.handles, runID)
 }
 
+// idle reports whether no run is in flight at all.
+func (r *runRegistry) idle() bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return len(r.handles) == 0
+}
+
 // solePending reports the one handle currently in flight, when there is
 // exactly one. mcp.go falls back to it as a last resort: the delivery
 // loop processes one delivery at a time (delivery.go's own doc comment),

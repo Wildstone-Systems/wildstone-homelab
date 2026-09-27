@@ -30,6 +30,7 @@ import (
 	"github.com/chickenrat17/wildstone-homelab/keystone/reconcile"
 	"github.com/chickenrat17/wildstone-homelab/keystone/redact"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
+	"github.com/chickenrat17/wildstone-homelab/keystone/speech"
 	"github.com/chickenrat17/wildstone-homelab/keystone/statefile"
 	"github.com/chickenrat17/wildstone-homelab/keystone/upkeep"
 )
@@ -61,6 +62,11 @@ type Server struct {
 	// uploads are drawn, which is what a deployment that installed no
 	// wallpaper artifact gets.
 	WallpaperDir string
+
+	// Speech transcribes voice messages and dashboard dictation
+	// (ADR-W042). nil, or a Router whose Mode is off, means voice is
+	// refused with a "please type" answer.
+	Speech *speech.Router
 
 	// trustedIngress is the exact set of remote addresses the identity
 	// proxy speaks from (ADR-W030 A8.1). It gates the household portal
@@ -278,6 +284,9 @@ type Server struct {
 	// 12 hours and 15 minutes.
 	ConsoleEntryWindow  time.Duration
 	ConsoleStepUpWindow time.Duration
+	// lateAnswerPoll is how often a late answer rechecks whether its
+	// turn has been recorded (DeliverLateAnswer). Zero is a second.
+	lateAnswerPoll time.Duration
 	// ConsoleSignInHTTP is the client used to reach the sign-in provider;
 	// nil means a default with a timeout. Tests point it at a fake.
 	ConsoleSignInHTTP *http.Client
@@ -648,6 +657,10 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("PUT /api/v1/butlers/{name}/access", s.handle(principal.VerbManage, s.setButlerAccess))
 	mux.Handle("PUT /api/v1/butlers/{name}/connection", s.handle(principal.VerbManage, s.setButlerConnection))
 	mux.Handle("PUT /api/v1/butlers/{name}/tool", s.handle(principal.VerbManage, s.setButlerTool))
+	// Assigning adds to a governed Agent's reach where the switch above
+	// only subtracts (#389). Opt-in tools need a fresh sign-in, checked
+	// in the handler because only it knows which tool it was given.
+	mux.Handle("PUT /api/v1/butlers/{name}/assignment", s.handle(principal.VerbManage, s.setButlerAssignment))
 	mux.Handle("PUT /api/v1/butlers/{name}/address", s.handle(principal.VerbManage, s.setButlerAddress))
 	mux.Handle("PUT /api/v1/butlers/{name}/class", s.handle(principal.VerbManage, s.consequential(s.setButlerAgentClass)))
 	// The Agent's runtime record (ADR-W039 §3.3): which runtime, as
@@ -661,6 +674,9 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("PUT /api/v1/butlers/{name}/runtime", s.handle(principal.VerbManage, s.consequential(s.setButlerRuntime)))
 	mux.Handle("POST /api/v1/butlers/{name}/runtime/credential", s.handle(principal.VerbManage, s.consequential(s.rotateRuntimeCredential)))
 	mux.Handle("POST /api/v1/butlers/{name}/runtime/revoke", s.handle(principal.VerbManage, s.consequential(s.revokeButlerRuntime)))
+	// Upgrading files a Plan and applies nothing, so it needs manage
+	// and no fresh sign-in; approving the Plan is the consequential act.
+	mux.Handle("POST /api/v1/butlers/{name}/runtime/upgrade", s.handle(principal.VerbManage, s.upgradeButlerRuntime))
 	// The runtime inventory across every live Agent (design doc §9 H9,
 	// #355): one read, same verb as the roster it augments.
 	mux.Handle("GET /api/v1/runtimes", s.handle(principal.VerbRead, s.listAgentRuntimes))
@@ -678,6 +694,9 @@ func (s *Server) Handler() http.Handler {
 	// the door, which is the only correct answer for a caller who holds
 	// both surfaces.
 	mux.Handle("POST /api/v1/butlers/{name}/ask", s.handle(principal.VerbRead, s.askOneButler))
+	// Dictation in the Console: sound to text for the text box, the same
+	// verb and the same Butler resolution as asking (ADR-W042).
+	mux.Handle("POST /api/v1/butlers/{name}/transcribe", s.handle(principal.VerbRead, s.transcribeForButler))
 	mux.Handle("GET /api/v1/butlers/{name}/status", s.handle(principal.VerbRead, s.butlerStatus))
 	mux.Handle("POST /api/v1/butler/models/{name}/readiness", s.handle(principal.VerbManage, s.recordModelReadiness))
 	// Probing is manage because it writes the verdict that decides
@@ -749,6 +768,10 @@ func (s *Server) Handler() http.Handler {
 	// than converse.
 	mux.Handle("POST /api/v1/chat/adapters/{capability}", s.handle(principal.VerbManage, s.consequential(s.mintChatAdapter)))
 	mux.Handle("POST /api/v1/chat/messages", s.handle(principal.VerbConverse, s.receiveChatMessage))
+	// A voice message: the same door, with a recording instead of text
+	// (ADR-W042). The adapter's credential decides the Connection here
+	// exactly as it does for text.
+	mux.Handle("POST /api/v1/chat/voice", s.handle(principal.VerbConverse, s.receiveChatVoice))
 	mux.Handle("GET /api/v1/chat/outbound", s.handle(principal.VerbConverse, s.pollChatOutbound))
 	mux.Handle("GET /api/v1/chat/outbound/{seq}/ready", s.handle(principal.VerbConverse, s.readyChatOutbound))
 	mux.Handle("POST /api/v1/chat/outbound/{seq}/ack", s.handle(principal.VerbConverse, s.ackChatOutbound))
@@ -799,6 +822,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/assistant/memory/promote", s.portal(surfaceAssistant, s.assistantPromoteMemory))
 	mux.Handle("POST /api/v1/assistant/memory/forget", s.portal(surfaceAssistant, s.assistantForget))
 	mux.Handle("POST /api/v1/assistant/ask", s.portal(surfaceAssistant, s.assistantAsk))
+	// Dictation: sound to text for the text box, never a turn (ADR-W042).
+	mux.Handle("POST /api/v1/assistant/transcribe", s.portal(surfaceAssistant, s.assistantTranscribe))
 	mux.Handle("GET /api/v1/assistant/conversations/{id}", s.portal(surfaceAssistant, s.assistantConversation))
 
 	// The household's own front page (the dashboard capability's
@@ -936,6 +961,7 @@ func (s *Server) Handler() http.Handler {
 	// notify) — the decision that this family adds no new RBAC verb,
 	// since RoleButler already holds both.
 	mux.Handle("POST /api/v1/agent/manifest", s.handle(principal.VerbRead, s.agentManifest))
+	mux.Handle("GET /api/v1/agent/tools", s.handle(principal.VerbRead, s.agentTools))
 	mux.Handle("POST /api/v1/agent/invoke", s.handle(principal.VerbPropose, s.agentInvoke))
 	mux.Handle("POST /api/v1/agent/recall", s.handle(principal.VerbRead, s.agentRecall))
 	mux.Handle("POST /api/v1/agent/remember", s.handle(principal.VerbPropose, s.agentRemember))
@@ -1161,6 +1187,15 @@ func (s *Server) writeJSON(w http.ResponseWriter, status int, body any) {
 		// §4.1): a newly minted API token, join token or runtime
 		// credential, each in the only moment it ever exists in a
 		// response.
+	case deliveriesResponse:
+		// Redacted everywhere but each delivery's task handle, which the
+		// runtime must present back (deliveriesResponse.redacted).
+		d := body.(deliveriesResponse)
+		if raw, err = d.redacted(); err != nil {
+			s.Log.Error("response redaction failed", "err", err)
+			http.Error(w, `{"error":"internal"}`, http.StatusInternalServerError)
+			return
+		}
 	default:
 		raw = []byte(redact.String(string(raw)))
 	}

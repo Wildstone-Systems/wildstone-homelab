@@ -1,0 +1,512 @@
+package agentgateway
+
+// #364: a Butler whose runtime is external and connected is answered by
+// that runtime, never in-process. These drive butlerlive.Serve against
+// this gateway with a stand-in runtime on the other side of it: it
+// long-polls Deliveries under its own principal, works the task through
+// its handle, and reports its answer with Complete{Reply}.
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/chickenrat17/wildstone-homelab/keystone/agentapi"
+	"github.com/chickenrat17/wildstone-homelab/keystone/butler/provider"
+	"github.com/chickenrat17/wildstone-homelab/keystone/butlerlive"
+	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
+)
+
+// judge is the Butler's own route, which on an external runtime only
+// ever judges an answer: every call it sees must be the tool-free
+// objective check, never a turn to answer.
+type judge struct {
+	mu      sync.Mutex
+	verdict string
+	calls   int
+	tooled  int
+}
+
+func (j *judge) Name() string { return "ollama" }
+
+func (j *judge) Chat(_ context.Context, req provider.ChatRequest) (*provider.ChatResponse, error) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	j.calls++
+	if len(req.Tools) > 0 {
+		j.tooled++
+	}
+	return &provider.ChatResponse{Text: j.verdict}, nil
+}
+
+func (j *judge) counts() (calls, tooled int) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return j.calls, j.tooled
+}
+
+// externalFixture makes alfred a connected Hermes-backed Butler and
+// wires a Butlers to this fixture's gateway, as cmd/keystone does.
+func externalFixture(t *testing.T, verdict string) (*fixture, *butlerlive.Butlers, *judge) {
+	t.Helper()
+	f := newFixture(t)
+	alfred, err := f.db.GetButler("alfred")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.db.SetButlerRuntime(alfred.Seq, runtimedb.ButlerRuntime{Type: agentapi.RuntimeHermes}, "mika"); err != nil {
+		t.Fatal(err)
+	}
+	f.bindRuntime(t, "rt-alfred", "alfred")
+	if err := f.db.SetRuntimeHealth(alfred.Seq, agentapi.HealthConnected); err != nil {
+		t.Fatal(err)
+	}
+	j := &judge{verdict: verdict}
+	bs := &butlerlive.Butlers{
+		DB: f.db, Ledger: f.ledger, Gateways: f.g.Gateways,
+		Providers:       func(runtimedb.Butler) (provider.Provider, error) { return j, nil },
+		UseAgentGateway: true,
+		AgentClient:     InProcess(f.g),
+		WithPrincipal: func(ctx context.Context, name string) context.Context {
+			rt, err := f.db.GetButlerRuntimeByName(name)
+			if err != nil || rt.Principal == "" {
+				return ctx
+			}
+			return WithPrincipal(ctx, rt.Principal)
+		},
+	}
+	f.g.Replies = bs
+	return f, bs, j
+}
+
+// nextTurn is the runtime's long-poll: the first turn delivery for it.
+func nextTurn(t *testing.T, g *Gateway) (agentapi.Delivery, butlerlive.ExternalTurn) {
+	t.Helper()
+	ctx := WithPrincipal(context.Background(), "rt-alfred")
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		ds, err := g.Deliveries(ctx, "", 200*time.Millisecond)
+		if err != nil {
+			t.Errorf("Deliveries: %v", err)
+			return agentapi.Delivery{}, butlerlive.ExternalTurn{}
+		}
+		for _, d := range ds {
+			if d.Kind == agentapi.DeliveryTurn {
+				var et butlerlive.ExternalTurn
+				if err := json.Unmarshal(d.Payload, &et); err != nil {
+					t.Errorf("turn payload: %v", err)
+				}
+				return d, et
+			}
+		}
+	}
+	t.Error("the runtime was never handed the turn")
+	return agentapi.Delivery{}, butlerlive.ExternalTurn{}
+}
+
+func TestAConnectedExternalRuntimeAnswersTheTurn(t *testing.T) {
+	f, bs, j := externalFixture(t, `{"kind":"informational"}`)
+
+	ran := make(chan error, 1)
+	go func() {
+		d, et := nextTurn(t, f.g)
+		if et.Text != "is n1 healthy?" {
+			t.Errorf("turn text = %q, want what the person said", et.Text)
+		}
+		if len(et.History) != 2 || et.History[0].Text != "hello" {
+			t.Errorf("history = %+v, want the conversation so far", et.History)
+		}
+		ctx := WithPrincipal(context.Background(), "rt-alfred")
+		if err := f.g.Start(ctx, agentapi.WorkStart{Handle: d.Handle, Reason: "delivery"}); err != nil {
+			ran <- err
+			return
+		}
+		ran <- f.g.Complete(ctx, agentapi.WorkComplete{Handle: d.Handle, Reply: "n1 is fine",
+			// Ignored: a runtime reports an answer, it does not certify it.
+			Evidence: []agentapi.Evidence{{Kind: "delivery", Description: "self-certified"}}})
+	}()
+
+	answer, err := bs.Serve(context.Background(), butlerlive.Turn{
+		Butler: "alfred", Member: "mika", Text: "is n1 healthy?",
+		Connection: butlerlive.ConnectionScope{Name: butlerlive.ConsoleConnection},
+		History:    []provider.Message{{Role: "user", Text: "hello"}, {Role: "assistant", Text: "hi"}},
+	})
+	if err != nil {
+		t.Fatalf("Serve: %v", err)
+	}
+	if err := <-ran; err != nil {
+		t.Fatalf("the runtime's Complete: %v", err)
+	}
+	if answer.FinalText != "n1 is fine" {
+		t.Fatalf("FinalText = %q, want the runtime's answer", answer.FinalText)
+	}
+	calls, tooled := j.counts()
+	if calls != 1 || tooled != 0 {
+		t.Fatalf("the Butler's route saw %d calls (%d offering tools), want only the one tool-free objective check", calls, tooled)
+	}
+	task, err := f.db.GetButlerTask(answer.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.State != runtimedb.ButlerTaskCompleted {
+		t.Fatalf("task state = %s, want completed", task.State)
+	}
+	evidence, err := f.db.ListButlerTaskEvidence(answer.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range evidence {
+		if e.Description == "self-certified" {
+			t.Fatal("the runtime's own evidence was written; Wildstone must draw it from the ledger")
+		}
+	}
+}
+
+// An answer claiming an effect nothing performed is held to the same
+// rule as the native runtime's: the person is told it was not done.
+func TestAnExternalAnswerClaimingAnUnperformedEffectIsNotDone(t *testing.T) {
+	f, bs, j := externalFixture(t,
+		`{"kind":"effectful","effects":[{"description":"restart n1","sourceKey":""}],"answerClaimsEffect":true}`)
+
+	go func() {
+		d, _ := nextTurn(t, f.g)
+		ctx := WithPrincipal(context.Background(), "rt-alfred")
+		if err := f.g.Complete(ctx, agentapi.WorkComplete{Handle: d.Handle, Reply: "I restarted n1."}); err != nil {
+			t.Errorf("Complete: %v", err)
+		}
+	}()
+
+	answer, err := bs.Serve(context.Background(), butlerlive.Turn{
+		Butler: "alfred", Member: "mika", Text: "restart n1",
+		Connection: butlerlive.ConnectionScope{Name: butlerlive.ConsoleConnection},
+	})
+	if err != nil {
+		t.Fatalf("Serve: %v", err)
+	}
+	if _, tooled := j.counts(); tooled != 0 {
+		t.Fatalf("the Butler's route was offered tools %d times: the turn ran in-process", tooled)
+	}
+	if strings.Contains(answer.FinalText, "restarted") {
+		t.Fatalf("FinalText = %q: an unproven claim reached the person", answer.FinalText)
+	}
+	task, err := f.db.GetButlerTask(answer.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.State == runtimedb.ButlerTaskCompleted {
+		t.Fatal("a claimed effect with no receipt completed the task")
+	}
+}
+
+func TestAFailedExternalRunIsReported(t *testing.T) {
+	f, bs, j := externalFixture(t, `{"kind":"informational"}`)
+
+	go func() {
+		d, _ := nextTurn(t, f.g)
+		ctx := WithPrincipal(context.Background(), "rt-alfred")
+		if err := f.g.Start(ctx, agentapi.WorkStart{Handle: d.Handle, Reason: "delivery"}); err != nil {
+			t.Errorf("Start: %v", err)
+		}
+		if err := f.g.Fail(ctx, agentapi.WorkFail{Handle: d.Handle, Reason: "failed: model quota"}); err != nil {
+			t.Errorf("Fail: %v", err)
+		}
+	}()
+
+	answer, err := bs.Serve(context.Background(), butlerlive.Turn{
+		Butler: "alfred", Member: "mika", Text: "is n1 healthy?",
+		Connection: butlerlive.ConnectionScope{Name: butlerlive.ConsoleConnection},
+	})
+	if err != nil {
+		t.Fatalf("Serve: %v", err)
+	}
+	if !strings.Contains(answer.FinalText, "failed: model quota") {
+		t.Fatalf("FinalText = %q, want the runtime's reason", answer.FinalText)
+	}
+	if calls, _ := j.counts(); calls != 0 {
+		t.Fatalf("the Butler's route saw %d calls, want none: nothing was answered", calls)
+	}
+}
+
+// Past the bounded wait the person is told it is still going; the
+// runtime's later answer still settles the task under the same rule.
+func TestALateExternalAnswerStillSettlesTheTask(t *testing.T) {
+	f, bs, j := externalFixture(t, `{"kind":"informational"}`)
+	bs.ExternalReplyWait = 50 * time.Millisecond
+	type shown struct{ task, text string }
+	var late []shown
+	bs.LateAnswer = func(taskID, text string) error {
+		late = append(late, shown{taskID, text})
+		return nil
+	}
+
+	answer, err := bs.Serve(context.Background(), butlerlive.Turn{
+		Butler: "alfred", Member: "mika", Text: "is n1 healthy?",
+		Connection: butlerlive.ConnectionScope{Name: butlerlive.ConsoleConnection},
+	})
+	if err != nil {
+		t.Fatalf("Serve: %v", err)
+	}
+	if !strings.Contains(answer.FinalText, "still working") {
+		t.Fatalf("FinalText = %q, want a still-working notice", answer.FinalText)
+	}
+	if calls, _ := j.counts(); calls != 0 {
+		t.Fatalf("the Butler's route saw %d calls before any answer, want none", calls)
+	}
+	task, err := f.db.GetButlerTask(answer.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.State != runtimedb.ButlerTaskRunning {
+		t.Fatalf("task state = %s, want still running", task.State)
+	}
+
+	d, _ := nextTurn(t, f.g)
+	ctx := WithPrincipal(context.Background(), "rt-alfred")
+	if err := f.g.Complete(ctx, agentapi.WorkComplete{Handle: d.Handle, Reply: "n1 is fine"}); err != nil {
+		t.Fatalf("late Complete: %v", err)
+	}
+	task, err = f.db.GetButlerTask(answer.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.State != runtimedb.ButlerTaskCompleted {
+		t.Fatalf("task state = %s, want completed by the late answer", task.State)
+	}
+	if task.ResultSummary != "n1 is fine" {
+		t.Fatalf("result summary = %q, want the late answer", task.ResultSummary)
+	}
+	// And it goes back to the conversation that asked (#389), once.
+	if len(late) != 1 || late[0].task != answer.TaskID || late[0].text != "n1 is fine" {
+		t.Fatalf("late answers shown = %+v, want the one for %s", late, answer.TaskID)
+	}
+}
+
+// A verdict the model wrapped in a code fence is read, not discarded as
+// unparsable — which used to end every such turn held for review (#364).
+func TestAFencedVerdictStillCompletesTheTurn(t *testing.T) {
+	f, bs, _ := externalFixture(t, "```json\n{\"kind\":\"informational\"}\n```")
+	go func() {
+		d, _ := nextTurn(t, f.g)
+		ctx := WithPrincipal(context.Background(), "rt-alfred")
+		if err := f.g.Complete(ctx, agentapi.WorkComplete{Handle: d.Handle, Reply: "n1 is fine"}); err != nil {
+			t.Errorf("Complete: %v", err)
+		}
+	}()
+	answer, err := bs.Serve(context.Background(), butlerlive.Turn{
+		Butler: "alfred", Member: "mika", Text: "is n1 healthy?",
+		Connection: butlerlive.ConnectionScope{Name: butlerlive.ConsoleConnection},
+	})
+	if err != nil {
+		t.Fatalf("Serve: %v", err)
+	}
+	if answer.FinalText != "n1 is fine" {
+		t.Fatalf("FinalText = %q, want the runtime's answer", answer.FinalText)
+	}
+	task, err := f.db.GetButlerTask(answer.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.State != runtimedb.ButlerTaskCompleted {
+		t.Fatalf("task state = %s, want completed", task.State)
+	}
+}
+
+// flakyJudge is a Butler route that fails while broken is set, standing
+// in for an objective check (or anything after it) that cannot settle.
+type flakyJudge struct {
+	judge
+	broken atomic.Bool
+}
+
+func (j *flakyJudge) Chat(ctx context.Context, req provider.ChatRequest) (*provider.ChatResponse, error) {
+	if j.broken.Load() {
+		return nil, errors.New("the route is down")
+	}
+	return j.judge.Chat(ctx, req)
+}
+
+func flakyFixture(t *testing.T) (*fixture, *butlerlive.Butlers, *flakyJudge) {
+	t.Helper()
+	f, bs, _ := externalFixture(t, `{"kind":"informational"}`)
+	j := &flakyJudge{judge: judge{verdict: `{"kind":"informational"}`}}
+	bs.Providers = func(runtimedb.Butler) (provider.Provider, error) { return j, nil }
+	return f, bs, j
+}
+
+// A runtime's Complete reports whether its answer SETTLED, not merely that
+// it was handed over: the bridge acknowledges its delivery on success, so
+// an answer that could not be judged or recorded must come back as an
+// error, or it is lost with the delivery.
+func TestAnAnswerThatCannotSettleIsNotReportedAsAccepted(t *testing.T) {
+	f, bs, j := flakyFixture(t)
+	j.broken.Store(true)
+
+	completed := make(chan error, 1)
+	go func() {
+		d, _ := nextTurn(t, f.g)
+		ctx := WithPrincipal(context.Background(), "rt-alfred")
+		completed <- f.g.Complete(ctx, agentapi.WorkComplete{Handle: d.Handle, Reply: "n1 is fine"})
+	}()
+	if _, err := bs.Serve(context.Background(), butlerlive.Turn{
+		Butler: "alfred", Member: "mika", Text: "is n1 healthy?",
+		Connection: butlerlive.ConnectionScope{Name: butlerlive.ConsoleConnection},
+	}); err == nil {
+		t.Error("Serve succeeded with a route that cannot judge the answer")
+	}
+	if err := <-completed; err == nil {
+		t.Fatal("Complete reported an answer that never settled as accepted")
+	}
+}
+
+// A late answer settles under the runtime's own handle, so one that fails
+// to settle can be reported again with the same delivery.
+func TestALateAnswerThatFailsCanBeRetriedWithTheSameHandle(t *testing.T) {
+	f, bs, j := flakyFixture(t)
+	bs.ExternalReplyWait = 50 * time.Millisecond
+	answer, err := bs.Serve(context.Background(), butlerlive.Turn{
+		Butler: "alfred", Member: "mika", Text: "is n1 healthy?",
+		Connection: butlerlive.ConnectionScope{Name: butlerlive.ConsoleConnection},
+	})
+	if err != nil {
+		t.Fatalf("Serve: %v", err)
+	}
+	d, _ := nextTurn(t, f.g)
+	ctx := WithPrincipal(context.Background(), "rt-alfred")
+
+	j.broken.Store(true)
+	if err := f.g.Complete(ctx, agentapi.WorkComplete{Handle: d.Handle, Reply: "n1 is fine"}); err == nil {
+		t.Fatal("a late answer that could not settle was reported as accepted")
+	}
+	// The retry the bridge makes: the same delivery, the same handle.
+	j.broken.Store(false)
+	if _, err := f.g.Manifest(ctx, d.Handle); err != nil {
+		t.Fatalf("the delivery's handle was invalidated by the failed attempt: %v", err)
+	}
+	if err := f.g.Complete(ctx, agentapi.WorkComplete{Handle: d.Handle, Reply: "n1 is fine"}); err != nil {
+		t.Fatalf("retrying the late answer: %v", err)
+	}
+	task, err := f.db.GetButlerTask(answer.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.State != runtimedb.ButlerTaskCompleted {
+		t.Fatalf("task state = %s, want completed by the retried answer", task.State)
+	}
+}
+
+// A follow-up sent while the runtime is still working on the previous
+// message gets its own task, and does not take the handle the runtime
+// holds (#389). Resuming used to re-issue that handle, so the in-flight
+// run's answer was refused and only the newest message was answered.
+func TestAFollowUpDoesNotCutOffTheRunInFlight(t *testing.T) {
+	f, bs, _ := externalFixture(t, `{"kind":"informational"}`)
+	bs.ExternalReplyWait = 50 * time.Millisecond
+	var late []string
+	bs.LateAnswer = func(taskID, text string) error {
+		late = append(late, taskID)
+		return nil
+	}
+	turn := func(text, session string) butlerlive.Answer {
+		t.Helper()
+		answer, err := bs.Serve(context.Background(), butlerlive.Turn{
+			Butler: "alfred", Member: "mika", Text: text, SessionID: session,
+			Connection: butlerlive.ConnectionScope{Name: butlerlive.ConsoleConnection},
+		})
+		if err != nil {
+			t.Fatalf("Serve(%q): %v", text, err)
+		}
+		return answer
+	}
+
+	first := turn("is n1 healthy?", "")
+	sid, err := f.db.InsertButlerSession(runtimedb.ButlerSession{
+		Principal: "butler", ActingFor: "mika", Provider: "test", Mode: runtimedb.ButlerModeFull,
+		Surface: runtimedb.ButlerSurfaceAdmin, Butler: "alfred", FinalText: first.FinalText,
+		Turns: []runtimedb.ButlerTurn{
+			{Role: runtimedb.ButlerRoleUser, Text: "is n1 healthy?", TaskID: first.TaskID},
+			{Role: runtimedb.ButlerRoleAssistant, Text: first.FinalText},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.db.SetButlerTaskSession(first.TaskID, sid); err != nil {
+		t.Fatal(err)
+	}
+	d, _ := nextTurn(t, f.g)
+
+	second := turn("and n2?", sid)
+	if second.TaskID == first.TaskID || second.Resumed {
+		t.Fatalf("the follow-up resumed %s (resumed=%t), want a task of its own", second.TaskID, second.Resumed)
+	}
+
+	// The first run reports back under the handle it was given.
+	ctx := WithPrincipal(context.Background(), "rt-alfred")
+	if err := f.g.Complete(ctx, agentapi.WorkComplete{Handle: d.Handle, Reply: "n1 is fine"}); err != nil {
+		t.Fatalf("the in-flight run's Complete was refused: %v", err)
+	}
+	task, err := f.db.GetButlerTask(first.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.State != runtimedb.ButlerTaskCompleted || task.ResultSummary != "n1 is fine" {
+		t.Fatalf("first task = %s %q, want completed with its own answer", task.State, task.ResultSummary)
+	}
+	if len(late) != 1 || late[0] != first.TaskID {
+		t.Fatalf("late answers = %v, want the first task's", late)
+	}
+}
+
+// An older task in the conversation that waits on the person is what
+// the next message answers, even after a follow-up opened a newer task
+// the runtime still holds (#389).
+func TestAnOlderTaskWaitingOnThePersonIsStillResumed(t *testing.T) {
+	f, bs, _ := externalFixture(t, `{"kind":"informational"}`)
+	bs.ExternalReplyWait = 50 * time.Millisecond
+	bs.LateAnswer = func(string, string) error { return nil }
+	turn := func(text, session string) butlerlive.Answer {
+		t.Helper()
+		answer, err := bs.Serve(context.Background(), butlerlive.Turn{
+			Butler: "alfred", Member: "mika", Text: text, SessionID: session,
+			Connection: butlerlive.ConnectionScope{Name: butlerlive.ConsoleConnection},
+		})
+		if err != nil {
+			t.Fatalf("Serve(%q): %v", text, err)
+		}
+		return answer
+	}
+
+	first := turn("restart the media server", "")
+	sid, err := f.db.InsertButlerSession(runtimedb.ButlerSession{
+		Principal: "butler", ActingFor: "mika", Provider: "test", Mode: runtimedb.ButlerModeFull,
+		Surface: runtimedb.ButlerSurfaceAdmin, Butler: "alfred", FinalText: first.FinalText,
+		Turns: []runtimedb.ButlerTurn{
+			{Role: runtimedb.ButlerRoleUser, Text: "restart the media server", TaskID: first.TaskID},
+			{Role: runtimedb.ButlerRoleAssistant, Text: first.FinalText},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.db.SetButlerTaskSession(first.TaskID, sid); err != nil {
+		t.Fatal(err)
+	}
+	second := turn("and check the backups", sid)
+	if second.TaskID == first.TaskID {
+		t.Fatal("the follow-up resumed the task the runtime holds")
+	}
+
+	// The first task now waits on the person.
+	if err := f.ledger.Wait(first.TaskID, string(agentapi.WorkWaitReply), "which media server?"); err != nil {
+		t.Fatal(err)
+	}
+	third := turn("the one on n1", sid)
+	if third.TaskID != first.TaskID || !third.Resumed {
+		t.Fatalf("the answer went to %s (resumed=%t), want the waiting %s", third.TaskID, third.Resumed, first.TaskID)
+	}
+}

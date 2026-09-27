@@ -72,7 +72,7 @@ func TestEndToEndDeliveryNeverLogsTheBearer(t *testing.T) {
 		case r.URL.Path == "/v1/runs/run-1/events":
 			order = append(order, "run-wait")
 			w.Header().Set("Content-Type", "text/event-stream")
-			fmt.Fprint(w, "data: {\"type\":\"run.completed\"}\n\n")
+			fmt.Fprint(w, "id: 1\ndata: {\"event\":\"run.completed\",\"run_id\":\"run-1\",\"output\":\"done\"}\n\n")
 		default:
 			t.Errorf("unexpected hermes request: %s %s", r.Method, r.URL.Path)
 		}

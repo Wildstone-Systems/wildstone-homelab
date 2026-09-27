@@ -282,6 +282,7 @@ func (s *Server) runNamedButlerSession(ctx context.Context, turn butlerlive.Turn
 		Capped:         ans.Capped,
 		PlanIDs:        planIDs,
 		ProposalErrors: proposalErrs,
+		Pending:        s.answerPending(ans.Butler, ans.TaskID),
 	}, http.StatusOK, nil
 }
 
