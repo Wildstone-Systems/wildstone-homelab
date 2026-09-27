@@ -595,7 +595,7 @@ func (s *Server) chatInbound(r *http.Request, id principal.Identity, msg inbound
 // surface, and those are the authority — a thread pointer that has
 // drifted (a binding revoked and reissued to somebody else on the same
 // chat id) must not hand a stranger the previous person's conversation.
-func (s *Server) chatThread(at runtimedb.Connection, conversation, identity string) (*turnContext, bool) {
+func (s *Server) chatThread(at runtimedb.Connection, conversation, identity string, verified bool) (*turnContext, bool) {
 	id, ok, err := s.DB.ChatThreadSession(at, conversation, identity)
 	if err != nil {
 		s.Log.Error("reading chat thread failed", "err", err)
@@ -607,7 +607,7 @@ func (s *Server) chatThread(at runtimedb.Connection, conversation, identity stri
 	if err := s.DB.ButlerSessionActive(id); err != nil {
 		return nil, false
 	}
-	sess, allowed, err := s.loadChatContinuation(id, at)
+	sess, allowed, err := s.loadChatContinuation(id, at, verified)
 	if err != nil {
 		return nil, !errors.Is(err, runtimedb.ErrNotFound) && !errors.Is(err, runtimedb.ErrSessionRevoked)
 	}

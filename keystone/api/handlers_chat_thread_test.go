@@ -98,10 +98,14 @@ func TestSessionPagesDeliverEveryResumeChoiceWithoutTruncation(t *testing.T) {
 		id := insertCandidateSession(t, h, at, "sam", strings.Repeat("😀", 80))
 		want[id] = true
 	}
-	protected := insertCandidateSession(t, h, at, "sam", "protected subject")
+	// A conversation carried on in the Console is offered too: sam's own
+	// bound one-to-one chat is verified, so it lists every recent
+	// conversation of theirs, trusted-UI ones included.
+	protected := insertCandidateSession(t, h, at, "sam", "console subject")
 	if err := h.s.DB.NoteButlerSessionConnection(protected, "inbound", "console", 0); err != nil {
 		t.Fatal(err)
 	}
+	want[protected] = true
 	tokens := regexp.MustCompile("`/resume ([A-Za-z0-9_-]+)`")
 	nextPage := regexp.MustCompile("Next page: `/sessions ([0-9]+)`")
 	seen := make(map[string]bool)
@@ -121,8 +125,8 @@ func TestSessionPagesDeliverEveryResumeChoiceWithoutTruncation(t *testing.T) {
 		}
 		body := queued[0].Body
 		after = queued[0].Seq
-		if strings.Contains(body, "protected subject") || strings.Contains(body, "bs-") {
-			t.Fatalf("page disclosed protected metadata: %q", body)
+		if strings.Contains(body, "bs-") {
+			t.Fatalf("page disclosed a session id: %q", body)
 		}
 		choices := tokens.FindAllStringSubmatch(body, -1)
 		if len(choices) == 0 || len(body) > runtimedb.MaxChatBodyBytes {
@@ -145,7 +149,7 @@ func TestSessionPagesDeliverEveryResumeChoiceWithoutTruncation(t *testing.T) {
 		text = "/sessions " + next[1]
 	}
 	if len(seen) != len(want) {
-		t.Fatalf("only %d of %d safe sessions were reachable", len(seen), len(want))
+		t.Fatalf("only %d of %d sessions were reachable", len(seen), len(want))
 	}
 	if calls := h.providerCalls(t); calls != 0 {
 		t.Fatalf("listing choices ran the model %d times", calls)
@@ -271,7 +275,10 @@ func TestChatThreadsAreNotSharedAcrossSurfaces(t *testing.T) {
 }
 
 // Trusted Console turns must not flow back through an existing external pointer.
-func TestConsoleActivityProtectsAnExistingChatThread(t *testing.T) {
+// A verified one-to-one chat continues a conversation its person carried
+// on in the Console: the same person, the same conversation, and nobody
+// else reads the reply.
+func TestAVerifiedChatContinuesAConversationCarriedOnInTheConsole(t *testing.T) {
 	h := newHarness(t)
 	h.wireButler(answerTurns("from telegram", "from the console", "back on telegram"), runtimedb.ButlerModeFull)
 	h.bindAccount(t, "admin", "mika", "telegram", "12345")
@@ -296,7 +303,7 @@ func TestConsoleActivityProtectsAnExistingChatThread(t *testing.T) {
 		t.Fatalf("console follow-up: status = %d", resp.StatusCode)
 	}
 
-	// Back to Telegram: redirect before loading the protected history.
+	// Back to Telegram: the same conversation continues.
 	h.send(runtimedb.RoleValet, map[string]any{
 		"transport": "telegram", "account": "12345", "text": "third, on telegram",
 		"messageId": "m-2",
@@ -304,15 +311,15 @@ func TestConsoleActivityProtectsAnExistingChatThread(t *testing.T) {
 
 	h.do(runtimedb.RoleOperator, "GET", "/api/v1/butler/sessions", nil, &sessions)
 	if len(sessions) != 1 {
-		t.Fatalf("sessions = %d, want the protected session preserved without starting another", len(sessions))
+		t.Fatalf("sessions = %d, want the one conversation continued", len(sessions))
 	}
 	var full runtimedb.ButlerSession
 	h.do(runtimedb.RoleOperator, "GET", "/api/v1/butler/sessions/"+sessions[0].ID, nil, &full)
-	if len(full.Turns) != 4 {
-		t.Fatalf("turns = %d, want 4 with no external continuation", len(full.Turns))
+	if len(full.Turns) != 6 {
+		t.Fatalf("turns = %d, want 6: the Telegram message continued the conversation", len(full.Turns))
 	}
-	if calls := h.providerCalls(t); calls != 2 {
-		t.Fatalf("model calls = %d, want only initial chat and Console turns", calls)
+	if calls := h.providerCalls(t); calls != 3 {
+		t.Fatalf("model calls = %d, want the chat, Console and returning chat turns", calls)
 	}
 }
 
