@@ -255,8 +255,8 @@ func TestAPackagedRuntimeCanBeUpgradedToTheCatalogsVersion(t *testing.T) {
 
 	type runtimeView struct {
 		Package *struct {
-			Name      string `json:"name"`
-			Instance  string `json:"instance"`
+			Name       string `json:"name"`
+			Instance   string `json:"instance"`
 			Installed  string `json:"installedVersion"`
 			Available  string `json:"availableVersion"`
 			Upgradable bool   `json:"upgradable"`
