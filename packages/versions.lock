@@ -22,7 +22,7 @@ cameras-frigate 1.0.1 0ac585beb5876da1
 captcha-flaresolverr 1.0.1 6420402a747e2ee5
 chat-discord 2.0.0 f18460627b32cd15
 chat-matrix 2.0.0 ecc85c0ff5b1a5d0
-chat-slack 2.0.1 c5ff3ab18b4a9bfa
+chat-slack 2.0.2 cf78429005a88e11
 chat-telegram 2.0.0 84b38bec04e10fc1
 code-gitea 1.0.1 44a8494cd02dee51
 dashboard 1.0.1 c0a5ca5341926568
@@ -64,7 +64,7 @@ photos-immich 1.0.1 ca6bb9afd82a91af
 podcasts-podgrab 1.0.0 031cec56af3ff13c
 recipes-mealie 1.0.1 37f0c771bc7816f5
 requests-seerr 1.0.1 d4c08d771b164c6b
-speech-speaches 1.0.0 24afe5c2f1c94a3c
+speech-speaches 1.0.1 63ee5575e2aa0b51
 subtitles-bazarr 1.0.2 e3556aa2a7bd503e
 sync-syncthing 1.0.2 5a20ec6bdab54726
 tools-it-tools 1.0.0 08d30d25834cb937

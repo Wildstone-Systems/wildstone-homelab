@@ -1,8 +1,9 @@
 # Speech capability, profile "speaches": turns the household's voice
 # messages into text on its own hardware, so what was said never leaves
-# the house (ADR-W042). Speaches serves the OpenAI transcription API
-# over faster-whisper; the same container can later speak replies with
-# Kokoro, the text-to-speech engine the project already prefers.
+# the house (ADR-W042), and reads the Agent's replies aloud with Kokoro,
+# the text-to-speech engine the project prefers (ADR-W043). Speaches
+# serves the OpenAI transcription and speech APIs over faster-whisper
+# and Kokoro, so one container does both.
 #
 # NO ROUTE, ON PURPOSE. Like ai-ollama, this is an API with no login of
 # its own. Its one caller is Keystone, which runs on the host rather
@@ -21,6 +22,13 @@
 # download its model (-speech-model) at startup and retries until the
 # container is up; the first download is a few hundred MB.
 #
+# To have replies read aloud as well, add
+#   -speech-replies local
+# Keystone then downloads the voice (-speech-reply-model, Kokoro, about
+# 330 MB) the same way, answers a voice message with a voice message,
+# and puts a listen button on each reply in the dashboard and Console.
+# -speech-reply-voice picks the voice (default af_heart).
+#
 # CPU-only as shipped: this is Speaches' CPU image, and it runs int8
 # models. A GPU build would be a separate profile with the render node
 # passed through. The default model transcribes a 30-second voice note
@@ -28,7 +36,8 @@
 #
 # Models are large and re-downloadable, so the volume is deliberately
 # outside any BackupPlan (the ADR-W013 A4 "rip it again" posture).
-# Audio is never written here: requests are transcribed in memory.
+# Audio is never written here: requests are transcribed and spoken in
+# memory.
 #
 # Image digest is REAL, resolved 2026-09-26 via the OCI registry API:
 #   ghcr.io/speaches-ai/speaches:0.8.3-cpu -> sha256:21e3df06...3ef8
@@ -37,7 +46,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: speech-speaches
-  version: 1.0.0
+  version: 1.0.1
   capability: speech
   profile: speaches
 requires:

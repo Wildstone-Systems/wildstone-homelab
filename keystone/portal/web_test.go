@@ -638,7 +638,7 @@ var browserGlobals = map[string]bool{
 	"alert": true, "confirm": true, "prompt": true,
 	// Dictation (ADR-W042): recording the microphone, packaging the
 	// clip, and telling the text box its value changed.
-	"MediaRecorder": true, "Blob": true, "Event": true,
+	"MediaRecorder": true, "Blob": true, "Event": true, "Audio": true,
 }
 
 var (

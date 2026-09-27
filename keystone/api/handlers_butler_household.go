@@ -188,7 +188,7 @@ func (s *Server) getHouseholdButlerStatus(_ *http.Request, id principal.Identity
 // checks, which are the same ones an approved household rule passes
 // through (ADR-W024 A5).
 func (s *Server) askHouseholdButler(r *http.Request, id principal.Identity) (any, int, error) {
-	message, named, st, err := readAskMessage(r)
+	r, message, named, st, err := readAskMessage(r)
 	if err != nil {
 		return nil, st, err
 	}
@@ -370,7 +370,7 @@ func (s *Server) runFamilySession(ctx context.Context, message, member, systemEx
 		Capped:            tr.CappedIterations,
 		TranscriptJSON:    redact.String(string(transcriptJSON)),
 		Turns: []runtimedb.ButlerTurn{
-			{Role: runtimedb.ButlerRoleUser, Text: redact.String(message)},
+			{Role: runtimedb.ButlerRoleUser, Text: redact.String(message), Source: turnSource(ctx)},
 			{
 				Role: runtimedb.ButlerRoleAssistant, Text: finalText, Capped: tr.CappedIterations,
 				TranscriptJSON: redact.String(string(transcriptJSON)),

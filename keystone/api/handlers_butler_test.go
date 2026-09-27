@@ -322,3 +322,31 @@ func TestButlerStatusRedactsEndpoint(t *testing.T) {
 		t.Fatalf("endpoint leaked a credential: %q", st.Endpoint)
 	}
 }
+
+// Dictation in the Console is sent with voice set, and the stored
+// question carries the 🎙️ marker; a typed follow-up in the same
+// conversation does not (ADR-W042 §2.4).
+func TestDictatedConsoleQuestionIsStoredAsSpoken(t *testing.T) {
+	h := newHarness(t)
+	asks := h.console(runtimedb.RoleOperator, "mika")
+	h.wireButler([]*provider.ChatResponse{{Text: "first"}, {Text: "second"}}, runtimedb.ButlerModeFull)
+
+	var ask askResponse
+	if resp := h.doToken(asks, "POST", "/api/v1/butler/ask", map[string]any{"message": "what's running", "voice": true}, &ask); resp.StatusCode != http.StatusOK {
+		t.Fatalf("ask status = %d", resp.StatusCode)
+	}
+	if resp := h.doToken(asks, "POST", "/api/v1/butler/sessions/"+ask.SessionID+"/ask", map[string]any{"message": "and why"}, nil); resp.StatusCode != http.StatusOK {
+		t.Fatalf("continue status = %d", resp.StatusCode)
+	}
+	var sess runtimedb.ButlerSession
+	h.doToken(asks, "GET", "/api/v1/butler/sessions/"+ask.SessionID, nil, &sess)
+	want := []string{runtimedb.TurnSourceVoice, "", "", ""}
+	if len(sess.Turns) != len(want) {
+		t.Fatalf("turns = %+v", sess.Turns)
+	}
+	for i, turn := range sess.Turns {
+		if turn.Source != want[i] {
+			t.Errorf("turn %d (%s %q) source = %q, want %q", i, turn.Role, turn.Text, turn.Source, want[i])
+		}
+	}
+}

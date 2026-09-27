@@ -172,6 +172,10 @@ type askRequest struct {
 	// this surface, and refused when there is more than one. Picking for
 	// them would be picking which model sees what they typed.
 	Butler string `json:"butler,omitempty"`
+	// Voice says the person dictated the message and sent it after
+	// checking it (ADR-W042). It labels the stored turn with a 🎙️ and
+	// changes nothing about how the message is answered.
+	Voice bool `json:"voice,omitempty"`
 }
 
 // askResponse is what one completed ask returns: the session id (its
@@ -224,7 +228,7 @@ type storedTranscript struct {
 // entered through the same submitProposal pipeline as the HTTP propose
 // endpoint, as principal "butler" acting-for the caller.
 func (s *Server) askButler(r *http.Request, id principal.Identity) (any, int, error) {
-	message, named, st, err := readAskMessage(r)
+	r, message, named, st, err := readAskMessage(r)
 	if err != nil {
 		return nil, st, err
 	}
@@ -265,12 +269,17 @@ func (s *Server) askOneButler(r *http.Request, id principal.Identity) (any, int,
 	name := r.PathValue("name")
 	var req struct {
 		Message string `json:"message"`
+		// Voice: dictated, as on askRequest.
+		Voice bool `json:"voice,omitempty"`
 	}
 	if code, err := decodeStrict(r, &req); err != nil {
 		return nil, code, err
 	}
 	if strings.TrimSpace(req.Message) == "" {
 		return nil, http.StatusBadRequest, fmt.Errorf("a question needs a message")
+	}
+	if req.Voice {
+		r = r.WithContext(withVoiceTurn(r.Context()))
 	}
 	if !s.butlersConfigured() {
 		return nil, http.StatusServiceUnavailable,
@@ -356,7 +365,7 @@ func historyFrom(turns []runtimedb.ButlerTurn) []provider.Message {
 // for — but reading a conversation and speaking into it are different
 // acts, and the second one is not an audit.
 func (s *Server) continueButlerSession(r *http.Request, id principal.Identity) (any, int, error) {
-	message, named, st, err := readAskMessage(r)
+	r, message, named, st, err := readAskMessage(r)
 	if err != nil {
 		return nil, st, err
 	}
@@ -515,7 +524,7 @@ func (s *Server) runAdminButlerSession(ctx context.Context, message, actingFor, 
 		// ADR-W027. It goes through redact for the same reason the
 		// answer does: it is operator-supplied text that can carry
 		// secret-shaped content, and it is about to be persisted.
-		{Role: runtimedb.ButlerRoleUser, Text: redact.String(message)},
+		{Role: runtimedb.ButlerRoleUser, Text: redact.String(message), Source: turnSource(ctx)},
 		{
 			Role: runtimedb.ButlerRoleAssistant, Text: finalText, Capped: tr.CappedIterations,
 			TranscriptJSON: redact.String(string(transcriptJSON)), PlanIDs: planIDs,
@@ -689,20 +698,26 @@ func (s *Server) getButlerSession(r *http.Request, id principal.Identity) (any, 
 // readAskMessage reads and bounds one ask body, shared by both surfaces
 // (ADR-W026 A6: inbound text is bounded before anything else looks at
 // it, on the family surface exactly as on the operator's).
-func readAskMessage(r *http.Request) (message, butlerName string, status int, err error) {
+//
+// A dictated message comes back as a request whose context marks the
+// turn as spoken (turnSource), so the caller passes r on unchanged.
+func readAskMessage(r *http.Request) (req2 *http.Request, message, butlerName string, status int, err error) {
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxAskBytes+1))
 	if err != nil {
-		return "", "", http.StatusBadRequest, fmt.Errorf("reading body: %w", err)
+		return r, "", "", http.StatusBadRequest, fmt.Errorf("reading body: %w", err)
 	}
 	if len(body) > maxAskBytes {
-		return "", "", http.StatusRequestEntityTooLarge, fmt.Errorf("message exceeds %d bytes", maxAskBytes)
+		return r, "", "", http.StatusRequestEntityTooLarge, fmt.Errorf("message exceeds %d bytes", maxAskBytes)
 	}
 	var req askRequest
 	if err := json.Unmarshal(body, &req); err != nil {
-		return "", "", http.StatusBadRequest, fmt.Errorf("parsing ask: %w", err)
+		return r, "", "", http.StatusBadRequest, fmt.Errorf("parsing ask: %w", err)
 	}
 	if req.Message == "" {
-		return "", "", http.StatusBadRequest, fmt.Errorf("message required")
+		return r, "", "", http.StatusBadRequest, fmt.Errorf("message required")
 	}
-	return req.Message, strings.TrimSpace(req.Butler), http.StatusOK, nil
+	if req.Voice {
+		r = r.WithContext(withVoiceTurn(r.Context()))
+	}
+	return r, req.Message, strings.TrimSpace(req.Butler), http.StatusOK, nil
 }

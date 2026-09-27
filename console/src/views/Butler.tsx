@@ -35,6 +35,7 @@ import { Confirm } from "../ui/Confirm";
 import { Dot, Kind, StatusPill } from "../ui/status";
 import { PendingPlan } from "./Plans";
 import { ButlerPicker, openingFor, preferred, SURFACE_LABEL } from "./butler/picker";
+import { ListenButton } from "../ui/ListenButton";
 import { dictationSupported, MicButton } from "../ui/MicButton";
 
 // The two surfaces, as the operator picks between them (ADR-W026 A1).
@@ -131,6 +132,9 @@ export function Butler({
     butlerName && status.data?.dictation && dictationSupported()
       ? { butler: butlerName, maxSeconds: status.data.dictationMaxSeconds ?? 120 }
       : null;
+  // The listen button under each reply, when this Butler's replies can
+  // be read aloud here.
+  const listenTo = butlerName && status.data?.readAloud && typeof Audio !== "undefined" ? butlerName : null;
   // The list is a sidebar on a desk and a sheet over the thread on a
   // phone, so it starts open on one and closed on the other.
   const [railOpen, setRailOpen] = useState(() => !narrow());
@@ -147,6 +151,11 @@ export function Butler({
   const [openID, setOpenID] = useState<string | null>(null);
   const [thread, setThread] = useState<ButlerSession | null>(null);
   const [pending, setPending] = useState<string | null>(null);
+  // The pending message was dictated: its bubble carries the 🎙️ too.
+  const [pendingVoice, setPendingVoice] = useState(false);
+  // The answer to a dictated question, to be read aloud once it is in
+  // the thread.
+  const [speakNext, setSpeakNext] = useState<string | null>(null);
   // A follow-up lands in the SAME session, so openID does not change
   // and the effect below would not re-run. Bumping this is what makes
   // "reload the thread" mean it.
@@ -196,7 +205,9 @@ export function Butler({
     };
   }, [openID, reloads]);
 
-  const send = (text: string) => {
+  // voice: the person dictated the message and checked it before
+  // sending; the stored turn is marked with a 🎙️ (ADR-W042).
+  const send = (text: string, voice = false) => {
     const message = text.trim();
     if (!message) return;
     // A Butler whose model is not answering refuses here as well as in
@@ -208,6 +219,7 @@ export function Butler({
     setAskError(null);
     setCommandReply(null);
     setPending(message);
+    setPendingVoice(voice);
     // Keyed on openID rather than on the loaded thread, and the
     // difference is a race with real consequences. openID is set the
     // moment a session is known; thread is filled in by a fetch that
@@ -222,8 +234,8 @@ export function Butler({
         ? // The Butler by NAME. Asking a surface was the ambiguity this
           // screen removed, and asking through the surface endpoint
           // would also refuse a household Butler outright.
-          api.askOneButler(current.butler.name, message)
-        : api.continueButlerSession(openID, message);
+          api.askOneButler(current.butler.name, message, voice)
+        : api.continueButlerSession(openID, message, voice);
     call
       // Re-opening the session is what loads the new turns AND the
       // plans they proposed; the effect above does both, so there is
@@ -240,6 +252,7 @@ export function Butler({
           setCommandReply(res.finalText);
           return;
         }
+        if (voice) setSpeakNext(res.finalText);
         setOpenID(res.sessionId);
         setReloads((n) => n + 1);
       })
@@ -413,8 +426,12 @@ export function Butler({
               surface={surface}
               session={thread}
               pending={pending}
+              pendingVoice={pendingVoice}
               proposals={proposals}
               onProposalResolved={refreshProposal}
+              listenTo={listenTo}
+              speakNext={speakNext}
+              onSpoken={() => setSpeakNext(null)}
             />
             {askError && (
               <div className="thread-error">
@@ -681,13 +698,15 @@ export function EmptyState({
 }: {
   row?: ButlerRow;
   busy: boolean;
-  onSend: (text: string) => void;
+  onSend: (text: string, voice?: boolean) => void;
   error?: string | null;
   // A slash command's reply, shown where the conversation would be.
   notice?: string | null;
   dictation?: Dictation | null;
 }) {
   const [text, setText] = useState("");
+  // The words in the box came, at least in part, from dictation.
+  const [spoken, setSpoken] = useState(false);
   const [micNote, setMicNote] = useState<{ message: string; bad?: boolean }>({ message: "" });
   // Every string on this screen is the selected Butler's, derived from
   // its own record. There is a fallback for the moment before the
@@ -697,8 +716,9 @@ export function EmptyState({
     : { title: "Which Butler?", blurb: "Pick one to start a conversation.", placeholder: "Ask…" };
   const blocked = !!row && !row.reachable;
   const submit = () => {
-    onSend(text);
+    onSend(text, spoken);
     setText("");
+    setSpoken(false);
     setMicNote({ message: "" });
   };
   return (
@@ -714,7 +734,10 @@ export function EmptyState({
             rows={2}
             placeholder={opening.placeholder}
             value={text}
-            onChange={(e) => setText(e.target.value)}
+            onChange={(e) => {
+              setText(e.target.value);
+              if (!e.target.value.trim()) setSpoken(false);
+            }}
             onKeyDown={(e) => {
               if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) submit();
             }}
@@ -726,7 +749,10 @@ export function EmptyState({
               butler={dictation.butler}
               maxSeconds={dictation.maxSeconds}
               disabled={busy}
-              onText={(words) => setText((had) => (had.trim() ? had.trim() + " " + words : words))}
+              onText={(words) => {
+                setText((had) => (had.trim() ? had.trim() + " " + words : words));
+                setSpoken(true);
+              }}
               onNote={(message, bad) => setMicNote({ message, bad })}
             />
           )}
@@ -765,14 +791,25 @@ export function Thread({
   surface,
   session,
   pending,
+  pendingVoice,
   proposals,
   onProposalResolved,
+  listenTo,
+  speakNext,
+  onSpoken,
 }: {
   surface: ButlerSurface;
   session: ButlerSession | null;
   pending: string | null;
+  pendingVoice?: boolean;
   proposals: PlanRecord[];
   onProposalResolved: (id: string) => void;
+  // The Butler whose replies get a listen button, or null for none.
+  listenTo?: string | null;
+  // A reply to read aloud as soon as it appears, and the call that says
+  // it has started.
+  speakNext?: string | null;
+  onSpoken?: () => void;
 }) {
   const end = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -788,12 +825,23 @@ export function Thread({
           {SURFACES[surface].blurb}
         </div>
       )}
-      {turns.map((t) => (
-        <Turn key={t.ordinal} turn={t} proposals={proposals} onResolved={onProposalResolved} />
+      {turns.map((t, i) => (
+        <Turn
+          key={t.ordinal}
+          turn={t}
+          proposals={proposals}
+          onResolved={onProposalResolved}
+          listenTo={listenTo}
+          autoPlay={i === turns.length - 1 && t.role === "assistant" && !!speakNext && t.text === speakNext}
+          onSpoken={onSpoken}
+        />
       ))}
       {pending !== null && (
         <>
-          <div className="msg msg-user">{pending}</div>
+          <div className="msg msg-user">
+            {pendingVoice && <VoiceMark />}
+            {pending}
+          </div>
           <TurnRow>
             <div className="msg msg-butler thinking">
               <Sparkle size={14} />
@@ -804,6 +852,16 @@ export function Thread({
       )}
       <div ref={end} />
     </div>
+  );
+}
+
+// A person's turn that was spoken — a chat voice message, or dictation
+// that was sent — carries a 🎙️, so a mis-hearing reads as one.
+function VoiceMark() {
+  return (
+    <span className="msg-voice" role="img" aria-label="Spoken: " title="Spoken">
+      🎙️
+    </span>
   );
 }
 
@@ -825,10 +883,16 @@ export function Turn({
   turn,
   proposals,
   onResolved,
+  listenTo,
+  autoPlay,
+  onSpoken,
 }: {
   turn: ButlerTurn;
   proposals: PlanRecord[];
   onResolved: (id: string) => void;
+  listenTo?: string | null;
+  autoPlay?: boolean;
+  onSpoken?: () => void;
 }) {
   const made = proposals.filter((p) => (turn.planIds ?? []).includes(p.id));
   if (turn.role === "user") {
@@ -842,11 +906,19 @@ export function Turn({
     // somebody does by hand the thing that already happened.
     const ran = parseCalls(turn.transcriptJson).length > 0 || (turn.planIds ?? []).length > 0;
     if (!ran) {
-      return <div className="msg msg-user">{turn.text}</div>;
+      return (
+        <div className="msg msg-user">
+          {turn.source === "voice" && <VoiceMark />}
+          {turn.text}
+        </div>
+      );
     }
     return (
       <TurnRow>
-        <div className="msg msg-user">{turn.text}</div>
+        <div className="msg msg-user">
+          {turn.source === "voice" && <VoiceMark />}
+          {turn.text}
+        </div>
         <div className="msg-note">
           This turn did not finish. What it had already done is below, and the
           next message continues it rather than starting again.
@@ -868,6 +940,9 @@ export function Turn({
   return (
     <TurnRow>
       <div className="msg msg-butler">{turn.text || "(no answer text)"}</div>
+      {listenTo && turn.text && (
+        <ListenButton butler={listenTo} text={turn.text} autoPlay={autoPlay} onStarted={onSpoken} />
+      )}
       <ToolTrace turn={turn} />
       {turn.capped && (
         <div className="msg-note">
@@ -942,14 +1017,17 @@ export function Composer({
 }: {
   surface: ButlerSurface;
   busy: boolean;
-  onSend: (text: string) => void;
+  onSend: (text: string, voice?: boolean) => void;
   dictation?: Dictation | null;
 }) {
   const [text, setText] = useState("");
+  // The words in the box came, at least in part, from dictation.
+  const [spoken, setSpoken] = useState(false);
   const [micNote, setMicNote] = useState<{ message: string; bad?: boolean }>({ message: "" });
   const submit = () => {
-    onSend(text);
+    onSend(text, spoken);
     setText("");
+    setSpoken(false);
     setMicNote({ message: "" });
   };
   return (
@@ -959,7 +1037,10 @@ export function Composer({
           rows={2}
           placeholder={SURFACES[surface].placeholder}
           value={text}
-          onChange={(e) => setText(e.target.value)}
+          onChange={(e) => {
+            setText(e.target.value);
+            if (!e.target.value.trim()) setSpoken(false);
+          }}
           onKeyDown={(e) => {
             if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) submit();
           }}
@@ -971,7 +1052,10 @@ export function Composer({
             butler={dictation.butler}
             maxSeconds={dictation.maxSeconds}
             disabled={busy}
-            onText={(words) => setText((had) => (had.trim() ? had.trim() + " " + words : words))}
+            onText={(words) => {
+              setText((had) => (had.trim() ? had.trim() + " " + words : words));
+              setSpoken(true);
+            }}
             onNote={(message, bad) => setMicNote({ message, bad })}
           />
         )}

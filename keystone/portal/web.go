@@ -109,6 +109,9 @@ func WritePage(w http.ResponseWriter, body []byte, frameAncestors []string) {
 		"img-src 'self' data:",
 		"style-src 'self' 'unsafe-inline'",
 		"font-src 'self'",
+		// A reply read aloud (ADR-W042) plays from a blob: URL the page
+		// made from the audio Keystone returned; nothing else plays.
+		"media-src blob:",
 		"script-src 'unsafe-inline'",
 		"form-action 'none'",
 		"base-uri 'none'",

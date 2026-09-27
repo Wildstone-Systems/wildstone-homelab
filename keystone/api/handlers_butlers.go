@@ -936,6 +936,10 @@ func (s *Server) butlerStatus(r *http.Request, _ principal.Identity) (any, int, 
 		out["dictation"] = true
 		out["dictationMaxSeconds"] = max
 	}
+	// And whether its listen button does.
+	if s.canReadAloud(b.Name) {
+		out["readAloud"] = true
+	}
 	// A Butler that cannot answer says why, and says it from the model's
 	// own readiness rather than from a sentence this handler invented.
 	if !b.Reachable() {

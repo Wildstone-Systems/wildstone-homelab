@@ -70,3 +70,46 @@ func TestSpeechRouterRefusesNonsense(t *testing.T) {
 		}
 	}
 }
+
+// Spoken replies are their own switch: off by default, served locally
+// by the same engine as transcription, and never given a cloud voice
+// unless asked.
+func TestSpeechRepliesAreTheirOwnSwitch(t *testing.T) {
+	r, _, err := speechRouter(validSpeech())
+	if err != nil || r.SpeaksAtAll() {
+		t.Fatalf("default: err = %v, speaks = %v", err, r.SpeaksAtAll())
+	}
+
+	c := validSpeech()
+	c.ReplyMode, c.URL = "local", "http://127.0.0.1:18000/v1"
+	r, warn, err := speechRouter(c)
+	if err != nil || len(warn) != 0 {
+		t.Fatalf("local replies: %v %v", warn, err)
+	}
+	v, ok := r.LocalVoice.(*speech.Client)
+	if !ok || v.BaseURL != "http://127.0.0.1:18000/v1" || v.Model != defaultReplyModel || v.Voice != defaultReplyVoice || !v.DownloadsModels {
+		t.Fatalf("local voice = %+v", r.LocalVoice)
+	}
+	if r.CloudVoice != nil || r.Enabled() || !r.CanSpeak(false) {
+		t.Errorf("replies without transcription: cloud=%v hears=%v speaks=%v", r.CloudVoice, r.Enabled(), r.CanSpeak(false))
+	}
+
+	c.ReplyMode, c.ReplyCloudVoice = "cloud", "sage"
+	r, _, err = speechRouter(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cv, ok := r.CloudVoice.(*speech.Client)
+	if !ok || cv.Voice != "sage" || cv.Model != defaultReplyCloudModel || cv.Processing() != speech.Cloud || r.LocalVoice != nil {
+		t.Fatalf("cloud voice = %+v, local = %v", r.CloudVoice, r.LocalVoice)
+	}
+
+	c.ReplyMode, c.URL = "local", ""
+	if _, warn, _ := speechRouter(c); len(warn) == 0 {
+		t.Error("local replies with no engine URL gave no warning")
+	}
+	c.ReplyMode = "loud"
+	if _, _, err := speechRouter(c); err == nil {
+		t.Error("an unknown reply mode was accepted")
+	}
+}

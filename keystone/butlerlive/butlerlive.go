@@ -80,6 +80,10 @@ type Turn struct {
 
 	// Text is what they said.
 	Text string
+	// Source is how Text arrived: runtimedb.TurnSourceVoice when it was
+	// spoken (a chat voice message, or dictation the person sent), ""
+	// when typed. It labels the stored turn and changes nothing else.
+	Source string
 
 	// SessionID continues an existing conversation; empty opens one.
 	SessionID string

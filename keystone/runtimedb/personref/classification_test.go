@@ -226,6 +226,7 @@ var dismissed = map[string]string{
 	"source_id":        "an identifier for a non-person entity",
 	"source_ids":       "an identifier for a non-person entity",
 	"source_kind":      "an enum or classification, not a party",
+	"speech":           "a chat reply to be read aloud: descriptive text, not a party",
 	"started_at":       "a timestamp",
 	"state":            "an enum or classification, not a party",
 	"status":           "an enum or classification, not a party",

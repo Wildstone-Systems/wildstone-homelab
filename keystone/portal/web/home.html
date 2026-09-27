@@ -2177,6 +2177,8 @@
           var words = String(res.j.text || "").trim();
           var had = o.input.value.trim();
           o.input.value = had ? had + " " + words : words;
+          // Sent with the message, so the stored turn shows a 🎙️.
+          o.input.dataset.spoken = "1";
           o.input.dispatchEvent(new Event("input", { bubbles: true }));
           o.input.focus();
           o.say("Check what I heard, then send.");
@@ -2186,6 +2188,10 @@
     }
     o.button.addEventListener("click", function () {
       if (state === "recording") { stop(); } else if (state === "idle") { start(); }
+    });
+    // A box emptied by hand is no longer dictated.
+    o.input.addEventListener("input", function () {
+      if (!o.input.value.trim()) { delete o.input.dataset.spoken; }
     });
     set("idle");
     o.button.hidden = true;
@@ -2272,6 +2278,122 @@
     box.appendChild(wrap);
     return wrap;
   }
+  // ============================================================ read aloud
+  // The listen button (ADR-W042 part two). It posts one reply's text to
+  // Keystone, which reads it with the voice the assistant's privacy
+  // class allows, and plays what comes back. One reply plays at a time;
+  // pressing again, starting another, or changing assistant stops it.
+  //
+  // The same code is in assistant.html, home.html and
+  // assistant-widget.html, like the dictation code above; change one,
+  // change all three.
+  //
+  // o.say(message, bad)   where errors are shown
+  function readAloud(o) {
+    var playing = null;
+    // ticket counts starts and stops: audio that arrives after the person
+    // stopped it, or started another, is dropped rather than played.
+    var ticket = 0;
+    // The icon is drawn here rather than taken from the icon font, which
+    // carries only the glyphs the pages already used.
+    // (The slashes are escaped only so no line here reads as a comment.)
+    var SVG = "http:\/\/www.w3.org/2000/svg";
+    function listenIcon(state) {
+      var svg = document.createElementNS(SVG, "svg");
+      svg.setAttribute("viewBox", "0 0 16 16");
+      svg.setAttribute("width", "15");
+      svg.setAttribute("height", "15");
+      svg.setAttribute("aria-hidden", "true");
+      function shape(tag, attrs) {
+        var n = document.createElementNS(SVG, tag);
+        Object.keys(attrs).forEach(function (k) { n.setAttribute(k, attrs[k]); });
+        svg.appendChild(n);
+      }
+      if (state === "playing") {
+        shape("rect", { x: "4", y: "4", width: "8", height: "8", rx: "1.5", fill: "currentColor" });
+      } else if (state === "working") {
+        [4, 8, 12].forEach(function (x) { shape("circle", { cx: String(x), cy: "8", r: "1.4", fill: "currentColor" }); });
+      } else {
+        shape("path", { d: "M2.5 6h2.6L8.5 3.2v9.6L5.1 10H2.5z", fill: "currentColor" });
+        shape("path", { d: "M10.6 5.6a3.4 3.4 0 0 1 0 4.8M12.4 3.8a6 6 0 0 1 0 8.4", fill: "none",
+          stroke: "currentColor", "stroke-width": "1.4", "stroke-linecap": "round" });
+      }
+      return svg;
+    }
+    function showListen(b, state) {
+      b.setAttribute("data-state", state);
+      b.setAttribute("aria-pressed", state === "idle" ? "false" : "true");
+      b.setAttribute("aria-label", state === "idle" ? "Listen" : "Stop reading");
+      b.title = state === "idle" ? "Read this reply aloud" : "Stop reading";
+      while (b.firstChild) { b.removeChild(b.firstChild); }
+      b.appendChild(listenIcon(state));
+    }
+    function stop() {
+      ticket++;
+      if (!playing) { return; }
+      if (playing.audio) { playing.audio.pause(); }
+      if (playing.url) { URL.revokeObjectURL(playing.url); }
+      showListen(playing.button, "idle");
+      playing = null;
+    }
+    function play(b, agentName, words) {
+      stop();
+      var mine = ticket;
+      playing = { button: b };
+      showListen(b, "working");
+      fetch("/api/v1/assistant/speak", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ agent: agentName, text: words })
+      })
+        .then(function (r) {
+          if (!r.ok) {
+            return r.json().catch(function () { return {}; }).then(function (j) {
+              throw new Error(j.error || "That reply couldn't be read aloud just now.");
+            });
+          }
+          return r.blob();
+        })
+        .then(function (blob) {
+          if (mine !== ticket) { return; }
+          var url = URL.createObjectURL(blob);
+          var audio = new Audio(url);
+          playing.audio = audio;
+          playing.url = url;
+          audio.onended = function () { if (mine === ticket) { stop(); } };
+          // "playing" only once sound has started: a browser may refuse
+          // to start it at all.
+          return audio.play().then(function () { if (mine === ticket) { showListen(b, "playing"); } });
+        })
+        .catch(function (err) {
+          if (mine !== ticket) { return; }
+          stop();
+          // A browser that will not start sound without a tap says so;
+          // the button is there to tap.
+          o.say(err && err.name === "NotAllowedError" ? "Press the speaker to hear the reply."
+            : String((err && err.message) || err), !(err && err.name === "NotAllowedError"));
+        });
+    }
+    return {
+      // button makes the listen button for one reply, read by the
+      // assistant that wrote it.
+      button: function (words, agentName) {
+        var b = document.createElement("button");
+        b.type = "button";
+        b.className = "listen";
+        showListen(b, "idle");
+        b.addEventListener("click", function () {
+          if (playing && playing.button === b) { stop(); } else { play(b, agentName, words); }
+        });
+        return b;
+      },
+      // start reads a reply straight away: the answer to a question
+      // the person spoke.
+      start: function (b) { b.click(); },
+      stop: stop
+    };
+  }
+
   function canDictate(name) {
     return agents.some(function (a) { return a.name === name && a.dictation; });
   }
@@ -2285,6 +2407,26 @@
       n.className = bad ? "muted bad" : "muted";
     }
   });
+
+  function canListen(name) {
+    return agents.some(function (a) { return a.name === name && a.readAloud; });
+  }
+  var listen = readAloud({
+    say: function (message, bad) {
+      var n = el("mic-note");
+      n.textContent = message || "";
+      n.className = bad ? "muted bad" : "muted";
+    }
+  });
+  // listenTo puts a listen button in one reply (into), for the current
+  // assistant, and reads the reply at once when now is set.
+  function listenTo(into, body, now) {
+    if (!body || !canListen(agent)) { return; }
+    var b = listen.button(body, agent);
+    into.appendChild(b);
+    if (now) { listen.start(b); }
+  }
+
 
   // setupNote is an empty assistant's explanation, from the server:
   // what is missing and, to somebody who can fix it, a link to where.
@@ -2322,6 +2464,7 @@
         if (session) { el("open-conversation").href = "/assistant/?session=" + encodeURIComponent(session); }
         maxDictation = res.j.dictationMaxSeconds || 0;
         dict.show(canDictate(agent));
+        listen.stop();
         // One entry is a label, not a menu.
         // One assistant is a label rather than a menu — but a LABEL,
         // not a disabled button. A greyed-out control with a caret on it
@@ -2350,6 +2493,7 @@
             // thread.
             agent = sel.value;
             dict.show(canDictate(agent));
+            listen.stop();
             session = "";
             clear(el("thread"));
             clear(el("assistant-note"));
@@ -2379,8 +2523,22 @@
     b.addEventListener("click", function () { el("ask").value = b.textContent; el("ask").focus(); });
   });
 
-  function turn(role, body) {
-    if (role === "user") { return make("div", "msg-user", body); }
+  // A person's turn. A spoken one (a voice message, or dictation that
+  // was sent) carries a 🎙️, so a mis-hearing reads as one.
+  function userTurn(body, voice) {
+    var n = make("div", "msg-user", body);
+    if (voice) {
+      var m = make("span", "msg-voice", "🎙️");
+      m.title = "Spoken";
+      m.setAttribute("role", "img");
+      m.setAttribute("aria-label", "Spoken: ");
+      n.insertBefore(m, n.firstChild);
+    }
+    return n;
+  }
+
+  function turn(role, body, receipts, voice) {
+    if (role === "user") { return userTurn(body, voice); }
     var wrap = make("div", "turn");
     var mark = make("div", "turn-mark");
     mark.appendChild(icon("sparkle", true));
@@ -2397,7 +2555,9 @@
     var thread = el("thread");
     el("asks").hidden = true;
     // The message appears immediately, dimmed: pending is explicit.
-    var mine = turn("user", body);
+    var spoken = box.dataset.spoken === "1";
+    listen.stop();
+    var mine = turn("user", body, null, spoken);
     mine.style.opacity = "0.6";
     thread.appendChild(mine);
     // A line naming what it is doing, because silence reads as a hang.
@@ -2419,7 +2579,7 @@
     fetch("/api/v1/assistant/ask", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ agent: agent, session: session, text: body, new: fresh })
+      body: JSON.stringify({ agent: agent, session: session, text: body, new: fresh, voice: spoken })
     })
       .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, status: r.status, j: j }; }); })
       .then(function (res) {
@@ -2466,6 +2626,7 @@
             ? "/assistant/?session=" + encodeURIComponent(session)
             : "/assistant/";
           box.value = "";
+          delete box.dataset.spoken;
           return;
         }
         session = res.j.session || session;
@@ -2480,6 +2641,9 @@
         var foot = make("div", "spread");
         foot.style.marginTop = "var(--space-2)";
         foot.appendChild(make("span", "muted tnum", when(new Date().toISOString())));
+        // A spoken question is answered aloud too (the answer still to
+        // come, when this reply only stands in for it).
+        listenTo(foot, res.j.reply, spoken && !res.j.pending);
         t.lastChild.appendChild(foot);
         thread.appendChild(t);
         if (res.j.pending) {
@@ -2488,6 +2652,7 @@
             var lateFoot = make("div", "spread");
             lateFoot.style.marginTop = "var(--space-2)";
             lateFoot.appendChild(make("span", "muted tnum", when(m.at || new Date().toISOString())));
+            listenTo(lateFoot, m.text, spoken);
             late.lastChild.appendChild(lateFoot);
             thread.appendChild(late);
             thread.scrollTop = thread.scrollHeight;
@@ -2502,6 +2667,7 @@
           ? "/assistant/?session=" + encodeURIComponent(session)
           : "/assistant/";
         box.value = "";
+        delete box.dataset.spoken;
       })
       .catch(function (err) {
         // A failed send keeps the typed text.

@@ -277,6 +277,11 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
     onUnauthorized();
     throw new ApiError(401, "unauthenticated");
   }
+  // A reply read aloud comes back as the audio itself (ADR-W042), the
+  // one body that is not JSON.
+  if (res.ok && (res.headers.get("Content-Type") ?? "").startsWith("audio/")) {
+    return (await res.blob()) as T;
+  }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     const failed = data as { error?: string; sessionId?: string; proposalErrors?: string[]; stepUp?: string };
@@ -409,6 +414,8 @@ export interface ButlerStatus {
   // Butler's privacy class allows is installed.
   dictation?: boolean;
   dictationMaxSeconds?: number;
+  // Whether its replies can be read aloud here (the listen button).
+  readAloud?: boolean;
 }
 
 // --- Agent runtime (ADR-W039 §3.3). What reasons for an Agent, as
@@ -524,6 +531,8 @@ export interface ButlerTurn {
   capped?: boolean;
   transcriptJson?: string;
   planIds?: string[];
+  // "voice": the person spoke this turn (ADR-W042); absent when typed.
+  source?: "voice";
 }
 
 // The two surfaces (ADR-W026 A1): the operator's butler reads system
@@ -1736,6 +1745,9 @@ export const api = {
       `/api/v1/butlers/${encodeURIComponent(name)}/transcribe?seconds=${seconds.toFixed(1)}`,
       audio,
     ),
+  // A Butler's reply read aloud, as audio (ADR-W042 part two).
+  speakForButler: (name: string, text: string) =>
+    call<Blob>("POST", `/api/v1/butlers/${encodeURIComponent(name)}/speak`, { text }),
   butlerSessionsFor: (name: string, limit = 20) =>
     call<ButlerSession[]>(
       "GET",
@@ -2129,8 +2141,9 @@ export const api = {
   // there for you". This one takes the ceiling from the Butler's own
   // record, which is the only correct answer for a caller who holds
   // both surfaces (ADR-W031 A10).
-  askOneButler: (name: string, message: string) =>
-    call<AskResponse>("POST", `/api/v1/butlers/${encodeURIComponent(name)}/ask`, { message }),
+  // voice marks a dictated message, so its stored turn shows a 🎙️.
+  askOneButler: (name: string, message: string, voice = false) =>
+    call<AskResponse>("POST", `/api/v1/butlers/${encodeURIComponent(name)}/ask`, voice ? { message, voice } : { message }),
   butlerSessions: (limit = 20, surface?: ButlerSurface, butler?: string) =>
     call<ButlerSession[]>(
       "GET",
@@ -2142,8 +2155,12 @@ export const api = {
   // A follow-up. There is one endpoint rather than one per surface
   // because the surface comes from the stored session — continuing a
   // household conversation cannot move it onto the operator's Butler.
-  continueButlerSession: (id: string, message: string) =>
-    call<AskResponse>("POST", `/api/v1/butler/sessions/${encodeURIComponent(id)}/ask`, { message }),
+  continueButlerSession: (id: string, message: string, voice = false) =>
+    call<AskResponse>(
+      "POST",
+      `/api/v1/butler/sessions/${encodeURIComponent(id)}/ask`,
+      voice ? { message, voice } : { message },
+    ),
   chatBindings: (withRevoked = false) =>
     call<ChatBinding[]>("GET", `/api/v1/chat/bindings${withRevoked ? "?revoked=true" : ""}`),
   // An invite admits one Person to one Agent's bot (ADR-W033 B7). It
