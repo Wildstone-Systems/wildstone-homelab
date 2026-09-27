@@ -75,6 +75,9 @@ const GROUP_OF: Record<string, Group> = {
   mqtt: "Home",
   inventory: "Home",
   recipes: "Home",
+  // PantryOS (pantry-pantryos): stock, the grocery list and the
+  // cook-along — the kitchen, beside recipes.
+  pantry: "Home",
   budget: "Home",
   // Home rather than Identity beside `mail`, and the difference is the
   // capability's whole reason for existing: mail-roundcube's calendars

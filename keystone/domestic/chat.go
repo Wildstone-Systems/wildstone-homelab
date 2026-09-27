@@ -17,6 +17,7 @@ package domestic
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -30,6 +31,31 @@ type ChatRecipient struct {
 	// Connection is the Agent's bot this leaves by (ADR-W033 B7). A
 	// message is from one Agent, so the queue it joins is that Agent's.
 	Connection int64
+}
+
+// ChatSendCapabilities are the chat capabilities whose package declares
+// the send tool — the ones a household routine can deliver through
+// (ADR-W024 A5; ADR-W026 G6). Named by the PACKAGE's capability
+// ("chat-matrix"), which is what a routine names as "chat-matrix.send" and
+// what DeclaredFromPackages knows. An installed bot is an instance of it
+// ("chat-matrix-family"); whether any instance is installed is asked per
+// call, not here.
+//
+// An operator-only chat package declares no agentTools, so it is never
+// here: a household rule must not post into the one conversation that can
+// also propose changes.
+func ChatSendCapabilities(sources []AgentToolSource) []string {
+	var out []string
+	for _, s := range sources {
+		if !strings.HasPrefix(s.Capability, "chat-") {
+			continue
+		}
+		if _, ok := s.Tools["send"]; ok {
+			out = append(out, s.Capability)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // ChatSender is the "<capability>.send" executor. One is registered per

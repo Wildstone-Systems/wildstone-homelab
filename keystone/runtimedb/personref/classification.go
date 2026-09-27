@@ -365,6 +365,8 @@ var Columns = []Column{
 		"a machine principal from the principals table — the legacy machine axis (#201 Decision 6, slice #210)"},
 	{"audit", "acting_for", Actor,
 		"a machine principal from the principals table — the legacy machine axis (#201 Decision 6, slice #210)"},
+	{"integration_pairings", "paired_by", Actor,
+		"0090: api.pairPantry passes id.Name to SavePairing — the Console Owner's handle, or a machine principal name for a non-Console caller"},
 	{"butler_access", "granted_by", Actor,
 		"written from actingMember(id) or id.Name: a person handle for a Console caller, a machine principal name otherwise"},
 	{"butler_access", "revoked_by", Actor,

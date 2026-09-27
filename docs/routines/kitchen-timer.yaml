@@ -1,0 +1,31 @@
+# Tell whoever set a kitchen timer that it went off (ADR-W042 A5.1).
+#
+# PantryOS sends pantry.timer_finished when a timer ends, naming as its
+# subject whoever set it: the member who asked the agent, or the member
+# linked to the profile picked on the kitchen tablet. This routine sends
+# that person a chat message. A timer set by nobody known names nobody, and
+# that one run simply stops — the routine is not paused.
+#
+# To use it:
+#   1. Change `chat-matrix.send` to the chat your household uses:
+#      chat-discord.send, chat-slack.send or chat-telegram.send.
+#   2. Console → Routines → New routine, paste this, then open it and
+#      "Submit for Owner review" with the household as output audience.
+#      Or ask the Butler to propose it.
+#   3. An Owner approves it in Plans (the Owner Review Queue).
+#
+# Each person gets it on the chat bot they are admitted to. The Butler
+# cannot approve it; nothing runs until an Owner does.
+kind: Automation
+metadata:
+  name: kitchen-timer
+  owner: household
+spec:
+  description: Tell whoever set a kitchen timer that it went off
+  trigger:
+    eventType: pantry.timer_finished
+  action:
+    tool: chat-matrix.send
+    tier: domestic
+    params:
+      message: "⏰ Your {{ .Payload.label }} timer is done."
