@@ -411,6 +411,8 @@ After filtering:
 
 The case this exists for: sessions begun on Homepage, then an ambiguous continuation arriving over Telegram. Safe where they were written is not safe where they would now be shown.
 
+**A verified one-to-one chat is trusted for continuation.** When the message is the Person's own direct chat on a Connection they bound to themselves (the claim-code flow), the Person asking is the Person every candidate belongs to, and nobody else reads the reply. For continuation that Connection is treated like a trusted surface: the Person's conversations from any Connection, Homepage and Console included, are offered with their subjects and times and continued, rather than filtered by the Connection's classification or redirected to Homepage. Being strict there protected the Person from themselves and cost them every multi-turn conversation over chat. What stays strict: a group chat is never verified; each candidate still passes the session privacy check (processing class, memory disclosure) before it is offered; and memory disclosure to the Connection is unchanged by this rule.
+
 No candidate's context is loaded before the Person chooses, as above. That rule is unchanged; this one covers what is shown while they decide.
 
 `/new` forces a new session immediately.
