@@ -56,6 +56,10 @@ type Incoming struct {
 	// Voice is set when the message is a recording rather than text
 	// (ADR-W042). Text is then empty, or a caption.
 	Voice *VoiceNote
+	// Problem is a transport limitation discovered while receiving this
+	// event. It is logged locally and is never relayed to Keystone: the
+	// adapter did not receive readable user content to authorize or answer.
+	Problem string
 }
 
 // VoiceNote is a recording a transport heard but has NOT yet fetched.
@@ -297,6 +301,11 @@ func (a *adapter) receiveLoop(ctx context.Context) {
 // adapter knows. Everything else is relayed verbatim — an adapter that
 // interprets messages is an adapter with opinions about the household.
 func (a *adapter) handle(ctx context.Context, m Incoming) {
+	if m.Problem != "" {
+		a.log.Warn("message cannot be handled", "transport", a.transport.Name(),
+			"conversation", m.Conversation, "message", m.MessageID, "reason", m.Problem)
+		return
+	}
 	// A bot answers only what is addressed to it (ADR-W033 B9.1). In a
 	// group that means a mention or a reply to the bot; everything else
 	// said there is other people's conversation, and never leaves this

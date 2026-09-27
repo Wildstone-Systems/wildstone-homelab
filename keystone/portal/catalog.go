@@ -149,10 +149,11 @@ var categoryOf = map[string]string{
 	"file-sync": "files",
 	"pdf-tools": "files",
 	// Talking, and the assistant.
-	"mail":            "talk",
-	"ai-chat":         "talk",
-	"language-models": "talk",
-	"speech":          "talk",
+	"mail":              "talk",
+	"ai-chat":           "talk",
+	"language-models":   "talk",
+	"speech":            "talk",
+	"matrix-homeserver": "talk",
 	// Everything else, named rather than defaulted, so a capability
 	// landing in "other" is a gap in this table rather than a decision.
 	"code":      "other",
@@ -179,6 +180,7 @@ var profileAliases = map[string]string{
 	"container": "home-assistant",
 	"matrix":    "open-webui",
 	"telegram":  "open-webui",
+	"synapse":   "matrix-synapse",
 }
 
 // DescribeKey maps a package profile onto the key its description is

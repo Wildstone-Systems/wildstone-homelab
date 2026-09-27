@@ -395,7 +395,7 @@ func TestCatalogShipsTheLaunchServiceSet(t *testing.T) {
 		// unblocked by protocol minor 12 (F98)
 		"vpn-gluetun",
 		// asked for after the expansion
-		"podcasts-podgrab",
+		"podcasts-podgrab", "matrix-synapse",
 		// The household's own calendar (ADR-W034). Listed here rather
 		// than left to the count because it is the only calendar a
 		// household can run that does not need a mail provider behind
@@ -684,36 +684,14 @@ func sortedNames(m map[string]shipped) []string {
 // side of a conversation between two containers.
 //
 // Checked per package rather than per resource, because a single
-// container can say nothing about whether anyone is listening.
+// container can say nothing about whether anyone is listening. Only live
+// containers count as consumers. A completed Job is not restarted when a
+// secret rotates, so configuration it generated would retain the old value.
 func TestAPasswordSetOnADatabaseIsGivenToItsApp(t *testing.T) {
-	// The env names that CREATE a database credential, by image family.
-	creators := map[string]bool{
-		"POSTGRES_PASSWORD":          true,
-		"MYSQL_PASSWORD":             true,
-		"MARIADB_PASSWORD":           true,
-		"MONGO_INITDB_ROOT_PASSWORD": true,
-	}
 	checked := 0
 	for name, rendered := range renderShippedPackages(t) {
 		t.Run(name, func(t *testing.T) {
-			// Every secret reference this package's containers make.
-			refs := map[string]int{}
-			created := map[string]string{} // secret -> the container that creates it
-			for _, r := range rendered {
-				if r.Kind != resource.KindContainer || r.Container == nil {
-					continue
-				}
-				for k, v := range r.Container.Env {
-					ref, ok := strings.CutPrefix(strings.TrimSpace(v), "secret/")
-					if !ok {
-						continue
-					}
-					refs[ref]++
-					if creators[k] {
-						created[ref] = r.Metadata.Name
-					}
-				}
-			}
+			refs, created := databaseCredentialUse(rendered)
 			for ref, by := range created {
 				checked++
 				if refs[ref] < 2 {
@@ -726,6 +704,56 @@ func TestAPasswordSetOnADatabaseIsGivenToItsApp(t *testing.T) {
 	}
 	if checked == 0 {
 		t.Fatal("no package created a database credential — this test walked nothing")
+	}
+}
+
+// databaseCredentialUse deliberately ignores Jobs. Secret updates recreate
+// dependent containers, but they do not rerun completed Jobs; counting a Job
+// here would bless generated configuration that becomes stale after rotation.
+func databaseCredentialUse(rendered []resource.Resource) (refs map[string]int, created map[string]string) {
+	creators := map[string]bool{
+		"POSTGRES_PASSWORD":          true,
+		"MYSQL_PASSWORD":             true,
+		"MARIADB_PASSWORD":           true,
+		"MONGO_INITDB_ROOT_PASSWORD": true,
+	}
+	refs = map[string]int{}
+	created = map[string]string{}
+	for _, r := range rendered {
+		if r.Kind != resource.KindContainer || r.Container == nil {
+			continue
+		}
+		for k, v := range r.Container.Env {
+			ref, ok := strings.CutPrefix(strings.TrimSpace(v), "secret/")
+			if !ok {
+				continue
+			}
+			refs[ref]++
+			if creators[k] {
+				created[ref] = r.Metadata.Name
+			}
+		}
+	}
+	return refs, created
+}
+
+func TestDatabaseCredentialJobIsNotALiveConsumer(t *testing.T) {
+	const ref = "database-password"
+	rendered := []resource.Resource{
+		{Kind: resource.KindContainer, Metadata: resource.Metadata{Name: "database"}, Container: &resource.ContainerSpec{
+			Env: map[string]string{"POSTGRES_PASSWORD": "secret/" + ref},
+		}},
+		{Kind: resource.KindJob, Metadata: resource.Metadata{Name: "configure-app"}, Job: &resource.JobSpec{
+			Run: resource.ContainerSpec{Env: map[string]string{"APP_DATABASE_PASSWORD": "secret/" + ref}},
+		}},
+	}
+
+	refs, created := databaseCredentialUse(rendered)
+	if created[ref] != "database" {
+		t.Fatalf("database creator = %q, want database", created[ref])
+	}
+	if refs[ref] != 1 {
+		t.Fatalf("live references = %d, want only the database container; a completed Job cannot consume rotations", refs[ref])
 	}
 }
 
