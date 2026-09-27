@@ -263,6 +263,7 @@ func (db *DB) conversationTurnsFor(conv int64, to ButlerSurface) ([]ButlerTurn, 
 			// recomputing authority rather than carrying it.
 			carried = append(carried, ButlerTurn{
 				Ordinal: t.Ordinal, Role: t.Role, Text: t.Text, CreatedAt: t.CreatedAt,
+				Source: t.Source,
 			})
 		}
 	}

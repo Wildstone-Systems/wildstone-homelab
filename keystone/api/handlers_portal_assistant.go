@@ -219,9 +219,15 @@ func (s *Server) assistantAsk(_ http.ResponseWriter, r *http.Request, member str
 		Session string `json:"session"`
 		Text    string `json:"text"`
 		New     bool   `json:"new,omitempty"`
+		// Voice: the words were dictated, then checked and sent. It
+		// labels the stored turn with a 🎙️ (ADR-W042) and nothing else.
+		Voice bool `json:"voice,omitempty"`
 	}
 	if code, err := decodeStrict(r, &req); err != nil {
 		return nil, code, err
+	}
+	if req.Voice {
+		r = r.WithContext(withVoiceTurn(r.Context()))
 	}
 	text := strings.TrimSpace(req.Text)
 	switch {
@@ -411,6 +417,7 @@ func assistantMessages(sess runtimedb.ButlerSession) []assistantMessage {
 			// themselves live on the Console's Plans page, which is the
 			// owner's; what the member is owed here is that it happened.
 			Proposals: len(t.PlanIDs),
+			Voice:     t.Source == runtimedb.TurnSourceVoice,
 		})
 	}
 	return messages
@@ -421,6 +428,9 @@ type assistantMessage struct {
 	Role string    `json:"role"`
 	Text string    `json:"text"`
 	At   time.Time `json:"at,omitzero"`
+	// Voice: the person spoke this turn rather than typing it; the page
+	// shows a 🎙️ beside it (ADR-W042 §2.4).
+	Voice bool `json:"voice,omitempty"`
 	// Receipts is what the assistant actually DID during this turn.
 	Receipts  []receipt `json:"receipts,omitempty"`
 	Proposals int       `json:"proposals,omitempty"`

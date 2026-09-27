@@ -58,6 +58,7 @@
   .msg { padding: 7px 10px; border-radius: 9px; background: var(--control); white-space: pre-wrap;
          overflow-wrap: anywhere; max-width: 92%; }
   .msg.me { align-self: flex-end; background: var(--me); }
+  .msg .voice { margin-right: 6px; }
   .msg.pending { color: var(--dim); font-style: italic; }
   #prompt { color: var(--dim); }
   form { display: flex; gap: 6px; }
@@ -261,6 +262,8 @@
           var words = String(res.j.text || "").trim();
           var had = o.input.value.trim();
           o.input.value = had ? had + " " + words : words;
+          // Sent with the message, so the stored turn shows a 🎙️.
+          o.input.dataset.spoken = "1";
           o.input.dispatchEvent(new Event("input", { bubbles: true }));
           o.input.focus();
           o.say("Check what I heard, then send.");
@@ -270,6 +273,10 @@
     }
     o.button.addEventListener("click", function () {
       if (state === "recording") { stop(); } else if (state === "idle") { start(); }
+    });
+    // A box emptied by hand is no longer dictated.
+    o.input.addEventListener("input", function () {
+      if (!o.input.value.trim()) { delete o.input.dataset.spoken; }
     });
     set("idle");
     o.button.hidden = true;
@@ -298,10 +305,20 @@
 
   // textContent, never innerHTML: what comes back is a model's output,
   // and it is displayed as text whatever it contains.
-  const add = (role, text, pending) => {
+  const add = (role, text, pending, voice) => {
     const div = document.createElement("div");
     div.className = "msg" + (role === "user" ? " me" : "") + (pending ? " pending" : "");
     div.textContent = text;
+    if (voice) {
+      // Spoken, not typed: a 🎙️, so a mis-hearing reads as one.
+      const m = document.createElement("span");
+      m.className = "voice";
+      m.textContent = "🎙️";
+      m.title = "Spoken";
+      m.setAttribute("role", "img");
+      m.setAttribute("aria-label", "Spoken: ");
+      div.prepend(m);
+    }
     log.append(div);
     log.scrollTop = log.scrollHeight;
     el("prompt").hidden = true;
@@ -434,9 +451,11 @@
     const text = el("text").value.trim();
     if (!text) return;
     awaiting++;
+    const spoken = el("text").dataset.spoken === "1";
     el("text").value = "";
+    delete el("text").dataset.spoken;
     el("suggestions").replaceChildren();
-    const mine = add("user", text);
+    const mine = add("user", text, false, spoken);
     const waiting = add("assistant", "thinking…", true);
     el("send").disabled = true;
     say("");
@@ -444,7 +463,7 @@
       const r = await fetch("/api/v1/assistant/ask", {
         method: "POST",
         headers: { "content-type": "application/json", accept: "application/json" },
-        body: JSON.stringify({ agent: el("agent").value, session, text, new: fresh }),
+        body: JSON.stringify({ agent: el("agent").value, session, text, new: fresh, voice: spoken }),
       });
       const body = await r.json().catch(() => ({}));
       const agent = el("agent").value;
@@ -456,6 +475,7 @@
         mine.remove();
         waiting.remove();
         el("text").value = text;
+        if (spoken) el("text").dataset.spoken = "1";
         setTimeout(() => el("ask").requestSubmit(), 0);
         return;
       }
@@ -465,6 +485,7 @@
         mine.remove();
         waiting.remove();
         el("text").value = text;
+        if (spoken) el("text").dataset.spoken = "1";
         chooser(body.choose, (id) => {
           if (id) { session = id; fresh = false; } else { session = ""; fresh = true; }
           el("ask").requestSubmit();

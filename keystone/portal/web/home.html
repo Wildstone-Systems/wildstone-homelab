@@ -2177,6 +2177,8 @@
           var words = String(res.j.text || "").trim();
           var had = o.input.value.trim();
           o.input.value = had ? had + " " + words : words;
+          // Sent with the message, so the stored turn shows a 🎙️.
+          o.input.dataset.spoken = "1";
           o.input.dispatchEvent(new Event("input", { bubbles: true }));
           o.input.focus();
           o.say("Check what I heard, then send.");
@@ -2186,6 +2188,10 @@
     }
     o.button.addEventListener("click", function () {
       if (state === "recording") { stop(); } else if (state === "idle") { start(); }
+    });
+    // A box emptied by hand is no longer dictated.
+    o.input.addEventListener("input", function () {
+      if (!o.input.value.trim()) { delete o.input.dataset.spoken; }
     });
     set("idle");
     o.button.hidden = true;
@@ -2379,8 +2385,22 @@
     b.addEventListener("click", function () { el("ask").value = b.textContent; el("ask").focus(); });
   });
 
-  function turn(role, body) {
-    if (role === "user") { return make("div", "msg-user", body); }
+  // A person's turn. A spoken one (a voice message, or dictation that
+  // was sent) carries a 🎙️, so a mis-hearing reads as one.
+  function userTurn(body, voice) {
+    var n = make("div", "msg-user", body);
+    if (voice) {
+      var m = make("span", "msg-voice", "🎙️");
+      m.title = "Spoken";
+      m.setAttribute("role", "img");
+      m.setAttribute("aria-label", "Spoken: ");
+      n.insertBefore(m, n.firstChild);
+    }
+    return n;
+  }
+
+  function turn(role, body, receipts, voice) {
+    if (role === "user") { return userTurn(body, voice); }
     var wrap = make("div", "turn");
     var mark = make("div", "turn-mark");
     mark.appendChild(icon("sparkle", true));
@@ -2397,7 +2417,8 @@
     var thread = el("thread");
     el("asks").hidden = true;
     // The message appears immediately, dimmed: pending is explicit.
-    var mine = turn("user", body);
+    var spoken = box.dataset.spoken === "1";
+    var mine = turn("user", body, null, spoken);
     mine.style.opacity = "0.6";
     thread.appendChild(mine);
     // A line naming what it is doing, because silence reads as a hang.
@@ -2419,7 +2440,7 @@
     fetch("/api/v1/assistant/ask", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ agent: agent, session: session, text: body, new: fresh })
+      body: JSON.stringify({ agent: agent, session: session, text: body, new: fresh, voice: spoken })
     })
       .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, status: r.status, j: j }; }); })
       .then(function (res) {
@@ -2466,6 +2487,7 @@
             ? "/assistant/?session=" + encodeURIComponent(session)
             : "/assistant/";
           box.value = "";
+          delete box.dataset.spoken;
           return;
         }
         session = res.j.session || session;
@@ -2502,6 +2524,7 @@
           ? "/assistant/?session=" + encodeURIComponent(session)
           : "/assistant/";
         box.value = "";
+        delete box.dataset.spoken;
       })
       .catch(function (err) {
         // A failed send keeps the typed text.

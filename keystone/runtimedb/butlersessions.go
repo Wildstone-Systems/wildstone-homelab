@@ -99,7 +99,14 @@ type ButlerTurn struct {
 	Capped         bool      `json:"capped,omitempty"`
 	TranscriptJSON string    `json:"transcriptJson,omitempty"`
 	PlanIDs        []string  `json:"planIds,omitempty"`
+	// Source is how a user turn arrived: TurnSourceVoice for words that
+	// came from a recording, "" for typed text. A label for the
+	// conversations page; it authorises nothing.
+	Source string `json:"source,omitempty"`
 }
+
+// TurnSourceVoice marks a user turn transcribed from speech (ADR-W042).
+const TurnSourceVoice = "voice"
 
 // ButlerRoleUser and ButlerRoleAssistant are the only two roles a turn
 // can carry. The tool traffic is not a turn: it is recorded inside the
@@ -203,11 +210,19 @@ func insertTurns(tx *sql.Tx, session int64, base int, turns []ButlerTurn) error 
 		if t.TranscriptJSON == "" {
 			t.TranscriptJSON = "{}"
 		}
+		if t.Source != "" && (t.Source != TurnSourceVoice || t.Role != ButlerRoleUser) {
+			return fmt.Errorf("runtimedb: turn source %q is not valid on a %s turn", t.Source, t.Role)
+		}
+		// source is named only when there is one: a typed turn is the
+		// column's default, and so is every turn written before 0090.
+		cols, marks := "session, ordinal, role, text, created_at, capped, tool_json, plan_ids", "?, ?, ?, ?, ?, ?, ?, ?"
+		args := []any{session, base + i, t.Role, t.Text, now(), boolInt(t.Capped), t.TranscriptJSON,
+			strings.Join(t.PlanIDs, ",")}
+		if t.Source != "" {
+			cols, marks, args = cols+", source", marks+", ?", append(args, t.Source)
+		}
 		if _, err := tx.Exec(
-			`INSERT INTO butler_session_turns (session, ordinal, role, text, created_at, capped, tool_json, plan_ids)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-			session, base+i, t.Role, t.Text, now(), boolInt(t.Capped), t.TranscriptJSON,
-			strings.Join(t.PlanIDs, ","),
+			`INSERT INTO butler_session_turns (`+cols+`) VALUES (`+marks+`)`, args...,
 		); err != nil {
 			return fmt.Errorf("runtimedb: inserting butler turn: %w", err)
 		}
@@ -290,7 +305,7 @@ func (db *DB) ListButlerTurns(seq int64) ([]ButlerTurn, error) {
 
 func listButlerTurns(q sessionReader, seq int64) ([]ButlerTurn, error) {
 	rows, err := q.Query(
-		`SELECT ordinal, role, text, created_at, capped, tool_json, plan_ids
+		`SELECT ordinal, role, text, created_at, capped, tool_json, plan_ids, source
 		 FROM butler_session_turns WHERE session = ? ORDER BY ordinal`, seq)
 	if err != nil {
 		return nil, fmt.Errorf("runtimedb: listing butler turns: %w", err)
@@ -301,7 +316,7 @@ func listButlerTurns(q sessionReader, seq int64) ([]ButlerTurn, error) {
 		var t ButlerTurn
 		var created, planIDs string
 		var capped int
-		if err := rows.Scan(&t.Ordinal, &t.Role, &t.Text, &created, &capped, &t.TranscriptJSON, &planIDs); err != nil {
+		if err := rows.Scan(&t.Ordinal, &t.Role, &t.Text, &created, &capped, &t.TranscriptJSON, &planIDs, &t.Source); err != nil {
 			return nil, err
 		}
 		t.Capped = capped != 0

@@ -458,7 +458,13 @@ func (s *Server) chatInbound(r *http.Request, id principal.Identity, msg inbound
 	var (
 		out any
 		st  int
+		ctx = r.Context()
 	)
+	if voice != nil {
+		// Stored with a 🎙️, so a mis-hearing reads as one on the
+		// conversations page (ADR-W042 §2.4).
+		ctx = withVoiceTurn(ctx)
+	}
 	// Which Butler answers is decided HERE, from the address the message
 	// arrived at, and the legacy single-provider path is taken only when
 	// this deployment has created no Butlers at all (ADR-W031 A2).
@@ -494,11 +500,11 @@ func (s *Server) chatInbound(r *http.Request, id principal.Identity, msg inbound
 		if prior != nil {
 			turn.SessionID, turn.History = prior.SessionID, prior.History
 		}
-		out, st, err = s.runNamedButlerSession(r.Context(), turn, prior)
+		out, st, err = s.runNamedButlerSession(ctx, turn, prior)
 	} else if !at.AdmitsOwnersOnly() {
-		out, st, err = s.runFamilySession(r.Context(), text, binding.Identity, "", at.Name(), msg.Group, prior)
+		out, st, err = s.runFamilySession(ctx, text, binding.Identity, "", at.Name(), msg.Group, prior)
 	} else {
-		out, st, err = s.runAdminButlerSession(r.Context(), text, binding.Identity, at.Name(), prior)
+		out, st, err = s.runAdminButlerSession(ctx, text, binding.Identity, at.Name(), prior)
 	}
 	if err != nil {
 		// A turn can fail after tools have already run. When it did,

@@ -452,6 +452,8 @@
           var words = String(res.j.text || "").trim();
           var had = o.input.value.trim();
           o.input.value = had ? had + " " + words : words;
+          // Sent with the message, so the stored turn shows a 🎙️.
+          o.input.dataset.spoken = "1";
           o.input.dispatchEvent(new Event("input", { bubbles: true }));
           o.input.focus();
           o.say("Check what I heard, then send.");
@@ -461,6 +463,10 @@
     }
     o.button.addEventListener("click", function () {
       if (state === "recording") { stop(); } else if (state === "idle") { start(); }
+    });
+    // A box emptied by hand is no longer dictated.
+    o.input.addEventListener("input", function () {
+      if (!o.input.value.trim()) { delete o.input.dataset.spoken; }
     });
     set("idle");
     o.button.hidden = true;
@@ -752,7 +758,7 @@
         clear(el("note"));
         var all = [];
         (res.j.messages || []).forEach(function (m) {
-          thread.appendChild(turn(m.role, m.text, m.receipts));
+          thread.appendChild(turn(m.role, m.text, m.receipts, m.voice));
           (m.receipts || []).forEach(function (r) { all.push(r); });
         });
         renderReceipts(all);
@@ -771,8 +777,22 @@
       });
   }
 
-  function turn(role, body, receipts) {
-    if (role === "user") { return make("div", "msg-user", body); }
+  // A person's turn. A spoken one (a voice message, or dictation that
+  // was sent) carries a 🎙️, so a mis-hearing reads as one.
+  function userTurn(body, voice) {
+    var n = make("div", "msg-user", body);
+    if (voice) {
+      var m = make("span", "msg-voice", "🎙️");
+      m.title = "Spoken";
+      m.setAttribute("role", "img");
+      m.setAttribute("aria-label", "Spoken: ");
+      n.insertBefore(m, n.firstChild);
+    }
+    return n;
+  }
+
+  function turn(role, body, receipts, voice) {
+    if (role === "user") { return userTurn(body, voice); }
     var wrap = make("div", "turn");
     var mark = make("span", "turn-mark");
     mark.appendChild(icon("sparkle", true));
@@ -977,7 +997,8 @@
     el("mic-note").textContent = "";
     var thread = el("thread");
     el("asks").hidden = true;
-    var mine = turn("user", body);
+    var spoken = box.dataset.spoken === "1";
+    var mine = turn("user", body, null, spoken);
     mine.style.opacity = "0.6";
     thread.appendChild(mine);
     var working = turn("assistant", "Thinking…");
@@ -990,7 +1011,7 @@
     fetch("/api/v1/assistant/ask", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ agent: agent, session: session, text: body, new: fresh })
+      body: JSON.stringify({ agent: agent, session: session, text: body, new: fresh, voice: spoken })
     })
       .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, status: r.status, j: j }; }); })
       .then(function (res) {
@@ -1024,6 +1045,7 @@
           // turn of the conversation. /new and /resume move which
           // conversation the next message belongs to.
           box.value = "";
+          delete box.dataset.spoken;
           if (res.j.newConversation) {
             forget(agent);
             newConversation();
@@ -1042,7 +1064,7 @@
         thread.appendChild(turn("assistant", res.j.reply || ""));
         if (res.j.pending) {
           awaitAnswer(session, res.j.seen || 0, function (m) {
-            thread.appendChild(turn(m.role, m.text, m.receipts));
+            thread.appendChild(turn(m.role, m.text, m.receipts, m.voice));
             thread.scrollTop = thread.scrollHeight;
             refreshReceipts();
             loadConversations();
@@ -1054,6 +1076,7 @@
                                   : res.j.proposals + " things need the owner's approval"));
         }
         box.value = "";
+        delete box.dataset.spoken;
         loadConversations();
         // Re-read the conversation once the answer is in. The ask
         // response carries the reply but not what the assistant DID to

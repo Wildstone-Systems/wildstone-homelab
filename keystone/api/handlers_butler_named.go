@@ -130,6 +130,9 @@ func (s *Server) butlersConfigured() bool {
 // second way of recording what happened — two audit paths would mean
 // two things to keep true.
 func (s *Server) runNamedButlerSession(ctx context.Context, turn butlerlive.Turn, prior *turnContext) (any, int, error) {
+	if turn.Source == "" {
+		turn.Source = turnSource(ctx)
+	}
 	if code, err := s.turnHasAPerson(turn.Member); err != nil {
 		return nil, code, err
 	}
@@ -234,7 +237,7 @@ func (s *Server) runNamedButlerSession(ctx context.Context, turn butlerlive.Turn
 		Capped:               ans.Capped,
 		TranscriptJSON:       redact.String(string(transcriptJSON)),
 		Turns: []runtimedb.ButlerTurn{
-			{Role: runtimedb.ButlerRoleUser, Text: redact.String(turn.Text), TaskID: ans.TaskID},
+			{Role: runtimedb.ButlerRoleUser, Text: redact.String(turn.Text), TaskID: ans.TaskID, Source: turn.Source},
 			{
 				Role: runtimedb.ButlerRoleAssistant, Text: finalText, Capped: ans.Capped,
 				TranscriptJSON: redact.String(string(transcriptJSON)), PlanIDs: planIDs,
@@ -378,7 +381,7 @@ func (s *Server) preserveFailedTurn(turn butlerlive.Turn, prior *turnContext, an
 			// proposal next to the question that caused it, the same
 			// way a successful assistant turn carries its own.
 			{Role: runtimedb.ButlerRoleUser, Text: redact.String(turn.Text), TaskID: ans.TaskID,
-				TranscriptJSON: failed, PlanIDs: planIDs},
+				TranscriptJSON: failed, PlanIDs: planIDs, Source: turn.Source},
 		},
 	})
 	if serr != nil || sessionID == "" {

@@ -346,6 +346,7 @@ a:hover { color: var(--color-accent-200); text-decoration: underline; }
 .turn { display: flex; gap: var(--space-3); align-items: flex-start; }
 .turn-mark { width: 24px; height: 24px; flex: none; border-radius: 50%; display: grid; place-items: center; color: var(--color-accent-300); background: color-mix(in srgb, var(--color-accent) 18%, transparent); }
 .msg-user { align-self: flex-end; max-width: 78%; background: color-mix(in srgb, var(--color-text) 10%, transparent); padding: var(--space-3) var(--space-4); border-radius: var(--radius-lg); border-bottom-right-radius: var(--radius-sm); font-size: 13.5px; }
+.msg-user .msg-voice { margin-right: var(--space-2); }
 .search { display: flex; align-items: center; gap: var(--space-3); background: var(--color-surface); border: 1px solid var(--hair); border-radius: var(--radius-md); padding: var(--space-3) var(--space-4); }
 .search input { flex: 1; min-width: 0; border: 0; background: none; color: var(--color-text); font: inherit; font-size: 14px; caret-color: var(--color-accent); }
 .search input:focus-visible { outline: none; }
