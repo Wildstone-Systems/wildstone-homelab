@@ -113,11 +113,42 @@ func TestMCPToolsListMapsManifestToolsWithReadOnlyHint(t *testing.T) {
 	}
 }
 
-func TestMCPToolsListMissingHandleIsInvalidParams(t *testing.T) {
-	m := testMCPServer(&fakeClient{})
+// TestMCPToolsListWithNoRunOffersTheAgentsTools: Hermes lists tools
+// when it connects, before any run exists (#364). With no handle to
+// scope a manifest by, it is offered the Agent's own tool set.
+func TestMCPToolsListWithNoRunOffersTheAgentsTools(t *testing.T) {
+	m := testMCPServer(&fakeClient{
+		toolsFn: func(ctx context.Context) ([]agentapi.ToolSpec, error) {
+			return []agentapi.ToolSpec{{Name: "get_household_events", ReadOnlyHint: true}}, nil
+		},
+		manifestFn: func(ctx context.Context, h agentapi.Handle) (agentapi.Manifest, error) {
+			t.Error("a task manifest was fetched with no run in flight")
+			return agentapi.Manifest{}, nil
+		},
+	})
 	_, resp := doMCP(t, m, "sh4red", nil, `{"jsonrpc":"2.0","id":4,"method":"tools/list"}`)
-	if resp.Error == nil || resp.Error.Code != codeInvalidParams {
-		t.Fatalf("resp.Error = %+v, want code %d", resp.Error, codeInvalidParams)
+	if resp.Error != nil {
+		t.Fatalf("tools/list error: %+v", resp.Error)
+	}
+	raw, _ := json.Marshal(resp.Result)
+	var result mcpToolsListResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		t.Fatalf("decoding tools/list result: %v", err)
+	}
+	if len(result.Tools) != 1 || result.Tools[0].Name != "get_household_events" {
+		t.Fatalf("tools = %+v, want the Agent's own tool set", result.Tools)
+	}
+}
+
+func TestMCPToolsListAgentToolsErrorIsInternalError(t *testing.T) {
+	m := testMCPServer(&fakeClient{
+		toolsFn: func(ctx context.Context) ([]agentapi.ToolSpec, error) {
+			return nil, errors.New("keystone unreachable")
+		},
+	})
+	_, resp := doMCP(t, m, "sh4red", nil, `{"jsonrpc":"2.0","id":4,"method":"tools/list"}`)
+	if resp.Error == nil || resp.Error.Code != codeInternalError {
+		t.Fatalf("resp.Error = %+v, want code %d", resp.Error, codeInternalError)
 	}
 }
 

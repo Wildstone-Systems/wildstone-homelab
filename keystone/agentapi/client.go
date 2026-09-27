@@ -132,6 +132,21 @@ type Client interface {
 	Heartbeat(ctx context.Context, hb Heartbeat) error
 }
 
+// ToolsClient lists the Agent's own tool set without a task (#364):
+// what a runtime that fetches its tools once, when it connects, before
+// any task exists (Hermes's MCP client does) can offer its model. It is
+// an addition to Client, like DeliveryClient.
+//
+// Wildstone enforces: which Agent — from the runtime principal, not a
+// parameter; the Agent's assignments, controls and grants and the
+// read-only verdict, as Manifest applies them. It is NOT narrowed by a
+// person or a Connection, because there is none yet: every Invoke is
+// still authorized against its own task's person and Connection, so a
+// tool listed here can be refused there.
+type ToolsClient interface {
+	Tools(ctx context.Context) ([]ToolSpec, error)
+}
+
 // DeliveryClient is the pull side of the Events family (§3.6, §4.1;
 // Phase 4, #341): long-poll for unacked deliveries,
 // and acknowledge one. It is deliberately its OWN interface rather than

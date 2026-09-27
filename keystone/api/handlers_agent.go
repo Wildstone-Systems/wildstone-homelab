@@ -236,6 +236,30 @@ func (s *Server) agentManifest(r *http.Request, id principal.Identity) (any, int
 	return res, http.StatusOK, nil
 }
 
+// agentTools is GET /api/v1/agent/tools (#364): the calling runtime's
+// Agent's own tool set, for a runtime that lists its tools before it
+// holds any task (agentapi.ToolsClient).
+func (s *Server) agentTools(r *http.Request, id principal.Identity) (any, int, error) {
+	ctx, code, err := s.agentContext(r, id)
+	if err != nil {
+		return nil, code, err
+	}
+	tc, ok := s.AgentGateway.(agentapi.ToolsClient)
+	if !ok {
+		return nil, http.StatusNotImplemented, fmt.Errorf("this deployment's agent gateway cannot list tools without a task")
+	}
+	tools, err := tc.Tools(ctx)
+	if err != nil {
+		return agentErrorResponse(err)
+	}
+	return toolsResponse{Tools: tools}, http.StatusOK, nil
+}
+
+// toolsResponse is GET /api/v1/agent/tools's body.
+type toolsResponse struct {
+	Tools []agentapi.ToolSpec `json:"tools"`
+}
+
 // agentInvoke is POST /api/v1/agent/invoke.
 func (s *Server) agentInvoke(r *http.Request, id principal.Identity) (any, int, error) {
 	ctx, code, err := s.agentContext(r, id)

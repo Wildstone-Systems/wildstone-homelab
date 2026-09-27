@@ -1237,3 +1237,24 @@ func TestHTTPClientIsConformant(t *testing.T) {
 	target.Deliveries = client
 	conformance.Run(t, target)
 }
+
+// GET /api/v1/agent/tools (#364): the runtime's own Agent's tools, with
+// no task, over the wire — what Hermes lists when it connects.
+func TestAgentToolsListsTheAgentsToolsOverHTTP(t *testing.T) {
+	h, _, _, cred := conformanceRunHarness(t)
+	var body toolsResponse
+	if res := h.doToken(cred.Secret, http.MethodGet, "/api/v1/agent/tools", nil, &body); res.StatusCode != http.StatusOK {
+		t.Fatalf("tools = %d", res.StatusCode)
+	}
+	if len(body.Tools) == 0 {
+		t.Fatal("the Agent's tool list is empty")
+	}
+	for _, tool := range body.Tools {
+		if tool.Name == "" {
+			t.Fatalf("a tool with no name: %+v", body.Tools)
+		}
+	}
+	if res := h.doToken("", http.MethodGet, "/api/v1/agent/tools", nil, nil); res.StatusCode == http.StatusOK {
+		t.Fatal("tools listed with no credential")
+	}
+}

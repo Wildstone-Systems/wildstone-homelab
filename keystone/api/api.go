@@ -919,6 +919,7 @@ func (s *Server) Handler() http.Handler {
 	// notify) — the decision that this family adds no new RBAC verb,
 	// since RoleButler already holds both.
 	mux.Handle("POST /api/v1/agent/manifest", s.handle(principal.VerbRead, s.agentManifest))
+	mux.Handle("GET /api/v1/agent/tools", s.handle(principal.VerbRead, s.agentTools))
 	mux.Handle("POST /api/v1/agent/invoke", s.handle(principal.VerbPropose, s.agentInvoke))
 	mux.Handle("POST /api/v1/agent/recall", s.handle(principal.VerbRead, s.agentRecall))
 	mux.Handle("POST /api/v1/agent/remember", s.handle(principal.VerbPropose, s.agentRemember))
