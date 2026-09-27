@@ -399,6 +399,37 @@ func (bs *Butlers) runtimeOffline(b runtimedb.Butler) (bool, string, error) {
 	return false, "", nil
 }
 
+// resumableForExternal picks the task a message in a session continues
+// when b answers through an external runtime: the newest open task the
+// runtime does not hold. open is false when every open task is held, in
+// which case the message gets a new task. For a native b it returns
+// newest unchanged with open true, so a native conversation resumes
+// exactly as it always has.
+func (bs *Butlers) resumableForExternal(b runtimedb.Butler, newest runtimedb.ButlerTask, session string) (runtimedb.ButlerTask, bool, error) {
+	if _, external, err := bs.externalRuntime(b); err != nil || !external {
+		return newest, true, err
+	}
+	tasks, err := bs.DB.OpenButlerTasksForSession(session)
+	if err != nil {
+		return runtimedb.ButlerTask{}, false, err
+	}
+	for _, task := range tasks {
+		held, err := bs.heldByExternalRuntime(b, task)
+		if err != nil {
+			return runtimedb.ButlerTask{}, false, err
+		}
+		if !held {
+			return task, true, nil
+		}
+	}
+	if len(tasks) == 0 {
+		// Nothing open: newest is finished, and the switch below opens
+		// a new task for it as it always has.
+		return newest, true, nil
+	}
+	return newest, false, nil
+}
+
 // heldByExternalRuntime reports whether task is work b's external
 // runtime holds: running (the runtime has it and has not answered), or
 // parked in waiting(runtime-offline) to be re-offered to it. A task
@@ -421,7 +452,20 @@ func (bs *Butlers) heldByExternalRuntime(b runtimedb.Butler, task runtimedb.Butl
 		return false, err
 	}
 	last := waits[len(waits)-1]
-	return last.Reason == runtimedb.ButlerWaitRuntimeOffline && last.ResolvedAt.IsZero(), nil
+	if last.Reason != runtimedb.ButlerWaitRuntimeOffline {
+		return false, nil
+	}
+	if last.ResolvedAt.IsZero() {
+		return true, nil
+	}
+	// The offline wait resolved after the state above was read: the
+	// runtime reconnected and started the task (Work Start resolves the
+	// wait and moves it to running in one step). It holds it now.
+	now, err := bs.DB.GetButlerTask(task.ID)
+	if err != nil {
+		return false, err
+	}
+	return now.State == runtimedb.ButlerTaskRunning, nil
 }
 
 // queueForOfflineRuntime moves task to waiting(runtime-offline). It
@@ -487,21 +531,24 @@ func (bs *Butlers) task(b runtimedb.Butler, t Turn) (runtimedb.ButlerTask, bool,
 			// cancelled" is the true answer to a follow-up on a
 			// conversation somebody stopped, and inventing a fresh task
 			// would quietly restart work that was deliberately halted.
-			held, herr := bs.heldByExternalRuntime(b, existing)
+			// An external runtime may hold the newest task while an
+			// older one waits on the person (#389): this message is for
+			// the newest task the runtime does not hold, or a new one.
+			existing, open, herr := bs.resumableForExternal(b, existing, t.SessionID)
 			if herr != nil {
 				return runtimedb.ButlerTask{}, false, herr
 			}
 			switch {
 			case existing.State == runtimedb.ButlerTaskCompleted, existing.State == runtimedb.ButlerTaskFailed:
-			case held:
-				// An external runtime is still working on the previous
-				// message, or it was parked for that runtime to come
-				// back (#389). Resuming would re-issue the task's handle
-				// and invalidate the one the runtime holds, so its
-				// answer would be refused and lost. This message is a
-				// new turn with its own task instead; the earlier one
-				// keeps its handle, and its answer reaches the
-				// conversation when it arrives (LateAnswer).
+			case !open:
+				// An external runtime is still working on every open
+				// task in this conversation, or they are parked for that
+				// runtime to come back. Resuming one would re-issue its
+				// handle and invalidate the one the runtime holds, so its
+				// answer would be refused and lost. This message is a new
+				// turn with its own task instead; the others keep their
+				// handles, and their answers reach the conversation when
+				// they arrive (LateAnswer).
 			default:
 				// THE CALLER MUST BE THE ORIGIN, checked here rather
 				// than only when a tool runs.

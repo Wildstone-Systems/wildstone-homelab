@@ -461,3 +461,52 @@ func TestAFollowUpDoesNotCutOffTheRunInFlight(t *testing.T) {
 		t.Fatalf("late answers = %v, want the first task's", late)
 	}
 }
+
+// An older task in the conversation that waits on the person is what
+// the next message answers, even after a follow-up opened a newer task
+// the runtime still holds (#389).
+func TestAnOlderTaskWaitingOnThePersonIsStillResumed(t *testing.T) {
+	f, bs, _ := externalFixture(t, `{"kind":"informational"}`)
+	bs.ExternalReplyWait = 50 * time.Millisecond
+	bs.LateAnswer = func(string, string) error { return nil }
+	turn := func(text, session string) butlerlive.Answer {
+		t.Helper()
+		answer, err := bs.Serve(context.Background(), butlerlive.Turn{
+			Butler: "alfred", Member: "mika", Text: text, SessionID: session,
+			Connection: butlerlive.ConnectionScope{Name: butlerlive.ConsoleConnection},
+		})
+		if err != nil {
+			t.Fatalf("Serve(%q): %v", text, err)
+		}
+		return answer
+	}
+
+	first := turn("restart the media server", "")
+	sid, err := f.db.InsertButlerSession(runtimedb.ButlerSession{
+		Principal: "butler", ActingFor: "mika", Provider: "test", Mode: runtimedb.ButlerModeFull,
+		Surface: runtimedb.ButlerSurfaceAdmin, Butler: "alfred", FinalText: first.FinalText,
+		Turns: []runtimedb.ButlerTurn{
+			{Role: runtimedb.ButlerRoleUser, Text: "restart the media server", TaskID: first.TaskID},
+			{Role: runtimedb.ButlerRoleAssistant, Text: first.FinalText},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.db.SetButlerTaskSession(first.TaskID, sid); err != nil {
+		t.Fatal(err)
+	}
+	second := turn("and check the backups", sid)
+	if second.TaskID == first.TaskID {
+		t.Fatal("the follow-up resumed the task the runtime holds")
+	}
+
+	// The first task now waits on the person.
+	if err := f.ledger.Wait(first.TaskID, string(agentapi.WorkWaitReply), "which media server?"); err != nil {
+		t.Fatal(err)
+	}
+	third := turn("the one on n1", sid)
+	if third.TaskID != first.TaskID || !third.Resumed {
+		t.Fatalf("the answer went to %s (resumed=%t), want the waiting %s", third.TaskID, third.Resumed, first.TaskID)
+	}
+}
