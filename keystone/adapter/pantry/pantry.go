@@ -1,4 +1,4 @@
-// Package pantry is the PantryOS adapter (ADR-W030 A5.1 / P12, ADR-W042).
+// Package pantry is the PantryOS adapter (ADR-W030 A5.1 / P12, ADR-W044).
 //
 // Two upstreams live here. HTTP (http.go) is the real one: PantryOS's
 // contract pantry-1. Fake is the versioned stand-in P12 was built
@@ -42,7 +42,7 @@ const (
 // groceryList normalises a list name the way pantry-1 does. PantryOS
 // keeps ONE list, the groceries; every other list is Wildstone's, and
 // asking PantryOS for one is a routing mistake that must be refused, not
-// answered as "nothing on it" (ADR-W042 A3).
+// answered as "nothing on it" (ADR-W044 A3).
 func groceryList(name string) (string, error) {
 	switch strings.ToLower(strings.TrimSpace(name)) {
 	case "groceries", "grocery", "shopping":

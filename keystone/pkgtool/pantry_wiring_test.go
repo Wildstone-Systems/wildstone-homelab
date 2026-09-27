@@ -15,7 +15,7 @@ import (
 )
 
 // The pantry package's agentTools and keystone/domestic.PantryTools are
-// two halves of one list (ADR-W042 A5): a tool the package declares that
+// two halves of one list (ADR-W044 A5): a tool the package declares that
 // nothing registers is a tool the Butler offers and cannot perform, and a
 // registered tool the package does not declare is refused on every call.
 func TestPantryToolsAreDeclaredByThePackage(t *testing.T) {

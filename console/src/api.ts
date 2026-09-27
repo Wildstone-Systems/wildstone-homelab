@@ -1062,7 +1062,7 @@ export interface IndexMeasurement {
 
 // ---------------------------------------------------------------- integrations
 
-// A PantryOS pairing (ADR-W042 A6): the address Keystone reaches PantryOS
+// A PantryOS pairing (ADR-W044 A6): the address Keystone reaches PantryOS
 // at, and when and by whom it was paired. The agent key is sealed in
 // Keystone and never sent here.
 export const PANTRY_PAIRING_PATH = "/api/v1/pantry/pairing";
@@ -1894,7 +1894,7 @@ export const api = {
     ),
   widenIntegration: (name: string, w: { actions: boolean; indexing: boolean; cloud: boolean }) =>
     call<{ widened: string }>("POST", `/api/v1/integrations/${encodeURIComponent(name)}/widen`, w),
-  // Pairing with PantryOS (ADR-W042 A6). Neither secret ever comes back:
+  // Pairing with PantryOS (ADR-W044 A6). Neither secret ever comes back:
   // the status says where and when, nothing more.
   pantryPairing: () => call<PantryPairingStatus>("GET", PANTRY_PAIRING_PATH),
   pairPantry: (req: { address: string; code: string; keystoneUrl: string }) =>

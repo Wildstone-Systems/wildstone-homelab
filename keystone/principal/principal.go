@@ -124,7 +124,7 @@ func (s *Store) Revoke(secret string) error {
 
 // RevokeOthers revokes every live token held by name except secret: a
 // rotation that only lands once the new credential is known to have
-// arrived (ADR-W042 A6 pairing), so a failed hand-over leaves the old one
+// arrived (ADR-W044 A6 pairing), so a failed hand-over leaves the old one
 // working.
 func (s *Store) RevokeOthers(name, secret string) (int64, error) {
 	return s.DB.RevokeTokensForExcept(name, hashSecret(secret))

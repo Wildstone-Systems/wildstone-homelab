@@ -2577,7 +2577,7 @@ check("a secret field has a named Show control", secretOut.includes('aria-label=
   secretOut.includes('aria-pressed="false"') && secretOut.includes('type="button"'));
 check("a secret field is never spell-checked", secretOut.includes('spellCheck="false"') || secretOut.includes('spellcheck="false"'));
 
-// Pairing with PantryOS (ADR-W042 A6). The screen must never hold either
+// Pairing with PantryOS (ADR-W044 A6). The screen must never hold either
 // secret, must say where the code comes from, and must survive the
 // password confirmation a consequential pairing can ask for.
 import { GroceryMoveView, PantryPairingView } from "../src/views/PantryPairing";

@@ -1,7 +1,7 @@
 package pantry
 
 // A PantryOS whose address and key are looked up on every call
-// (ADR-W042 A6, #384), so pairing — or re-pairing, or unpairing — takes
+// (ADR-W044 A6, #384), so pairing — or re-pairing, or unpairing — takes
 // effect without restarting Keystone.
 
 import (

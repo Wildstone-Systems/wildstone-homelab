@@ -116,7 +116,7 @@ func main() {
 	consoleStepUp := flag.Duration("console-stepup-window", consoleauth.DefaultStepUpWindow, "how recent a sign-in a consequential Console operation requires")
 	calendarURL := flag.String("calendar-url", "", "CalDAV collection of the household calendar, e.g. http://radicale:5232/GROUPS/Y2FsZW5kYXJfdXNlcnM=/; other declared calendars are derived from its origin (ADR-W034, ADR-W038). Empty leaves them all unregistered, so a Butler does not offer the household a calendar this deployment has not got. The password comes ONLY from CALENDAR_PASSWORD, never a flag")
 	calendarUser := flag.String("calendar-user", "", "directory account the calendar actions sign in to the CalDAV collection as; its password comes from CALENDAR_PASSWORD")
-	pantryURL := flag.String("pantry-url", "", "PantryOS address for the pantry.* actions, e.g. https://pantry.example.internal (ADR-W042). Empty leaves them unregistered, so a Butler does not offer the household a pantry this deployment has not got. The agent key comes ONLY from PANTRY_AGENT_KEY, never a flag")
+	pantryURL := flag.String("pantry-url", "", "PantryOS address for the pantry.* actions, e.g. https://pantry.example.internal (ADR-W044). Empty leaves them unregistered, so a Butler does not offer the household a pantry this deployment has not got. The agent key comes ONLY from PANTRY_AGENT_KEY, never a flag")
 	householdIngress := flag.String("household-ingress", "", "comma-separated EXACT remote addresses of the identity proxy (Authelia). Empty fails closed. This names ONE trust boundary and it now gates TWO things: the household review page (ADR-W030 A8.1), and Console sign-in by forwarded identity (ADR-W032) — a request from one of these addresses carrying Remote-User and a Remote-Groups list containing console_users, who is an active Owner Person with a fresh Console sign-in (OIDC, ADR-W033 A4.1), is authenticated as that person, with admin authority. Setting this does not by itself grant anyone the Console: they must also be in the console_users directory group, which packages/wildstone-console declares, and be an active Owner")
 	speechMode := flag.String("speech-mode", "off", "how voice messages are transcribed (ADR-W042): off | local | local-then-cloud | cloud. local never sends audio out of the house; cloud and local-then-cloud use OpenAI only for a conversation whose Agent may use a cloud model. The OpenAI key comes ONLY from OPENAI_API_KEY or the Console, never a flag")
 	speechURL := flag.String("speech-url", "", "base URL of the local speech-to-text engine, e.g. http://127.0.0.1:18000/v1 (the speech-speaches package, installed on this node); empty means no local engine")
@@ -316,7 +316,7 @@ type householdConfig struct {
 	// same division -ntfy-url and NTFY_TOKEN already make.
 	CalendarUser string
 	// PantryURL is PantryOS, for the pantry.* actions; empty leaves them
-	// unregistered (ADR-W042). Its agent key arrives in PANTRY_AGENT_KEY,
+	// unregistered (ADR-W044). Its agent key arrives in PANTRY_AGENT_KEY,
 	// never in a flag — the division -calendar-url and CALENDAR_PASSWORD
 	// make.
 	PantryURL string
@@ -1350,7 +1350,7 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 		for _, e := range filedrop.Executors() {
 			actions.Register(e)
 		}
-		// PantryOS (packages/pantry-pantryos, ADR-W042). The calendar's
+		// PantryOS (packages/pantry-pantryos, ADR-W044). The calendar's
 		// road (ADR-W034 A5): Keystone holds the upstream, and each call
 		// is gated on the package being installed, as the lists are.
 		//
@@ -1359,7 +1359,7 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 		// connects it (A3), so a request is then told PantryOS is not
 		// connected, never written somewhere else.
 		//
-		// Where PantryOS is, asked on every call: a pairing (ADR-W042 A6)
+		// Where PantryOS is, asked on every call: a pairing (ADR-W044 A6)
 		// wins, because it is the newer and more deliberate act; the
 		// -pantry-url flag with PANTRY_AGENT_KEY is the fallback. Pairing,
 		// re-pairing and unpairing take effect without a restart.

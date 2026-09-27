@@ -13,7 +13,7 @@ import (
 )
 
 // The grocery list belongs to PantryOS while PantryOS is installed, and to
-// the household lists otherwise (ADR-W042 A3, #383).
+// the household lists otherwise (ADR-W044 A3, #383).
 
 // groceryGateway is the lists gateway with a PantryOS behind it.
 func groceryGateway(t *testing.T, up adapter.Upstream, pantryInstalled bool) (*Gateway, *runtimedb.DB) {

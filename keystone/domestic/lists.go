@@ -95,7 +95,7 @@ type Lists struct {
 	// posture, as Filedrop.Enabled). nil means "do not ask".
 	Enabled func() (bool, error)
 	// Groceries, when set, is where the grocery list goes while PantryOS
-	// is installed (ADR-W042 A3, #383). nil keeps every list here.
+	// is installed (ADR-W044 A3, #383). nil keeps every list here.
 	Groceries GroceryList
 }
 
@@ -131,7 +131,7 @@ var errGroceriesElsewhere = errors.New("the grocery list lives in PantryOS, whic
 	"tick them off; removing or clearing items is done in PantryOS itself")
 
 // routeGroceries sends a call about the grocery list to PantryOS while
-// PantryOS is installed (ADR-W042 A3). routed=false means the call is this
+// PantryOS is installed (ADR-W044 A3). routed=false means the call is this
 // store's to answer. There is no fallback: when PantryOS is installed, a
 // grocery call is PantryOS's whatever happens next — a PantryOS that is
 // down is reported down, because quietly writing here would leave the

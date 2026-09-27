@@ -591,7 +591,7 @@ export function InstalledDetail({
       <ServiceAccessPanel capability={pkg.capability} />
 
       {/* PantryOS runs where it already runs; pairing is how Wildstone
-          reaches it (ADR-W042 A6). */}
+          reaches it (ADR-W044 A6). */}
       {pkg.capability === "pantry" && <PantryPairingPanel />}
 
       <div className="row" style={{ marginTop: "var(--space-8)" }}>
