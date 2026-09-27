@@ -6,12 +6,14 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"strings"
 	"sync/atomic"
 	"time"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/agentapi"
+	"github.com/chickenrat17/wildstone-homelab/keystone/agentapi/httpclient"
 )
 
 // keystoneClient is what the delivery loop needs from Wildstone,
@@ -81,7 +83,7 @@ func (b *bridge) deliveryLoop(ctx context.Context) {
 			backoff = sleepBackoff(ctx, backoff)
 			continue
 		}
-		backoff = time.Second
+		settled := true
 		for _, d := range deliveries {
 			if !b.handleDelivery(ctx, d) {
 				// Stop at the first delivery this poll could not settle:
@@ -90,9 +92,18 @@ func (b *bridge) deliveryLoop(ctx context.Context) {
 				// nothing to gain by racing ahead of it, and doing so
 				// would let `after` skip past the one delivery that
 				// still needs a retry.
+				settled = false
 				break
 			}
 			after = d.ID
+		}
+		if settled {
+			backoff = time.Second
+		} else {
+			// The next poll hands the same delivery straight back, so
+			// retrying at once is a hot loop against Keystone (and its
+			// rate limiter) until whatever failed recovers.
+			backoff = sleepBackoff(ctx, backoff)
 		}
 	}
 }
@@ -138,11 +149,17 @@ func (b *bridge) handleTurn(ctx context.Context, d agentapi.Delivery) bool {
 
 	manifest, err := b.keystone.Manifest(ctx, d.Handle)
 	if err != nil {
+		if refused(err) {
+			return b.dropRefused(ctx, d, err)
+		}
 		b.log.Error("fetching manifest", "delivery", d.ID, "handle", d.Handle, "err", err)
 		return false
 	}
 
 	if err := b.keystone.Start(ctx, agentapi.WorkStart{Handle: d.Handle, Reason: "delivery"}); err != nil {
+		if refused(err) {
+			return b.dropRefused(ctx, d, err)
+		}
 		b.log.Error("starting task", "delivery", d.ID, "handle", d.Handle, "err", err)
 		return false
 	}
@@ -170,6 +187,9 @@ func (b *bridge) handleTurn(ctx context.Context, d agentapi.Delivery) bool {
 		if err := b.keystone.Complete(ctx, agentapi.WorkComplete{
 			Handle: d.Handle, Summary: "hermes run " + runID + " completed", Reply: outcome.Output,
 		}); err != nil {
+			if refused(err) {
+				return b.dropRefused(ctx, d, err)
+			}
 			b.log.Error("reporting the run's answer", "delivery", d.ID, "run", runID, "err", err)
 			return false
 		}
@@ -186,6 +206,22 @@ func (b *bridge) handleTurn(ctx context.Context, d agentapi.Delivery) bool {
 			return false
 		}
 	}
+	return b.ack(ctx, d.ID)
+}
+
+// refused reports whether Keystone refused the call outright (a 403): a
+// handle it no longer accepts — the task finished, was cancelled, or was
+// re-issued a handle by a later turn — or a credential it does not bind.
+// Retrying cannot change that answer.
+func refused(err error) bool { return errors.Is(err, httpclient.ErrRefused) }
+
+// dropRefused acknowledges a delivery whose handle Keystone refused, so
+// it stops blocking every delivery queued behind it. Nothing is lost:
+// the task's handle is Keystone's to issue, and a task that still needs
+// this runtime is handed to it again with a live one.
+func (b *bridge) dropRefused(ctx context.Context, d agentapi.Delivery, err error) bool {
+	b.log.Warn("Wildstone refused this delivery's task handle; acknowledging it without a run",
+		"delivery", d.ID, "handle", d.Handle, "err", err)
 	return b.ack(ctx, d.ID)
 }
 

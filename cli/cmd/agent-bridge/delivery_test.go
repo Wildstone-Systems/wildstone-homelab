@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/agentapi"
+	"github.com/chickenrat17/wildstone-homelab/keystone/agentapi/httpclient"
 )
 
 func testBridge(t *testing.T, ks *fakeClient, hc *fakeHermes) (*bridge, *bytes.Buffer) {
@@ -151,6 +152,35 @@ func TestHandleTurnCompletedWithoutAnswerFailsTask(t *testing.T) {
 	}
 	if len(ks.failCalls) != 1 || ks.failCalls[0].Reason != "the hermes run completed with no answer" {
 		t.Fatalf("failCalls = %+v, want one saying the run had no answer", ks.failCalls)
+	}
+}
+
+// TestHandleTurnRefusedHandleIsAcked: a handle Keystone no longer
+// accepts can never succeed, and an unacked delivery blocks every one
+// queued behind it.
+func TestHandleTurnRefusedHandleIsAcked(t *testing.T) {
+	ks := &fakeClient{
+		manifestFn: func(ctx context.Context, h agentapi.Handle) (agentapi.Manifest, error) {
+			return agentapi.Manifest{}, &httpclient.RefusedError{Message: "the task handle was refused"}
+		},
+	}
+	ran := false
+	hc := &fakeHermes{
+		startRunFn: func(ctx context.Context, req hermesRunRequest, idempotencyKey string) (string, error) {
+			ran = true
+			return "run-1", nil
+		},
+	}
+	br, _ := testBridge(t, ks, hc)
+
+	if !br.handleDelivery(context.Background(), turnDelivery("d1", "task1")) {
+		t.Fatal("handleDelivery returned false on a refused handle, want it settled")
+	}
+	if len(ks.ackCalls) != 1 || ks.ackCalls[0] != "d1" {
+		t.Fatalf("ackCalls = %v, want [d1]", ks.ackCalls)
+	}
+	if ran {
+		t.Fatal("a run was started for a task whose handle was refused")
 	}
 }
 
