@@ -117,6 +117,30 @@ func (db *DB) AssignTool(butler int64, tool, by string) error {
 	return nil
 }
 
+// AssignToolIfNeverAssigned assigns tool to an Agent that has never had
+// it — no live assignment and no revoked one — and reports whether it
+// did. A revoked row is somebody's decision that the Agent should not
+// have the tool, so it is left standing. For a backfill of a tool the
+// Agent could never have been given (see api.BackfillMemoryTools).
+func (db *DB) AssignToolIfNeverAssigned(butler int64, tool, by string) (bool, error) {
+	if tool == "" || by == "" {
+		return false, fmt.Errorf("runtimedb: assigning a tool needs a tool and who assigned it")
+	}
+	res, err := db.sql.Exec(
+		`INSERT INTO butler_tool_assignments (butler, tool, assigned_at, assigned_by)
+		 SELECT ?, ?, ?, ?
+		 WHERE NOT EXISTS (SELECT 1 FROM butler_tool_assignments WHERE butler = ? AND tool = ?)`,
+		butler, tool, now(), by, butler, tool)
+	if err != nil {
+		return false, fmt.Errorf("runtimedb: assigning %q: %w", tool, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("runtimedb: assigning %q: %w", tool, err)
+	}
+	return n == 1, nil
+}
+
 // UnassignTool takes one named tool away.
 func (db *DB) UnassignTool(butler int64, tool, by string) error {
 	if by == "" {

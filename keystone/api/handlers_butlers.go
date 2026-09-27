@@ -194,6 +194,52 @@ func (s *Server) BackfillAgentTools() error {
 	return nil
 }
 
+// memoryTools are the tools no governed Agent could be given before #364:
+// the inventory it was seeded from never listed them, and there is no
+// assign path after creation (butler.InventoryMemory has the why).
+var memoryTools = []string{"recall", "remember"}
+
+// BackfillMemoryTools gives every governed Agent the memory tools it
+// would have been seeded with, had the inventory listed them (#364).
+//
+// Run at startup after BackfillAgentTools, and idempotent. It assigns
+// only a tool the Agent has NEVER had — a revoked assignment is somebody
+// having taken it away, and stays taken — and only to a governed Agent,
+// since an ungoverned one already reaches every tool its surface
+// registers. A narrowing still subtracts on top, so the Console's own
+// switch takes memory away again.
+func (s *Server) BackfillMemoryTools() error {
+	if s.DB == nil {
+		return nil
+	}
+	butlers, err := s.DB.ListButlers()
+	if err != nil {
+		return err
+	}
+	for _, b := range butlers {
+		if !b.RetiredAt.IsZero() {
+			continue
+		}
+		governed, err := s.DB.AgentIsGoverned(b.Seq)
+		if err != nil {
+			return err
+		}
+		if !governed {
+			continue
+		}
+		for _, tool := range memoryTools {
+			added, err := s.DB.AssignToolIfNeverAssigned(b.Seq, tool, "system")
+			if err != nil {
+				return err
+			}
+			if added && s.Log != nil {
+				s.Log.Info("gave an agent a memory tool it could never be assigned before", "butler", b.Name, "tool", tool)
+			}
+		}
+	}
+	return nil
+}
+
 // seedAgentTools gives an Agent its default tools and enrolls it in the
 // assigned-tools model (design §6.4).
 //
