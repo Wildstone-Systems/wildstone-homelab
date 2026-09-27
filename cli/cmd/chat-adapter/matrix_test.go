@@ -174,12 +174,18 @@ func TestMatrixAcceptsInvitedRoomsBeforeAdvancingTheCursor(t *testing.T) {
 
 func TestMatrixRetriesInvitationWhenJoiningFails(t *testing.T) {
 	joinAttempts := 0
+	syncs := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case strings.Contains(r.URL.Path, "/account/whoami"):
 			w.Write([]byte(`{"user_id":"@butler:example.org"}`)) //nolint:errcheck
 		case strings.Contains(r.URL.Path, "/sync"):
-			w.Write([]byte(`{"next_batch":"after-invite","rooms":{"invite":{"!new:example.org":{}}}}`)) //nolint:errcheck
+			syncs++
+			if syncs == 1 {
+				w.Write([]byte(`{"next_batch":"after-invite","rooms":{"invite":{"!new:example.org":{}}}}`)) //nolint:errcheck
+				return
+			}
+			w.Write([]byte(`{"next_batch":"after-retry","rooms":{"join":{}}}`)) //nolint:errcheck
 		case strings.Contains(r.URL.Path, "/join/"):
 			joinAttempts++
 			if joinAttempts == 1 {
@@ -194,17 +200,54 @@ func TestMatrixRetriesInvitationWhenJoiningFails(t *testing.T) {
 	defer srv.Close()
 
 	m := &matrix{homeserver: srv.URL, token: "tok", timeout: time.Second, http: srv.Client()}
-	if _, err := m.Receive(context.Background()); err == nil {
-		t.Fatal("Receive succeeded despite failed room join")
+	problems, err := m.Receive(context.Background())
+	if err != nil {
+		t.Fatalf("Receive: %v", err)
 	}
-	if m.since != "" {
-		t.Fatalf("cursor advanced to %q after failed join", m.since)
+	if len(problems) != 1 || problems[0].Problem == "" {
+		t.Fatalf("failed join diagnostics = %+v, want one", problems)
+	}
+	if m.since != "after-invite" {
+		t.Fatalf("cursor = %q after failed join, want it advanced", m.since)
 	}
 	if _, err := m.Receive(context.Background()); err != nil {
 		t.Fatalf("retry Receive: %v", err)
 	}
-	if joinAttempts != 2 || m.since != "after-invite" {
+	if joinAttempts != 2 || m.since != "after-retry" {
 		t.Fatalf("join attempts = %d, cursor = %q; want retry and then advancement", joinAttempts, m.since)
+	}
+}
+
+func TestMatrixFailedInvitationDoesNotStarveJoinedRooms(t *testing.T) {
+	const sync = `{"next_batch":"next","rooms":{
+	  "invite":{"!unreachable:example.org":{}},
+	  "join":{"!working:example.org":{"summary":{"m.joined_member_count":2},"timeline":{"events":[
+	    {"type":"m.room.message","event_id":"$hello","sender":"@sam:example.org","content":{"msgtype":"m.text","body":"hello"}}
+	  ]}}}}}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, "/account/whoami"):
+			w.Write([]byte(`{"user_id":"@butler:example.org"}`)) //nolint:errcheck
+		case strings.Contains(r.URL.Path, "/sync"):
+			w.Write([]byte(sync)) //nolint:errcheck
+		case strings.Contains(r.URL.Path, "/join/"):
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	m := &matrix{homeserver: srv.URL, token: "tok", timeout: time.Second, http: srv.Client(), since: "before"}
+	msgs, err := m.Receive(context.Background())
+	if err != nil {
+		t.Fatalf("Receive: %v", err)
+	}
+	if len(msgs) != 2 || msgs[0].Problem == "" || msgs[1].MessageID != "$hello" {
+		t.Fatalf("messages = %+v, want failed-invite diagnostic and joined-room message", msgs)
+	}
+	if m.since != "next" {
+		t.Fatalf("cursor = %q, want next", m.since)
 	}
 }
 

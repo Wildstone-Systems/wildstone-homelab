@@ -46,6 +46,11 @@ type matrix struct {
 	// encryptedWarned bounds diagnostics to one per room per process. The
 	// adapter cannot decrypt the event, but it must not fail silently either.
 	encryptedWarned map[string]bool
+	// pendingInvites keeps failed joins available for retry after the /sync
+	// cursor advances. One unreachable invitation must not starve messages
+	// from rooms the bot has already joined.
+	pendingInvites map[string]struct{}
+	inviteWarned   map[string]bool
 	// txn numbers outgoing messages: Matrix deduplicates on the
 	// transaction id, so a retried send is not a second message.
 	txn atomic.Int64
@@ -150,17 +155,13 @@ func (m *matrix) Receive(ctx context.Context) ([]Incoming, error) {
 		return nil, err
 	}
 	first := m.since == ""
-	if err := m.joinInvitedRooms(ctx, sync.Rooms.Invite); err != nil {
-		// Do not advance the cursor: a transient join failure must leave the
-		// invitation visible for the next retry.
-		return nil, err
-	}
+	problems := m.joinInvitedRooms(ctx, sync.Rooms.Invite)
 	m.since = sync.NextBatch
 	if first {
-		return nil, nil
+		return problems, nil
 	}
 
-	var out []Incoming
+	out := problems
 	for roomID, room := range sync.Rooms.Join {
 		for _, ev := range room.Timeline.Events {
 			if ev.Type == "m.room.encrypted" {
@@ -251,25 +252,46 @@ func (m *matrix) Receive(ctx context.Context) ([]Incoming, error) {
 // joinInvitedRooms accepts rooms the bot account was explicitly invited to.
 // Joining does not admit the sender to an Agent: messages still pass through
 // Keystone's invite-key and binding checks after the room becomes readable.
-func (m *matrix) joinInvitedRooms(ctx context.Context, invited map[string]struct{}) error {
-	rooms := make([]string, 0, len(invited))
+func (m *matrix) joinInvitedRooms(ctx context.Context, invited map[string]struct{}) []Incoming {
+	if m.pendingInvites == nil {
+		m.pendingInvites = map[string]struct{}{}
+	}
+	if m.inviteWarned == nil {
+		m.inviteWarned = map[string]bool{}
+	}
 	for roomID := range invited {
+		m.pendingInvites[roomID] = struct{}{}
+	}
+
+	rooms := make([]string, 0, len(m.pendingInvites))
+	for roomID := range m.pendingInvites {
 		rooms = append(rooms, roomID)
 	}
 	sort.Strings(rooms)
+	var problems []Incoming
 	for _, roomID := range rooms {
 		path := "/_matrix/client/v3/join/" + url.PathEscape(roomID)
 		var joined struct {
 			RoomID string `json:"room_id"`
 		}
-		if err := m.call(ctx, http.MethodPost, path, map[string]any{}, &joined); err != nil {
-			return fmt.Errorf("matrix join invited room: %w", err)
+		err := m.call(ctx, http.MethodPost, path, map[string]any{}, &joined)
+		if err == nil && joined.RoomID != "" && joined.RoomID != roomID {
+			err = fmt.Errorf("joined room %q instead", joined.RoomID)
 		}
-		if joined.RoomID != "" && joined.RoomID != roomID {
-			return fmt.Errorf("matrix joined room %q for invitation %q", joined.RoomID, roomID)
+		if err != nil {
+			if !m.inviteWarned[roomID] {
+				m.inviteWarned[roomID] = true
+				problems = append(problems, Incoming{
+					Conversation: roomID,
+					Problem:      "Matrix room invitation could not be accepted; the adapter will retry: " + err.Error(),
+				})
+			}
+			continue
 		}
+		delete(m.pendingInvites, roomID)
+		delete(m.inviteWarned, roomID)
 	}
-	return nil
+	return problems
 }
 
 // voiceIn turns an m.audio event into a VoiceNote, or nil when its
