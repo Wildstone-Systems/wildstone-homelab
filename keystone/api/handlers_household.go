@@ -128,12 +128,29 @@ type mintPublisherRequest struct {
 // the secrets-rotation contract (ADR-W012 A5), recorded as the same kind
 // of system/secrets plan.
 func (s *Server) mintPublisher(r *http.Request, id principal.Identity) (any, int, error) {
-	if s.Agents == nil {
-		return nil, http.StatusServiceUnavailable, fmt.Errorf("agent plane not wired")
-	}
 	capName := r.PathValue("capability")
 	if !capabilityNameRegexp.MatchString(capName) {
 		return nil, http.StatusBadRequest, fmt.Errorf("capability must be lowercase [a-z0-9._-], 1–52 chars")
+	}
+	// A paired PantryOS holds its publisher token from the pairing. Rotating
+	// it here would revoke that token behind PantryOS's back, so the pantry
+	// publisher rotates by pairing again — under the same lock pairing uses,
+	// so this check cannot race a pairing in progress.
+	if capName == PantryCapability {
+		s.pantryPairingMu.Lock()
+		defer s.pantryPairingMu.Unlock()
+		_, perr := s.DB.Pairing(PantryCapability)
+		switch {
+		case perr == nil:
+			return nil, http.StatusConflict, errors.New(
+				"PantryOS is paired and holds this publisher token; pair again (Integrations → PantryOS) to rotate it")
+		case !errors.Is(perr, runtimedb.ErrNotPaired):
+			return nil, http.StatusInternalServerError, perr
+		}
+	}
+
+	if s.Agents == nil {
+		return nil, http.StatusServiceUnavailable, fmt.Errorf("agent plane not wired")
 	}
 	var req mintPublisherRequest
 	if err := json.NewDecoder(http.MaxBytesReader(nil, r.Body, 4096)).Decode(&req); err != nil {

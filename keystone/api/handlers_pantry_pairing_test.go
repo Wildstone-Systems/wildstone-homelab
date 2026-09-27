@@ -260,3 +260,21 @@ func TestUnpairingForgetsTheKeyAndRevokesTheToken(t *testing.T) {
 		t.Fatal("the publisher token survived unpairing")
 	}
 }
+
+// While PantryOS is paired, its publisher token belongs to the pairing: the
+// generic publisher route would revoke it behind PantryOS's back, so it is
+// refused and the token keeps working. Pairing again is how it rotates.
+func TestAPairedPantryTokenIsNotRotatedByTheGenericPublisherRoute(t *testing.T) {
+	h := pairingHarness(t)
+	pantryOS := newFakePantryOS(t, "ABCD-EFGH", "REPLACED-agent-key-1")
+	if resp, out := pair(h, pantryOS.srv.URL, "ABCD-EFGH"); resp.StatusCode != http.StatusOK {
+		t.Fatalf("pair = %d %v", resp.StatusCode, out)
+	}
+	resp := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/household/publishers/pantry", map[string]string{"node": "n1"}, nil)
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("generic rotation while paired = %d, want 409", resp.StatusCode)
+	}
+	if !h.publisherTokenWorks(pantryOS.gotToken) {
+		t.Fatal("the paired PantryOS lost its publisher token")
+	}
+}
