@@ -60,6 +60,14 @@ var imageArgv0 = map[string][]string{
 	// Evidence: element-hq/synapse v1.161.0 docker/Dockerfile and start.py.
 	"matrixdotorg/synapse": {""},
 
+	// The official PostgreSQL image declares ENTRYPOINT
+	// ["docker-entrypoint.sh"], but that wrapper supplies `postgres` only
+	// when its first argument begins with `-`. Wildstone replaces the image
+	// Cmd, so the socket-only command must retain `postgres` as argv[0].
+	// Evidence: docker-library/postgres's published Dockerfile and
+	// docker-entrypoint.sh for PostgreSQL 18/bookworm.
+	"postgres": {"postgres"},
+
 	// Caddy with the caddy-dns/cloudflare module compiled in, for the
 	// DNS-01 profile (ADR-W019 A9). Same shape as stock caddy, and
 	// checked rather than assumed: the image config blob at

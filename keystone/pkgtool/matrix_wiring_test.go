@@ -175,10 +175,6 @@ func TestMatrixPostgresSocketAndBackupAreComplete(t *testing.T) {
 		!mountsVolume(synapse, "matrix-postgres-socket", "/run/postgresql") {
 		t.Error("Postgres and Synapse do not share the capability-owned socket volume")
 	}
-	if generate.Env["POSTGRES_HOST"] != "matrix-postgres" {
-		t.Errorf("Synapse generator points at database host %q", generate.Env["POSTGRES_HOST"])
-	}
-
 	backup := matrixResource(t, resource.KindBackupPlan, "matrix").BackupPlan
 	for _, volume := range []string{"matrix-data", "matrix-pgdata"} {
 		if !slices.Contains(backup.Volumes, volume) {
