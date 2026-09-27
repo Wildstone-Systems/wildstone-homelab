@@ -8,8 +8,7 @@ one Agent identity to any Matrix homeserver.
 ## What the first release installs
 
 - Synapse with a dedicated PostgreSQL database.
-- A private-ingress route at `matrix.<public domain>` (or the configured
-  `matrix_subdomain`).
+- A private-ingress route at the stable `matrix.<public domain>` origin.
 - Wildstone OIDC sign-in with the existing household identity and two-factor
   policy. Password registration and guest access are off.
 - Client and media APIs only. Incoming federation is not mounted and outbound
@@ -33,9 +32,8 @@ package form or with the capability API. The normal parameters are:
 
 - `node`: the node that will hold the database and media.
 - `public_domain`: the deployment's service domain.
-- `matrix_subdomain`: `matrix` by default.
 - `server_name`: optional permanent domain used in Matrix IDs. If omitted it
-  is `<matrix_subdomain>.<public_domain>`.
+  is `matrix.<public_domain>`.
 - `timezone`: UTC by default.
 
 Choose `server_name` carefully. It becomes the domain in every Matrix user ID
@@ -44,7 +42,7 @@ data.
 
 ## Try it from a native client
 
-1. Wait until `matrix-postgres`, `matrix-synapse-generate`, and
+1. Wait until `matrix-postgres`, `matrix-config-generate`, and
    `matrix-synapse` have converged.
 2. In Element or another Matrix client that supports SSO, choose a custom
    homeserver and enter the Matrix route shown by Wildstone. Tailnet installs

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/chickenrat17/wildstone-homelab/keystone/plan"
 	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
 )
 
@@ -114,7 +115,7 @@ func TestMatrixOidcSecretTravelsByFile(t *testing.T) {
 }
 
 func TestMatrixGenerationAndRuntimeUseTheSameData(t *testing.T) {
-	generate := matrixResource(t, resource.KindJob, "matrix-synapse-generate").Job.Run
+	generate := matrixResource(t, resource.KindJob, "matrix-config-generate").Job.Run
 	synapse := matrixResource(t, resource.KindContainer, "matrix-synapse").Container
 	if generate.Image != synapse.Image {
 		t.Errorf("config generator image %q differs from runtime %q", generate.Image, synapse.Image)
@@ -129,11 +130,28 @@ func TestMatrixGenerationAndRuntimeUseTheSameData(t *testing.T) {
 		!slices.Contains(synapse.Command, "--config-path=/etc/wildstone/matrix-homeserver/private.yaml") {
 		t.Errorf("Synapse does not load generated base then managed override: %v", synapse.Command)
 	}
+
+	// Job and Container intentionally share a planner tier because most Jobs
+	// provision an already-running service. Matrix's generator is the opposite:
+	// the runtime cannot start until this Job has created homeserver.yaml. Pin
+	// the real plan order so a rename cannot recreate the first-install loop.
+	generatedAt, runtimeAt := -1, -1
+	for i, step := range plan.Diff(matrixPackage(t), nil).Steps {
+		switch step.Name {
+		case "matrix-config-generate":
+			generatedAt = i
+		case "matrix-synapse":
+			runtimeAt = i
+		}
+	}
+	if generatedAt < 0 || runtimeAt < 0 || generatedAt >= runtimeAt {
+		t.Errorf("fresh-install plan puts config generation at %d and Synapse runtime at %d; generation must be first", generatedAt, runtimeAt)
+	}
 }
 
 func TestMatrixPostgresCredentialAndBackupAreComplete(t *testing.T) {
 	postgres := matrixResource(t, resource.KindContainer, "matrix-postgres").Container
-	generate := matrixResource(t, resource.KindJob, "matrix-synapse-generate").Job.Run
+	generate := matrixResource(t, resource.KindJob, "matrix-config-generate").Job.Run
 	if postgres.Env["POSTGRES_PASSWORD"] != generate.Env["POSTGRES_PASSWORD"] {
 		t.Errorf("Postgres and Synapse generator use different password references: %q vs %q",
 			postgres.Env["POSTGRES_PASSWORD"], generate.Env["POSTGRES_PASSWORD"])

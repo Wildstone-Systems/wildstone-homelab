@@ -23,7 +23,7 @@
 # therefore materializes the new value before Synapse reads its config.
 #
 # CONFIGURATION. The official image no longer builds homeserver.yaml at every
-# startup. matrix-synapse-generate runs its supported migrate_config mode once,
+# startup. matrix-config-generate runs its supported migrate_config mode once,
 # producing the base file, random signing key and macaroon/registration keys in
 # matrix-data. private.yaml is Wildstone-owned and loaded second, overriding
 # the listener, public URL, authentication and federation posture. The split
@@ -42,7 +42,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: matrix-synapse
-  version: 1.0.2
+  version: 1.0.3
   capability: matrix-homeserver
   profile: synapse
 requires:
@@ -188,7 +188,10 @@ templates:
   - |
     apiVersion: wildstone.dev/v1
     kind: Job
-    metadata: { name: matrix-synapse-generate, node: "{{ .Params.node }}" }
+    # Job and Container share a planner tier. This name must sort before
+    # matrix-synapse so a fresh volume receives homeserver.yaml before the
+    # runtime tries to read it; the package regression checks the actual plan.
+    metadata: { name: matrix-config-generate, node: "{{ .Params.node }}" }
     spec:
       run:
         image: "matrixdotorg/synapse@sha256:6b95dd129e35e97e8032cb759e5db4a516a5f7ef6c98d34d716fea1ae239b62a"
