@@ -81,11 +81,19 @@ type HTTP struct {
 
 func (h *HTTP) Name() string { return "pantryos" }
 
+// client never follows a redirect. The agent key travels in a custom
+// header, which Go's redirect policy does not strip on a cross-origin
+// hop, and a 307/308 would carry an action's body along with it. PantryOS
+// does not redirect its integration routes, so a redirect means the
+// address is wrong or something in between is — either way, stop, and
+// report the 3xx as the unavailable answer it is.
 func (h *HTTP) client() *http.Client {
+	c := http.Client{Timeout: 10 * time.Second}
 	if h.HTTP != nil {
-		return h.HTTP
+		c = *h.HTTP
 	}
-	return &http.Client{Timeout: 10 * time.Second}
+	c.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	return &c
 }
 
 // envelope is every pantry-1 answer.
@@ -159,8 +167,17 @@ func (h *HTTP) do(ctx context.Context, method, path string, body io.Reader) (env
 	return env, nil
 }
 
-// answer turns a pantry-1 envelope into an Answer.
-func answer(env envelope) (adapter.Answer, error) {
+// answer turns a pantry-1 envelope into an Answer — only when it is the
+// answer to THIS question: the contract this adapter speaks and the
+// capability it asked for. A pantry-2 body, or a cached or misrouted
+// answer to something else, is not a result.
+func answer(env envelope, capability string) (adapter.Answer, error) {
+	if env.Contract != Contract {
+		return adapter.Answer{}, fmt.Errorf("%w: pantryos answered in contract %q, this adapter speaks %q", adapter.ErrUnavailable, env.Contract, Contract)
+	}
+	if env.Capability != capability {
+		return adapter.Answer{}, fmt.Errorf("%w: asked for %s, pantryos answered for %q", adapter.ErrUnavailable, capability, env.Capability)
+	}
 	var data map[string]any
 	if len(env.Data) > 0 {
 		if err := json.Unmarshal(env.Data, &data); err != nil {
@@ -299,7 +316,7 @@ func (h *HTTP) Query(ctx context.Context, capability string, request json.RawMes
 	if err != nil {
 		return adapter.Answer{}, err
 	}
-	return answer(env)
+	return answer(env, capability)
 }
 
 // Act performs a declared action. Whether it is ALLOWED was decided
@@ -314,7 +331,7 @@ func (h *HTTP) Act(ctx context.Context, capability string, request json.RawMessa
 	if err != nil {
 		return adapter.Answer{}, err
 	}
-	return answer(env)
+	return answer(env, capability)
 }
 
 var _ adapter.Upstream = (*HTTP)(nil)

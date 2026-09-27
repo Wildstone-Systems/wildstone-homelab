@@ -40,7 +40,7 @@ func pantryServer(t *testing.T, status int, body string) (*HTTP, *seen) {
 }
 
 func TestQueryReachesPantryOSAsAGetWithParams(t *testing.T) {
-	up, got := pantryServer(t, 200, `{"contract":"pantry-1","status":"ok","data":{"items":[]}}`)
+	up, got := pantryServer(t, 200, `{"contract":"pantry-1","capability":"pantry.expiring","status":"ok","data":{"items":[]}}`)
 	_, err := up.Query(context.Background(), CapExpiring, json.RawMessage(`{"within_days":3,"list":null,"search":"eggs & ham"}`))
 	if err != nil {
 		t.Fatal(err)
@@ -69,7 +69,7 @@ func TestNestedQueryParamsAreRefusedNotDropped(t *testing.T) {
 }
 
 func TestActPostsTheRequestAsTheBody(t *testing.T) {
-	up, got := pantryServer(t, 200, `{"contract":"pantry-1","status":"ok","data":{"added":true}}`)
+	up, got := pantryServer(t, 200, `{"contract":"pantry-1","capability":"pantry.add","status":"ok","data":{"added":true}}`)
 	ans, err := up.Act(context.Background(), CapAdd, json.RawMessage(`{"list":"groceries","item":"milk"}`))
 	if err != nil {
 		t.Fatal(err)
@@ -84,10 +84,10 @@ func TestActPostsTheRequestAsTheBody(t *testing.T) {
 		t.Fatalf("data = %+v", ans.Data)
 	}
 
-	// An action with no request still sends a JSON object.
-	if _, err := up.Act(context.Background(), CapCookAbandon, nil); err != nil {
-		t.Fatal(err)
-	}
+	// An action with no request still sends a JSON object. (The canned
+	// reply names pantry.add, so it is refused as an answer — the request
+	// still went out, which is what this checks.)
+	_, _ = up.Act(context.Background(), CapCookAbandon, nil)
 	if got.body != "{}" {
 		t.Fatalf("empty act body = %q", got.body)
 	}
@@ -99,35 +99,45 @@ func TestResultStatusesMapOntoResultTypes(t *testing.T) {
 		name, body string
 		check      func(t *testing.T, a adapter.Answer, err error)
 	}{
-		{"ok", `{"status":"ok","data":{"n":1}}`, func(t *testing.T, a adapter.Answer, err error) {
+		{"ok", `{"contract":"pantry-1","capability":"pantry.summary","status":"ok","data":{"n":1}}`, func(t *testing.T, a adapter.Answer, err error) {
 			if err != nil || a.Empty || a.Stale {
 				t.Fatalf("%+v %v", a, err)
 			}
 		}},
-		{"empty", `{"status":"empty","data":{"items":[]}}`, func(t *testing.T, a adapter.Answer, err error) {
+		{"empty", `{"contract":"pantry-1","capability":"pantry.summary","status":"empty","data":{"items":[]}}`, func(t *testing.T, a adapter.Answer, err error) {
 			if err != nil || !a.Empty || a.Data == nil {
 				t.Fatalf("%+v %v", a, err)
 			}
 		}},
-		{"stale", `{"status":"stale","observedAt":"` + observed + `","data":{}}`, func(t *testing.T, a adapter.Answer, err error) {
+		{"stale", `{"contract":"pantry-1","capability":"pantry.summary","status":"stale","observedAt":"` + observed + `","data":{}}`, func(t *testing.T, a adapter.Answer, err error) {
 			want, _ := time.Parse(time.RFC3339, observed)
 			if err != nil || !a.Stale || !a.ObservedAt.Equal(want) {
 				t.Fatalf("%+v %v", a, err)
 			}
 		}},
-		{"stale without a time", `{"status":"stale","data":{}}`, func(t *testing.T, _ adapter.Answer, err error) {
+		{"stale without a time", `{"contract":"pantry-1","capability":"pantry.summary","status":"stale","data":{}}`, func(t *testing.T, _ adapter.Answer, err error) {
 			if !errors.Is(err, adapter.ErrUnavailable) {
 				t.Fatalf("err = %v: a stale answer with no time would read as current", err)
 			}
 		}},
-		{"unavailable", `{"status":"unavailable","data":{}}`, func(t *testing.T, _ adapter.Answer, err error) {
+		{"unavailable", `{"contract":"pantry-1","capability":"pantry.summary","status":"unavailable","data":{}}`, func(t *testing.T, _ adapter.Answer, err error) {
 			if !errors.Is(err, adapter.ErrUnavailable) {
 				t.Fatalf("err = %v", err)
 			}
 		}},
-		{"unknown status", `{"status":"maybe","data":{}}`, func(t *testing.T, _ adapter.Answer, err error) {
+		{"unknown status", `{"contract":"pantry-1","capability":"pantry.summary","status":"maybe","data":{}}`, func(t *testing.T, _ adapter.Answer, err error) {
 			if !errors.Is(err, adapter.ErrUnavailable) {
 				t.Fatalf("err = %v", err)
+			}
+		}},
+		{"another contract", `{"contract":"pantry-2","capability":"pantry.summary","status":"ok","data":{}}`, func(t *testing.T, _ adapter.Answer, err error) {
+			if !errors.Is(err, adapter.ErrUnavailable) {
+				t.Fatalf("err = %v: a pantry-2 answer was accepted as pantry-1", err)
+			}
+		}},
+		{"another capability", `{"contract":"pantry-1","capability":"pantry.list","status":"ok","data":{}}`, func(t *testing.T, _ adapter.Answer, err error) {
+			if !errors.Is(err, adapter.ErrUnavailable) {
+				t.Fatalf("err = %v: an answer to a different question was accepted", err)
 			}
 		}},
 		{"not json", `<html>`, func(t *testing.T, _ adapter.Answer, err error) {
@@ -221,5 +231,39 @@ func TestTheFakeRefusesListsPantryOSDoesNotKeep(t *testing.T) {
 	}
 	if ans.Data.(map[string]any)["added"] != false || len(f.Items("groceries")) != 2 {
 		t.Fatalf("answer = %+v, groceries = %v", ans.Data, f.Items("groceries"))
+	}
+}
+
+func TestRedirectsAreNotFollowedAndTheKeyStaysHome(t *testing.T) {
+	leaked := make(chan string, 1)
+	elsewhere := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		leaked <- r.Header.Get("X-Agent-Key")
+		_, _ = w.Write([]byte(`{"contract":"pantry-1","capability":"pantry.add","status":"ok","data":{}}`))
+	}))
+	defer elsewhere.Close()
+	for _, code := range []int{http.StatusFound, http.StatusTemporaryRedirect, http.StatusPermanentRedirect} {
+		redirecting := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, elsewhere.URL+r.URL.Path, code)
+		}))
+		// Even a caller-supplied client gets the no-redirect policy.
+		up := &HTTP{BaseURL: redirecting.URL, AgentKey: "REPLACED-agent-key", HTTP: &http.Client{}}
+		_, err := up.Act(context.Background(), CapAdd, json.RawMessage(`{"list":"groceries","item":"milk"}`))
+		redirecting.Close()
+		if !errors.Is(err, adapter.ErrUnavailable) {
+			t.Fatalf("%d: err = %v, want ErrUnavailable", code, err)
+		}
+		select {
+		case key := <-leaked:
+			t.Fatalf("%d: the redirect was followed and carried the key %q", code, key)
+		default:
+		}
+		if _, err := up.Capabilities(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case <-leaked:
+			t.Fatalf("%d: the capability request followed the redirect", code)
+		default:
+		}
 	}
 }
