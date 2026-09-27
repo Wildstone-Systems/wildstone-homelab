@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,6 +14,25 @@ import (
 	"testing"
 	"time"
 )
+
+func TestTransportProblemIsLoggedAndNeverRelayed(t *testing.T) {
+	var logs bytes.Buffer
+	a := &adapter{
+		transport: &fakeTransport{},
+		log:       slog.New(slog.NewTextHandler(&logs, nil)),
+	}
+	// keystone is deliberately nil: handling a transport problem must return
+	// before any user content or synthetic substitute can cross that boundary.
+	a.handle(context.Background(), Incoming{
+		Conversation: "!secret:example.org",
+		MessageID:    "$cipher",
+		Problem:      "Matrix end-to-end encryption is not supported",
+	})
+	got := logs.String()
+	if !strings.Contains(got, "message cannot be handled") || !strings.Contains(got, "end-to-end encryption") {
+		t.Fatalf("diagnostic log = %q", got)
+	}
+}
 
 // fakeTransport stands in for a chat vendor: queued incoming messages,
 // recorded outgoing ones. No network, no vendor.

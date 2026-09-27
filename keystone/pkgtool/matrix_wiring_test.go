@@ -106,6 +106,11 @@ func TestMatrixOidcSecretTravelsByFile(t *testing.T) {
 	if oidc.SecretRef != secretRef {
 		t.Errorf("Authelia and Synapse use different OIDC secrets: %q vs %q", oidc.SecretRef, secretRef)
 	}
+	for _, claim := range []string{"preferred_username", "name", "email"} {
+		if !slices.Contains(oidc.IdTokenClaims, claim) {
+			t.Errorf("Synapse maps OIDC claim %q but Authelia does not put it in the ID token: %v", claim, oidc.IdTokenClaims)
+		}
+	}
 	if len(oidc.RedirectUris) != 1 || !strings.HasSuffix(oidc.RedirectUris[0], "/_synapse/client/oidc/callback") {
 		t.Errorf("unexpected Synapse OIDC callback: %v", oidc.RedirectUris)
 	}

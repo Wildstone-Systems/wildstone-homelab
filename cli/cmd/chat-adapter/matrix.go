@@ -25,6 +25,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -42,6 +43,9 @@ type matrix struct {
 	userID string
 	// since is Matrix's own cursor.
 	since string
+	// encryptedWarned bounds diagnostics to one per room per process. The
+	// adapter cannot decrypt the event, but it must not fail silently either.
+	encryptedWarned map[string]bool
 	// txn numbers outgoing messages: Matrix deduplicates on the
 	// transaction id, so a retried send is not a second message.
 	txn atomic.Int64
@@ -77,7 +81,8 @@ func (m *matrix) client() *http.Client {
 type syncResponse struct {
 	NextBatch string `json:"next_batch"`
 	Rooms     struct {
-		Join map[string]struct {
+		Invite map[string]struct{} `json:"invite"`
+		Join   map[string]struct {
 			Summary struct {
 				JoinedMemberCount int `json:"m.joined_member_count"`
 			} `json:"summary"`
@@ -145,6 +150,11 @@ func (m *matrix) Receive(ctx context.Context) ([]Incoming, error) {
 		return nil, err
 	}
 	first := m.since == ""
+	if err := m.joinInvitedRooms(ctx, sync.Rooms.Invite); err != nil {
+		// Do not advance the cursor: a transient join failure must leave the
+		// invitation visible for the next retry.
+		return nil, err
+	}
 	m.since = sync.NextBatch
 	if first {
 		return nil, nil
@@ -153,6 +163,21 @@ func (m *matrix) Receive(ctx context.Context) ([]Incoming, error) {
 	var out []Incoming
 	for roomID, room := range sync.Rooms.Join {
 		for _, ev := range room.Timeline.Events {
+			if ev.Type == "m.room.encrypted" {
+				if m.encryptedWarned == nil {
+					m.encryptedWarned = map[string]bool{}
+				}
+				if !m.encryptedWarned[roomID] {
+					m.encryptedWarned[roomID] = true
+					out = append(out, Incoming{
+						Conversation: roomID,
+						MessageID:    ev.EventID,
+						Problem: "Matrix end-to-end encryption is not supported by this Agent adapter; " +
+							"create a new room with encryption disabled",
+					})
+				}
+				continue
+			}
 			if ev.Type != "m.room.message" {
 				continue // a reaction, a membership change
 			}
@@ -221,6 +246,30 @@ func (m *matrix) Receive(ctx context.Context) ([]Incoming, error) {
 		}
 	}
 	return out, nil
+}
+
+// joinInvitedRooms accepts rooms the bot account was explicitly invited to.
+// Joining does not admit the sender to an Agent: messages still pass through
+// Keystone's invite-key and binding checks after the room becomes readable.
+func (m *matrix) joinInvitedRooms(ctx context.Context, invited map[string]struct{}) error {
+	rooms := make([]string, 0, len(invited))
+	for roomID := range invited {
+		rooms = append(rooms, roomID)
+	}
+	sort.Strings(rooms)
+	for _, roomID := range rooms {
+		path := "/_matrix/client/v3/join/" + url.PathEscape(roomID)
+		var joined struct {
+			RoomID string `json:"room_id"`
+		}
+		if err := m.call(ctx, http.MethodPost, path, map[string]any{}, &joined); err != nil {
+			return fmt.Errorf("matrix join invited room: %w", err)
+		}
+		if joined.RoomID != "" && joined.RoomID != roomID {
+			return fmt.Errorf("matrix joined room %q for invitation %q", joined.RoomID, roomID)
+		}
+	}
+	return nil
 }
 
 // voiceIn turns an m.audio event into a VoiceNote, or nil when its

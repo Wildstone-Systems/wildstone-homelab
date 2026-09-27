@@ -131,6 +131,109 @@ func TestMatrixUnknownMembershipIsAGroup(t *testing.T) {
 	}
 }
 
+func TestMatrixAcceptsInvitedRoomsBeforeAdvancingTheCursor(t *testing.T) {
+	var joined []string
+	var authorization string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, "/account/whoami"):
+			w.Write([]byte(`{"user_id":"@butler:example.org"}`)) //nolint:errcheck
+		case strings.Contains(r.URL.Path, "/sync"):
+			w.Write([]byte(`{"next_batch":"after-invite","rooms":{"invite":{"!new:example.org":{"invite_state":{"events":[]}}}}}`)) //nolint:errcheck
+		case strings.Contains(r.URL.Path, "/join/"):
+			joined = append(joined, r.URL.Path)
+			authorization = r.Header.Get("Authorization")
+			if r.Method != http.MethodPost {
+				t.Errorf("join method = %s, want POST", r.Method)
+			}
+			w.Write([]byte(`{"room_id":"!new:example.org"}`)) //nolint:errcheck
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	m := &matrix{homeserver: srv.URL, token: "tok", timeout: time.Second, http: srv.Client()}
+	msgs, err := m.Receive(context.Background())
+	if err != nil {
+		t.Fatalf("Receive: %v", err)
+	}
+	if len(msgs) != 0 {
+		t.Fatalf("invitation produced messages before the room was joined: %+v", msgs)
+	}
+	if len(joined) != 1 || !strings.Contains(joined[0], "/join/!new:example.org") {
+		t.Fatalf("join requests = %v, want the invited room", joined)
+	}
+	if authorization != "Bearer tok" {
+		t.Fatalf("join authorization = %q", authorization)
+	}
+	if m.since != "after-invite" {
+		t.Fatalf("cursor = %q, want after-invite after a successful join", m.since)
+	}
+}
+
+func TestMatrixRetriesInvitationWhenJoiningFails(t *testing.T) {
+	joinAttempts := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, "/account/whoami"):
+			w.Write([]byte(`{"user_id":"@butler:example.org"}`)) //nolint:errcheck
+		case strings.Contains(r.URL.Path, "/sync"):
+			w.Write([]byte(`{"next_batch":"after-invite","rooms":{"invite":{"!new:example.org":{}}}}`)) //nolint:errcheck
+		case strings.Contains(r.URL.Path, "/join/"):
+			joinAttempts++
+			if joinAttempts == 1 {
+				http.Error(w, "try again", http.StatusServiceUnavailable)
+				return
+			}
+			w.Write([]byte(`{"room_id":"!new:example.org"}`)) //nolint:errcheck
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	m := &matrix{homeserver: srv.URL, token: "tok", timeout: time.Second, http: srv.Client()}
+	if _, err := m.Receive(context.Background()); err == nil {
+		t.Fatal("Receive succeeded despite failed room join")
+	}
+	if m.since != "" {
+		t.Fatalf("cursor advanced to %q after failed join", m.since)
+	}
+	if _, err := m.Receive(context.Background()); err != nil {
+		t.Fatalf("retry Receive: %v", err)
+	}
+	if joinAttempts != 2 || m.since != "after-invite" {
+		t.Fatalf("join attempts = %d, cursor = %q; want retry and then advancement", joinAttempts, m.since)
+	}
+}
+
+func TestMatrixReportsEncryptedRoomsOnceInsteadOfFailingSilently(t *testing.T) {
+	const encrypted = `{"next_batch":"s2","rooms":{"join":{"!secret:example.org":{
+	  "summary":{"m.joined_member_count":2},"timeline":{"events":[
+	  {"type":"m.room.encrypted","event_id":"$cipher","sender":"@sam:example.org","content":{"ciphertext":"opaque"}}
+	]}}}}}`
+	srv, _ := matrixServer(t, encrypted)
+	m := &matrix{homeserver: srv.URL, token: "tok", timeout: time.Second, http: srv.Client()}
+	if _, err := m.Receive(context.Background()); err != nil {
+		t.Fatalf("first Receive: %v", err)
+	}
+	msgs, err := m.Receive(context.Background())
+	if err != nil {
+		t.Fatalf("encrypted Receive: %v", err)
+	}
+	if len(msgs) != 1 || msgs[0].Problem == "" || msgs[0].Conversation != "!secret:example.org" {
+		t.Fatalf("encrypted event = %+v, want one room diagnostic", msgs)
+	}
+	again, err := m.Receive(context.Background())
+	if err != nil {
+		t.Fatalf("repeated encrypted Receive: %v", err)
+	}
+	if len(again) != 0 {
+		t.Fatalf("encrypted room repeated its diagnostic: %+v", again)
+	}
+}
+
 func TestMatrixSendIsIdempotentPerMessage(t *testing.T) {
 	var sentPaths []string
 	var body map[string]string

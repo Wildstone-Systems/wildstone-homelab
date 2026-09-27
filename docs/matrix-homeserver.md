@@ -60,8 +60,17 @@ Install an instance of `chat-matrix` for the Agent and use this homeserver's
 route as `homeserver_url`. The adapter still requires an access token for a
 dedicated Matrix account. Create/sign in to that service identity through the
 normal Wildstone identity flow, obtain an access token with a Matrix client,
-and provide it in the connection form. The adapter boundary remains the same
+and provide it in the connection form. Keep that client session active: logging
+it out revokes the token the adapter uses. Invite the bot to a **new room with
+encryption disabled**; the adapter accepts Matrix room invitations
+automatically, while Keystone's normal invite-key and account-binding checks
+still decide who may speak to the Agent. The adapter boundary remains the same
 whether the homeserver is local or external.
+
+`chat-matrix` does not implement Matrix end-to-end encryption. It ignores
+encrypted event contents and emits a clear adapter diagnostic naming the room,
+instead of silently appearing to work. Encryption cannot be disabled after it
+is enabled on a room, so create a separate unencrypted room for Agent chat.
 
 ## Security and current limits
 

@@ -42,7 +42,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: matrix-synapse
-  version: 1.0.6
+  version: 1.0.7
   capability: matrix-homeserver
   profile: synapse
 requires:
@@ -324,6 +324,10 @@ templates:
       redirectUris:
         - '{{ origin (printf "matrix.%s" .Params.public_domain) }}/_synapse/client/oidc/callback'
       scopes: [openid, profile, email]
+      # Synapse's default OIDC profile method reads the ID token when the
+      # openid scope is present. Authelia otherwise exposes profile claims
+      # only from /userinfo, leaving the localpart mapping above empty.
+      idTokenClaims: [preferred_username, name, email]
       authPolicy: two_factor
       secretRef: "{{ .Resolved.OidcSecretRef }}"
 

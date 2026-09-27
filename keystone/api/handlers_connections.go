@@ -93,7 +93,7 @@ var chatPlatforms = []chatPlatform{
 		{Key: "homeserver", Label: "Homeserver address", Param: "homeserver_url",
 			Hint: "Where the bot's account lives, e.g. https://matrix.example.com."},
 		{Key: "accessToken", Label: "Access token", Secret: "token",
-			Hint: "Sign in as the bot account in Element → Settings → Help & About → Access token."},
+			Hint: "Sign in as the bot account in Element → Settings → Help & About → Access token. Keep that session active; Agent rooms must have encryption disabled."},
 	}},
 }
 
@@ -255,11 +255,15 @@ func (s *Server) createConnection(r *http.Request, id principal.Identity) (any, 
 	s.event("chat.connection_created", person, id,
 		fmt.Sprintf("%s on %s (%s) for %s, plan %s", agent.Name, platform.Label, capName, person, planID))
 
+	note := fmt.Sprintf("%s's %s bot is being installed. %s will find their invite on %s, and get their key there.",
+		agent.Name, platform.Label, person, where)
+	if platform.Name == "matrix" {
+		note += " Invite the bot to a new room with encryption disabled; it will accept the room invitation automatically."
+	}
 	return map[string]any{
 		"capability": capName, "instance": instance, "platform": platform.Name,
 		"butler": agent.Name, "person": person, "node": node, "plan": planID, "invite": invite.Seq,
-		"note": fmt.Sprintf("%s's %s bot is being installed. %s will find their invite on %s, and get their key there.",
-			agent.Name, platform.Label, person, where),
+		"note": note,
 	}, http.StatusCreated, nil
 }
 

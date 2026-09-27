@@ -385,7 +385,7 @@ For a new bot, paste its credential:
 | Telegram | bot token | @BotFather → /newbot |
 | Discord | bot token | discord.com/developers → Bot → Reset Token. Turn on **Message Content Intent** there too, or the bot receives messages with their text removed. |
 | Slack | bot token (`xoxb-…`) and app-level token (`xapp-…`) | api.slack.com/apps. Turn on Socket Mode; the bot needs `chat:write`, `im:history`, `files:read` (for voice clips) and the `message.im` event, and the app token needs `connections:write`. |
-| Matrix | homeserver address and access token | an ordinary account on your homeserver, used as the bot |
+| Matrix | homeserver address and access token | an ordinary account on your homeserver, used as the bot. Keep its token-bearing client session active and use a new unencrypted room; the adapter accepts room invitations but does not implement Matrix E2EE. |
 
 Keystone then does the rest:
 1. It gives the bot its own Keystone credential, which holds the
