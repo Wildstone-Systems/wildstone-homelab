@@ -507,3 +507,25 @@ func TestAnApprovedFinishCannotFinishADifferentCook(t *testing.T) {
 		t.Fatalf("finished session = %v, want s-pasta", finishedSession)
 	}
 }
+
+// The question names the cook the approval is bound to. If the tablet
+// switches dishes between binding the call and asking, the person is still
+// shown — and approves — the dish whose id is in the key.
+func TestTheFinishQuestionNamesTheBoundCook(t *testing.T) {
+	reads := 0
+	pasta := `{"session":{"id":"s-pasta","recipe_name":"Pasta","servings_made":"4","step_number":1,"total_steps":2,"step_text":"Boil."}}`
+	up := &scriptedPantry{answers: map[string]func(map[string]any) (adapter.Answer, error){
+		pantry.CapCookCurrent: func(req map[string]any) (adapter.Answer, error) {
+			reads++
+			if reads == 1 {
+				return ok(lastStep)(req) // bound: Flatbread
+			}
+			return ok(pasta)(req) // the tablet switched right after
+		},
+	}}
+	g, asked, _ := pantryGateway(t, up, true)
+	_, _ = g.Dispatch(context.Background(), pantryCall(PantryToolFinishCooking, nil))
+	if len(*asked) != 1 || !strings.Contains((*asked)[0].Question, "Flatbread") {
+		t.Fatalf("asked %+v; the question must name the bound cook (Flatbread)", *asked)
+	}
+}

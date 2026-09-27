@@ -246,7 +246,15 @@ func (t *pantryTool) PrepareContext(ctx context.Context, c Call) (Call, error) {
 	for k, v := range c.Params {
 		params[k] = v
 	}
+	// What the question will name, bound with the id: the person approves
+	// exactly the dish they were shown, and a second read can never show
+	// them another one.
 	params["session_id"] = s.ID
+	params["recipe"] = s.Recipe
+	params["servings"] = ""
+	if s.Servings > 0 {
+		params["servings"] = strconv.FormatFloat(s.Servings, 'f', -1, 64)
+	}
 	c.Params = params
 	return c, nil
 }
@@ -255,9 +263,16 @@ func (t *pantryTool) PrepareContext(ctx context.Context, c Call) (Call, error) {
 // person is asked about a dish rather than a tool call. It reads the
 // cook-along first: nobody is asked to finish a cook that is not
 // happening.
-func (t *pantryTool) Describe(ctx context.Context, _ Call) (string, error) {
+func (t *pantryTool) Describe(ctx context.Context, c Call) (string, error) {
 	if t.tool != PantryToolFinishCooking {
 		return "", nil
+	}
+	// Bound by PrepareContext: describe THAT cook, the one the consent key
+	// covers — never whatever a second read happens to find.
+	if c.Params["session_id"] != "" {
+		servings, _ := strconv.ParseFloat(c.Params["servings"], 64)
+		return fmt.Sprintf("Finish cooking %s%s? This takes its ingredients out of the pantry.",
+			c.Params["recipe"], servingsPhrase(servings)), nil
 	}
 	if err := t.pantry.ready(); err != nil {
 		return "", err
