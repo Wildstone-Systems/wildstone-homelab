@@ -14,6 +14,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -758,6 +759,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/chat/outbound", s.handle(principal.VerbConverse, s.pollChatOutbound))
 	mux.Handle("GET /api/v1/chat/outbound/{seq}/ready", s.handle(principal.VerbConverse, s.readyChatOutbound))
 	mux.Handle("POST /api/v1/chat/outbound/{seq}/ack", s.handle(principal.VerbConverse, s.ackChatOutbound))
+	mux.Handle("POST /api/v1/chat/outbound/{seq}/speech", s.handle(principal.VerbConverse, s.speakChatOutbound))
 	mux.Handle("POST /api/v1/chat/bindings/{id}/revoke", s.handle(principal.VerbManage, s.revokeChatBinding))
 
 	// The household portal (#197, #198): the two surfaces a family
@@ -1154,6 +1156,10 @@ func (s *Server) actingPersonMayStillHold(id principal.Identity) bool {
 // reveal/submission review. Ordinary chat and tool replies cannot use those
 // response types.
 func (s *Server) writeJSON(w http.ResponseWriter, status int, body any) {
+	if a, ok := body.(audioResponse); ok {
+		a.write(w, status)
+		return
+	}
 	raw, err := json.Marshal(body)
 	if err != nil {
 		s.Log.Error("response marshal failed", "err", err)
@@ -1185,6 +1191,30 @@ func (s *Server) writeJSON(w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	w.Write(raw)
+}
+
+// audioResponse is a reply read aloud (ADR-W042 part two), written as
+// the audio itself rather than as JSON. It is the one binary body: the
+// words it was made from were redacted before they were spoken, and a
+// JSON-and-redact pass over base64 audio would only corrupt it.
+type audioResponse struct {
+	MIME  string
+	Audio []byte
+	// Engine is where it was made, "local" or "cloud", for a caller
+	// that shows it.
+	Engine string
+}
+
+func (a audioResponse) write(w http.ResponseWriter, status int) {
+	w.Header().Set("Content-Type", a.MIME)
+	w.Header().Set("Content-Length", strconv.Itoa(len(a.Audio)))
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	if a.Engine != "" {
+		w.Header().Set("X-Wildstone-Speech-Engine", a.Engine)
+	}
+	w.WriteHeader(status)
+	w.Write(a.Audio)
 }
 
 // mintResponse is the one body shape allowed to carry a secret: the newly

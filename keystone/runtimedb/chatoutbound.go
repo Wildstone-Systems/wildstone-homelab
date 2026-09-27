@@ -87,6 +87,13 @@ type ChatOutbound struct {
 	CreatedAt   time.Time `json:"createdAt"`
 	ExpiresAt   time.Time `json:"expiresAt"`
 	DeliveredAt time.Time `json:"deliveredAt,omitempty"`
+	// Speech is the text to read aloud after Body is delivered, or ""
+	// (migration 0091). It never leaves in a poll: the adapter sees
+	// Speak, and asks Keystone for the audio, which is made then.
+	Speech string `json:"-"`
+	// Speak tells the adapter this reply is also to be sent as a voice
+	// message.
+	Speak bool `json:"speak,omitempty"`
 }
 
 // ErrDuplicateOutbound reports that this dedupe key is already queued or
@@ -129,11 +136,15 @@ func (db *DB) EnqueueChatOutbound(m ChatOutbound) (int64, error) {
 		return 0, err
 	}
 	defer tx.Rollback()
-	res, err := tx.Exec(
-		`INSERT INTO chat_outbound (connection, target, body, kind, binding_id, correlation_id, dedupe_key, created_at, expires_at, hold_until)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		m.Connection, m.Target, m.Body, m.Kind, m.BindingID, m.CorrelationID,
-		m.DedupeKey, now(), m.ExpiresAt.UTC().Format(time.RFC3339Nano), timeText(m.HoldUntil))
+	// speech is named only when there is some, like a turn's source:
+	// a text-only message is the column's default.
+	cols, marks := "connection, target, body, kind, binding_id, correlation_id, dedupe_key, created_at, expires_at, hold_until", "?, ?, ?, ?, ?, ?, ?, ?, ?, ?"
+	args := []any{m.Connection, m.Target, m.Body, m.Kind, m.BindingID, m.CorrelationID,
+		m.DedupeKey, now(), m.ExpiresAt.UTC().Format(time.RFC3339Nano), timeText(m.HoldUntil)}
+	if m.Speech = strings.TrimSpace(m.Speech); m.Speech != "" {
+		cols, marks, args = cols+", speech", marks+", ?", append(args, truncateUTF8(m.Speech, MaxChatBodyBytes))
+	}
+	res, err := tx.Exec(`INSERT INTO chat_outbound (`+cols+`) VALUES (`+marks+`)`, args...)
 	if err != nil {
 		_ = tx.Rollback()
 		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
@@ -263,7 +274,8 @@ func (db *DB) ChatOutboundReady(at Connection, seq int64) (ChatOutbound, error) 
 // The transport comes from the Connection, which is the row that owns
 // that fact.
 const outboundColumns = `SELECT o.seq, o.connection, conn.transport, o.target, o.body, o.kind,
-	 o.binding_id, o.correlation_id, o.dedupe_key, o.created_at, o.expires_at, o.delivered_at, o.hold_until
+	 o.binding_id, o.correlation_id, o.dedupe_key, o.created_at, o.expires_at, o.delivered_at, o.hold_until,
+	 o.speech != ''
 	 FROM chat_outbound o JOIN butler_addresses conn ON conn.seq = o.connection`
 
 // scanChatOutbound reads the shared column list both queue reads select.
@@ -273,7 +285,7 @@ func scanChatOutbound(rows *sql.Rows) ([]ChatOutbound, error) {
 		var m ChatOutbound
 		var created, expires, delivered, hold string
 		if err := rows.Scan(&m.Seq, &m.Connection, &m.Transport, &m.Target, &m.Body, &m.Kind,
-			&m.BindingID, &m.CorrelationID, &m.DedupeKey, &created, &expires, &delivered, &hold); err != nil {
+			&m.BindingID, &m.CorrelationID, &m.DedupeKey, &created, &expires, &delivered, &hold, &m.Speak); err != nil {
 			return nil, err
 		}
 		var err error
@@ -469,6 +481,43 @@ func (db *DB) checkOutboundPrivacy(messages []ChatOutbound, at Connection) ([]Ch
 		}
 	}
 	return messages, nil
+}
+
+// TakeChatOutboundSpeech returns the text of one reply to read aloud,
+// and clears it, so a reply is spoken at most once. It answers only for
+// this Connection's own messages, under the same checks as a delivery:
+// unexpired, to a person still admitted, and still allowed here by the
+// privacy of what produced it. A reply whose privacy no longer allows
+// this Connection is ErrPrivacy, and nothing is spoken.
+func (db *DB) TakeChatOutboundSpeech(at Connection, seq int64) (string, error) {
+	if err := db.CheckHouseholdExecution(); err != nil {
+		return "", err
+	}
+	var speech string
+	err := db.sql.QueryRow(`SELECT o.speech FROM chat_outbound o
+	 WHERE o.connection = ? AND o.seq = ? AND o.speech != '' AND o.expires_at > ? AND `+outboundAdmissionPredicate,
+		at.Seq, seq, now()).Scan(&speech)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", ErrNotFound
+	}
+	if err != nil {
+		return "", fmt.Errorf("runtimedb: reading reply speech: %w", err)
+	}
+	res, err := db.sql.Exec(`UPDATE chat_outbound SET speech = '' WHERE seq = ? AND speech != ''`, seq)
+	if err != nil {
+		return "", fmt.Errorf("runtimedb: taking reply speech: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return "", ErrNotFound // taken by a concurrent request
+	}
+	checked, err := db.checkOutboundPrivacy([]ChatOutbound{{Seq: seq, Body: speech}}, at)
+	if err != nil {
+		return "", err
+	}
+	if checked[0].Body != speech {
+		return "", ErrPrivacy
+	}
+	return speech, nil
 }
 
 // ChatReplyRouteForSession is where the newest chat reply for a session

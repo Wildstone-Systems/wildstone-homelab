@@ -580,13 +580,17 @@ func (s *Server) chatInbound(r *http.Request, id principal.Identity, msg inbound
 			body = "I can't send that answer here because of its privacy settings. Please continue on your household screen."
 		}
 	}
+	var spoken string
 	if voice != nil {
+		// A person who spoke is answered in voice too, when replies are
+		// read aloud here: the answer, not the "I heard" line.
+		spoken = s.replySpeech(at, body)
 		// Say what was heard, so a mis-hearing is visible in the same
 		// breath as the answer to it. These are the person's own words,
 		// going back to the conversation they were spoken into.
 		body = heardLine(text) + body
 	}
-	seq := s.queueChatReply(at, conversation, body, binding.ID, "",
+	seq := s.queueSpokenChatReply(at, conversation, body, spoken, binding.ID, "",
 		chatDedupe(at, conversation, msg.MessageID, ask.SessionID, text), ask.SessionID)
 	s.settleInbound(claimKey, seq, &settled)
 	return inboundResponse{Accepted: true, Bound: true, Queued: seq}, http.StatusAccepted, nil
@@ -738,6 +742,13 @@ func chatProposalDedupe(messageKey string, planIDs, proposalErrs []string) strin
 // already recorded, and telling the adapter the whole request failed
 // would have it redeliver a message that has been answered.
 func (s *Server) queueChatReply(at runtimedb.Connection, target, body string, bindingID int64, correlationID, dedupe string, sessionIDs ...string) int64 {
+	return s.queueSpokenChatReply(at, target, body, "", bindingID, correlationID, dedupe, sessionIDs...)
+}
+
+// queueSpokenChatReply is queueChatReply for a reply that is also to be
+// read aloud: speech is the text to speak once body is delivered, or ""
+// for text only.
+func (s *Server) queueSpokenChatReply(at runtimedb.Connection, target, body, speech string, bindingID int64, correlationID, dedupe string, sessionIDs ...string) int64 {
 	var privacySessions []int64
 	for _, id := range sessionIDs {
 		if id == "" {
@@ -753,7 +764,7 @@ func (s *Server) queueChatReply(at runtimedb.Connection, target, body string, bi
 	seq, err := s.DB.EnqueueChatOutbound(runtimedb.ChatOutbound{
 		PrivacySessions: privacySessions,
 		Connection:      at.Seq, Target: target,
-		Body: redact.String(body), Kind: "reply", BindingID: bindingID,
+		Body: redact.String(body), Speech: speech, Kind: "reply", BindingID: bindingID,
 		CorrelationID: correlationID, DedupeKey: dedupe,
 	})
 	if err != nil && seq == 0 {

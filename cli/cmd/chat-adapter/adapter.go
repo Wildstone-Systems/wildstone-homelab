@@ -433,6 +433,11 @@ func (a *adapter) deliverLoop(ctx context.Context) {
 			if err := a.keystone.ack(ctx, m.Seq); err != nil {
 				a.log.Error("acking", "seq", m.Seq, "err", err)
 			}
+			// After the ack, so a slow or failed voice never has the
+			// text sent twice.
+			if ready.Speak {
+				a.deliverVoice(ctx, m.Seq, ready.Target)
+			}
 		}
 	}
 }
