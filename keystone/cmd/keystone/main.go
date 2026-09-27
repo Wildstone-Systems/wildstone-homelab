@@ -49,6 +49,7 @@ import (
 	"github.com/chickenrat17/wildstone-homelab/keystone/redact"
 	"github.com/chickenrat17/wildstone-homelab/keystone/report"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
+	"github.com/chickenrat17/wildstone-homelab/keystone/speech"
 	"github.com/chickenrat17/wildstone-homelab/keystone/statefile"
 	"github.com/chickenrat17/wildstone-homelab/keystone/upkeep"
 )
@@ -115,6 +116,13 @@ func main() {
 	calendarURL := flag.String("calendar-url", "", "CalDAV collection of the household calendar, e.g. http://radicale:5232/GROUPS/Y2FsZW5kYXJfdXNlcnM=/; other declared calendars are derived from its origin (ADR-W034, ADR-W038). Empty leaves them all unregistered, so a Butler does not offer the household a calendar this deployment has not got. The password comes ONLY from CALENDAR_PASSWORD, never a flag")
 	calendarUser := flag.String("calendar-user", "", "directory account the calendar actions sign in to the CalDAV collection as; its password comes from CALENDAR_PASSWORD")
 	householdIngress := flag.String("household-ingress", "", "comma-separated EXACT remote addresses of the identity proxy (Authelia). Empty fails closed. This names ONE trust boundary and it now gates TWO things: the household review page (ADR-W030 A8.1), and Console sign-in by forwarded identity (ADR-W032) — a request from one of these addresses carrying Remote-User and a Remote-Groups list containing console_users, who is an active Owner Person with a fresh Console sign-in (OIDC, ADR-W033 A4.1), is authenticated as that person, with admin authority. Setting this does not by itself grant anyone the Console: they must also be in the console_users directory group, which packages/wildstone-console declares, and be an active Owner")
+	speechMode := flag.String("speech-mode", "off", "how voice messages are transcribed (ADR-W042): off | local | local-then-cloud | cloud. local never sends audio out of the house; cloud and local-then-cloud use OpenAI only for a conversation whose Agent may use a cloud model. The OpenAI key comes ONLY from OPENAI_API_KEY or the Console, never a flag")
+	speechURL := flag.String("speech-url", "", "base URL of the local speech-to-text engine, e.g. http://127.0.0.1:18000/v1 (the speech-speaches package, installed on this node); empty means no local engine")
+	speechModel := flag.String("speech-model", defaultSpeechModel, "local speech-to-text model; Keystone asks the engine to download it at startup")
+	speechCloudModel := flag.String("speech-cloud-model", defaultSpeechCloudModel, "OpenAI transcription model used when -speech-mode allows the cloud")
+	speechLanguage := flag.String("speech-language", "auto", "two-letter language hint for transcription, e.g. en, or auto to detect")
+	speechMaxSeconds := flag.Int("speech-max-seconds", speech.DefaultMaxSeconds, "longest voice message accepted, in seconds (5-600)")
+	speechTimeout := flag.Duration("speech-timeout", speech.DefaultTimeout, "how long one transcription may take before it is abandoned")
 	hostOpsEnabled := flag.Bool("hostops-enabled", false, "enable the host.* executor family (ADR-W039 Phase 6/H7, #353): Tier 3 host administration (container logs/stats/restart, disk usage, systemd unit status, image pruning, a reconcile poke) through existing Wardstone ops, never a privileged container or a shell. Off by default; an Owner still has to grant the family to a specific Agent (opt-in) and confirm every mutating call before anything runs")
 	flag.Parse()
 
@@ -132,6 +140,17 @@ func main() {
 		fmt.Fprintf(os.Stderr, "keystone: -agent-runtime must be %s or %s, not %q\n", agentRuntimeLegacy, agentRuntimeNative, butlerCfg.AgentRuntime)
 		os.Exit(2)
 	}
+	speechRtr, speechWarnings, err := speechRouter(speechConfig{
+		Mode: *speechMode, URL: *speechURL, Model: *speechModel, CloudModel: *speechCloudModel,
+		Language: *speechLanguage, MaxSeconds: *speechMaxSeconds, Timeout: *speechTimeout,
+	})
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "keystone:", err)
+		os.Exit(2)
+	}
+	for _, w := range speechWarnings {
+		log.Warn("speech: " + w)
+	}
 	householdCfg := householdConfig{
 		Interval: *automationEvery, Timezone: *householdTZ,
 		NtfyURL: *ntfyURL, ReplyURL: *replyURL, ReplyTTL: *replyTTL,
@@ -140,6 +159,7 @@ func main() {
 		ConsoleEntryWindow: *consoleEntry, ConsoleStepUpWindow: *consoleStepUp,
 		HostOpsEnabled:    *hostOpsEnabled,
 		AgentHeartbeatTTL: *agentHeartbeatTTL,
+		Speech:            speechRtr,
 	}
 	if err := run(*listen, *apiListen, *joinTokens, *hosts, *dataDir, *ingestEvery, *reconcileEvery, *managedPrefix, *backupEvery, *resticImage, *consoleDir, *catalogDir, *wallpaperDir, butlerCfg, householdCfg, log); err != nil {
 		fmt.Fprintln(os.Stderr, "keystone:", err)
@@ -301,6 +321,9 @@ type householdConfig struct {
 	// go without a heartbeat before the sweeper marks it offline
 	// (ADR-W039 §3.7, Phase 4, #340).
 	AgentHeartbeatTTL time.Duration
+	// Speech transcribes voice messages (ADR-W042). Its Mode is off
+	// unless the deployment turned it on; nil (a test's config) is off.
+	Speech *speech.Router
 }
 
 // confirmWindow is how long a confirm-tier question stays open, and
@@ -1184,6 +1207,10 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 			"pictures", apiSrv.ShippedWallpaperCount())
 	}
 	apiSrv.ConsoleEntryWindow, apiSrv.ConsoleStepUpWindow = householdCfg.ConsoleEntryWindow, householdCfg.ConsoleStepUpWindow
+	apiSrv.Speech = householdCfg.Speech
+	// Fetch the local model now rather than when somebody first speaks;
+	// the engine may still be starting, so this retries in the background.
+	go householdCfg.Speech.Warm(context.Background(), log)
 	apiSrv.HouseholdLoc = householdLoc
 	apiSrv.HouseholdZone = householdZone
 	// An Agent that hears the household's clock is wrong can propose the

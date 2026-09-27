@@ -119,11 +119,6 @@ func (s *Server) receiveChatMessage(r *http.Request, id principal.Identity) (any
 	if st, err := decodeChatBody(r, &msg); err != nil {
 		return nil, st, err
 	}
-	transport := strings.TrimSpace(msg.Transport)
-	account := strings.TrimSpace(msg.Account)
-	if transport == "" || account == "" {
-		return nil, http.StatusBadRequest, fmt.Errorf("transport and account are required")
-	}
 	text := strings.TrimSpace(msg.Text)
 	if text == "" {
 		return nil, http.StatusBadRequest, fmt.Errorf("text is required")
@@ -131,6 +126,20 @@ func (s *Server) receiveChatMessage(r *http.Request, id principal.Identity) (any
 	if len(text) > maxAskBytes {
 		// Bounded before anything else looks at it (ADR-W026 A6).
 		return nil, http.StatusRequestEntityTooLarge, fmt.Errorf("message exceeds %d bytes", maxAskBytes)
+	}
+	return s.chatInbound(r, id, msg, text, nil)
+}
+
+// chatInbound is everything after the body is read, shared by typed
+// messages and voice messages (ADR-W042). voice is nil for a typed
+// message; for a voice message text is empty until the recording has
+// been transcribed, which happens only after every check a stranger or
+// a room would stop at (§2.2).
+func (s *Server) chatInbound(r *http.Request, id principal.Identity, msg inboundMessage, text string, voice *voiceClip) (any, int, error) {
+	transport := strings.TrimSpace(msg.Transport)
+	account := strings.TrimSpace(msg.Account)
+	if transport == "" || account == "" {
+		return nil, http.StatusBadRequest, fmt.Errorf("transport and account are required")
 	}
 	at, err := s.connectionForCaller(id, msg)
 	if err != nil {
@@ -255,7 +264,14 @@ func (s *Server) receiveChatMessage(r *http.Request, id principal.Identity) (any
 			Reason: "no admission for this account on this connection"}, http.StatusAccepted, nil
 	}
 
-	claimKey := chatDedupe(at, conversation, msg.MessageID, "inbound", text)
+	// A voice message has no words yet, so the recording itself stands
+	// in for them in the dedupe key: a redelivered clip is the same
+	// clip, and is claimed once before any engine hears it.
+	dedupeText := text
+	if voice != nil {
+		dedupeText = voice.digest()
+	}
+	claimKey := chatDedupe(at, conversation, msg.MessageID, "inbound", dedupeText)
 	claimed, priorSeq, err := s.DB.ClaimChatInbound(claimKey, at.Surface)
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
@@ -323,6 +339,42 @@ func (s *Server) receiveChatMessage(r *http.Request, id principal.Identity) (any
 			Reason: reason}, http.StatusAccepted, nil
 	}
 
+	// A VOICE MESSAGE IS TRANSCRIBED HERE, and not one step earlier.
+	// Everything above could turn it away — a stranger, a room, a
+	// redelivery — and none of them cost a CPU second or a cloud call
+	// (ADR-W042 §2.2). Nothing below this block knows the words were
+	// spoken, except the three doors voice may not open.
+	if voice != nil {
+		heard, reply, reason := s.transcribeChatVoice(r.Context(), at, account, voice)
+		if reply != "" {
+			seq := s.queueChatReply(at, conversation, reply, binding.ID, "",
+				chatDedupe(at, conversation, msg.MessageID, "voice", dedupeText))
+			s.settleInbound(claimKey, seq, &settled)
+			return inboundResponse{Accepted: true, Bound: true, Queued: seq, Reason: reason},
+				http.StatusAccepted, nil
+		}
+		text = heard
+		// A SPOKEN SECRET IS NEITHER STORED NOR PASSED ON. Typed, the
+		// exact /secret syntax stores one; spoken, the words came through
+		// a recogniser that may have mis-heard the value, and the
+		// recording is already on the vendor's servers. So it is
+		// recorded as a disclosure, never stored, never repeated, and
+		// never shown to the Agent.
+		if secretCommand.MatchString(text) || redact.SecretSubmission(text) ||
+			strings.HasPrefix(strings.TrimSpace(strings.ToLower(text)), "/secret") {
+			if s.SecretVault != nil {
+				if err := s.SecretVault.RecordDisclosure(binding.Identity, at.Seq); err != nil {
+					return nil, http.StatusServiceUnavailable, fmt.Errorf("cannot record secret disclosure safely")
+				}
+			}
+			seq := s.queueChatReply(at, conversation, spokenSecretReply, binding.ID, "",
+				chatDedupe(at, conversation, msg.MessageID, "voice-secret", dedupeText))
+			s.settleInbound(claimKey, seq, &settled)
+			return inboundResponse{Accepted: true, Bound: true, Queued: seq,
+				Reason: "a spoken secret was not stored"}, http.StatusAccepted, nil
+		}
+	}
+
 	// Is this an ANSWER to something a household rule asked (ADR-W024
 	// H4, ADR-W026 A8)? If so it is a fact, not a conversation: it goes
 	// onto the household timeline correlated to the rule that asked, and
@@ -330,23 +382,31 @@ func (s *Server) receiveChatMessage(r *http.Request, id principal.Identity) (any
 	// rule opens still closes with the Butler switched off — the
 	// deterministic-backbone principle, applied to the one place chat
 	// could quietly have broken it.
-	if note, handled, e := s.prepareSecretInput(binding.Identity, text, at.Seq); handled {
-		if e != nil {
-			return nil, http.StatusServiceUnavailable, e
-		}
-		seq := s.queueChatReply(at, conversation, note, binding.ID, "", chatDedupe(at, conversation, msg.MessageID, "secret", "secret-intake"))
-		s.settleInbound(claimKey, seq, &settled)
-		return inboundResponse{Accepted: true, Bound: true, Queued: seq, Reason: "protected secret intake"}, http.StatusAccepted, nil
-	}
-
-	if !at.AdmitsOwnersOnly() {
-		if body, answered := s.recordChatAnswer(at, binding, conversation, text); answered {
-			seq := s.queueChatReply(at, conversation, body, binding.ID, "",
-				chatDedupe(at, conversation, msg.MessageID, "answer", text))
+	//
+	// VOICE NEVER REACHES THE NEXT THREE (ADR-W042 §2.3): secret intake,
+	// a rule's answer, and slash commands all act on exact words, and a
+	// recogniser mis-hears. A spoken secret was already stopped above; a
+	// spoken "yes" is not recorded as the household's answer to a rule,
+	// and a spoken "slash status" is a sentence for the Agent.
+	if voice == nil {
+		if note, handled, e := s.prepareSecretInput(binding.Identity, text, at.Seq); handled {
+			if e != nil {
+				return nil, http.StatusServiceUnavailable, e
+			}
+			seq := s.queueChatReply(at, conversation, note, binding.ID, "", chatDedupe(at, conversation, msg.MessageID, "secret", "secret-intake"))
 			s.settleInbound(claimKey, seq, &settled)
-			s.touchBinding(binding, conversation, msg.Group)
-			return inboundResponse{Accepted: true, Bound: true, Queued: seq,
-				Reason: "recorded as the answer to a household question"}, http.StatusAccepted, nil
+			return inboundResponse{Accepted: true, Bound: true, Queued: seq, Reason: "protected secret intake"}, http.StatusAccepted, nil
+		}
+
+		if !at.AdmitsOwnersOnly() {
+			if body, answered := s.recordChatAnswer(at, binding, conversation, text); answered {
+				seq := s.queueChatReply(at, conversation, body, binding.ID, "",
+					chatDedupe(at, conversation, msg.MessageID, "answer", text))
+				s.settleInbound(claimKey, seq, &settled)
+				s.touchBinding(binding, conversation, msg.Group)
+				return inboundResponse{Accepted: true, Bound: true, Queued: seq,
+					Reason: "recorded as the answer to a household question"}, http.StatusAccepted, nil
+			}
 		}
 	}
 
@@ -362,13 +422,15 @@ func (s *Server) receiveChatMessage(r *http.Request, id principal.Identity) (any
 		Binding:      binding,
 		Group:        msg.Group,
 	}
-	if body, reason, handled := s.runChatCommand(commandCtx, text); handled {
-		seq := s.queueChatReply(at, conversation, body, binding.ID, "",
-			chatDedupe(at, conversation, msg.MessageID, "command", text), choiceSessions...)
-		s.settleInbound(claimKey, seq, &settled)
-		s.touchBinding(binding, conversation, msg.Group)
-		return inboundResponse{Accepted: true, Bound: true, Queued: seq,
-			Reason: reason}, http.StatusAccepted, nil
+	if voice == nil {
+		if body, reason, handled := s.runChatCommand(commandCtx, text); handled {
+			seq := s.queueChatReply(at, conversation, body, binding.ID, "",
+				chatDedupe(at, conversation, msg.MessageID, "command", text), choiceSessions...)
+			s.settleInbound(claimKey, seq, &settled)
+			s.touchBinding(binding, conversation, msg.Group)
+			return inboundResponse{Accepted: true, Bound: true, Queued: seq,
+				Reason: reason}, http.StatusAccepted, nil
+		}
 	}
 
 	// The session runners take their own snapshot of the backend and
@@ -511,6 +573,12 @@ func (s *Server) receiveChatMessage(r *http.Request, id principal.Identity) (any
 		if err := s.DB.CheckSessionPrivacy(ask.SessionID, runtimedb.ModelLocal, runtimedb.MemoryDestination{ConnectionRef: at.Seq}); err != nil {
 			body = "I can't send that answer here because of its privacy settings. Please continue on your household screen."
 		}
+	}
+	if voice != nil {
+		// Say what was heard, so a mis-hearing is visible in the same
+		// breath as the answer to it. These are the person's own words,
+		// going back to the conversation they were spoken into.
+		body = heardLine(text) + body
 	}
 	seq := s.queueChatReply(at, conversation, body, binding.ID, "",
 		chatDedupe(at, conversation, msg.MessageID, ask.SessionID, text), ask.SessionID)
