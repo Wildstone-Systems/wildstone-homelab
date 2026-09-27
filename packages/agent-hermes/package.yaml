@@ -45,7 +45,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: agent-hermes
-  version: 0.1.1
+  version: 0.1.2
   capability: agent-hermes
   profile: hermes
   instanced: true
@@ -368,16 +368,23 @@ templates:
         - { source: "/etc/wildstone/{{ .Capability }}", target: /etc/hermes, readOnly: true }
       restart: unless-stopped
       # H1 hardening (protocol minor 18, keystone/resource/resource.go).
-      # `capDrop`/`noNewPrivileges` cost this app nothing — it drops to
-      # UID 10000 and needs no Linux capability at all — so both are on
-      # unconditionally. `readOnlyRootfs` is NOT set here: the design
+      # Hermes itself runs as UID 10000 and holds no capability, but the
+      # image's s6 init starts as root and must chown /opt/data and drop
+      # to that user first (s6-applyuidgid: setgroups/setgid/setuid).
+      # `capDrop: [ALL]` made every init step exit 111 and the container
+      # restart forever, so this drops everything in Docker's default
+      # set EXCEPT what that hand-off needs: CHOWN, DAC_OVERRIDE, FOWNER
+      # (the ownership fix-up), SETUID/SETGID (the drop itself) and KILL
+      # (root's s6 supervising processes it no longer owns). None of
+      # them survives into the UID-10000 process. `noNewPrivileges` is
+      # on unconditionally. `readOnlyRootfs` is NOT set here: the design
       # doc's own spike S1 ("try --read-only with a tmpfs /tmp by hand")
       # was written to answer whether the official image's s6 supervision
       # tolerates a read-only rootfs, and this environment could not run
       # that spike (no way to pull and boot the real image here) — so
       # this ships without a claim this package cannot back up. Flip it
       # once S1 confirms the image starts clean under it.
-      capDrop: [ALL]
+      capDrop: [AUDIT_WRITE, FSETID, MKNOD, NET_BIND_SERVICE, NET_RAW, SETFCAP, SETPCAP, SYS_CHROOT]
       noNewPrivileges: true
       resources: { memory: 4g, cpus: "2", pidsLimit: 512 }
       # NEW: an egress allowlist restricted to Keystone and the model
