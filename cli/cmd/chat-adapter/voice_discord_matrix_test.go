@@ -241,3 +241,116 @@ func TestMatrixRefusesMalformedMediaURIs(t *testing.T) {
 		t.Errorf("parseMXC = %q %q %v", s, id, ok)
 	}
 }
+
+// slackWith feeds message events straight into the driver, as Socket
+// Mode would, and returns what it made of them.
+func slackWith(t *testing.T, files *httptest.Server, events ...string) []Incoming {
+	t.Helper()
+	s := &slack{botToken: "xoxb-test", events: make(chan Incoming, 16), botID: "B1"}
+	if files != nil {
+		s.http = files.Client()
+		s.files = func(u *url.URL) bool { return strings.HasPrefix(u.String(), files.URL) }
+	}
+	for _, e := range events {
+		s.event(context.Background(), []byte(e))
+	}
+	var out []Incoming
+	for {
+		select {
+		case in := <-s.events:
+			out = append(out, in)
+		default:
+			return out
+		}
+	}
+}
+
+func TestSlackReadsAudioClips(t *testing.T) {
+	var gotAuth string
+	var downloads atomic.Int32
+	files := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		downloads.Add(1)
+		gotAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "video/mp4")
+		io.WriteString(w, "mp4 audio bytes")
+	}))
+	defer files.Close()
+	clip := `"files":[{"subtype":"slack_audio","mimetype":"video/mp4","size":9000,"duration_ms":4200,"url_private_download":"` + files.URL + `/files-pri/T1-F1/download/audio_message.mp4"}]`
+	got := slackWith(t, files,
+		// A clip in a DM.
+		`{"type":"message","subtype":"file_share","user":"U1","channel":"D1","channel_type":"im","ts":"1.1","text":"",`+clip+`}`,
+		// In a channel, not addressed.
+		`{"type":"message","subtype":"file_share","user":"U2","channel":"C1","channel_type":"channel","ts":"1.2","text":"",`+clip+`}`,
+		// In a channel, with the bot mentioned in its caption.
+		`{"type":"message","subtype":"file_share","user":"U2","channel":"C1","channel_type":"channel","ts":"1.3","text":"<@B1> listen",`+clip+`}`,
+		// A shared photo is still nothing to relay.
+		`{"type":"message","subtype":"file_share","user":"U1","channel":"D1","channel_type":"im","ts":"1.4","text":"","files":[{"mimetype":"image/png","url_private_download":"`+files.URL+`/a.png"}]}`,
+		// An edit is still ignored.
+		`{"type":"message","subtype":"message_changed","user":"U1","channel":"D1","channel_type":"im","ts":"1.5","text":"x"}`,
+	)
+	if len(got) != 3 {
+		t.Fatalf("got %d messages, want the three clips: %+v", len(got), got)
+	}
+	if downloads.Load() != 0 {
+		t.Fatal("the driver downloaded audio; fetching is the adapter's decision")
+	}
+	dm := got[0]
+	if dm.Voice == nil || dm.Text != "" || dm.Group || !dm.Addressed || dm.MessageID != "1.1" {
+		t.Fatalf("clip DM = %+v", dm)
+	}
+	// Slack labels its audio clips video/mp4; Keystone accepts that.
+	if dm.Voice.MIME != "video/mp4" || dm.Voice.Seconds != 4.2 || dm.Voice.Size != 9000 {
+		t.Fatalf("clip metadata = %+v", dm.Voice)
+	}
+	if got[1].Addressed {
+		t.Error("a channel clip nobody addressed was marked addressed")
+	}
+	if !got[2].Addressed || got[2].Text != "" {
+		t.Errorf("a channel clip mentioning the bot = %+v, want addressed with no text", got[2])
+	}
+	audio, err := dm.Voice.Fetch(context.Background(), 1<<20)
+	if err != nil || string(audio) != "mp4 audio bytes" {
+		t.Fatalf("Fetch = %q, %v", audio, err)
+	}
+	if gotAuth != "Bearer xoxb-test" {
+		t.Errorf("Authorization = %q, want the bot token", gotAuth)
+	}
+	if _, err := dm.Voice.Fetch(context.Background(), 5); !errors.Is(err, errVoiceTooLarge) {
+		t.Fatalf("over the limit: err = %v, want errVoiceTooLarge", err)
+	}
+}
+
+// Without files:read Slack answers with its sign-in page, not the file.
+// That is said plainly, rather than sent to Keystone as a recording.
+func TestSlackSaysWhenTheFilesScopeIsMissing(t *testing.T) {
+	files := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		io.WriteString(w, "<html>sign in</html>")
+	}))
+	defer files.Close()
+	got := slackWith(t, files, `{"type":"message","subtype":"file_share","user":"U1","channel":"D1","channel_type":"im","ts":"1.1","files":[{"subtype":"slack_audio","mimetype":"video/mp4","url_private_download":"`+files.URL+`/f"}]}`)
+	if len(got) != 1 {
+		t.Fatalf("got %+v", got)
+	}
+	if _, err := got[0].Voice.Fetch(context.Background(), 1<<20); !errors.Is(err, errSlackFilesScope) {
+		t.Fatalf("err = %v, want errSlackFilesScope", err)
+	}
+}
+
+// The bot token is sent to Slack's file host and nowhere else.
+func TestSlackFetchesOnlyFromItsFileHost(t *testing.T) {
+	s := &slack{botToken: "xoxb-test"}
+	for _, link := range []string{
+		"http://files.slack.com/files-pri/T1-F1/a.mp4",
+		"https://evil.example/files-pri/T1-F1/a.mp4",
+		"https://files.slack.com.evil.example/a.mp4",
+	} {
+		if _, err := s.fetchFile(context.Background(), link, 1<<20); err == nil || errors.Is(err, errVoiceTooLarge) {
+			t.Errorf("%s: fetched, want refused", link)
+		}
+	}
+	u, _ := url.Parse("https://files.slack.com/files-pri/T1-F1/a.mp4")
+	if !s.fileAllowed(u) {
+		t.Error("Slack's own file host was refused")
+	}
+}

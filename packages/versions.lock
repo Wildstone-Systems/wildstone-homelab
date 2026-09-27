@@ -22,7 +22,7 @@ cameras-frigate 1.0.1 0ac585beb5876da1
 captcha-flaresolverr 1.0.1 6420402a747e2ee5
 chat-discord 2.0.0 f18460627b32cd15
 chat-matrix 2.0.0 ecc85c0ff5b1a5d0
-chat-slack 2.0.0 26174531dec4cc1d
+chat-slack 2.0.1 c5ff3ab18b4a9bfa
 chat-telegram 2.0.0 84b38bec04e10fc1
 code-gitea 1.0.1 44a8494cd02dee51
 dashboard 1.0.1 c0a5ca5341926568

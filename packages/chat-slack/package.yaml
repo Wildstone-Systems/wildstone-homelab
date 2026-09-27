@@ -38,14 +38,17 @@
 #
 # THE APP. Made at api.slack.com/apps with Socket Mode on (the homelab
 # has no public URL for Slack to call). It needs two tokens: the bot
-# token (xoxb-…, scopes chat:write and im:history, subscribed to the
-# message.im event) and an app-level token (xapp-…, scope
-# connections:write) that opens the socket.
+# token (xoxb-…, scopes chat:write, im:history and files:read,
+# subscribed to the message.im event) and an app-level token (xapp-…,
+# scope connections:write) that opens the socket. files:read is what
+# lets the bot download a voice clip (ADR-W042); an app installed
+# before it was asked for must be reinstalled from its OAuth page for
+# the new scope to take effect.
 apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: chat-slack
-  version: 2.0.0
+  version: 2.0.1
   capability: chat-slack
   profile: slack
   instanced: true
