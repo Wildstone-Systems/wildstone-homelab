@@ -13,6 +13,7 @@ import { Group, GROUPS, groupOf, hostOf, RANK } from "../services";
 import { Dot, Kind, StatusPill } from "../ui/status";
 import { Drawer } from "../ui/Drawer";
 import { SecretInput } from "../ui/SecretInput";
+import { PantryPairingPanel } from "./PantryPairing";
 import { ServiceAccessPanel } from "./ServiceAccess";
 
 // Services (ADR-W021 A5, ADR-W027): the catalog, and installing from it.
@@ -588,6 +589,10 @@ export function InstalledDetail({
           the third thing an Owner asks about an installed service, and
           until slice 8 the one Wildstone could not answer. */}
       <ServiceAccessPanel capability={pkg.capability} />
+
+      {/* PantryOS runs where it already runs; pairing is how Wildstone
+          reaches it (ADR-W042 A6). */}
+      {pkg.capability === "pantry" && <PantryPairingPanel />}
 
       <div className="row" style={{ marginTop: "var(--space-8)" }}>
         <button className="btn btn-secondary" onClick={onReconfigure}>

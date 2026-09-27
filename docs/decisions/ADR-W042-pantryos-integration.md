@@ -229,7 +229,8 @@ connected yet.
    does for lists.
 4. `keystone/domestic`: grocery routing (A3) with the unavailable case pinned.
 5. Connection Plan + pairing exchange (A6) — the exchange is implemented
-   (#384); a Console screen for it is not.
+   (#384), with its Console screen in the pantry service's detail panel
+   (Services → PantryOS → Connection).
 
 ## Consequences
 

@@ -1037,6 +1037,18 @@ export interface IndexMeasurement {
 // ---------------------------------------------------------------- integrations
 
 // One named connection to an application (ADR-W030 A5). Keystone holds
+// A PantryOS pairing (ADR-W042 A6): the address Keystone reaches PantryOS
+// at, and when and by whom it was paired. The agent key is sealed in
+// Keystone and never sent here.
+export const PANTRY_PAIRING_PATH = "/api/v1/pantry/pairing";
+export interface PantryPairing {
+  capability: string;
+  endpoint: string;
+  pairedAt: string;
+  pairedBy: string;
+}
+export type PantryPairingStatus = { paired: false } | { paired: true; pairing: PantryPairing };
+
 // the contract and the leases; the application-specific half lives in an
 // adapter outside it.
 export interface IntegrationConnection {
@@ -1815,6 +1827,12 @@ export const api = {
     ),
   widenIntegration: (name: string, w: { actions: boolean; indexing: boolean; cloud: boolean }) =>
     call<{ widened: string }>("POST", `/api/v1/integrations/${encodeURIComponent(name)}/widen`, w),
+  // Pairing with PantryOS (ADR-W042 A6). Neither secret ever comes back:
+  // the status says where and when, nothing more.
+  pantryPairing: () => call<PantryPairingStatus>("GET", PANTRY_PAIRING_PATH),
+  pairPantry: (req: { address: string; code: string; keystoneUrl: string }) =>
+    call<PantryPairingStatus>("POST", PANTRY_PAIRING_PATH, req),
+  unpairPantry: () => call<{ paired: false; publisherTokensRevoked: number }>("DELETE", PANTRY_PAIRING_PATH),
   indexMeasurements: () =>
     call<{ measurements: IndexMeasurement[] | null }>("GET", "/api/v1/butler/index/measurements"),
   compactButlerIndex: (maxAgeDays: number) =>
