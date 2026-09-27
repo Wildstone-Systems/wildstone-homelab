@@ -296,6 +296,14 @@ type Butlers struct {
 	// runtime's answer (#364). Zero means externalReplyWait.
 	ExternalReplyWait time.Duration
 
+	// LateAnswer shows the person an answer that was settled after its
+	// turn stopped waiting: the turn timed out, or it was parked for an
+	// offline runtime and answered after a re-offer (#389). It is given
+	// the task and the answer as the objective check left it. cmd/keystone
+	// wires it to the api package, which owns sessions and the chat
+	// queue; nil records the answer on the task and shows it to nobody.
+	LateAnswer func(taskID, text string) error
+
 	// mu guards clients and waiting.
 	mu sync.Mutex
 	// waiting holds, per task, the turn waiting on its external

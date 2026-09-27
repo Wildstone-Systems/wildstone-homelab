@@ -894,6 +894,34 @@
     return row;
   }
 
+  // A reply that stands in for an answer still to come: the assistant's
+  // runtime is taking longer than a turn waits, or is offline and the
+  // turn resumes when it is back (#389). The answer is added to the
+  // conversation as a new turn when it arrives, so look for it for a
+  // while and show it here. seen is how many messages the conversation
+  // already had. Sending again, or moving to another conversation,
+  // stops the wait; the answer is still there when it is reopened.
+  var awaiting = 0;
+  function awaitAnswer(id, seen, show) {
+    var mine = ++awaiting, tries = 0;
+    function poll() {
+      if (mine !== awaiting || id !== session || ++tries > 60) { return; }
+      fetch("/api/v1/assistant/conversations/" + encodeURIComponent(id),
+            { headers: { accept: "application/json" } })
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (j) {
+          if (mine !== awaiting || id !== session) { return; }
+          var messages = (j && j.messages) || [];
+          if (messages.length <= seen) { setTimeout(poll, 10000); return; }
+          messages.slice(seen).forEach(function (m) {
+            if (m.role !== "user") { show(m); }
+          });
+        })
+        .catch(function () { setTimeout(poll, 10000); });
+    }
+    setTimeout(poll, 10000);
+  }
+
   // Re-reads the open conversation for its receipts only.
   //
   // Deliberately not a redraw of the thread: the member is looking at
@@ -945,6 +973,7 @@
   function send() {
     var box = el("ask"), body = box.value.trim();
     if (!body || !agent) { return; }
+    awaiting++;
     el("mic-note").textContent = "";
     var thread = el("thread");
     el("asks").hidden = true;
@@ -1011,6 +1040,14 @@
         if (session) { remember(agent, session); }
         text("session-id", session);
         thread.appendChild(turn("assistant", res.j.reply || ""));
+        if (res.j.pending) {
+          awaitAnswer(session, res.j.seen || 0, function (m) {
+            thread.appendChild(turn(m.role, m.text, m.receipts));
+            thread.scrollTop = thread.scrollHeight;
+            refreshReceipts();
+            loadConversations();
+          });
+        }
         if (res.j.proposals) {
           thread.appendChild(make("div", "pill pill-warn",
             res.j.proposals === 1 ? "1 thing needs the owner's approval"

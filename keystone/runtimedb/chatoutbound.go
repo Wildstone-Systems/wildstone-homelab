@@ -470,3 +470,32 @@ func (db *DB) checkOutboundPrivacy(messages []ChatOutbound, at Connection) ([]Ch
 	}
 	return messages, nil
 }
+
+// ChatReplyRouteForSession is where the newest chat reply for a session
+// went: its Connection, target conversation and binding. It is how an
+// answer that arrives after its turn has returned finds its way back to
+// the chat that asked (#389). The route is taken from the reply that
+// was sent rather than from chat_threads, because the thread may have
+// moved on to a newer conversation since. ok is false when the session
+// never replied into a chat, or the reply has been pruned
+// (ChatOutboundRetention).
+func (db *DB) ChatReplyRouteForSession(sessionID string) (ChatOutbound, bool, error) {
+	var seq int64
+	if _, err := fmt.Sscanf(sessionID, "bs-%d", &seq); err != nil {
+		return ChatOutbound{}, false, nil
+	}
+	var out ChatOutbound
+	err := db.sql.QueryRow(
+		`SELECT o.connection, o.target, o.binding_id FROM chat_outbound o
+		 JOIN chat_outbound_sessions s ON s.outbound = o.seq
+		 WHERE s.session = ? AND o.kind = 'reply'
+		 ORDER BY o.seq DESC LIMIT 1`, seq,
+	).Scan(&out.Connection, &out.Target, &out.BindingID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ChatOutbound{}, false, nil
+	}
+	if err != nil {
+		return ChatOutbound{}, false, fmt.Errorf("runtimedb: finding a session's chat route: %w", err)
+	}
+	return out, true, nil
+}

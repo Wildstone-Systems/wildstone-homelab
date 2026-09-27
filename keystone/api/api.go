@@ -278,6 +278,9 @@ type Server struct {
 	// 12 hours and 15 minutes.
 	ConsoleEntryWindow  time.Duration
 	ConsoleStepUpWindow time.Duration
+	// lateAnswerPoll is how often a late answer rechecks whether its
+	// turn has been recorded (DeliverLateAnswer). Zero is a second.
+	lateAnswerPoll time.Duration
 	// ConsoleSignInHTTP is the client used to reach the sign-in provider;
 	// nil means a default with a timeout. Tests point it at a fake.
 	ConsoleSignInHTTP *http.Client
