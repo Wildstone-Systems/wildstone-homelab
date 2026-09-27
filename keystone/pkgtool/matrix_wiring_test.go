@@ -58,6 +58,9 @@ func TestMatrixIsPrivateAndNonFederatedByDefault(t *testing.T) {
 	if route.Upstream != "container/matrix-synapse:8008" {
 		t.Errorf("Matrix route points at %q, want the Synapse client listener", route.Upstream)
 	}
+	if route.Host != "matrix.example.internal" {
+		t.Errorf("Matrix route host is %q; it must retain the pinned matrix label", route.Host)
+	}
 }
 
 func TestMatrixOidcSecretTravelsByFile(t *testing.T) {

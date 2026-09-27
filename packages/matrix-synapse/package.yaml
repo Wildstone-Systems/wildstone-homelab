@@ -42,7 +42,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: matrix-synapse
-  version: 1.0.1
+  version: 1.0.2
   capability: matrix-homeserver
   profile: synapse
 requires:
@@ -50,8 +50,11 @@ requires:
   - { trait: ingress, mode: private }
 params:
   - { name: public_domain, required: true, description: "The domain your services are named under, e.g. home.example.com. Under a tailnet this is a label rather than an address you type.", source: domain }
-  - { name: matrix_subdomain, default: matrix, description: "The name of the Matrix client endpoint, e.g. matrix." }
-  - { name: server_name, default: "", description: "The permanent domain in Matrix IDs. Leave empty to use matrix_subdomain.public_domain. Do not change it after first install." }
+  # Matrix clients and the OIDC callback retain this origin permanently. The
+  # tailnet ingress pins the stable "matrix" route label to one port, so this
+  # label is deliberately not configurable: a custom label would lose that
+  # pin and could move when another route is installed.
+  - { name: server_name, default: "", description: "The permanent domain in Matrix IDs. Leave empty to use matrix.public_domain. Do not change it after first install." }
   - { name: node, required: true, description: "Which machine to install this on.", source: node }
   - { name: timezone, default: UTC, source: timezone, validate: iana_timezone, description: "Your timezone, e.g. America/Chicago." }
 accessGroups: [family]
@@ -99,8 +102,8 @@ templates:
       filename: private.yaml
       content: |
         # Managed by Wildstone — change package parameters, not this file.
-        server_name: "{{ or .Params.server_name (printf "%s.%s" .Params.matrix_subdomain .Params.public_domain) }}"
-        public_baseurl: '{{ origin (printf "%s.%s" .Params.matrix_subdomain .Params.public_domain) }}/'
+        server_name: "{{ or .Params.server_name (printf "matrix.%s" .Params.public_domain) }}"
+        public_baseurl: '{{ origin (printf "matrix.%s" .Params.public_domain) }}/'
         serve_server_wellknown: false
         report_stats: false
 
@@ -191,7 +194,7 @@ templates:
         image: "matrixdotorg/synapse@sha256:6b95dd129e35e97e8032cb759e5db4a516a5f7ef6c98d34d716fea1ae239b62a"
         command: ["migrate_config"]
         env:
-          SYNAPSE_SERVER_NAME: "{{ or .Params.server_name (printf "%s.%s" .Params.matrix_subdomain .Params.public_domain) }}"
+          SYNAPSE_SERVER_NAME: "{{ or .Params.server_name (printf "matrix.%s" .Params.public_domain) }}"
           SYNAPSE_REPORT_STATS: "no"
           SYNAPSE_NO_TLS: "yes"
           POSTGRES_HOST: matrix-postgres
@@ -252,7 +255,7 @@ templates:
     kind: Route
     metadata: { name: matrix, node: "{{ .Params.node }}" }
     spec:
-      host: "{{ .Params.matrix_subdomain }}.{{ .Params.public_domain }}"
+      host: "matrix.{{ .Params.public_domain }}"
       upstream: "container/matrix-synapse:8008"
       auth: app_oidc
       classification: family_private
@@ -269,7 +272,7 @@ templates:
       clientId: matrix-synapse
       clientName: Matrix
       redirectUris:
-        - '{{ origin (printf "%s.%s" .Params.matrix_subdomain .Params.public_domain) }}/_synapse/client/oidc/callback'
+        - '{{ origin (printf "matrix.%s" .Params.public_domain) }}/_synapse/client/oidc/callback'
       scopes: [openid, profile, email]
       authPolicy: two_factor
       secretRef: "{{ .Resolved.OidcSecretRef }}"
