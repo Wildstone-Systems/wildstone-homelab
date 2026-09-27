@@ -175,6 +175,9 @@ func TestMatrixPostgresSocketAndBackupAreComplete(t *testing.T) {
 		!mountsVolume(synapse, "matrix-postgres-socket", "/run/postgresql") {
 		t.Error("Postgres and Synapse do not share the capability-owned socket volume")
 	}
+	if !mountsVolume(postgres, "matrix-pgdata", "/var/lib/postgresql") {
+		t.Error("PostgreSQL 18 live data is not persisted from /var/lib/postgresql")
+	}
 	backup := matrixResource(t, resource.KindBackupPlan, "matrix").BackupPlan
 	for _, volume := range []string{"matrix-data", "matrix-pgdata"} {
 		if !slices.Contains(backup.Volumes, volume) {

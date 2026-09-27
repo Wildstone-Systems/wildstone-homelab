@@ -42,7 +42,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: matrix-synapse
-  version: 1.0.5
+  version: 1.0.6
   capability: matrix-homeserver
   profile: synapse
 requires:
@@ -264,7 +264,10 @@ templates:
         - -c
         - unix_socket_directories=/run/postgresql
       mounts:
-        - { source: matrix-pgdata, target: /var/lib/postgresql/data }
+        # PostgreSQL 18 stores PGDATA under /var/lib/postgresql/18/docker.
+        # Mount the image's parent data volume so the live database—not an
+        # unused legacy child path—is persistent and included in backups.
+        - { source: matrix-pgdata, target: /var/lib/postgresql }
         - { source: matrix-postgres-socket, target: /run/postgresql }
       restart: unless-stopped
       resources: { memory: 768m, cpus: "1", pidsLimit: 256 }
