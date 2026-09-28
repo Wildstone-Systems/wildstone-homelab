@@ -455,8 +455,24 @@ func TestOnlyMakingOrRemovingABotAsksForAFreshSignIn(t *testing.T) {
 
 // withLocalHomeserver records a matrix-homeserver capability in state the
 // way matrix-synapse renders it: its private.yaml on node n1, carrying the
-// server_name Synapse uses. The handler reads nothing else from it.
+// server_name Synapse uses, and the Job that installs bot registrations.
+// The handler reads nothing else from it.
 func withLocalHomeserver(t *testing.T, h *harness, serverName string) {
+	t.Helper()
+	withPreAppServiceHomeserver(t, h, serverName)
+	if err := h.s.State.Put(resource.Resource{
+		ApiVersion: resource.ApiVersion,
+		Kind:       resource.KindJob,
+		Metadata:   resource.Metadata{Name: "matrix-appservices-install", Node: "n1", Owner: "capability/matrix-homeserver", Package: "matrix-synapse"},
+		Job:        &resource.JobSpec{Run: resource.ContainerSpec{Image: "alpine@sha256:" + strings.Repeat("0", 64)}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// withPreAppServiceHomeserver records a matrix-synapse from before
+// ADR-W033 B7.2: a private.yaml, but no Job to install registrations.
+func withPreAppServiceHomeserver(t *testing.T, h *harness, serverName string) {
 	t.Helper()
 	if err := h.s.State.Put(resource.Resource{
 		ApiVersion: resource.ApiVersion,
@@ -557,5 +573,36 @@ func TestALocalMatrixBotIsRefusedWithoutAHomeserver(t *testing.T) {
 	withToken["credentials"] = map[string]string{"accessToken": fakesecret.Token()}
 	if code, _ := h.connect(t, withToken); code != http.StatusBadRequest {
 		t.Errorf("a local bot with a pasted token was accepted: %d", code)
+	}
+}
+
+// A homeserver installed before bots could live on it is not offered, and
+// a local connect is refused rather than reported connected: its Synapse
+// would never load the registration, so the bot could neither register
+// nor sync.
+func TestALocalMatrixBotIsRefusedOnAHomeserverWithoutAppServices(t *testing.T) {
+	h, _ := connectHarness(t)
+	withPreAppServiceHomeserver(t, h, "matrix.example.internal")
+	var platforms struct {
+		Platforms []chatPlatform `json:"platforms"`
+	}
+	h.do(runtimedb.RoleAdmin, http.MethodGet, "/api/v1/connections/platforms", nil, &platforms)
+	for _, p := range platforms.Platforms {
+		if p.Local != nil {
+			t.Errorf("%s offers a local bot on a homeserver that cannot load one", p.Name)
+		}
+	}
+	code, out := h.connect(t, localMatrixFor("joan", "sandy"))
+	if code != http.StatusBadRequest {
+		t.Fatalf("connect on a pre-B7.2 homeserver = %d %v", code, out)
+	}
+	if msg, _ := out["error"].(string); !strings.Contains(msg, "upgrade matrix-synapse") {
+		t.Errorf("the refusal does not say to upgrade: %v", out)
+	}
+	current, _ := h.s.State.Load()
+	for _, r := range current {
+		if r.Kind == resource.KindMatrixAppService {
+			t.Errorf("a registration was recorded despite the refusal: %s", r.Metadata.Name)
+		}
 	}
 }

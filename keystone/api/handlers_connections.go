@@ -123,7 +123,7 @@ func chatPlatformNamed(name string) (chatPlatform, bool) {
 // listChatPlatforms is what the Connect form is built from.
 func (s *Server) listChatPlatforms(_ *http.Request, _ principal.Identity) (any, int, error) {
 	out := append([]chatPlatform(nil), chatPlatforms...)
-	if hs, ok := s.localMatrixHomeserver(); ok {
+	if hs, ok := s.localMatrixHomeserver(); ok && hs.appServices {
 		for i := range out {
 			if out[i].Name == "matrix" {
 				out[i].Local = &chatLocal{
@@ -143,7 +143,20 @@ func (s *Server) listChatPlatforms(_ *http.Request, _ principal.Identity) (any, 
 type localMatrixServer struct {
 	node       string
 	serverName string
+	// appServices is whether the installed homeserver can load a bot at
+	// all. A matrix-synapse from before B7.2 (1.0.8 and earlier) has a
+	// private.yaml but neither the Job that installs registrations nor
+	// the startup code that lists them, and installing chat-matrix does
+	// not re-render it: a local bot there would be reported connected
+	// and never be able to register or sync.
+	appServices bool
 }
+
+// localMatrixAppServicesJob is the matrix-synapse Job that installs bot
+// registrations. It ships in the same package version as the startup code
+// that loads them, so its presence in current state is what says the
+// homeserver accepts application services.
+const localMatrixAppServicesJob = "matrix-appservices-install"
 
 // localMatrixHomeserver finds the matrix-homeserver capability in current
 // state: the node it runs on, and the server_name its rendered config
@@ -157,9 +170,20 @@ func (s *Server) localMatrixHomeserver() (localMatrixServer, bool) {
 	if err != nil {
 		return localMatrixServer{}, false
 	}
+	var (
+		hs       localMatrixServer
+		found    bool
+		installs bool
+	)
 	for _, r := range current {
-		if r.Metadata.Owner != "capability/matrix-homeserver" || r.Kind != resource.KindConfigFile ||
-			r.ConfigFile == nil || r.ConfigFile.Filename != "private.yaml" {
+		if r.Metadata.Owner != "capability/matrix-homeserver" {
+			continue
+		}
+		if r.Kind == resource.KindJob && r.Metadata.Name == localMatrixAppServicesJob {
+			installs = true
+			continue
+		}
+		if found || r.Kind != resource.KindConfigFile || r.ConfigFile == nil || r.ConfigFile.Filename != "private.yaml" {
 			continue
 		}
 		var cfg struct {
@@ -168,9 +192,13 @@ func (s *Server) localMatrixHomeserver() (localMatrixServer, bool) {
 		if yaml.Unmarshal([]byte(r.ConfigFile.Content), &cfg) != nil || cfg.ServerName == "" || r.Metadata.Node == "" {
 			return localMatrixServer{}, false
 		}
-		return localMatrixServer{node: r.Metadata.Node, serverName: cfg.ServerName}, true
+		hs, found = localMatrixServer{node: r.Metadata.Node, serverName: cfg.ServerName}, true
 	}
-	return localMatrixServer{}, false
+	if !found {
+		return localMatrixServer{}, false
+	}
+	hs.appServices = installs
+	return hs, true
 }
 
 // localMatrixBotID is the user a local bot is registered as: the
@@ -271,6 +299,9 @@ func (s *Server) createConnection(r *http.Request, id principal.Identity) (any, 
 		var ok bool
 		if local, ok = s.localMatrixHomeserver(); !ok {
 			return nil, http.StatusBadRequest, fmt.Errorf("this household does not run a Matrix homeserver; install matrix-synapse first, or connect a bot on another server with its token")
+		}
+		if !local.appServices {
+			return nil, http.StatusBadRequest, fmt.Errorf("this household's Matrix server is too old to host a bot; upgrade matrix-synapse to 1.0.9 or later first, or connect a bot on another server with its token")
 		}
 		if asked != "" && asked != local.node {
 			return nil, http.StatusBadRequest, fmt.Errorf("a bot on the household's own Matrix server runs on %s, the machine running Matrix", local.node)
