@@ -507,6 +507,8 @@ func backupPlanEqual(a, b *resource.BackupPlanSpec) bool {
 		a.Retention == b.Retention &&
 		stringSliceEqual(a.Volumes, b.Volumes) &&
 		stringSliceEqual(a.Paths, b.Paths) &&
+		stringSliceEqual(a.Exclude, b.Exclude) &&
+		a.Class == b.Class &&
 		a.Reserve == b.Reserve &&
 		offsiteEqual(a.Offsite, b.Offsite)
 }
@@ -735,7 +737,10 @@ func grade(action Action, want, have resource.Resource) (RiskGrade, string) {
 		}
 		sourcesAdded := false
 		if action == ActionUpdate && have.BackupPlan != nil {
-			sourcesAdded = !subset(want.BackupPlan.Volumes, have.BackupPlan.Volumes) || !subset(want.BackupPlan.Paths, have.BackupPlan.Paths)
+			// More sources, or fewer excludes, both send more data out.
+			sourcesAdded = !subset(want.BackupPlan.Volumes, have.BackupPlan.Volumes) ||
+				!subset(want.BackupPlan.Paths, have.BackupPlan.Paths) ||
+				!subset(have.BackupPlan.Exclude, want.BackupPlan.Exclude)
 		}
 		switch {
 		case wantOff != nil && (haveOff == nil || haveOff.Target != wantOff.Target || haveOff.Route != wantOff.Route):

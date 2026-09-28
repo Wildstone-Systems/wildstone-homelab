@@ -165,7 +165,7 @@ func (e *Engine) runOffsite(ctx context.Context, r resource.Resource, desired []
 				e.log().Info("backup: initialized an off-site repository", "plan", name, "target", o.Target)
 			}
 
-			send, pass := e.offsiteSpec(spec, t, name, append([]string{"backup"}, sourceTargets(spec)...), sources(spec), false), "off-site backup pass"
+			send, pass := e.offsiteSpec(spec, t, name, backupCommand(spec), sources(spec), false), "off-site backup pass"
 			if local && !direct {
 				send, pass = e.offsiteSpec(spec, t, name, []string{"copy"}, nil, true), "off-site copy pass"
 			}

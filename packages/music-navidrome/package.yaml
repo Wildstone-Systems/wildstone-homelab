@@ -18,7 +18,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: music-navidrome
-  version: 1.0.1
+  version: 1.0.2
   capability: music
   profile: navidrome
 requires:
@@ -81,4 +81,5 @@ templates:
       repository: music-backup-repo
       passwordSecret: secret/restic-music
       schedule: weekly
+      class: important
       retention: { keepWeekly: 4 }

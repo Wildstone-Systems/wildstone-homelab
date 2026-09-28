@@ -43,7 +43,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: budget-actual
-  version: 1.1.0
+  version: 1.1.1
   capability: budget
   profile: actual
 requires:
@@ -161,4 +161,5 @@ templates:
       repository: budget-backup-repo
       passwordSecret: secret/restic-budget
       schedule: daily
+      class: critical
       retention: { keepDaily: 7, keepWeekly: 4, keepMonthly: 6 }

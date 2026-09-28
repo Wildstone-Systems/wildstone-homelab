@@ -275,6 +275,31 @@ that share. Otherwise it would be backing up the empty folder
 underneath — and after enough of those, retention would prune the real
 snapshots away. The run fails and says which share is missing.
 
+**Leave things out** with `exclude` — restic patterns, one per entry. A
+pattern without a leading `/` matches anywhere; an absolute one must sit
+inside one of the plan's `paths`:
+
+```yaml
+spec:
+  paths: ["/srv/wildstone/nas/media/My Movies"]
+  exclude:
+    - "*.nfo"                                        # anywhere
+    - "**/Samples"                                   # any folder called Samples
+    - "/srv/wildstone/nas/media/My Movies/Extras"    # this one folder
+```
+
+On a plan that goes off-site, removing an exclude is High risk: it sends
+more out of the house. Adding one is not.
+
+**Say how much it matters** with `class: critical` (irreplaceable),
+`important` (painful to rebuild) or `rebuildable`. Every package's plan
+already carries one; it only groups plans when you choose what goes
+off-site, and changes nothing about how they run.
+
+A plan's `volumes`, and its repository when that is a volume, must be
+declared `Volume` resources on the same node: a typo would otherwise back
+up an empty volume Docker created on the spot, and report success.
+
 A snapshot keeps the folder's path, so a restore of
 `/srv/wildstone/nas/media/My Movies` lands in
 `<plan>-restore/backup/srv/wildstone/nas/media/My Movies`.

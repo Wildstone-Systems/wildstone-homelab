@@ -65,7 +65,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: podcasts-podgrab
-  version: 1.0.0
+  version: 1.0.1
   capability: podcasts
   profile: podgrab
 requires:
@@ -145,4 +145,5 @@ templates:
       repository: podcasts-backup-repo
       passwordSecret: secret/restic-podcasts
       schedule: daily
+      class: important
       retention: { keepDaily: 7, keepWeekly: 4 }

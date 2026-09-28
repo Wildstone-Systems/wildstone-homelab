@@ -317,3 +317,32 @@ func TestNetworkMountValidates(t *testing.T) {
 		}
 	}
 }
+
+// TestBackupPlanExcludeAndClass: excludes that restic can read, and the
+// three classes; anything else named and refused.
+func TestBackupPlanExcludeAndClass(t *testing.T) {
+	r := nasPlanRes()
+	r.BackupPlan.Exclude = []string{"*.nfo", "**/Samples", "/srv/wildstone/nas/media/My Movies/Extras"}
+	r.BackupPlan.Class = "important"
+	if err := r.Validate(); err != nil {
+		t.Fatalf("valid excludes rejected: %v", err)
+	}
+	for _, tc := range []struct {
+		name, field string
+		mut         func(*BackupPlanSpec)
+	}{
+		{"empty", "spec.exclude[0]", func(p *BackupPlanSpec) { p.Exclude = []string{""} }},
+		{"padded", "spec.exclude[0]", func(p *BackupPlanSpec) { p.Exclude = []string{" *.nfo"} }},
+		{"negated", "spec.exclude[0]", func(p *BackupPlanSpec) { p.Exclude = []string{"!keep.txt"} }},
+		{"control", "spec.exclude[0]", func(p *BackupPlanSpec) { p.Exclude = []string{"a\nb"} }},
+		{"absolute outside paths", "spec.exclude[0]", func(p *BackupPlanSpec) { p.Exclude = []string{"/etc/passwd"} }},
+		{"too many", "spec.exclude", func(p *BackupPlanSpec) { p.Exclude = make([]string, 101) }},
+		{"bad class", "spec.class", func(p *BackupPlanSpec) { p.Class = "precious" }},
+	} {
+		r := nasPlanRes()
+		tc.mut(r.BackupPlan)
+		if err := r.Validate(); err == nil || !strings.Contains(err.Error(), tc.field) {
+			t.Errorf("%s: err = %v, want %s named", tc.name, err, tc.field)
+		}
+	}
+}

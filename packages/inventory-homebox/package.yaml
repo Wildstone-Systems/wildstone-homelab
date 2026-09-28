@@ -35,7 +35,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: inventory-homebox
-  version: 1.1.0
+  version: 1.1.1
   capability: inventory
   profile: homebox
 requires:
@@ -148,4 +148,5 @@ templates:
       repository: inventory-backup-repo
       passwordSecret: secret/restic-inventory
       schedule: daily
+      class: critical
       retention: { keepDaily: 7, keepWeekly: 4 }

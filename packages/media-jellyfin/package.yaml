@@ -19,7 +19,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: media-jellyfin
-  version: 1.0.3
+  version: 1.0.4
   capability: media
   profile: jellyfin
 requires:
@@ -115,4 +115,5 @@ templates:
       repository: media-backup-repo
       passwordSecret: secret/restic-media
       schedule: weekly
+      class: important
       retention: { keepWeekly: 4 }

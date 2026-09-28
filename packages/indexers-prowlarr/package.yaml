@@ -28,7 +28,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: indexers-prowlarr
-  version: 1.0.2
+  version: 1.0.3
   capability: indexers
   profile: prowlarr
 requires:
@@ -93,4 +93,5 @@ templates:
       repository: indexers-backup-repo
       passwordSecret: secret/restic-indexers
       schedule: weekly
+      class: rebuildable
       retention: { keepWeekly: 4 }

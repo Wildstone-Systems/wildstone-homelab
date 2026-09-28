@@ -15,7 +15,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: bookmarks-linkding
-  version: 1.0.1
+  version: 1.0.2
   capability: bookmarks
   profile: linkding
 requires:
@@ -77,4 +77,5 @@ templates:
       repository: bookmarks-backup-repo
       passwordSecret: secret/restic-bookmarks
       schedule: daily
+      class: critical
       retention: { keepDaily: 7, keepWeekly: 4 }

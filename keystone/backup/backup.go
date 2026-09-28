@@ -290,7 +290,7 @@ func (e *Engine) runBackup(ctx context.Context, r resource.Resource, desired []r
 			if err := e.ensureRepository(ctx, r); err != nil {
 				return err
 			}
-			backupSpec := e.resticSpec(spec, append([]string{"backup"}, sourceTargets(spec)...), sources(spec))
+			backupSpec := e.resticSpec(spec, backupCommand(spec), sources(spec))
 			if err := e.Run.RunContainer(withGuard(ctx, guard), r.Metadata.Node, "backup-"+name, backupSpec); err != nil {
 				var low *LowDiskError
 				if errors.As(err, &low) {
@@ -501,6 +501,20 @@ func (e *Engine) resticSpec(spec *resource.BackupPlanSpec, command []string, wit
 		Command: command,
 		Restart: "no",
 	}
+}
+
+// backupCommand is `restic backup` over the plan's sources, with its
+// excludes. An absolute exclude names a folder under one of the plan's
+// paths, which sits at /backup<path> in the container (see sourceTarget).
+func backupCommand(spec *resource.BackupPlanSpec) []string {
+	cmd := append([]string{"backup"}, sourceTargets(spec)...)
+	for _, x := range spec.Exclude {
+		if strings.HasPrefix(x, "/") {
+			x = "/backup" + x
+		}
+		cmd = append(cmd, "--exclude", x)
+	}
+	return cmd
 }
 
 // sourceTarget is where a source appears inside the run container: a

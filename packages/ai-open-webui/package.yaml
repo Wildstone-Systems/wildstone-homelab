@@ -20,7 +20,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: ai-open-webui
-  version: 1.0.1
+  version: 1.0.2
   capability: ai-chat
   profile: open-webui
 requires:
@@ -113,4 +113,5 @@ templates:
       repository: ai-chat-backup-repo
       passwordSecret: secret/restic-ai-chat
       schedule: weekly
+      class: important
       retention: { keepWeekly: 4 }

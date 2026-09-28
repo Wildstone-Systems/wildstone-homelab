@@ -201,7 +201,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: calendar-radicale
-  version: 2.2.0
+  version: 2.2.1
   capability: calendar
   profile: radicale
 requires:
@@ -578,6 +578,7 @@ templates:
       repository: calendar-backup-repo
       passwordSecret: secret/restic-calendar
       schedule: daily
+      class: critical
       retention: { keepDaily: 7, keepWeekly: 4, keepMonthly: 6 }
 # The household actions this capability offers (ADR-W001, ADR-W024 A5).
 # The domestic gateway dispatches these and nothing else, at exactly

@@ -872,12 +872,23 @@ type BackupPlanSpec struct {
 	// Schedule is one of backupSchedules: daily, weekly, monthly.
 	Schedule  string          `yaml:"schedule,omitempty"`
 	Retention BackupRetention `yaml:"retention,omitempty"`
+	// Exclude are restic exclude patterns (ADR-W045 A4). A pattern with no
+	// leading "/" matches anywhere ("*.nfo", "**/Samples", "cache"); an
+	// absolute one must lie inside one of Paths and excludes that folder.
+	Exclude []string `yaml:"exclude,omitempty"`
+	// Class says how much the data matters: critical (irreplaceable),
+	// important (painful to rebuild) or rebuildable. It groups plans for
+	// the owner choosing what goes off-site; it changes no behaviour.
+	Class string `yaml:"class,omitempty"`
 	// Offsite, when set, also sends this plan's backups to a BackupTarget
 	// (ADR-W045 A3). With route offsite-only, Repository, PasswordSecret,
 	// Schedule and Retention are left empty: the off-site block carries
 	// them, and nothing is stored locally.
 	Offsite *BackupOffsite `yaml:"offsite,omitempty"`
 }
+
+// backupClasses is the closed set of BackupPlanSpec.Class values.
+var backupClasses = map[string]bool{"critical": true, "important": true, "rebuildable": true}
 
 // Off-site routes (ADR-W045 A3).
 const (
@@ -1798,6 +1809,17 @@ func validateBackupPlan(r *Resource) error {
 			return bad("spec.reserve", err.Error())
 		}
 	}
+	if p.Class != "" && !backupClasses[p.Class] {
+		return bad("spec.class", "must be critical, important or rebuildable")
+	}
+	if len(p.Exclude) > 100 {
+		return bad("spec.exclude", "must list at most 100 patterns")
+	}
+	for i, x := range p.Exclude {
+		if msg := excludeProblem(x, p.Paths); msg != "" {
+			return bad(fmt.Sprintf("spec.exclude[%d]", i), msg)
+		}
+	}
 	if o := p.Offsite; o != nil && o.Route == BackupRouteOffsiteOnly {
 		// Nothing is kept locally, so a local field here would be a
 		// setting that silently does nothing.
@@ -1847,6 +1869,31 @@ func validateBackupPlan(r *Resource) error {
 		}
 	}
 	return nil
+}
+
+// excludeProblem returns why an exclude pattern is unusable, or "".
+// Patterns reach restic as one argument each, never through a shell, so
+// only what restic itself would misread is refused.
+func excludeProblem(x string, paths []string) string {
+	switch {
+	case x == "" || strings.TrimSpace(x) != x:
+		return "must not be empty or start or end with spaces"
+	case len(x) > 512:
+		return "must be at most 512 characters"
+	case strings.ContainsFunc(x, func(c rune) bool { return c < 0x20 || c == 0x7f }):
+		return "must not contain control characters"
+	case strings.HasPrefix(x, "!"):
+		return `must not start with "!" (negated patterns are not supported)`
+	}
+	if strings.HasPrefix(x, "/") {
+		for _, p := range paths {
+			if x == p || strings.HasPrefix(x, p+"/") {
+				return ""
+			}
+		}
+		return "an absolute pattern must lie inside one of spec.paths; use a pattern without a leading / (such as **/Samples) to match anywhere"
+	}
+	return ""
 }
 
 // hostPathProblem returns why a node path is unusable as a backup source

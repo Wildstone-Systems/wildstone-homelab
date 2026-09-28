@@ -22,7 +22,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: documents-paperless
-  version: 1.0.3
+  version: 1.0.4
   capability: documents
   profile: paperless
 requires:
@@ -241,4 +241,5 @@ templates:
       repository: documents-backup-repo
       passwordSecret: secret/restic-documents
       schedule: daily
+      class: critical
       retention: { keepDaily: 7, keepWeekly: 4, keepMonthly: 6 }

@@ -538,3 +538,46 @@ func TestOffsiteTargetDeclared(t *testing.T) {
 		}
 	}
 }
+
+// TestBackupVolumesDeclared: a plan's volumes and repository volume must
+// be declared on its node — a typo would back up an empty volume.
+func TestBackupVolumesDeclared(t *testing.T) {
+	e := NewEngine(nil)
+	vol := func(name, node string) resource.Resource {
+		return resource.Resource{ApiVersion: resource.ApiVersion, Kind: resource.KindVolume,
+			Metadata: resource.Metadata{Name: name, Owner: "capability/photos", Node: node}, Volume: &resource.VolumeSpec{Name: name}}
+	}
+	plan := func() resource.Resource {
+		return resource.Resource{ApiVersion: resource.ApiVersion, Kind: resource.KindBackupPlan,
+			Metadata: resource.Metadata{Name: "photos", Owner: "capability/photos", Node: "n1"},
+			BackupPlan: &resource.BackupPlanSpec{Volumes: []string{"immich-library"}, Repository: "backup-repo",
+				PasswordSecret: "secret/restic-photos", Schedule: "daily"}}
+	}
+	count := func(rs ...resource.Resource) int {
+		v, _ := e.Validate(Change{Proposed: rs})
+		n := 0
+		for _, x := range v {
+			if x.Rule == RuleBackupVolumesDeclared {
+				n++
+			}
+		}
+		return n
+	}
+	if n := count(plan(), vol("immich-library", "n1"), vol("backup-repo", "n1")); n != 0 {
+		t.Fatalf("declared volumes flagged %d times", n)
+	}
+	if n := count(plan(), vol("backup-repo", "n1")); n != 1 {
+		t.Fatalf("undeclared source: %d violations, want 1", n)
+	}
+	if n := count(plan(), vol("immich-library", "n2"), vol("backup-repo", "n1")); n != 1 {
+		t.Fatalf("source declared on another node: %d violations, want 1", n)
+	}
+	if n := count(plan(), vol("immich-library", "n1")); n != 1 {
+		t.Fatalf("undeclared repository volume: %d violations, want 1", n)
+	}
+	pathRepo := plan()
+	pathRepo.BackupPlan.Repository = "/srv/wildstone/nas/backups/photos"
+	if n := count(pathRepo, vol("immich-library", "n1")); n != 0 {
+		t.Fatalf("a path repository was treated as a volume: %d", n)
+	}
+}

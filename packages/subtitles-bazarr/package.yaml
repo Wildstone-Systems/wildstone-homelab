@@ -16,7 +16,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: subtitles-bazarr
-  version: 1.0.2
+  version: 1.0.3
   capability: subtitles
   profile: bazarr
 requires:
@@ -79,4 +79,5 @@ templates:
       repository: subtitles-backup-repo
       passwordSecret: secret/restic-subtitles
       schedule: weekly
+      class: rebuildable
       retention: { keepWeekly: 4 }

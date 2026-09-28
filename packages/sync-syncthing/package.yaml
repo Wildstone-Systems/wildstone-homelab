@@ -19,7 +19,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: sync-syncthing
-  version: 1.0.2
+  version: 1.0.3
   capability: file-sync
   profile: syncthing
 requires:
@@ -97,4 +97,5 @@ templates:
       repository: file-sync-backup-repo
       passwordSecret: secret/restic-file-sync
       schedule: weekly
+      class: important
       retention: { keepWeekly: 4 }

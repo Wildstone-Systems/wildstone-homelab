@@ -437,3 +437,31 @@ func TestCopyRunsWhileNASSourceIsDown(t *testing.T) {
 		t.Fatalf("reports = %+v, want the backup refused and the copy run", reports)
 	}
 }
+
+// TestExcludesReachRestic: excludes ride every backup command — local and
+// straight off-site — and an absolute one is moved to where the folder
+// sits inside the run container.
+func TestExcludesReachRestic(t *testing.T) {
+	spec := &resource.BackupPlanSpec{
+		Paths:   []string{nasTarget + "/movies"},
+		Exclude: []string{"*.nfo", "**/Samples", nasTarget + "/movies/Extras"},
+	}
+	got := strings.Join(backupCommand(spec), " ")
+	want := "backup /backup" + nasTarget + "/movies --exclude *.nfo --exclude **/Samples --exclude /backup" + nasTarget + "/movies/Extras"
+	if got != want {
+		t.Fatalf("command = %q\nwant      %q", got, want)
+	}
+
+	run := &fakeRunner{exit: map[string]int32{"offsite-movies-probe": 10}}
+	e, _, state := newEngine(t, run)
+	p := offsitePlan("movies", resource.BackupRouteOffsiteOnly)
+	p.BackupPlan.Exclude = []string{"*.nfo"}
+	seedAll(t, state, targetResource(false), p)
+	if err := e.RunNow(context.Background(), "movies"); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := run.run("offsite-movies")
+	if !strings.Contains(strings.Join(b.spec.Command, " "), "--exclude *.nfo") {
+		t.Fatalf("off-site backup command lost the exclude: %v", b.spec.Command)
+	}
+}
