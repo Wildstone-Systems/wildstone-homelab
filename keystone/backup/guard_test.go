@@ -22,7 +22,9 @@ type fakeAgent struct {
 	disks  map[string]*wsv1.DiskSpaceResult
 	usage  map[string]uint64
 	tooOld bool
-	asked  []string
+	// tooOldUsage fails MeasureUsage only, as a walk past 1M entries does.
+	tooOldUsage bool
+	asked       []string
 }
 
 func (f *fakeAgent) Apply(_ context.Context, _ string, op *wsv1.Operation) (*wsv1.OpResult, error) {
@@ -44,6 +46,9 @@ func (f *fakeAgent) Apply(_ context.Context, _ string, op *wsv1.Operation) (*wsv
 		c := proto.Clone(d).(*wsv1.DiskSpaceResult)
 		return &wsv1.OpResult{Result: &wsv1.OpResult_DiskSpace{DiskSpace: c}}, nil
 	case *wsv1.Operation_MeasureUsage:
+		if f.tooOldUsage {
+			return &wsv1.OpResult{Result: &wsv1.OpResult_Error{Error: &wsv1.OpError{Code: wsv1.ErrorCode_ERROR_CODE_RUNTIME, Message: "usage walk exceeded 1M entries"}}}, nil
+		}
 		key := o.MeasureUsage.GetPath() + o.MeasureUsage.GetVolume()
 		f.asked = append(f.asked, "usage:"+key)
 		n, ok := f.usage[key]
@@ -345,5 +350,37 @@ func TestInRunGuardStopsBackup(t *testing.T) {
 	}
 	if !strings.HasSuffix(strings.Join(app.ops, ","), "stop,remove") {
 		t.Fatalf("ops = %v, want the container stopped and removed", app.ops)
+	}
+}
+
+// TestDiskAlreadyPastReserve: a host whose disk is already fuller than
+// its reserve keeps running backups that add almost nothing — the state
+// many hosts are in on upgrade — but a backup that needs real room, or
+// cannot be sized, does not start.
+func TestDiskAlreadyPastReserve(t *testing.T) {
+	agent := &fakeAgent{
+		disks: map[string]*wsv1.DiskSpaceResult{"backup-repo": disk(250<<30, 24<<30, "/", "ext4")}, // reserve 25 GiB
+		// A few bytes of growth: the real case the exit drill found.
+		usage: map[string]uint64{"immich-library": 10<<30 + 100, "immich-db": 0, "backup-repo": 12 << 30},
+	}
+	run := &fakeRunner{}
+	e, _, state := newEngine(t, run)
+	e.Agent = agent
+	seedAll(t, state, backupPlanResource("photos"))
+	if err := e.RunNow(context.Background(), "photos"); err != nil {
+		t.Fatalf("an incremental backup on a disk past its reserve was refused: %v", err)
+	}
+
+	agent.usage["immich-library"] = 40 << 30 // 48 GiB estimate against a 12 GiB repo
+	var low *LowDiskError
+	if err := e.RunNow(context.Background(), "photos"); !errors.As(err, &low) {
+		t.Fatalf("a backup needing 36 GiB on 24 GiB free ran: %v", err)
+	}
+
+	delete(agent.usage, "immich-library")
+	agent.usage["immich-library-broken"] = 0
+	agent.tooOldUsage = true
+	if err := e.RunNow(context.Background(), "photos"); !errors.As(err, &low) {
+		t.Fatalf("an unsizeable backup on a disk past its reserve ran: %v", err)
 	}
 }

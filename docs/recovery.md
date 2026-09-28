@@ -224,8 +224,76 @@ cryptographically gone with the house: the endpoint and bucket, the
 bucket key, and every off-site password.
 
 Not yet built (tracked under #407): the monthly restore drill and
-integrity checks for the off-site copy, a disk-space guard, NAS folders
-as sources, and Console screens.
+integrity checks for the off-site copy, and Console screens.
+
+### NAS shares and folders
+
+A plan can back up folders on the node, not only volumes, and keep its
+local copy on a NAS so it never uses the host's own disk.
+
+Declare the share once. Wildstone mounts it under `/srv/wildstone`
+(always `nosuid,nodev`) and records it in `/etc/fstab` so it is back
+after a reboot; if it drops, the next reconcile mounts it again. NFS only
+for now — an SMB share needs a password, which fstab would hold in
+plain text.
+
+```yaml
+apiVersion: wildstone.dev/v1
+kind: NetworkMount
+metadata: {name: media, owner: owner, node: node1}
+spec:
+  type: nfs4
+  source: nas.example.internal:/volume1/media
+  target: /srv/wildstone/nas/media
+  options: [soft]          # optional, e.g. ro, vers=4.1
+```
+
+Then name folders in `paths`, and a folder as the `repository`:
+
+```yaml
+spec:
+  paths: ["/srv/wildstone/nas/media/My Movies"]   # spaces are fine
+  offsite: {target: offsite, route: offsite-only, passwordSecret: secret/restic-movies-offsite, schedule: weekly}
+```
+
+```yaml
+spec:
+  volumes: [photos-data]
+  repository: /srv/wildstone/nas/backups/photos    # the local copy lives on the NAS
+  passwordSecret: secret/photos-restic
+  schedule: daily
+```
+
+**If the NAS is down, the backup does not run.** Before every run
+Wildstone checks that each folder under a declared share is really on
+that share. Otherwise it would be backing up the empty folder
+underneath — and after enough of those, retention would prune the real
+snapshots away. The run fails and says which share is missing.
+
+A snapshot keeps the folder's path, so a restore of
+`/srv/wildstone/nas/media/My Movies` lands in
+`<plan>-restore/backup/srv/wildstone/nas/media/My Movies`.
+
+### Disk space
+
+A local copy never fills the disk it lives on. Each repository's disk
+keeps a **reserve**: by default the larger of 10% and 20 GiB (a quarter
+of a disk smaller than 80 GiB). Set your own per plan with
+`reserve: 50GiB` or `reserve: 15%`; it cannot be zero.
+
+- **When you propose a plan**, Wildstone sizes the sources and refuses a
+  local copy that would not fit, suggesting `offsite-only` or a NAS
+  repository instead.
+- **Before every run** it checks again, because data grows. If the copy
+  would cross the reserve, the local copy is skipped: a plan with an
+  off-site copy backs up straight to it for that run, so the data stays
+  protected; one without fails and says why. `wild backup list` shows the
+  skipped run and the reason.
+- **During a run** it re-checks every 30 seconds and stops restic at the
+  reserve.
+- A disk that is already past its reserve (common on a well-used host)
+  still runs backups that add little, but a run may then use at most
+  half of what is left.
 
 ## Losing a host: the restore procedure
 

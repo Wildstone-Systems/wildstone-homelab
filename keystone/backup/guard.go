@@ -258,10 +258,11 @@ func (e *Engine) spaceNeeded(ctx context.Context, r resource.Resource, repoExist
 	return est - have, true
 }
 
-// checkSpace decides whether a local backup of r fits: free space at the
-// repository must stay above the reserve after the estimated growth. It
-// returns the in-run guard for the backup pass, or a *LowDiskError when
-// the copy does not fit. The guard is nil when the node cannot be asked.
+// checkSpace decides whether a local backup of r fits: the estimated
+// growth must not take free space at the repository below the reserve.
+// It returns the in-run guard for the backup pass, or a *LowDiskError
+// when the copy does not fit. The guard is nil when the node cannot be
+// asked.
 func (e *Engine) checkSpace(ctx context.Context, r resource.Resource) (guard func(context.Context) error, err error) {
 	spec, node := r.BackupPlan, r.Metadata.Node
 	if e.Agent == nil {
@@ -281,14 +282,32 @@ func (e *Engine) checkSpace(ctx context.Context, r resource.Resource) (guard fun
 	}
 	reserve := reserveFor(spec, d.total)
 	need, measured := e.spaceNeeded(ctx, r, d.exists)
-	if d.free < reserve+need {
-		detail := fmt.Sprintf("%s has %s free and must keep a %s reserve", spec.Repository, humanBytes(d.free), humanBytes(reserve))
-		if measured && need > 0 {
-			detail = fmt.Sprintf("about %s more is needed, but %s", humanBytes(need), detail)
-		}
-		return nil, &LowDiskError{Detail: detail}
+	// Refuse what the backup would DO to the disk, not the state the disk
+	// is already in: a disk past its reserve with a copy that adds almost
+	// nothing (the steady state of a daily backup) still runs, or every
+	// backup on a nearly-full host would stop on upgrade. That case is
+	// held to a tighter in-run floor instead: half of what is left.
+	floor := reserve
+	tooBig := func() error {
+		return &LowDiskError{Detail: fmt.Sprintf("about %s more is needed, but %s has %s free and must keep a %s reserve",
+			humanBytes(need), spec.Repository, humanBytes(d.free), humanBytes(reserve))}
 	}
-	return e.inRunGuard(node, spec.Repository, reserve), nil
+	switch {
+	case d.free >= reserve && need > 0 && (need > d.free || d.free-need < reserve):
+		return nil, tooBig()
+	case d.free < reserve && need > d.free/2:
+		return nil, tooBig()
+	case !measured && d.free < reserve:
+		// Nothing to estimate with and already past the reserve: the
+		// run could need anything, so it does not start.
+		return nil, &LowDiskError{Detail: fmt.Sprintf("%s has %s free, below its %s reserve, and the sources could not be sized",
+			spec.Repository, humanBytes(d.free), humanBytes(reserve))}
+	case d.free < reserve:
+		floor = d.free / 2
+		e.log().Warn("backup: the repository disk is past its reserve; running with a tighter floor",
+			"plan", r.Metadata.Name, "free", humanBytes(d.free), "reserve", humanBytes(reserve), "floor", humanBytes(floor))
+	}
+	return e.inRunGuard(node, spec.Repository, floor), nil
 }
 
 // inRunGuard is checked by the runner while the backup pass runs.
@@ -299,7 +318,7 @@ func (e *Engine) inRunGuard(node, repo string, reserve uint64) func(context.Cont
 			return nil // a failed check is not a full disk; the next one may answer
 		}
 		if d.free < reserve {
-			return &LowDiskError{Detail: fmt.Sprintf("stopped the backup: %s reached its %s reserve (%s free)", repo, humanBytes(reserve), humanBytes(d.free))}
+			return &LowDiskError{Detail: fmt.Sprintf("stopped the backup: %s reached its %s floor (%s free)", repo, humanBytes(reserve), humanBytes(d.free))}
 		}
 		return nil
 	}
