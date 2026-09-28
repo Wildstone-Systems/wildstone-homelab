@@ -55,6 +55,10 @@ type Loop struct {
 	Connected func(node string) bool
 	Log       *slog.Logger
 
+	// calendarDrift is the last set of calendar-grant findings reported,
+	// so a standing finding is recorded once rather than every tick.
+	calendarDrift string
+
 	// AccessGroups maps a capability to the household groups its
 	// manifest declares it is for (ADR-W033 design §4, slice 8).
 	//
@@ -200,6 +204,19 @@ func (l *Loop) Tick(ctx context.Context) (TickOutcome, error) {
 		// fact that projection deliberately declined to resolve by
 		// guessing.
 		l.event("projection.drift", "", d.Account, map[string]string{"reason": d.Reason})
+	}
+
+	// The calendar registry's grants become usernames here, on the same
+	// copy, for the same reason (ADR-W038, #372).
+	desired, calendarDrift, err := projectCalendarRights(l.DB, desired)
+	if err != nil {
+		return TickOutcome{}, fmt.Errorf("loop: projecting calendar grants: %w", err)
+	}
+	if summary := fmt.Sprint(calendarDrift); summary != l.calendarDrift {
+		l.calendarDrift = summary
+		for _, d := range calendarDrift {
+			l.event("projection.calendar", "", d.Account, map[string]string{"reason": d.Reason})
+		}
 	}
 
 	out := TickOutcome{}

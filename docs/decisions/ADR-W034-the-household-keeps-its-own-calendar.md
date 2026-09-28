@@ -1,7 +1,7 @@
 # ADR-W034: The household keeps its own calendar
 
-- **Status:** accepted. Built: A1–A14. Open: C1 (event bus), C3
-  (other providers), per-member personal calendars (C2).
+- **Status:** accepted. Built: A1–A14, C2 (a member's own calendars on
+  the Calendar page). Open: C1 (event bus), C3 (other providers).
 - **Relates to:** ADR-W005 (package format), ADR-W013 A4 (backups),
   ADR-W019 A10 (a Route is not always served at the host it declares),
   ADR-W024 (household events and automations), ADR-W029 (a package is
@@ -186,8 +186,9 @@ starts by reading it.
 ### A9. The agent acts on declared shared calendars, not on anybody's own
 
 Everybody's own calendars are their own: `rights` is anchored on the name
-they signed in with, and nothing — including the service account — reads
-another person's. Alongside them are the declared shared calendars of
+they signed in with, and no other person reads them. The service account
+does, for one reader only — the Calendar page shows a member their own
+(C2) — and no agent tool reaches them. Alongside them are the declared shared calendars of
 ADR-W038, each a group collection with its own read and write access;
 `household` is the default one. The seven tools act on the default, or on
 the calendar named by their optional `calendar` argument, within the
@@ -380,10 +381,47 @@ The temporal half needs a small scheduler, and idempotent publication:
 ### C2. Personal calendars
 
 Access to shared calendars is decided by ADR-W038, and the `confirm`
-tier is built (A10). What stays open is a Person's own calendar: an
-agent cannot reach it (A9), and whether Keystone should ever act with a
-per-member credential — a member's calendar password is theirs — is
-undecided.
+tier is built (A10).
+
+**Amendment (2026-09-28): a member sees and keeps their own calendars on
+the Calendar page.** Decided with the household owner. Keystone never
+holds a member's own calendar password. It reaches their calendars with
+the calendar service account instead, which the generated rights file
+lets read and write every person's own collections and create their
+principal. That is an administrator's reach, and it is stated rather than
+hidden: whoever runs the machine could already read the collections
+volume.
+
+- **The principal is the proven member.** The page derives it from the
+  member the identity proxy asserted, lower-cased as Radicale's login is.
+  No request field names a principal, and every collection the server
+  reports is confined to a direct child of it before use.
+- **Their own, and only there.** A member's own calendars are listed on
+  their Calendar page beside the shared ones, with a colour and a
+  visibility choice. They never appear on the dashboard or the agenda
+  (shared screens, ADR-W033 A10), in a booking, or in any Butler tool
+  (A9 is unchanged). Household activity records that a member changed
+  their own calendar, never what the event was.
+- **No event crosses kinds.** An event moves between two shared calendars
+  or between two of the member's own, never between the two kinds. A
+  shared event may carry a booking, and moving a private event onto a
+  shared calendar would publish it by a side effect.
+- **New calendar.** The page can make the member a new calendar in their
+  own account, so it reaches their phone as well. For somebody who has
+  never signed in to the calendar, the principal is created first.
+- **A rename keeps them.** Radicale keeps a person's calendars under the
+  login that made them and does not move them when the login changes. The
+  page lists calendars under every login the Person has had (#372) and
+  makes new ones under the current login, which is the one a phone signs
+  in with. A principal belongs to every Person who has carried its name,
+  ignoring case as Radicale does: somebody signing in under a name another
+  Person carries or once carried is shown none of that Person's calendars
+  and cannot make one there. Radicale itself still gives a directory login
+  its own principal, so a retired name should not be reissued as a
+  directory account; Wildstone already refuses it to a new Person (0093).
+- **Undeclared shared collections stay out.** The service account's
+  personal rules exclude `GROUPS/`, so a shared calendar removed from the
+  registry is not the service's to read.
 
 Changes to the calendar registry go through an Owner-approved package
 Plan (ADR-W033 E2; ADR-W038).

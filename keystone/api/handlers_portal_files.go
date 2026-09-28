@@ -62,6 +62,9 @@ type filedropSettings struct {
 // them looking for a missing capability instead.
 func (s *Server) filedropStore(desired []resource.Resource, member string) *portal.FileStore {
 	store := &portal.FileStore{Member: member, BeforeWrite: s.DB.CheckHouseholdExecution}
+	if s.DB != nil {
+		store.Folders = s.DB
+	}
 	for _, r := range desired {
 		if r.Kind != resource.KindConfigFile || r.ConfigFile == nil {
 			continue
@@ -104,7 +107,7 @@ func (s *Server) filedropCapabilities(_ http.ResponseWriter, r *http.Request, me
 	namespaces := make([]map[string]string, 0, len(portal.Namespaces))
 	for _, ns := range portal.Namespaces {
 		if ns.Key == "me" {
-			if _, ok := portal.PersonalDir(member); !ok {
+			if _, ok := portal.PersonalDirFor(member, store.Folders); !ok {
 				continue
 			}
 		}

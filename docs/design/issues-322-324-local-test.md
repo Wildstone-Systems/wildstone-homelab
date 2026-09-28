@@ -45,7 +45,9 @@ Example `calendars` package parameter (JSON):
 ```
 
 Use an existing directory group in place of `adults` if that group is not declared
-on the deployment. `readMembers` and `writeMembers` accept directory usernames.
+on the deployment, or a household group by its id (`grp_…`). `readMembers` and
+`writeMembers` accept a person id (`psn_…`) or a handle, and follow that Person
+through a rename.
 Members still need the Calendar application's `calendar_users` access. Keep one
 calendar with `default: true` and retain the `household` identifier.
 
@@ -66,8 +68,17 @@ calendar with `default: true` and retain the `household` identifier.
    write access before retrying an approved deletion; it must refuse.
 8. On Apple Calendar and Thunderbird or DAVx5, use one existing account. Discover
    both shared calendars and verify names/colors, read-only behavior and edits.
-   Confirm personal calendars remain personal and Keystone cannot read them.
+   Confirm another person cannot see your personal calendars on either client.
    Record client/OS versions and results before marking device acceptance complete.
+9. Personal calendars (ADR-W034 C2): open Calendar as a member and confirm their
+   own calendars are listed with a person marker, and another member's are not.
+   Create one with **New calendar**, add an event to it, and confirm it appears on
+   that member's phone. Confirm it is absent from Home, Agenda and every Butler
+   answer, that an event cannot move between it and a shared calendar, and that
+   household activity does not name the event. Repeat **New calendar** for a
+   member who has never signed in to the calendar server.
+10. Renames (#372): rename a member, then confirm they keep their shared calendar
+    grants, hidden calendars, Files **Mine** folder and commitments.
 9. Restart Radicale and verify event data and unrelated collection properties are
    preserved. Change a display name/color through an approved package Plan and
    confirm the client sees the update.

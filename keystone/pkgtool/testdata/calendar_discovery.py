@@ -59,7 +59,31 @@ assert request("sam", "GET", school + "event.ics")[0] == 200
 assert request("sam", "DELETE", school + "event.ics")[0] == 403
 assert request("sam", "PROPFIND", private, headers={"HTTP_DEPTH": "1"})[0] == 403
 assert request("sam", "PUT", "/sam/personal/private.ics", ics, {"CONTENT_TYPE": "text/calendar"})[0] == 201
-assert request("radicale", "GET", "/sam/personal/private.ics")[0] == 403
+# A person's own calendars: no other person reaches them...
+assert request("alex", "GET", "/sam/personal/private.ics")[0] == 403
+assert request("alex", "PUT", "/sam/personal/other.ics", ics, {"CONTENT_TYPE": "text/calendar"})[0] == 403
+status, body = request("alex", "PROPFIND", "/sam/", headers={"HTTP_DEPTH": "1"})
+assert status == 403 or "/sam/personal/" not in unquote(body), (status, body)
+# ...and Keystone's service account does, for the Calendar page (ADR-W034 C2).
+assert request("radicale", "GET", "/sam/personal/private.ics")[0] == 200
+status, body = request("radicale", "PROPFIND", "/sam/", headers={"HTTP_DEPTH": "1"})
+assert status == 207 and "/sam/personal/" in unquote(body), (status, body)
+mkcalendar = ('<?xml version="1.0" encoding="utf-8" ?><C:mkcalendar xmlns:D="DAV:" '
+              'xmlns:C="urn:ietf:params:xml:ns:caldav"><D:set><D:prop><D:displayname>Work</D:displayname>'
+              '</D:prop></D:set></C:mkcalendar>')
+assert request("radicale", "MKCALENDAR", "/sam/work/", mkcalendar)[0] == 201
+assert request("sam", "PUT", "/sam/work/mine.ics", ics.replace("UID:fixture", "UID:work"), {"CONTENT_TYPE": "text/calendar"})[0] == 201
+# Somebody who has never signed in has no principal; the service makes it.
+assert request("radicale", "MKCALENDAR", "/newcomer/first/", mkcalendar)[0] == 409
+assert request("radicale", "MKCOL", "/newcomer/")[0] == 201
+assert request("radicale", "MKCALENDAR", "/newcomer/first/", mkcalendar)[0] == 201
+# A shared collection nobody declared is not the service's.
+undeclared = "/GROUPS/" + base64.b64encode(b"wildstone_calendar_removed").decode() + "/"
+os.makedirs(root / "data" / "collection-root" / "GROUPS" / undeclared.split("/")[2], exist_ok=True)
+(root / "data" / "collection-root" / "GROUPS" / undeclared.split("/")[2] / ".Radicale.props").write_text('{"tag": "VCALENDAR"}')
+assert request("radicale", "PROPFIND", undeclared, headers={"HTTP_DEPTH": "1"})[0] == 403
+assert request("radicale", "PUT", undeclared + "x.ics", ics, {"CONTENT_TYPE": "text/calendar"})[0] == 403
+assert request("radicale", "MKCALENDAR", "/GROUPS/sneaky/", mkcalendar)[0] == 403
 assert request("sam", "MOVE", household + "event.ics", headers={"HTTP_DESTINATION": "http://test" + school + "event.ics", "HTTP_OVERWRITE": "F"})[0] in (403, 404)
 assert request("alex", "MOVE", school + "event.ics", headers={"HTTP_DESTINATION": "http://test" + household + "event.ics", "HTTP_OVERWRITE": "F"})[0] == 201
 assert request("alex", "GET", household + "event.ics")[0] == 200
@@ -71,4 +95,4 @@ assert request("alex", "GET", school + "event.ics")[0] == 200
 # Startup must preserve event data while updating display metadata.
 app = Application(configuration)
 assert request("sam", "GET", household + "event.ics")[0] == 200
-print("Radicale discovery, per-calendar rights, MOVE and personal isolation passed")
+print("Radicale discovery, per-calendar rights, MOVE, personal isolation and personal calendars passed")

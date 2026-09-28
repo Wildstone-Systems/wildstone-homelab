@@ -193,6 +193,8 @@ type Column struct {
 // Each entry names the column 0043 replaced it with, so the two tables
 // read as one story rather than as a contradiction.
 var LegacyColumns = []Column{
+	{"calendar_visibility", "member", Human,
+		"pre-0093: the member whose per-calendar display preference this row stored, as a handle. Now calendar_visibility.person_id"},
 	{"butler_access", "member", Human,
 		"pre-0043: the person admitted to a Butler, as a handle. Now butler_access.person_id"},
 	{"butler_identity_links", "member", Human,
@@ -620,8 +622,14 @@ var Columns = []Column{
 		"the CalDAV href of the event the booking made — an address in the household calendar, not somebody"},
 	{"commitment_bookings", "calendar_id", NotAPerson,
 		"the sharedcalendar.Calendar ID selected for the booking, not a Person identity"},
-	{"calendar_visibility", "member", Human,
-		"calendarPreference passes the authenticated household member whose per-calendar display preference this row stores"},
+	{"calendar_visibility", "person_id", PersonID,
+		"0093: the Person whose per-calendar display preference this row stores, resolved from the signed-in member"},
+	{"person_handles", "person_id", PersonID,
+		"0093: the Person who carries or once carried this handle, written by triggers on butler_members"},
+	{"person_file_dirs", "person_id", PersonID,
+		"0093: the Person whose own Files folder this is"},
+	{"person_file_dirs", "dir", NotAPerson,
+		"0093: a folder name under Members/, recorded once and never renamed with the Person — a path, not a reference to anybody"},
 	{"calendar_visibility", "calendar_id", NotAPerson,
 		"the sharedcalendar.Calendar ID whose visibility the member customized, not a Person identity"},
 	{"commitment_completions", "commitment", NotAPerson,

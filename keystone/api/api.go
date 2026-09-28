@@ -880,6 +880,7 @@ func (s *Server) Handler() http.Handler {
 	// the calendar package's own group — see handlers_portal_calendarpage.go.
 	mux.Handle("GET /calendar/{$}", s.portal(surfaceCalendar, s.portalPage("calendar")))
 	mux.Handle("POST /api/v1/calendar/visibility", s.portal(surfaceCalendar, s.calendarPreference))
+	mux.Handle("POST /api/v1/calendar/personal", s.portal(surfaceCalendar, s.calendarPersonalCreate))
 	mux.Handle("GET /api/v1/calendar/events", s.portal(surfaceCalendar, s.calendarPageEvents))
 	mux.Handle("POST /api/v1/calendar/events", s.portal(surfaceCalendar, s.calendarPageCreate))
 	mux.Handle("POST /api/v1/calendar/events/update", s.portal(surfaceCalendar, s.calendarPageUpdate))

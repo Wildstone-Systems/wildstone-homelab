@@ -5,13 +5,14 @@
 <link rel="stylesheet" href="/portal/assets/nocturne.css">
 <!--wildstone:theme-->
 <!--
-  The household's shared calendar: the month, and adding, changing and
-  removing events on it.
+  The household's shared calendars and the member's own: the month, and
+  adding, changing and removing events on them.
 
-  IT IS THE SHARED CALENDAR, and says so under the heading. Keystone
-  holds the calendar service's own credential and nobody's personal one,
-  so a member's own calendars are on their phone and not here — a page
-  that let that go unsaid would read as "my events vanished".
+  THE MEMBER'S OWN CALENDARS ARE THEIRS ALONE (ADR-W034 C2). The server
+  lists them from the signed-in member's own account and nobody else's,
+  marks them "personal", and never lets an event move between one of
+  them and a shared calendar. "New calendar" makes another one, in the
+  member's own account, so it is on their phone as well.
 
   TIMES ARE THE HOUSEHOLD'S. The server answers each event with its day
   and wall-clock times already in the household's zone, and takes dates
@@ -84,10 +85,35 @@
   <div class="row-between" style="margin-bottom: var(--space-6)">
     <div>
       <h1>Calendar</h1>
-      <div class="muted">The household's shared calendar</div>
+      <div class="muted">The household's shared calendars, and your own</div>
     </div>
-    <button type="button" class="hbtn hbtn-primary" id="add"><i class="ph ph-plus" aria-hidden="true"></i> Add event</button>
+    <div class="calnav" style="margin: 0">
+      <button type="button" class="hbtn hbtn-secondary" id="newcal"><i class="ph ph-calendar-blank" aria-hidden="true"></i> New calendar</button>
+      <button type="button" class="hbtn hbtn-primary" id="add"><i class="ph ph-plus" aria-hidden="true"></i> Add event</button>
+    </div>
   </div>
+
+  <section class="surface editor" id="newcal-form" hidden style="margin: 0 0 var(--space-6)">
+    <h2>New calendar of your own</h2>
+    <div class="muted">Only you see it, here and on any phone signed in as you.</div>
+    <form id="cal-form" style="margin-top: var(--space-4)">
+      <div class="fields">
+        <div class="fld">
+          <label for="cal-name">Name</label>
+          <input class="hinput" id="cal-name" type="text" maxlength="120" required autocomplete="off">
+        </div>
+        <div class="fld">
+          <label for="cal-color">Colour</label>
+          <input class="hinput" id="cal-color" type="color" value="#10b981">
+        </div>
+      </div>
+      <div id="cal-note"></div>
+      <div class="actions">
+        <button type="submit" class="hbtn hbtn-primary" id="cal-save"><i class="ph ph-check" aria-hidden="true"></i> Create</button>
+        <button type="button" class="hbtn hbtn-secondary" id="cal-cancel">Cancel</button>
+      </div>
+    </form>
+  </section>
 
   <div class="calnav">
     <button type="button" class="hbtn hbtn-secondary" id="prev" aria-label="Previous month"><i class="ph ph-caret-left" aria-hidden="true"></i></button>
@@ -186,7 +212,7 @@
   </section>
 
   <footer class="muted" style="margin-top: var(--space-8); font-size: 12px">
-    Shared calendars follow the access your household has given you. Visibility changes only your view. Your personal calendars stay on your phone.
+    Shared calendars follow the access your household has given you. Your own calendars are shown only to you, and never to the assistant. Hiding a calendar changes only your view.
   </footer>
 </main>
 
@@ -308,11 +334,17 @@
   });
 
   function paintCalendars() {
-    var box = el("calendars"); clear(box); box.hidden = calendars.length < 2;
+    var box = el("calendars"); clear(box);
+    box.hidden = calendars.length < 2 && !calendars.some(function (c) { return c.personal; });
     calendars.forEach(function (c) {
       var label = make("label", "hbtn hbtn-ghost");
       var check = document.createElement("input"); check.type = "checkbox"; check.checked = c.visible;
       label.appendChild(check); label.appendChild(document.createTextNode(" " + c.name));
+      if (c.personal) {
+        // A person, and words for anyone not looking at it.
+        label.appendChild(icon("user"));
+        label.title = "Your own calendar. Only you can see it.";
+      }
       label.style.borderLeft = "4px solid " + c.color;
       check.addEventListener("change", function () {
         check.disabled = true;
@@ -332,7 +364,7 @@
       .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
       .then(function (res) {
         if (!res.ok) { throw new Error(res.j.error || "Can't read the calendar right now."); }
-        showNote(el("note"), "", "");
+        showNote(el("note"), res.j.personalNote ? "note-warn" : "", res.j.personalNote || "");
         today = res.j.today || today;
         calendars = res.j.calendars || [];
         paintCalendars();
@@ -417,7 +449,9 @@
       row.appendChild(make("span", "when", whenOf(e)));
       var what = make("span", "grow");
       what.appendChild(make("span", null, e.title));
-      if (e.calendarName && calendars.length > 1) { what.appendChild(make("span", "evmeta", e.calendarName)); }
+      if (e.calendarName && calendars.length > 1) {
+        what.appendChild(make("span", "evmeta", e.calendarName + (e.personal ? " · only you" : "")));
+      }
       if (e.color) { row.style.borderLeft = "4px solid " + e.color; }
       // The place and the note under the title, so what somebody wrote
       // down is on the page rather than only in the form.
@@ -441,8 +475,17 @@
   function openEditor(e) {
     editing = e || null;
     var select = el("ev-calendar"); clear(select);
-    var writable = calendars.filter(function (c) { return c.writable || (e && c.id === e.calendar); });
-    writable.forEach(function (c) { var opt = make("option", null, c.name); opt.value = c.id; select.appendChild(opt); });
+    // An existing event may move only between calendars of its own kind:
+    // shared to shared, or between the member's own.
+    var writable = calendars.filter(function (c) {
+      if (e && c.id === e.calendar) { return true; }
+      return c.writable && (!e || !!c.personal === !!e.personal);
+    });
+    writable.forEach(function (c) {
+      var opt = make("option", null, c.name + (c.personal ? " (only you)" : ""));
+      opt.value = c.id;
+      select.appendChild(opt);
+    });
     var preferred = writable.filter(function (c) { return c.default; })[0] || writable[0];
     select.value = e ? e.calendar : (preferred ? preferred.id : "household");
     el("calendar-field").hidden = calendars.length < 2;
@@ -525,6 +568,32 @@
     if (!editing || editing.writable === false) { return; }
     if (!confirm("Remove “" + editing.title + "” from " + (editing.calendarName || "Household") + "?")) { return; }
     send("/api/v1/calendar/events/delete", { calendar: editing.calendar, href: editing.calendarEvent, title: editing.title });
+  });
+
+  // ---- A new calendar of the member's own.
+  el("newcal").addEventListener("click", function () {
+    el("newcal-form").hidden = false;
+    showNote(el("cal-note"), "", "");
+    el("cal-name").value = "";
+    el("cal-name").focus();
+  });
+  el("cal-cancel").addEventListener("click", function () { el("newcal-form").hidden = true; });
+  el("cal-form").addEventListener("submit", function (ev) {
+    ev.preventDefault();
+    el("cal-save").disabled = true;
+    fetch("/api/v1/calendar/personal", {
+      method: "POST",
+      headers: { "content-type": "application/json", accept: "application/json" },
+      body: JSON.stringify({ name: el("cal-name").value, color: el("cal-color").value })
+    })
+      .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+      .then(function (res) {
+        if (!res.ok) { throw new Error(res.j.error || "The calendar couldn't be made."); }
+        el("newcal-form").hidden = true;
+        load();
+      })
+      .catch(function (err) { showNote(el("cal-note"), "note-bad", String(err.message || err)); })
+      .then(function () { el("cal-save").disabled = false; });
   });
 
   el("ev-allday").addEventListener("change", syncAllDay);

@@ -33,10 +33,11 @@
 #     ONE account rather than two, deliberately. Radicale searching the
 #     directory and Keystone writing the household calendar are both
 #     "the calendar service acting as itself", and a second account would
-#     be a second thing to create, rotate and forget. It gains nothing it
-#     did not already have: the rights file still anchors every PERSON's
-#     own calendars on the name they signed in with, and this account is
-#     not in any of them.
+#     be a second thing to create, rotate and forget. It can read and
+#     write each person's own calendars as well as the shared ones, which
+#     is what lets the Calendar page show a member their own (ADR-W034
+#     C2). Keystone decides whose it shows from the member the identity
+#     proxy proved; nothing a browser sends names another person's.
 #
 #  2. Give this capability that account's password:
 #
@@ -69,8 +70,13 @@
 #
 # THE SHARED HOUSEHOLD CALENDAR, AND HOW IT REACHES A PHONE.
 #
-# Everybody's own calendars are their own and nobody else can read them.
-# Alongside them are the Owner-declared shared calendars (ADR-W038).
+# Everybody's own calendars are their own: no other PERSON can read them.
+# Keystone's service account can, so that each member sees their own on
+# the Calendar page and nobody else's (ADR-W034 C2); no Butler reaches
+# them (A9). Alongside them are the Owner-declared shared calendars
+# (ADR-W038). A shared calendar grants Persons and household groups;
+# Keystone resolves those into this rights file's usernames on every
+# reconcile pass, so a rename does not detach a grant.
 # The default registry retains Household for everyone in calendar_users.
 #
 # It is stored as a GROUP collection — under
@@ -195,14 +201,14 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: calendar-radicale
-  version: 2.1.0
+  version: 2.2.0
   capability: calendar
   profile: radicale
 requires:
   - { trait: identity, mode: ldap }
   - { trait: ingress, mode: private }
 params:
-  - { name: calendars, default: '{"calendars":[{"id":"household","name":"Household","color":"#3b82f6","default":true,"readGroups":["calendar_users"],"writeGroups":["calendar_users"]}]}', description: 'Shared calendar registry as JSON: calendars with id, name, color, default, readGroups/writeGroups and optional readMembers/writeMembers; bookingCalendar defaults to household. Empty retains Household.' }
+  - { name: calendars, default: '{"calendars":[{"id":"household","name":"Household","color":"#3b82f6","default":true,"readGroups":["calendar_users"],"writeGroups":["calendar_users"]}]}', description: 'Shared calendar registry as JSON: calendars with id, name, color, default, readGroups/writeGroups and optional readMembers/writeMembers; bookingCalendar defaults to household. Empty retains Household. Groups are directory groups such as calendar_users, or household group ids (grp_...); members are a person_id (psn_...) or a handle, and follow that Person through a rename.' }
   - { name: public_domain, required: true, description: "The domain your services are named under, e.g. home.example.com. Under a tailnet this is a label rather than an address you type.", source: domain }
   # NOT "calendar": mail-roundcube's Davis already defaults to that
   # label, and two Routes wanting one host is a collision under the
@@ -402,7 +408,6 @@ templates:
                 super().__init__(configuration)
                 with open(os.path.join(os.path.dirname(__file__), "calendars.json"), encoding="utf-8") as stream:
                     self._calendars = json.load(stream)["calendars"]
-                self._service = configuration.get("auth", "ldap_reader_dn").split(",", 1)[0].removeprefix("uid=")
                 # Provision declared collections under the normal storage write lock.
                 # Preserve existing events and unrelated collection properties.
                 with self.acquire_lock("w"):
@@ -434,14 +439,14 @@ templates:
             def discover(self, path, depth="0", child_context_manager=None, user_groups=None):
                 groups = set(user_groups or ())
                 principal = path.strip("/")
-                # Only enrich a principal listing. Existing group discovery and the
-                # rights filter remain in charge of which collections are returned.
+                # Only enrich a principal listing, and with every declared shared
+                # calendar. Who may see which is decided by the rights file alone:
+                # PROPFIND drops each collection the signed-in user has no right
+                # to. The registry names people by Person, which only Keystone can
+                # resolve, and it resolves them into that rights file.
                 if principal and "/" not in principal:
                     for calendar in self._calendars:
-                        readers = set((calendar.get("readMembers") or []) + (calendar.get("writeMembers") or []))
-                        allowed = set((calendar.get("readGroups") or []) + (calendar.get("writeGroups") or []))
-                        if principal == self._service or principal in readers or groups.intersection(allowed):
-                            groups.add(self._group(calendar))
+                        groups.add(self._group(calendar))
                 yield from super().discover(path, depth, child_context_manager, groups)
   # ---- The credential file.
   #

@@ -539,8 +539,10 @@ profile rather than a role. `mayComplete` and `notify` accept
 `household`, `household/<member>` (a Person, W033 A2) and `group/<name>`
 (W033 B8.1's one namespace); a group answers only for its members, and a
 group nobody is in denies.
-_Code not yet conformant: `household/<member>` is keyed by directory
-handle; a rename detaches it._
+`household/<member>` names a Person by `person_id` or by a handle they
+carry or once carried, so a rename detaches nothing: the upkeep engine
+brings every `owner`, `mayComplete` and `notify` reference up to the
+Person's current handle when it builds a standing (#372).
 
 ### A22. What A4 costs, stated exactly
 

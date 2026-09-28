@@ -120,6 +120,10 @@ type Filedrop struct {
 	// honest thing for a control plane that cannot look.
 	Settings      func() (root string, maxUpload int64, err error)
 	RequiredMount func() (string, error)
+	// Folders is where each Person's own folder is recorded, so "me"
+	// follows the Person across a rename (#372). nil derives the folder
+	// from the subject's handle, as a test or a bare control plane does.
+	Folders portal.PersonalFolders
 	// Enabled reports whether this deployment has the filedrop
 	// capability INSTALLED, asked per call.
 	//
@@ -179,7 +183,7 @@ func (f *Filedrop) store(c Call) (*portal.FileStore, error) {
 			return f.beforeWrite()
 		}
 		return nil
-	}, Root: root, MaxUpload: maxUpload, Member: strings.TrimSpace(c.Subject)}, nil
+	}, Root: root, MaxUpload: maxUpload, Member: strings.TrimSpace(c.Subject), Folders: f.Folders}, nil
 }
 
 // errNoFiledropRoot is the one sentence every tool gives for "installed,
