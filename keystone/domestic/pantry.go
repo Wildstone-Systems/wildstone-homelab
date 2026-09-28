@@ -65,6 +65,8 @@ const (
 	PantryToolAddGroceries   = "add_to_grocery_list"
 	PantryToolCheckGroceries = "check_grocery_item"
 	PantryToolFinishCooking  = "finish_cooking"
+	PantryToolLogMeal        = "log_meal"
+	PantryToolUndoMeal       = "undo_meal"
 )
 
 // PantryTools maps each tool to the tier it must be declared at
@@ -90,6 +92,9 @@ var PantryTools = map[string]string{
 	PantryToolAddGroceries:   TierDomestic,
 	PantryToolCheckGroceries: TierDomestic,
 	PantryToolFinishCooking:  TierConfirm,
+	// Only the eater's own log, and undo exists (PantryOS #79).
+	PantryToolLogMeal:  TierDomestic,
+	PantryToolUndoMeal: TierDomestic,
 }
 
 // pantryUsage is each tool's params, in the words a model reads.
@@ -121,6 +126,12 @@ var pantryUsage = map[string]string{
 	PantryToolCheckGroceries: "Tick items off the grocery list (bought). params: items (required; separate several with commas).",
 	PantryToolFinishCooking: "Finish the recipe being cooked: takes its ingredients out of the pantry; the person is asked first. " +
 		"params: location_id (optional).",
+	PantryToolLogMeal: "Log what the person asking ate (\"I had two eggs for breakfast\"); taken from the pantry when it is " +
+		"in stock. params: food (required, e.g. eggs), quantity (optional, default 1), unit (optional, default each), " +
+		"meal_type (optional: breakfast, lunch, dinner or snack). If PantryOS is not sure which food is meant it names " +
+		"the candidates: ask which, then call again with the same food and its item_id or fdc_id.",
+	PantryToolUndoMeal: "Take back a meal that was logged by mistake; anything it took from the pantry is put back. " +
+		"params: event_id (required, from log_meal).",
 }
 
 // maxSpokenRecipes bounds how many suggestions one summary reads out.
@@ -218,6 +229,10 @@ func (t *pantryTool) execute(ctx context.Context, c Call) (Result, error) {
 		return p.checkGroceries(ctx, c)
 	case PantryToolFinishCooking:
 		return p.finishCooking(ctx, c)
+	case PantryToolLogMeal:
+		return p.logMeal(ctx, c)
+	case PantryToolUndoMeal:
+		return p.undoMeal(ctx, c)
 	}
 	return Result{}, fmt.Errorf("pantry has no tool %q", t.tool)
 }
@@ -1086,4 +1101,75 @@ func itsTheir(n int) string {
 		return "its"
 	}
 	return "their"
+}
+
+// logMeal logs a meal for the member asking. An uncertain food comes back
+// from PantryOS as a refusal naming the candidates — the model asks which,
+// never guesses.
+func (p *Pantry) logMeal(ctx context.Context, c Call) (Result, error) {
+	if c.Subject == "" {
+		return Result{}, errors.New("logging a meal needs to know who ate, and this conversation names nobody")
+	}
+	food := strings.TrimSpace(c.Params["food"])
+	if food == "" {
+		return Result{}, errors.New("food is required: what was eaten")
+	}
+	req := map[string]any{"member": c.Subject, "food": food}
+	if raw := strings.TrimSpace(c.Params["quantity"]); raw != "" {
+		q, err := strconv.ParseFloat(raw, 64)
+		if err != nil || math.IsNaN(q) || math.IsInf(q, 0) || q <= 0 {
+			return Result{}, fmt.Errorf("quantity must be a number above zero, not %q", raw)
+		}
+		req["quantity"] = q
+	}
+	for _, k := range []string{"unit", "meal_type", "item_id"} {
+		if v := strings.TrimSpace(c.Params[k]); v != "" {
+			req[k] = v
+		}
+	}
+	if raw := strings.TrimSpace(c.Params["fdc_id"]); raw != "" {
+		id, err := strconv.Atoi(raw)
+		if err != nil {
+			return Result{}, fmt.Errorf("fdc_id must be a number, not %q", raw)
+		}
+		req["fdc_id"] = id
+	}
+	d, _, err := p.ask(ctx, true, pantry.CapMealLog, req)
+	if err != nil {
+		return Result{}, err
+	}
+	meal, _ := d["meal"].(map[string]any)
+	eventID := str(meal["event_id"])
+	summary := fmt.Sprintf("Logged %s %s %s", amount(meal["quantity"], str(meal["unit"])), str(meal["food"]),
+		mealPhrase(str(req["meal_type"])))
+	if meal["from_stock"] == true {
+		summary += ", taken from the pantry."
+	} else {
+		summary += " (none in stock, so nothing was taken)."
+	}
+	summary += " To take it back: undo_meal with event_id " + eventID + "."
+	return Result{EffectConfirmed: true, Summary: summary, Detail: map[string]string{"event_id": eventID}}, nil
+}
+
+func mealPhrase(mealType string) string {
+	if mealType == "" {
+		return "eaten"
+	}
+	return "for " + mealType
+}
+
+func (p *Pantry) undoMeal(ctx context.Context, c Call) (Result, error) {
+	id := strings.TrimSpace(c.Params["event_id"])
+	if id == "" {
+		return Result{}, errors.New("event_id is required: the one log_meal gave back")
+	}
+	d, _, err := p.ask(ctx, true, pantry.CapMealUndo, map[string]any{"event_id": id})
+	if err != nil {
+		return Result{}, err
+	}
+	if d["already_undone"] == true {
+		return Result{Summary: "That meal was already taken back."}, nil
+	}
+	return Result{EffectConfirmed: true, Summary: "Took that meal back; anything it used is back in the pantry.",
+		Detail: map[string]string{"event_id": id}}, nil
 }

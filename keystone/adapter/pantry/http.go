@@ -48,6 +48,8 @@ const (
 	CapCookAbandon = "pantry.cook.abandon"
 	CapTimerSet    = "pantry.timer.set"
 	CapTimerCancel = "pantry.timer.cancel"
+	CapMealLog     = "pantry.meal.log"
+	CapMealUndo    = "pantry.meal.undo"
 )
 
 // ErrRejected is PantryOS refusing a request it understood: a list that
