@@ -1,11 +1,12 @@
 # ADR-W045: Off-site backup to S3-compatible storage
 
-- **Status:** proposed.
+- **Status:** accepted by the owner on 2026-09-28, including the A5
+  amendments. Not yet implemented; work tracked under #407.
 - **Issue:** [#407](https://github.com/chickenrat17/wildstone-homelab/issues/407).
   Audit: [`docs/design/issue-407-offsite-backup-audit.md`](../design/issue-407-offsite-backup-audit.md).
 - **Builds on:** ADR-W011 A4 (backup engine), ADR-W012 (secrets path),
   ADR-W018 A2 (recovery contract), ADR-W033 D1 (household secrets).
-- **Amends (if accepted):** ADR-W018 A2 item 3, ADR-W012 A1 — see A5.
+- **Amends:** ADR-W018 A2 item 3, ADR-W012 A1 — see A5.
 
 ## Context
 
@@ -192,8 +193,8 @@ them from a password manager. For a full restore:
   With the private key offline, nothing on a running system can open it.
 - The Console and CLI keep no reveal path; write-only still holds on a
   running system.
-- This is the one decision here that changes an accepted ADR. It needs
-  explicit owner acceptance.
+- This is the one decision here that changes an accepted ADR. The owner
+  accepted it on 2026-09-28.
 
 **The recovery kit** — the only thing that must live outside Wildstone:
 
