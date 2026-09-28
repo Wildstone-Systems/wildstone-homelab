@@ -67,7 +67,11 @@ func (f *fakeAgent) setFree(key string, free uint64) {
 }
 
 func disk(total, free uint64, mp, fstype string) *wsv1.DiskSpaceResult {
-	return &wsv1.DiskSpaceResult{TotalBytes: total, FreeBytes: free, MountPoint: mp, Fstype: fstype, Exists: true}
+	d := &wsv1.DiskSpaceResult{TotalBytes: total, FreeBytes: free, MountPoint: mp, Fstype: fstype, Exists: true}
+	if mp == nasTarget {
+		d.Source = "nas.example.internal:/media"
+	}
+	return d
 }
 
 const nasTarget = "/srv/wildstone/nas/media"
@@ -382,5 +386,54 @@ func TestDiskAlreadyPastReserve(t *testing.T) {
 	agent.tooOldUsage = true
 	if err := e.RunNow(context.Background(), "photos"); !errors.As(err, &low) {
 		t.Fatalf("an unsizeable backup on a disk past its reserve ran: %v", err)
+	}
+}
+
+// TestWrongShareIsNeverBackedUp: a different share mounted at the
+// declared target is refused, not backed up as if it were the NAS.
+func TestWrongShareIsNeverBackedUp(t *testing.T) {
+	run := &fakeRunner{}
+	e, _, state := newEngine(t, run)
+	other := disk(8<<40, 4<<40, nasTarget, "nfs4")
+	other.Source = "old-nas.example.internal:/media"
+	e.Agent = &fakeAgent{disks: map[string]*wsv1.DiskSpaceResult{
+		nasTarget + "/movies": other, nasTarget + "/backups/movies": other,
+	}}
+	seedAll(t, state, nasMount(), nasPlan("movies"))
+	err := e.RunNow(context.Background(), "movies")
+	if err == nil || !strings.Contains(err.Error(), "refusing to back up the wrong share") {
+		t.Fatalf("err = %v", err)
+	}
+	if len(run.names()) != 0 {
+		t.Fatalf("restic ran against the wrong share: %v", run.names())
+	}
+}
+
+// TestCopyRunsWhileNASSourceIsDown: a local-and-offsite copy reads only
+// the local repository, so the NAS source being down does not stop the
+// last good snapshot reaching S3 — while a backup of the source does.
+func TestCopyRunsWhileNASSourceIsDown(t *testing.T) {
+	run := &fakeRunner{}
+	e, _, state := newEngine(t, run)
+	e.Agent = &fakeAgent{disks: map[string]*wsv1.DiskSpaceResult{
+		nasTarget + "/movies": disk(100<<30, 50<<30, "/srv/wildstone", "ext4"), // share down
+		"backup-repo":         disk(1<<40, 500<<30, "/", "ext4"),
+	}}
+	p := offsitePlan("movies", resource.BackupRouteLocalAndOffsite)
+	p.BackupPlan.Volumes = nil
+	p.BackupPlan.Paths = []string{nasTarget + "/movies"}
+	seedAll(t, state, nasMount(), targetResource(false), p)
+
+	reports, err := e.Tick(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var backupRefused, copyOK bool
+	for _, rep := range reports {
+		backupRefused = backupRefused || (rep.Kind == runtimedb.BackupRunBackup && strings.Contains(rep.Err, "is not mounted"))
+		copyOK = copyOK || (rep.Kind == runtimedb.BackupRunOffsite && rep.Err == "")
+	}
+	if !backupRefused || !copyOK {
+		t.Fatalf("reports = %+v, want the backup refused and the copy run", reports)
 	}
 }

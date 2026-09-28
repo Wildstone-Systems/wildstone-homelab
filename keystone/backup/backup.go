@@ -280,7 +280,7 @@ func (e *Engine) runBackup(ctx context.Context, r resource.Resource, desired []r
 	return e.withProvenance(ctx, r, runtimedb.BackupRunBackup,
 		fmt.Sprintf("backup run: %s (%d source(s) -> %s)", name, len(sources(spec)), spec.Repository),
 		func(ctx context.Context) error {
-			if err := e.checkMounts(ctx, r, desired, true); err != nil {
+			if err := e.checkMounts(ctx, r, desired, true, true); err != nil {
 				return err
 			}
 			guard, err := e.checkSpace(ctx, r)

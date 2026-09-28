@@ -50,7 +50,7 @@ func (a *Agent) diskSpace(ctx context.Context, op *wsv1.DiskSpace) (*wsv1.OpResu
 	if err := statfsFn(probe, &st); err != nil {
 		return nil, opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "statfs %q: %v", probe, err)
 	}
-	mp, fstype, err := mountOf(mountinfoPath, probe)
+	m, err := mountOf(mountinfoPath, probe)
 	if err != nil {
 		return nil, opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "read mountinfo: %v", err)
 	}
@@ -58,23 +58,34 @@ func (a *Agent) diskSpace(ctx context.Context, op *wsv1.DiskSpace) (*wsv1.OpResu
 	return &wsv1.OpResult_DiskSpace{DiskSpace: &wsv1.DiskSpaceResult{
 		TotalBytes: st.Blocks * bsize,
 		FreeBytes:  st.Bavail * bsize,
-		MountPoint: mp,
-		Fstype:     fstype,
+		MountPoint: m.point,
+		Fstype:     m.fstype,
 		Exists:     exists,
+		Source:     m.source,
+		Options:    m.options,
 	}}, nil
 }
 
-// mountOf returns the mount point and filesystem type of the mount that
-// holds path: the LONGEST mountinfo mount point that is path or one of
-// its ancestors. Mount points in mountinfo escape space, tab, newline and
-// backslash as octal (\040 and so on), which is decoded before comparing.
-func mountOf(mountinfo, path string) (string, string, error) {
+// mountEntry is one mountinfo line, as much of it as DiskSpace reports.
+type mountEntry struct {
+	point, fstype, source string
+	options               []string
+}
+
+// mountOf returns the mount that holds path: the LONGEST mountinfo mount
+// point that is path or one of its ancestors. Mount points in mountinfo
+// escape space, tab, newline and backslash as octal (\040 and so on),
+// which is decoded before comparing.
+//
+// A line is "ID parent major:minor root point mount-options [optional
+// fields...] - fstype source super-options".
+func mountOf(mountinfo, path string) (mountEntry, error) {
 	f, err := os.Open(mountinfo)
 	if err != nil {
-		return "", "", err
+		return mountEntry{}, err
 	}
 	defer f.Close()
-	best, bestType := "", ""
+	var best mountEntry
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 64*1024), 1024*1024)
 	for sc.Scan() {
@@ -86,21 +97,32 @@ func mountOf(mountinfo, path string) (string, string, error) {
 		if !(path == mp || mp == "/" || strings.HasPrefix(path, mp+"/")) {
 			continue
 		}
-		if len(mp) < len(best) {
+		if len(mp) < len(best.point) {
 			continue
 		}
-		fstype := ""
+		e := mountEntry{point: mp}
+		if len(fields) > 5 {
+			e.options = strings.Split(fields[5], ",")
+		}
 		for i, fl := range fields {
-			if fl == "-" && i+1 < len(fields) {
-				fstype = fields[i+1]
+			if fl == "-" {
+				if i+1 < len(fields) {
+					e.fstype = fields[i+1]
+				}
+				if i+2 < len(fields) {
+					e.source = unescapeMountinfo(fields[i+2])
+				}
+				if i+3 < len(fields) {
+					e.options = append(e.options, strings.Split(fields[i+3], ",")...)
+				}
 				break
 			}
 		}
 		// Equal length is the same mount point mounted over itself: the
 		// later line is the one on top, and the one path now reaches.
-		best, bestType = mp, fstype
+		best = e
 	}
-	return best, bestType, sc.Err()
+	return best, sc.Err()
 }
 
 func unescapeMountinfo(s string) string {

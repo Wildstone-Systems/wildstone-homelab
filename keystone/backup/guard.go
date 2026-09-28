@@ -70,6 +70,7 @@ type diskInfo struct {
 	total, free uint64
 	mountPoint  string
 	fstype      string
+	source      string
 	exists      bool
 }
 
@@ -103,7 +104,7 @@ func (e *Engine) diskSpace(ctx context.Context, node, nameOrPath string) (diskIn
 		return diskInfo{}, fmt.Errorf("disk space of %s: %s: %s", nameOrPath, oe.GetCode(), oe.GetMessage())
 	}
 	d := res.GetDiskSpace()
-	return diskInfo{total: d.GetTotalBytes(), free: d.GetFreeBytes(), mountPoint: d.GetMountPoint(), fstype: d.GetFstype(), exists: d.GetExists()}, nil
+	return diskInfo{total: d.GetTotalBytes(), free: d.GetFreeBytes(), mountPoint: d.GetMountPoint(), fstype: d.GetFstype(), source: d.GetSource(), exists: d.GetExists()}, nil
 }
 
 func (e *Engine) usage(ctx context.Context, node, nameOrPath string) (uint64, error) {
@@ -169,9 +170,11 @@ func sources(spec *resource.BackupPlanSpec) []string {
 
 // checkMounts refuses a run whose NAS path is not on its share: every
 // source or repository path under a declared NetworkMount must sit on a
-// filesystem mounted at that share's target (or deeper), and every
-// source path must exist.
-func (e *Engine) checkMounts(ctx context.Context, r resource.Resource, desired []resource.Resource, withRepo bool) error {
+// filesystem mounted at that share's target (or deeper), from the
+// declared source, and every source path must exist. withSources and
+// withRepo say which paths this run actually reads: a restic copy needs
+// only the repository, so a NAS source being down must not stop it.
+func (e *Engine) checkMounts(ctx context.Context, r resource.Resource, desired []resource.Resource, withSources, withRepo bool) error {
 	spec := r.BackupPlan
 	check := func(p string, mustExist bool) error {
 		share := shareFor(desired, r.Metadata.Node, p)
@@ -192,14 +195,20 @@ func (e *Engine) checkMounts(ctx context.Context, r resource.Resource, desired [
 			return fmt.Errorf("NAS share %s is not mounted at %s (%s is on %s); refusing to back up the empty folder underneath",
 				share.Source, share.Target, p, d.mountPoint)
 		}
+		if share != nil && d.mountPoint == share.Target && d.source != "" && d.source != share.Source {
+			return fmt.Errorf("%s is mounted from %s, not the declared share %s; refusing to back up the wrong share",
+				share.Target, d.source, share.Source)
+		}
 		if mustExist && !d.exists {
 			return fmt.Errorf("source folder %s does not exist", p)
 		}
 		return nil
 	}
-	for _, p := range spec.Paths {
-		if err := check(p, true); err != nil {
-			return err
+	if withSources {
+		for _, p := range spec.Paths {
+			if err := check(p, true); err != nil {
+				return err
+			}
 		}
 	}
 	if withRepo && strings.HasPrefix(spec.Repository, "/") {

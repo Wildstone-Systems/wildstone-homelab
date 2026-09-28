@@ -574,6 +574,12 @@ message DiskSpaceResult {
   string mount_point = 3; // the mount point of the filesystem, from mountinfo
   string fstype = 4;      // e.g. "ext4", "nfs4"
   bool exists = 5;        // false: answered for the nearest existing ancestor
+  // The mount's source ("nas.example.internal:/media" for an NFS share)
+  // and its live options — per-mount and superblock options together —
+  // from mountinfo, so a declared share can be told from a different one
+  // mounted at the same place.
+  string source = 6;
+  repeated string options = 7;
 }
 
 // ---------------------------------------------------------------- files

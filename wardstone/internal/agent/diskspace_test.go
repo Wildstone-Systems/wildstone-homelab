@@ -5,6 +5,7 @@ package agent
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -20,7 +21,7 @@ func TestMountOf(t *testing.T) {
 	lines := "" +
 		"22 1 8:1 / / rw,relatime shared:1 - ext4 /dev/sda1 rw\n" +
 		"30 22 0:40 / /srv/wildstone rw shared:2 - xfs /dev/sdb1 rw\n" +
-		"41 30 0:52 / /srv/wildstone/nas/media rw shared:3 - nfs4 nas.example.internal:/media rw\n" +
+		"41 30 0:52 / /srv/wildstone/nas/media rw,nosuid,nodev shared:3 - nfs4 nas.example.internal:/media rw,vers=4.1,soft\n" +
 		"42 30 0:53 / /srv/wildstone/nas/my\\040photos rw - nfs nas.example.internal:/p rw\n"
 	if err := os.WriteFile(info, []byte(lines), 0o644); err != nil {
 		t.Fatal(err)
@@ -33,13 +34,17 @@ func TestMountOf(t *testing.T) {
 		{"/srv/wildstone/nas/my photos/2024", "/srv/wildstone/nas/my photos", "nfs"},
 		{"/var/lib/docker/volumes/x/_data", "/", "ext4"},
 	} {
-		mp, fstype, err := mountOf(info, tc.path)
+		m, err := mountOf(info, tc.path)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if mp != tc.mp || fstype != tc.fstype {
-			t.Errorf("mountOf(%q) = %q %q, want %q %q", tc.path, mp, fstype, tc.mp, tc.fstype)
+		if m.point != tc.mp || m.fstype != tc.fstype {
+			t.Errorf("mountOf(%q) = %q %q, want %q %q", tc.path, m.point, m.fstype, tc.mp, tc.fstype)
 		}
+	}
+	m, _ := mountOf(info, "/srv/wildstone/nas/media/movies")
+	if m.source != "nas.example.internal:/media" || strings.Join(m.options, ",") != "rw,nosuid,nodev,rw,vers=4.1,soft" {
+		t.Errorf("share source/options = %q %v", m.source, m.options)
 	}
 }
 

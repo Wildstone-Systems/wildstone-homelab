@@ -264,6 +264,11 @@ spec:
   schedule: daily
 ```
 
+Changing a share's `source` or `options` rewrites its fstab entry, but
+the share already mounted stays until the next reboot or remount —
+Wildstone has no unmount. Until then the change shows as not applied,
+and backups refuse a share mounted from a different source.
+
 **If the NAS is down, the backup does not run.** Before every run
 Wildstone checks that each folder under a declared share is really on
 that share. Otherwise it would be backing up the empty folder

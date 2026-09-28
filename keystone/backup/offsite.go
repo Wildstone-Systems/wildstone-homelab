@@ -130,7 +130,10 @@ func (e *Engine) runOffsite(ctx context.Context, r resource.Resource, desired []
 				return err
 			}
 			local := o.Route == resource.BackupRouteLocalAndOffsite
-			if err := e.checkMounts(ctx, r, desired, local); err != nil {
+			// A copy reads only the local repository; a direct or
+			// offsite-only backup reads only the sources.
+			copying := local && !direct
+			if err := e.checkMounts(ctx, r, desired, !copying, copying); err != nil {
 				return err
 			}
 			ctx, cancel := context.WithTimeout(ctx, e.offsiteTimeout())

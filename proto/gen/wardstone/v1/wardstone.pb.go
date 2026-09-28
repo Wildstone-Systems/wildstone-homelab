@@ -3601,12 +3601,18 @@ func (x *DiskSpace) GetVolume() string {
 }
 
 type DiskSpaceResult struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	TotalBytes    uint64                 `protobuf:"varint,1,opt,name=total_bytes,json=totalBytes,proto3" json:"total_bytes,omitempty"`
-	FreeBytes     uint64                 `protobuf:"varint,2,opt,name=free_bytes,json=freeBytes,proto3" json:"free_bytes,omitempty"`   // available to unprivileged writers (statfs f_bavail)
-	MountPoint    string                 `protobuf:"bytes,3,opt,name=mount_point,json=mountPoint,proto3" json:"mount_point,omitempty"` // the mount point of the filesystem, from mountinfo
-	Fstype        string                 `protobuf:"bytes,4,opt,name=fstype,proto3" json:"fstype,omitempty"`                           // e.g. "ext4", "nfs4"
-	Exists        bool                   `protobuf:"varint,5,opt,name=exists,proto3" json:"exists,omitempty"`                          // false: answered for the nearest existing ancestor
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	TotalBytes uint64                 `protobuf:"varint,1,opt,name=total_bytes,json=totalBytes,proto3" json:"total_bytes,omitempty"`
+	FreeBytes  uint64                 `protobuf:"varint,2,opt,name=free_bytes,json=freeBytes,proto3" json:"free_bytes,omitempty"`   // available to unprivileged writers (statfs f_bavail)
+	MountPoint string                 `protobuf:"bytes,3,opt,name=mount_point,json=mountPoint,proto3" json:"mount_point,omitempty"` // the mount point of the filesystem, from mountinfo
+	Fstype     string                 `protobuf:"bytes,4,opt,name=fstype,proto3" json:"fstype,omitempty"`                           // e.g. "ext4", "nfs4"
+	Exists     bool                   `protobuf:"varint,5,opt,name=exists,proto3" json:"exists,omitempty"`                          // false: answered for the nearest existing ancestor
+	// The mount's source ("nas.example.internal:/media" for an NFS share)
+	// and its live options — per-mount and superblock options together —
+	// from mountinfo, so a declared share can be told from a different one
+	// mounted at the same place.
+	Source        string   `protobuf:"bytes,6,opt,name=source,proto3" json:"source,omitempty"`
+	Options       []string `protobuf:"bytes,7,rep,name=options,proto3" json:"options,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3674,6 +3680,20 @@ func (x *DiskSpaceResult) GetExists() bool {
 		return x.Exists
 	}
 	return false
+}
+
+func (x *DiskSpaceResult) GetSource() string {
+	if x != nil {
+		return x.Source
+	}
+	return ""
+}
+
+func (x *DiskSpaceResult) GetOptions() []string {
+	if x != nil {
+		return x.Options
+	}
+	return nil
 }
 
 type WriteManagedFile struct {
@@ -6450,7 +6470,7 @@ const file_wardstone_v1_wardstone_proto_rawDesc = "" +
 	"file_count\x18\x02 \x01(\x04R\tfileCount\"7\n" +
 	"\tDiskSpace\x12\x12\n" +
 	"\x04path\x18\x01 \x01(\tR\x04path\x12\x16\n" +
-	"\x06volume\x18\x02 \x01(\tR\x06volume\"\xa2\x01\n" +
+	"\x06volume\x18\x02 \x01(\tR\x06volume\"\xd4\x01\n" +
 	"\x0fDiskSpaceResult\x12\x1f\n" +
 	"\vtotal_bytes\x18\x01 \x01(\x04R\n" +
 	"totalBytes\x12\x1d\n" +
@@ -6459,7 +6479,9 @@ const file_wardstone_v1_wardstone_proto_rawDesc = "" +
 	"\vmount_point\x18\x03 \x01(\tR\n" +
 	"mountPoint\x12\x16\n" +
 	"\x06fstype\x18\x04 \x01(\tR\x06fstype\x12\x16\n" +
-	"\x06exists\x18\x05 \x01(\bR\x06exists\"\x85\x01\n" +
+	"\x06exists\x18\x05 \x01(\bR\x06exists\x12\x16\n" +
+	"\x06source\x18\x06 \x01(\tR\x06source\x12\x18\n" +
+	"\aoptions\x18\a \x03(\tR\aoptions\"\x85\x01\n" +
 	"\x10WriteManagedFile\x12\x12\n" +
 	"\x04path\x18\x01 \x01(\tR\x04path\x12\x18\n" +
 	"\acontent\x18\x02 \x01(\fR\acontent\x12\x12\n" +
