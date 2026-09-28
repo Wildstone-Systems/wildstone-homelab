@@ -459,6 +459,39 @@ func homepagePrereqFiles(managedPrefix string, desired []resource.Resource) []ma
 	return out
 }
 
+// homepageFallbackContent reports the regenerated content for path, iff
+// path is one of Homepage's own generated files and desiredByKey no
+// longer has a ConfigFile claiming it.
+//
+// It exists for the mirror image of #410: relinquishing a declared
+// ConfigFile override at one of these paths is a Delete step, and a
+// Delete ordinarily clears its path to empty (applyConfigFileStep — no
+// delete-file op exists). But this tick's own prereq repair, which runs
+// BEFORE observe/apply, already restored the regenerated fallback at
+// that same path the moment the claim disappeared from desired state.
+// Clearing it in the Delete step that follows would throw that away and
+// leave the path empty until the next tick repairs it again — a real,
+// if one-tick, wrong intermediate state where the household's dashboard
+// reads a blank settings file. Handing the Delete step this content
+// instead keeps the handoff a single correct write.
+//
+// desiredByKey is expected in the shape a ConfigFile Delete step
+// already receives it: the ConfigFile being deleted is absent from it,
+// exactly as it would be from true desired state once the override is
+// gone.
+func homepageFallbackContent(managedPrefix string, desiredByKey map[resKey]resource.Resource, path string) ([]byte, bool) {
+	desired := make([]resource.Resource, 0, len(desiredByKey))
+	for _, r := range desiredByKey {
+		desired = append(desired, r)
+	}
+	for _, f := range homepagePrereqFiles(managedPrefix, desired) {
+		if f.path == path {
+			return f.want, true
+		}
+	}
+	return nil, false
+}
+
 // prereqRepairedClients reports whether the merged Authelia clients file
 // was among the prereqs rewritten this tick.
 func prereqRepairedClients(repaired []string, managedPrefix string) bool {

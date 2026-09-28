@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/chickenrat17/wildstone-homelab/keystone/plan"
 	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
 )
 
@@ -157,6 +158,54 @@ func TestDeclaredDashboardSettingsSurviveRepair(t *testing.T) {
 		if string(got) != settings.ConfigFile.Content {
 			t.Fatalf("tick %d: declared dashboard settings overwritten:\n%s", tick, got)
 		}
+	}
+}
+
+// TestRelinquishingADashboardOverrideRestoresTheGeneratedFallback covers
+// the handoff in the other direction, raised in review of #410's fix: a
+// declared ConfigFile withdrawn from desired state is a Delete step, and
+// a Delete ordinarily clears its path to empty (applyConfigFileStep — no
+// delete-file op exists). But the SAME tick's prereq repair runs before
+// observe/plan/apply and, the instant the claim disappears from desired
+// state, already restores Homepage's own generated settings at that
+// exact path. Clearing it in the Delete step that follows would throw
+// that restore away and leave the household's dashboard reading a blank
+// settings file until the next tick repairs it again. The Delete step
+// must hand back the regenerated fallback instead.
+func TestRelinquishingADashboardOverrideRestoresTheGeneratedFallback(t *testing.T) {
+	h := startGateway(t, []string{"tok"})
+	agent := newTestAgent(t, h, "node-a", "tok")
+	if !h.gw.WaitConnected("node-a", 10*time.Second) {
+		t.Fatal("agent never connected")
+	}
+	rec := newReconciler(&GatewayApplier{Gateway: h.gw})
+	// The Delete step for a ConfigFile grades Medium risk; auto-approve
+	// so the handoff completes within the one tick this test checks.
+	rec.Approve = func(*plan.Plan) bool { return true }
+
+	settings := configFile("dashboard-settings", "capability/dashboard", "settings.yaml",
+		"householdName: The Smiths\naccentHue: 210\nsearchEngine: duckduckgo\n")
+	if _, err := rec.Reconcile(t.Context(), "node-a", []resource.Resource{settings}); err != nil {
+		t.Fatalf("first tick: %v", err)
+	}
+
+	// The override is withdrawn: desired state no longer declares the
+	// ConfigFile.
+	out, err := rec.Reconcile(t.Context(), "node-a", nil)
+	if err != nil {
+		t.Fatalf("handoff tick: %v", err)
+	}
+	if !out.Applied {
+		t.Fatalf("the Delete step relinquishing the override was not applied: %+v", out)
+	}
+
+	settingsPath := managedPathForTest(agent, homepageSettingsPath(testManagedPrefix))
+	got, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := string(renderHomepageSettings(nil)); string(got) != want {
+		t.Fatalf("after relinquishing the override, settings.yaml = %q, want the regenerated fallback %q", got, want)
 	}
 }
 
