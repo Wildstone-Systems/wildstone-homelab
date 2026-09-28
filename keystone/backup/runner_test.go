@@ -16,6 +16,8 @@ import (
 type scriptedApplier struct {
 	inspects []*wsv1.OpResult
 	ops      []string
+	// removeErr, when set, answers every RemoveContainer with it.
+	removeErr *wsv1.OpError
 }
 
 func (s *scriptedApplier) Apply(_ context.Context, _ string, op *wsv1.Operation) (*wsv1.OpResult, error) {
@@ -28,6 +30,9 @@ func (s *scriptedApplier) Apply(_ context.Context, _ string, op *wsv1.Operation)
 		s.ops = append(s.ops, "stop")
 	case *wsv1.Operation_RemoveContainer:
 		s.ops = append(s.ops, "remove")
+		if s.removeErr != nil {
+			return &wsv1.OpResult{Result: &wsv1.OpResult_Error{Error: s.removeErr}}, nil
+		}
 	case *wsv1.Operation_InspectContainer:
 		s.ops = append(s.ops, "inspect")
 		res := s.inspects[0]
@@ -65,7 +70,7 @@ func TestRunnerExitZeroSucceeds(t *testing.T) {
 	}
 	// A leftover of the same name is cleared before ensure, and the
 	// container is removed after it finishes.
-	want := "pull,stop,remove,ensure,inspect,inspect,stop,remove"
+	want := "pull,remove,ensure,inspect,inspect,stop,remove"
 	if got := strings.Join(app.ops, ","); got != want {
 		t.Fatalf("ops = %s, want %s", got, want)
 	}
@@ -123,5 +128,25 @@ func TestRunnerTimeout(t *testing.T) {
 	err := r.RunContainer(context.Background(), "n1", "backup-photos", resource.ContainerSpec{Image: testResticImage})
 	if err == nil || !strings.Contains(err.Error(), "still running") {
 		t.Fatalf("err = %v, want a timeout", err)
+	}
+}
+
+// TestRunnerAbortsWhenLeftoverWontClear: a leftover that cannot be
+// removed is never reused — EnsureContainer would keep it, stale command,
+// mounts and credentials included — so the run stops before ensure.
+func TestRunnerAbortsWhenLeftoverWontClear(t *testing.T) {
+	app := &scriptedApplier{
+		inspects:  []*wsv1.OpResult{inspected(false, "exited", 0)},
+		removeErr: &wsv1.OpError{Code: wsv1.ErrorCode_ERROR_CODE_RUNTIME, Message: "device busy"},
+	}
+	r := &ApplierRunner{Applier: app, Poll: time.Millisecond, Timeout: time.Second}
+	err := r.RunContainer(context.Background(), "n1", "backup-photos", resource.ContainerSpec{Image: testResticImage})
+	if err == nil || !strings.Contains(err.Error(), "clearing a leftover") {
+		t.Fatalf("err = %v, want the clear-out failure", err)
+	}
+	for _, op := range app.ops {
+		if op == "ensure" {
+			t.Fatalf("ops = %v: ensured after a failed clear-out", app.ops)
+		}
 	}
 }

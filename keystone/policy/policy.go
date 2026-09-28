@@ -187,23 +187,38 @@ func (e *Engine) Validate(ch Change) (violations, exempted []Violation) {
 			}
 		}
 	}
-	// A BackupTarget removed while an untouched plan still copies to it
-	// would leave that plan failing every run with nobody having decided
-	// that. The plan is untouched, so the loop above skipped it: check
-	// every plan that names a target this change deletes.
+	// A BackupTarget changed or removed under an UNTOUCHED plan that
+	// copies to it would leave that plan failing every run with nobody
+	// having decided that — deleted, or moved to another node where the
+	// plan's runs cannot resolve its credentials. The loop above skipped
+	// the untouched plan, so check every such plan against the targets
+	// this change touches.
+	touchedTarget := func(name string) bool {
+		key := string(resource.KindBackupTarget) + "/" + name
+		cur, was := currentByKey[key]
+		now, is := targets[name]
+		return was != is || (was && !reflect.DeepEqual(cur, now))
+	}
 	for _, r := range ch.Proposed {
 		if r.Kind != resource.KindBackupPlan || r.BackupPlan == nil || r.BackupPlan.Offsite == nil {
 			continue
 		}
+		if cur, ok := currentByKey[string(r.Kind)+"/"+r.Metadata.Name]; !ok || !reflect.DeepEqual(cur, r) {
+			continue // touched: the loop above already checked it
+		}
 		name := r.BackupPlan.Offsite.Target
-		if _, still := targets[name]; still {
+		if !touchedTarget(name) {
 			continue
 		}
-		if _, was := currentByKey[string(resource.KindBackupTarget)+"/"+name]; was {
+		if _, still := targets[name]; !still {
 			all = append(all, Violation{
 				Rule: RuleBackupTargetDeclared, Kind: string(resource.KindBackupTarget), Name: name,
 				Msg: fmt.Sprintf("BackupPlan %q still copies off-site to this target; change or remove its offsite block first", r.Metadata.Name),
 			})
+			continue
+		}
+		if v, bad := offsiteTargetRule(r, targets); bad {
+			all = append(all, v)
 		}
 	}
 	// Deletions of admin routes by the butler (RuleButlerAdminScope

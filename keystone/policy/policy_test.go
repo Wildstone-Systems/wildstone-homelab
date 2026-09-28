@@ -500,6 +500,9 @@ func offsitePlan(node, target string) resource.Resource {
 func TestOffsiteTargetDeclared(t *testing.T) {
 	e := NewEngine(nil)
 	tgt := backupTarget(nil) // node n1
+	moved := backupTarget(nil)
+	moved.Metadata.Node = "n2"
+	rebucketed := backupTarget(func(s *resource.BackupTargetSpec) { s.Bucket = "other-bucket" })
 	for _, tc := range []struct {
 		name     string
 		ch       Change
@@ -512,6 +515,14 @@ func TestOffsiteTargetDeclared(t *testing.T) {
 			Current:  []resource.Resource{tgt, offsitePlan("n1", "offsite")},
 			Proposed: []resource.Resource{offsitePlan("n1", "offsite")},
 		}, true},
+		{"target moved to another node under an untouched plan", Change{
+			Current:  []resource.Resource{tgt, offsitePlan("n1", "offsite")},
+			Proposed: []resource.Resource{moved, offsitePlan("n1", "offsite")},
+		}, true},
+		{"target edited in place under an untouched plan", Change{
+			Current:  []resource.Resource{tgt, offsitePlan("n1", "offsite")},
+			Proposed: []resource.Resource{rebucketed, offsitePlan("n1", "offsite")},
+		}, false},
 		{"unrelated change with target intact", Change{
 			Current:  []resource.Resource{tgt, offsitePlan("n1", "offsite")},
 			Proposed: []resource.Resource{tgt, offsitePlan("n1", "offsite"), container("app", nil)},
