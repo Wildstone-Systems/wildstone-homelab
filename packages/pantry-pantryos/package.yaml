@@ -30,7 +30,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: pantry-pantryos
-  version: 0.2.1
+  version: 0.3.0
   capability: pantry
   profile: pantryos
   # One pantry. A second PantryOS would be a second grocery list.
