@@ -515,3 +515,41 @@ func TestDiffBackupPlanOffsite(t *testing.T) {
 		}
 	}
 }
+
+// TestDiffNetworkMount: mounting a declared share is Low (so a dropped
+// share is re-mounted unattended); changing one is Medium.
+func TestDiffNetworkMount(t *testing.T) {
+	m := func(src string) resource.Resource {
+		return resource.Resource{Kind: resource.KindNetworkMount, Metadata: resource.Metadata{Name: "media", Owner: "owner", Node: "n1"},
+			NetworkMount: &resource.NetworkMountSpec{Type: "nfs4", Source: src, Target: "/srv/wildstone/nas/media"}}
+	}
+	if p := Diff([]resource.Resource{m("nas:/a")}, nil); p.OverallRisk != RiskLow {
+		t.Fatalf("create = %s", p.OverallRisk)
+	}
+	if p := Diff([]resource.Resource{m("nas:/b")}, []resource.Resource{m("nas:/a")}); p.OverallRisk != RiskMedium {
+		t.Fatalf("update = %s", p.OverallRisk)
+	}
+	if KindOrder(resource.KindNetworkMount) >= KindOrder(resource.KindBackupPlan) || KindOrder(resource.KindNetworkMount) >= KindOrder(resource.KindContainer) {
+		t.Fatal("a share must be mounted before what reads it")
+	}
+}
+
+// TestDiffOffsiteSourcesAdded: adding a folder to a plan that already
+// goes off-site sends more data out of the house, so it is High.
+func TestDiffOffsiteSourcesAdded(t *testing.T) {
+	off := &resource.BackupOffsite{Target: "offsite", Route: resource.BackupRouteLocalAndOffsite, PasswordSecret: "secret/o", Schedule: "weekly"}
+	have := offsiteBP(off)
+	want := offsiteBP(off)
+	want.BackupPlan.Paths = []string{"/srv/wildstone/nas/media/movies"}
+	if p := Diff([]resource.Resource{want}, []resource.Resource{have}); p.OverallRisk != RiskHigh {
+		t.Fatalf("sources added to an off-site plan = %s, want High", p.OverallRisk)
+	}
+	// Removing a source is not High: less leaves the house.
+	fewer := offsiteBP(off)
+	fewer.BackupPlan.Volumes = nil
+	fewer.BackupPlan.Paths = []string{"/srv/x"}
+	have.BackupPlan.Paths = []string{"/srv/x"}
+	if p := Diff([]resource.Resource{fewer}, []resource.Resource{have}); p.OverallRisk == RiskHigh {
+		t.Fatal("removing a source graded High")
+	}
+}

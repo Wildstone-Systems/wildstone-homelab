@@ -574,7 +574,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, nodeID string, desired []res
 	for _, res := range desired {
 		switch res.Kind {
 		case resource.KindContainer, resource.KindVolume, resource.KindRoute, resource.KindOidcClient,
-			resource.KindLdapGroup, resource.KindLdapUser, resource.KindIngress, resource.KindBackupPlan, resource.KindBackupTarget, resource.KindConfigFile, resource.KindSeedFile, resource.KindJob,
+			resource.KindLdapGroup, resource.KindLdapUser, resource.KindIngress, resource.KindBackupPlan, resource.KindBackupTarget, resource.KindNetworkMount, resource.KindConfigFile, resource.KindSeedFile, resource.KindJob,
 			resource.KindSecret, resource.KindMatrixAppService:
 			wsDesired = append(wsDesired, res)
 		case resource.KindDnsRecord:
@@ -747,6 +747,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, nodeID string, desired []res
 			sr = r.applyBackupPlanStep(ctx, nodeID, step, desiredByKey)
 		case resource.KindBackupTarget:
 			sr = r.applyBackupTargetStep(ctx, nodeID, step, desiredByKey)
+		case resource.KindNetworkMount:
+			sr = r.applyNetworkMountStep(ctx, nodeID, step, desiredByKey)
 		case resource.KindConfigFile:
 			sr = r.applyConfigFileStep(ctx, nodeID, step, desiredByKey)
 		case resource.KindSeedFile:
@@ -886,6 +888,14 @@ func (r *Reconciler) observe(ctx context.Context, nodeID string, desired []resou
 			}
 		case resource.KindSeedFile:
 			obs, present, oerr := r.observeSeedFile(ctx, nodeID, k, want, isDesired)
+			if oerr != nil {
+				return nil, nil, nil, oerr
+			}
+			if present {
+				observed = append(observed, obs)
+			}
+		case resource.KindNetworkMount:
+			obs, present, oerr := r.observeNetworkMount(ctx, nodeID, k, want, isDesired)
 			if oerr != nil {
 				return nil, nil, nil, oerr
 			}
@@ -1135,6 +1145,8 @@ func placeholderResource(kind resource.Kind, name string) resource.Resource {
 		r.BackupPlan = &resource.BackupPlanSpec{}
 	case resource.KindBackupTarget:
 		r.BackupTarget = &resource.BackupTargetSpec{}
+	case resource.KindNetworkMount:
+		r.NetworkMount = &resource.NetworkMountSpec{}
 	case resource.KindConfigFile:
 		r.ConfigFile = &resource.ConfigFileSpec{}
 	case resource.KindSeedFile:
@@ -1399,7 +1411,8 @@ func observableKind(k resource.Kind) bool {
 	case resource.KindSecret, resource.KindJob, resource.KindContainer,
 		resource.KindVolume, resource.KindRoute, resource.KindOidcClient,
 		resource.KindConfigFile, resource.KindSeedFile, resource.KindLdapGroup, resource.KindLdapUser,
-		resource.KindIngress, resource.KindBackupPlan, resource.KindBackupTarget, resource.KindMatrixAppService:
+		resource.KindIngress, resource.KindBackupPlan, resource.KindBackupTarget, resource.KindMatrixAppService,
+		resource.KindNetworkMount:
 		return true
 	default:
 		return false

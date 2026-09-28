@@ -39,6 +39,7 @@ var kindSpecs = []struct {
 	{resource.KindIngress, reflect.TypeOf(resource.IngressSpec{})},
 	{resource.KindBackupPlan, reflect.TypeOf(resource.BackupPlanSpec{})},
 	{resource.KindBackupTarget, reflect.TypeOf(resource.BackupTargetSpec{})},
+	{resource.KindNetworkMount, reflect.TypeOf(resource.NetworkMountSpec{})},
 	{resource.KindConfigFile, reflect.TypeOf(resource.ConfigFileSpec{})},
 	{resource.KindSeedFile, reflect.TypeOf(resource.SeedFileSpec{})},
 	{resource.KindJob, reflect.TypeOf(resource.JobSpec{})},

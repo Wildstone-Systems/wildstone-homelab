@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 	wsv1 "github.com/chickenrat17/wildstone-homelab/proto/gen/wardstone/v1"
 )
@@ -156,4 +157,34 @@ type applierFunc func(ctx context.Context, node string, op *wsv1.Operation) (*ws
 
 func (f applierFunc) Apply(ctx context.Context, node string, op *wsv1.Operation) (*wsv1.OpResult, error) {
 	return f(ctx, node, op)
+}
+
+// TestProposalPreflight: a proposal the backup preflight refuses never
+// becomes a plan, and says why; the check sees the proposed resources.
+func TestProposalPreflight(t *testing.T) {
+	h := newHarness(t)
+	var saw []string
+	h.s.BackupPreflight = func(puts []resource.Resource) error {
+		for _, r := range puts {
+			saw = append(saw, string(r.Kind)+"/"+r.Metadata.Name)
+		}
+		return errors.New("BackupPlan photos: its local copy will not fit")
+	}
+	doc := containerYAML(t, "immich", "ghcr.io/immich-app/immich-server@"+testDigest, nil)
+	resp := h.do(runtimedb.RoleOperator, "POST", "/api/v1/plans", proposalRequest{Summary: "x", Put: []string{doc}}, nil)
+	if resp.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("refused proposal = %d, want 422", resp.StatusCode)
+	}
+	if len(saw) != 1 || saw[0] != "Container/immich" {
+		t.Fatalf("preflight saw %v", saw)
+	}
+	plans, err := h.s.DB.PlansInState(runtimedb.PlanProposed)
+	if err != nil || len(plans) != 0 {
+		t.Fatalf("a refused proposal was recorded: %v %v", plans, err)
+	}
+
+	h.s.BackupPreflight = func([]resource.Resource) error { return nil }
+	if resp := h.do(runtimedb.RoleOperator, "POST", "/api/v1/plans", proposalRequest{Summary: "x", Put: []string{doc}}, nil); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("accepted proposal = %d", resp.StatusCode)
+	}
 }

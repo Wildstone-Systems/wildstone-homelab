@@ -94,6 +94,11 @@ type Deps struct {
 	// (*api.Server).event does. planID is empty for an event that
 	// precedes the plan record (a policy exemption or rejection).
 	Event func(typ, planID string, id principal.Identity, msg string)
+	// Preflight, when set, checks the proposed resources against the
+	// node before a plan is recorded: today, whether a BackupPlan's local
+	// copy fits its disk (ADR-W045 A3.1). A refusal is a 422 carrying its
+	// reason; nil skips the check.
+	Preflight func(puts []resource.Resource) error
 }
 
 func (d Deps) event(typ, planID string, id principal.Identity, msg string) {
@@ -263,6 +268,13 @@ func File(deps Deps, id principal.Identity, req Request, opts Options) (any, int
 	for _, res := range puts {
 		if res.Kind == resource.KindAutomation {
 			return nil, http.StatusBadRequest, fmt.Errorf("Automation changes require an exact-version routine Plan; save a routine draft with its output audience and submit it for Owner review")
+		}
+	}
+
+	if deps.Preflight != nil {
+		if err := deps.Preflight(puts); err != nil {
+			deps.event("preflight.rejected", "", id, err.Error())
+			return nil, http.StatusUnprocessableEntity, fmt.Errorf("proposal does not fit the node: %w", err)
 		}
 	}
 

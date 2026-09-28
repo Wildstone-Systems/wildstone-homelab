@@ -6,6 +6,7 @@ package agent
 import (
 	"archive/tar"
 	"compress/gzip"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"io"
@@ -198,13 +199,15 @@ func (e fsError) Error() string { return string(e) }
 // measureUsage recursively sums regular-file sizes under path (managed
 // prefix required). Symlinks are not followed. The walk aborts with a
 // RUNTIME error if it visits more than maxUsageWalkEntries entries.
-func (a *Agent) measureUsage(op *wsv1.MeasureUsage) (*wsv1.OpResult_MeasureUsage, *wsv1.OpError) {
-	path, oerr := a.resolveManaged(op.GetPath())
+//
+// op.volume (protocol minor 19) measures a wildstone-owned volume instead.
+func (a *Agent) measureUsage(ctx context.Context, op *wsv1.MeasureUsage) (*wsv1.OpResult_MeasureUsage, *wsv1.OpError) {
+	path, oerr := a.diskSpaceTarget(ctx, op.GetPath(), op.GetVolume())
 	if oerr != nil {
 		return nil, oerr
 	}
 	if _, err := os.Lstat(path); os.IsNotExist(err) {
-		return nil, opErr(wsv1.ErrorCode_ERROR_CODE_NOT_FOUND, "path %q", op.GetPath())
+		return nil, opErr(wsv1.ErrorCode_ERROR_CODE_NOT_FOUND, "path %q", op.GetPath()+op.GetVolume())
 	} else if err != nil {
 		return nil, opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "stat: %v", err)
 	}

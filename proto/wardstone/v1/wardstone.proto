@@ -135,6 +135,7 @@ message Operation {
     SeedVolumeFile seed_volume_file = 30;
     StatVolumeFile stat_volume_file = 31;
     ListDirectory list_directory = 32;
+    DiskSpace disk_space = 33;
   }
 }
 
@@ -174,6 +175,7 @@ message OpResult {
     SeedVolumeFileResult seed_volume_file = 32;
     StatVolumeFileResult stat_volume_file = 33;
     ListDirectoryResult list_directory = 34;
+    DiskSpaceResult disk_space = 35;
   }
 }
 
@@ -534,13 +536,50 @@ message SnapshotDirResult {
 // prefix required). Symlinks are not followed. The walk is capped at
 // 1,000,000 entries — beyond that the op returns a RUNTIME error rather
 // than an unbounded scan of an attacker-grown tree.
+//
+// volume (protocol minor 19) measures a wildstone-owned Docker volume
+// instead, so a backup can size its sources before it runs. Exactly one
+// of path and volume is set.
 message MeasureUsage {
   string path = 1;
+  string volume = 2;
 }
 
 message MeasureUsageResult {
   uint64 total_bytes = 1;
   uint64 file_count = 2;
+}
+
+// DiskSpace reports the filesystem that holds a managed path or a
+// wildstone-owned Docker volume (protocol minor 19): its size, the space
+// still available to unprivileged writers, and which mount it is. Exactly
+// one of path and volume is set. Read-only; it never creates anything.
+//
+// It exists so a backup can refuse to fill a disk (ADR-W045 A3.1) and can
+// tell a NAS share that is mounted from the empty directory it would be
+// mounted over (A3.2): a path whose mount_point is the host's root
+// filesystem instead of the share is a backup of nothing.
+//
+// A path that does not exist yet is answered for its nearest existing
+// ancestor, with exists=false — a repository directory restic has not
+// created yet still has a filesystem it will be written to.
+message DiskSpace {
+  string path = 1;
+  string volume = 2;
+}
+
+message DiskSpaceResult {
+  uint64 total_bytes = 1;
+  uint64 free_bytes = 2;  // available to unprivileged writers (statfs f_bavail)
+  string mount_point = 3; // the mount point of the filesystem, from mountinfo
+  string fstype = 4;      // e.g. "ext4", "nfs4"
+  bool exists = 5;        // false: answered for the nearest existing ancestor
+  // The mount's source ("nas.example.internal:/media" for an NFS share)
+  // and its live options — per-mount and superblock options together —
+  // from mountinfo, so a declared share can be told from a different one
+  // mounted at the same place.
+  string source = 6;
+  repeated string options = 7;
 }
 
 // ---------------------------------------------------------------- files

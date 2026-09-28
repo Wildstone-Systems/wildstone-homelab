@@ -89,7 +89,7 @@ func (e *Engine) offsiteSpec(plan *resource.BackupPlanSpec, t *resource.BackupTa
 		mounts = append(mounts, resource.Mount{Source: plan.Repository, Target: "/repo"})
 	}
 	for _, v := range sources {
-		mounts = append(mounts, resource.Mount{Source: v, Target: "/backup/" + v, ReadOnly: true})
+		mounts = append(mounts, resource.Mount{Source: v, Target: sourceTarget(v), ReadOnly: true})
 	}
 	cmd := append([]string{}, command...)
 	if t.PathStyle {
@@ -109,21 +109,36 @@ func (e *Engine) offsiteSpec(plan *resource.BackupPlanSpec, t *resource.BackupTa
 // apply the off-site retention. Bounded by OffsiteTimeout rather than
 // the runner's default, because a first upload of a large library can
 // take days.
-func (e *Engine) runOffsite(ctx context.Context, r resource.Resource, desired []resource.Resource) error {
+//
+// direct backs the sources up straight into the off-site repository even
+// on route local-and-offsite: the fallback when the local copy had no
+// room (ADR-W045 A3.1). The same repository takes both, so later copies
+// carry on from there.
+func (e *Engine) runOffsite(ctx context.Context, r resource.Resource, desired []resource.Resource, direct bool) error {
 	spec := r.BackupPlan
 	name := r.Metadata.Name
 	o := spec.Offsite
+	route := o.Route
+	if direct {
+		route += ", direct: the local copy had no room"
+	}
 	return e.withProvenance(ctx, r, runtimedb.BackupRunOffsite,
-		fmt.Sprintf("off-site run: %s (%s -> BackupTarget %s)", name, o.Route, o.Target),
+		fmt.Sprintf("off-site run: %s (%s -> BackupTarget %s)", name, route, o.Target),
 		func(ctx context.Context) error {
 			t, err := findTarget(desired, r)
 			if err != nil {
 				return err
 			}
+			local := o.Route == resource.BackupRouteLocalAndOffsite
+			// A copy reads only the local repository; a direct or
+			// offsite-only backup reads only the sources.
+			copying := local && !direct
+			if err := e.checkMounts(ctx, r, desired, !copying, copying); err != nil {
+				return err
+			}
 			ctx, cancel := context.WithTimeout(ctx, e.offsiteTimeout())
 			defer cancel()
 			node := r.Metadata.Node
-			local := o.Route == resource.BackupRouteLocalAndOffsite
 
 			probe := e.offsiteSpec(spec, t, name, []string{"cat", "config"}, nil, false)
 			if err := e.Run.RunContainer(ctx, node, "offsite-"+name+"-probe", probe); err != nil {
@@ -133,19 +148,25 @@ func (e *Engine) runOffsite(ctx context.Context, r resource.Resource, desired []
 				// Matching chunker parameters is what keeps a copied
 				// snapshot deduplicated off-site: without them every
 				// copied file would be split differently and re-uploaded.
-				initCmd := []string{"init"}
+				initSpec := e.offsiteSpec(spec, t, name, []string{"init"}, nil, false)
 				if local {
-					initCmd = append(initCmd, "--copy-chunker-params")
+					initSpec = e.offsiteSpec(spec, t, name, []string{"init", "--copy-chunker-params"}, nil, true)
 				}
-				initSpec := e.offsiteSpec(spec, t, name, initCmd, nil, local)
-				if err := e.Run.RunContainer(ctx, node, "offsite-"+name+"-init", initSpec); err != nil {
+				err := e.Run.RunContainer(ctx, node, "offsite-"+name+"-init", initSpec)
+				if code, ok := exitCode(err); ok && code == resticExitNoRepo && local && direct {
+					// A direct run on a plan whose local copy never got
+					// made: no local chunker parameters to copy. A plain
+					// init still works; later copies just dedupe less.
+					err = e.Run.RunContainer(ctx, node, "offsite-"+name+"-init", e.offsiteSpec(spec, t, name, []string{"init"}, nil, false))
+				}
+				if err != nil {
 					return describe("off-site repository init", err)
 				}
 				e.log().Info("backup: initialized an off-site repository", "plan", name, "target", o.Target)
 			}
 
-			send, pass := e.offsiteSpec(spec, t, name, append([]string{"backup"}, sourceTargets(spec)...), spec.Volumes, false), "off-site backup pass"
-			if local {
+			send, pass := e.offsiteSpec(spec, t, name, append([]string{"backup"}, sourceTargets(spec)...), sources(spec), false), "off-site backup pass"
+			if local && !direct {
 				send, pass = e.offsiteSpec(spec, t, name, []string{"copy"}, nil, true), "off-site copy pass"
 			}
 			if err := e.Run.RunContainer(ctx, node, "offsite-"+name, send); err != nil {

@@ -111,7 +111,9 @@ func auditFields(op *wsv1.Operation) (arm string, fields []slog.Attr) {
 			slog.String("dest_path", o.SnapshotDir.GetDestPath()),
 		}
 	case *wsv1.Operation_MeasureUsage:
-		return "MeasureUsage", []slog.Attr{slog.String("path", o.MeasureUsage.GetPath())}
+		return "MeasureUsage", []slog.Attr{slog.String("path", o.MeasureUsage.GetPath()), slog.String("volume", o.MeasureUsage.GetVolume())}
+	case *wsv1.Operation_DiskSpace:
+		return "DiskSpace", []slog.Attr{slog.String("path", o.DiskSpace.GetPath()), slog.String("volume", o.DiskSpace.GetVolume())}
 	case *wsv1.Operation_ListBlockDevices:
 		return "ListBlockDevices", nil
 	case *wsv1.Operation_EnsureMount:

@@ -100,7 +100,14 @@ import (
 //	using any of them to an agent below this minor
 //	(resource.HardeningProtocolMinor), rather than letting an older
 //	agent apply it partially.
-const ProtocolMinor = 18
+//
+// 19: adds DiskSpace and MeasureUsage.volume (ADR-W045 A3.1/A3.2), so a
+//
+//	backup can refuse to fill the disk its local copy lives on and can
+//	tell a mounted NAS share from the empty directory under it. An older
+//	agent answers DiskSpace as an unknown operation; Keystone treats that
+//	as "cannot check" and, for a NAS path, refuses to run.
+const ProtocolMinor = 19
 
 // maxUpdateMsgBytes is the gRPC message size cap on both ends of the
 // session/join connections (ADR-W003 W5). SelfUpdate ships the new binary
