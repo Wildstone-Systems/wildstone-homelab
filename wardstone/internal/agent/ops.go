@@ -150,7 +150,12 @@ func (a *Agent) dispatchOp(ctx context.Context, opID string, op *wsv1.Operation)
 		}
 	case *wsv1.Operation_MeasureUsage:
 		var r *wsv1.OpResult_MeasureUsage
-		if r, oerr = a.measureUsage(o.MeasureUsage); oerr == nil {
+		if r, oerr = a.measureUsage(ctx, o.MeasureUsage); oerr == nil {
+			res.Result = r
+		}
+	case *wsv1.Operation_DiskSpace:
+		var r *wsv1.OpResult_DiskSpace
+		if r, oerr = a.diskSpace(ctx, o.DiskSpace); oerr == nil {
 			res.Result = r
 		}
 	case *wsv1.Operation_ListBlockDevices:

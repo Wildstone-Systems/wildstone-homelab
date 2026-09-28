@@ -39,6 +39,9 @@ const (
 	// copied to off-site (ADR-W045 A2). Owner-declared only: a package
 	// cannot ship one (capability.Expand refuses it).
 	KindBackupTarget Kind = "BackupTarget"
+	// KindNetworkMount is a NAS share mounted on a node (ADR-W045 A3.2),
+	// so backups and apps can read and write it under the mount root.
+	KindNetworkMount Kind = "NetworkMount"
 	KindConfigFile   Kind = "ConfigFile"
 	KindSeedFile     Kind = "SeedFile"
 	KindJob          Kind = "Job"
@@ -849,9 +852,19 @@ type BackupRetention struct {
 type BackupPlanSpec struct {
 	// Volumes are the source volume names, mounted read-only into the
 	// restic run container.
-	Volumes []string `yaml:"volumes"`
-	// Repository is the volume name holding the restic repository.
+	Volumes []string `yaml:"volumes,omitempty"`
+	// Paths are source folders on the node, such as a movie library on a
+	// NAS share (ADR-W045 A4): absolute paths under the node's managed
+	// prefix, mounted read-only. A plan needs at least one volume or path.
+	Paths []string `yaml:"paths,omitempty"`
+	// Repository holds the local restic repository: a volume name, or an
+	// absolute path on the node — a folder on a NAS share keeps the local
+	// copy off the host's own disk (ADR-W045 A3.2).
 	Repository string `yaml:"repository,omitempty"`
+	// Reserve is the free space the local repository's disk must keep,
+	// as a size ("50GiB") or a share of the disk ("15%"). Empty uses the
+	// larger of 10% and 20 GiB; it cannot be zero (ADR-W045 A3.1).
+	Reserve string `yaml:"reserve,omitempty"`
 	// PasswordSecret is a reference of the form secret/<name> to the
 	// repository password (ADR-W005 A2) — never a literal value. Only
 	// Wardstone materializes it (E8).
@@ -958,6 +971,40 @@ type BackupTargetSpec struct {
 	SecretKeySecret string `yaml:"secretKeySecret"`
 }
 
+// networkMountTypes is the closed set of NetworkMountSpec.Type values.
+// NFS only for now: an SMB share needs a password, and a mount option is
+// written verbatim into /etc/fstab, where a password would sit in plain
+// text for any reader of the file.
+var networkMountTypes = map[string]bool{"nfs": true, "nfs4": true}
+
+// nfsSourceRegexp is "host:/export": a host name or IPv4 address, then an
+// absolute export path. No whitespace or commas, which would split the
+// fstab line or smuggle in an option.
+var nfsSourceRegexp = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9.-]*:/[A-Za-z0-9._/-]*$`)
+
+// mountOptionRegexp mirrors the agent's own bound on a mount option.
+var mountOptionRegexp = regexp.MustCompile(`^[a-zA-Z0-9._=/-]+$`)
+
+// NetworkMountSpec is the spec for kind NetworkMount (ADR-W045 A3.2): an
+// NFS share the node mounts at Target and records in /etc/fstab, so it
+// is back after a reboot. The agent enforces its own boundaries on top —
+// Target under the mount root, nosuid and nodev always on, the fstab line
+// written only after the mount succeeded (ADR-W003 W6c).
+//
+// A backup path under Target is only trusted while the share is really
+// mounted there: the backup engine checks before every run, so a NAS that
+// is down is a failed backup, never a backup of the empty folder beneath.
+type NetworkMountSpec struct {
+	// Type is "nfs" or "nfs4".
+	Type string `yaml:"type"`
+	// Source is the share, "host:/export": "nas.example.internal:/volume1/media".
+	Source string `yaml:"source"`
+	// Target is where it is mounted: "/srv/wildstone/nas/media".
+	Target string `yaml:"target"`
+	// Options are extra mount options, such as "ro", "vers=4.1" or "soft".
+	Options []string `yaml:"options,omitempty"`
+}
+
 // Resource is the typed machine-layer record the Reconciler drives
 // (ADR-W004 A1). Exactly one of the Spec fields is populated, matching
 // Metadata's Kind (enforced by Validate and by the (de)serialization
@@ -981,6 +1028,8 @@ type Resource struct {
 	BackupPlan *BackupPlanSpec `yaml:"-"`
 	// BackupTarget is the spec for KindBackupTarget (ADR-W045 A2).
 	BackupTarget *BackupTargetSpec `yaml:"-"`
+	// NetworkMount is the spec for KindNetworkMount (ADR-W045 A3.2).
+	NetworkMount *NetworkMountSpec `yaml:"-"`
 	ConfigFile   *ConfigFileSpec   `yaml:"-"`
 	SeedFile     *SeedFileSpec     `yaml:"-"`
 	Job          *JobSpec          `yaml:"-"`
@@ -1096,6 +1145,12 @@ var registry = map[Kind]kindEntry{
 		// store of the node that runs the backups.
 		newSpec:    func() any { return &BackupTargetSpec{} },
 		validate:   validateBackupTarget,
+		nodeScoped: true,
+	},
+	KindNetworkMount: {
+		// Mounted on one node's filesystem.
+		newSpec:    func() any { return &NetworkMountSpec{} },
+		validate:   validateNetworkMount,
 		nodeScoped: true,
 	},
 	KindConfigFile: {
@@ -1222,6 +1277,7 @@ func (r *Resource) validateSpecExclusivity() error {
 		KindLdapGroup:    r.LdapGroup != nil,
 		KindBackupPlan:   r.BackupPlan != nil,
 		KindBackupTarget: r.BackupTarget != nil,
+		KindNetworkMount: r.NetworkMount != nil,
 		KindConfigFile:   r.ConfigFile != nil,
 		KindSeedFile:     r.SeedFile != nil,
 		KindAutomation:   r.Automation != nil,
@@ -1709,12 +1765,37 @@ func validateBackupPlan(r *Resource) error {
 	if p == nil {
 		return bad("spec", "backup plan spec missing")
 	}
-	if len(p.Volumes) == 0 {
-		return bad("spec.volumes", "must name at least one source volume")
+	if len(p.Volumes) == 0 && len(p.Paths) == 0 {
+		return bad("spec.volumes", "must name at least one source volume or path")
 	}
 	for i, v := range p.Volumes {
 		if v == "" {
 			return bad(fmt.Sprintf("spec.volumes[%d]", i), "must not be empty")
+		}
+	}
+	seen := map[string]bool{}
+	for i, pth := range p.Paths {
+		if msg := hostPathProblem(pth); msg != "" {
+			return bad(fmt.Sprintf("spec.paths[%d]", i), msg)
+		}
+		if seen[pth] {
+			return bad(fmt.Sprintf("spec.paths[%d]", i), "is listed twice")
+		}
+		seen[pth] = true
+	}
+	if strings.HasPrefix(p.Repository, "/") {
+		if msg := hostPathProblem(p.Repository); msg != "" {
+			return bad("spec.repository", msg)
+		}
+		for _, pth := range p.Paths {
+			if p.Repository == pth || strings.HasPrefix(p.Repository, pth+"/") || strings.HasPrefix(pth, p.Repository+"/") {
+				return bad("spec.repository", fmt.Sprintf("must not be inside a source path or contain one (%s): the backup would back itself up", pth))
+			}
+		}
+	}
+	if p.Reserve != "" {
+		if _, _, err := ParseReserve(p.Reserve); err != nil {
+			return bad("spec.reserve", err.Error())
 		}
 	}
 	if o := p.Offsite; o != nil && o.Route == BackupRouteOffsiteOnly {
@@ -1763,6 +1844,89 @@ func validateBackupPlan(r *Resource) error {
 		}
 		if err := validateRetention(o.Retention); err != "" {
 			return bad("spec.offsite.retention", err)
+		}
+	}
+	return nil
+}
+
+// hostPathProblem returns why a node path is unusable as a backup source
+// or repository, or "" when it is fine. The agent enforces the managed
+// prefix itself; this only refuses what no node could accept.
+func hostPathProblem(p string) string {
+	switch {
+	case !strings.HasPrefix(p, "/"):
+		return "must be an absolute path"
+	case path.Clean(p) != p:
+		return "must be a clean path (no trailing /, no . or .. segments)"
+	case p == "/":
+		return "must not be the root directory"
+	case strings.ContainsFunc(p, func(c rune) bool { return c < 0x20 || c == 0x7f }):
+		// Spaces are fine ("My Movies"): the path reaches Docker and
+		// restic as one argument, never through a shell.
+		return "must not contain control characters"
+	}
+	return ""
+}
+
+// ParseReserve reads a BackupPlan reserve: a size with a unit ("50GiB",
+// "500MB", "2TiB") or a share of the disk ("15%"). It returns exactly one
+// of bytes or percent as non-zero.
+func ParseReserve(s string) (bytes uint64, percent float64, err error) {
+	if strings.HasSuffix(s, "%") {
+		v, perr := strconv.ParseFloat(strings.TrimSuffix(s, "%"), 64)
+		if perr != nil || v <= 0 || v >= 100 {
+			return 0, 0, fmt.Errorf("must be a size such as 50GiB or a share such as 15%%, between 0 and 100%% exclusive")
+		}
+		return 0, v, nil
+	}
+	units := []struct {
+		suffix string
+		mult   float64
+	}{
+		{"TiB", 1 << 40}, {"GiB", 1 << 30}, {"MiB", 1 << 20},
+		{"TB", 1e12}, {"GB", 1e9}, {"MB", 1e6},
+	}
+	for _, u := range units {
+		if strings.HasSuffix(s, u.suffix) {
+			v, perr := strconv.ParseFloat(strings.TrimSuffix(s, u.suffix), 64)
+			if perr != nil || v <= 0 {
+				break
+			}
+			return uint64(v * u.mult), 0, nil
+		}
+	}
+	return 0, 0, fmt.Errorf("must be a size such as 50GiB, 500MB or 2TiB, or a share such as 15%%; it cannot be zero")
+}
+
+func validateNetworkMount(r *Resource) error {
+	m := r.NetworkMount
+	bad := func(field, msg string) error {
+		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: field, Msg: msg}
+	}
+	if m == nil {
+		return bad("spec", "network mount spec missing")
+	}
+	if !networkMountTypes[m.Type] {
+		return bad("spec.type", `must be "nfs" or "nfs4" (SMB is not supported yet: its password would sit in /etc/fstab)`)
+	}
+	if !nfsSourceRegexp.MatchString(m.Source) {
+		return bad("spec.source", `must be host:/export, such as nas.example.internal:/volume1/media`)
+	}
+	if msg := hostPathProblem(m.Target); msg != "" {
+		return bad("spec.target", msg)
+	}
+	if strings.ContainsAny(m.Target, " \t") {
+		// Unlike a backup path, the target is written into /etc/fstab,
+		// whose fields are whitespace-separated; the agent refuses it too.
+		return bad("spec.target", "must not contain spaces: it is written into /etc/fstab")
+	}
+	for i, o := range m.Options {
+		if !mountOptionRegexp.MatchString(o) {
+			return bad(fmt.Sprintf("spec.options[%d]", i), "must be one option of letters, digits, '.', '_', '=', '/' or '-' (no commas or spaces)")
+		}
+		key := strings.ToLower(strings.SplitN(o, "=", 2)[0])
+		if key == "password" || key == "pass" || key == "credentials" || key == "username" || key == "user" {
+			return bad(fmt.Sprintf("spec.options[%d]", i), "must not carry credentials: mount options are written to /etc/fstab in plain text")
 		}
 	}
 	return nil

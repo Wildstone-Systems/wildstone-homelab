@@ -31,6 +31,7 @@ import (
 	"log/slog"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -61,6 +62,10 @@ type Engine struct {
 	State *statefile.Store
 	DB    *runtimedb.DB
 	Run   Runner
+	// Agent answers the read-only DiskSpace and MeasureUsage ops the
+	// disk-space guard and NAS mount checks use (see guard.go). nil runs
+	// without them, as against an agent too old to answer.
+	Agent Applier
 	// ResticImage is the digest-pinned restic image every run uses —
 	// engine-level configuration, not per-plan, so one upgrade covers the
 	// fleet and a plan cannot smuggle in an arbitrary image.
@@ -183,16 +188,23 @@ func (e *Engine) start(ctx context.Context, done func([]RunReport)) (*sync.WaitG
 func (e *Engine) planWork(ctx context.Context, r resource.Resource, desired []resource.Resource) []RunReport {
 	spec, name := r.BackupPlan, r.Metadata.Name
 	var reports []RunReport
+	direct := false
 	if hasLocal(spec) {
 		if e.due(name, runtimedb.BackupRunBackup, scheduleIntervals[spec.Schedule]) {
-			reports = append(reports, report(name, runtimedb.BackupRunBackup, e.runBackup(ctx, r)))
+			err := e.runBackup(ctx, r, desired)
+			reports = append(reports, report(name, runtimedb.BackupRunBackup, err))
+			// No room for the local copy: a plan with an off-site copy
+			// backs up straight to it this time, so the data is still
+			// protected while the owner frees space (ADR-W045 A3.1).
+			var low *LowDiskError
+			direct = errors.As(err, &low) && spec.Offsite != nil
 		}
 		if e.due(name, runtimedb.BackupRunDrill, e.drillEvery()) {
 			reports = append(reports, report(name, runtimedb.BackupRunDrill, e.runDrill(ctx, r)))
 		}
 	}
-	if o := spec.Offsite; o != nil && e.due(name, runtimedb.BackupRunOffsite, scheduleIntervals[o.Schedule]) {
-		reports = append(reports, report(name, runtimedb.BackupRunOffsite, e.runOffsite(ctx, r, desired)))
+	if o := spec.Offsite; o != nil && (direct || e.due(name, runtimedb.BackupRunOffsite, scheduleIntervals[o.Schedule])) {
+		reports = append(reports, report(name, runtimedb.BackupRunOffsite, e.runOffsite(ctx, r, desired, direct)))
 	}
 	return reports
 }
@@ -256,21 +268,34 @@ func (e *Engine) within(plan string, kind runtimedb.BackupRunKind, status runtim
 	return e.now().Sub(last.StartedAt) < d, true
 }
 
-// runBackup executes one backup run: a probe pass (`restic cat config`,
-// read-only) that tells an existing repository from a missing one, an
-// init pass only when it is missing, a backup pass, and — when the plan
-// declares any retention — a forget --prune pass. Every pass must exit 0.
-func (e *Engine) runBackup(ctx context.Context, r resource.Resource) error {
+// runBackup executes one backup run: the NAS mount and disk-space checks
+// (guard.go), a probe pass (`restic cat config`, read-only) that tells an
+// existing repository from a missing one, an init pass only when it is
+// missing, a backup pass watched by the disk-space guard, and — when the
+// plan declares any retention — a forget --prune pass. Every pass must
+// exit 0. A run with no room returns a *LowDiskError.
+func (e *Engine) runBackup(ctx context.Context, r resource.Resource, desired []resource.Resource) error {
 	spec := r.BackupPlan
 	name := r.Metadata.Name
 	return e.withProvenance(ctx, r, runtimedb.BackupRunBackup,
-		fmt.Sprintf("backup run: %s (%d volume(s) -> %s)", name, len(spec.Volumes), spec.Repository),
+		fmt.Sprintf("backup run: %s (%d source(s) -> %s)", name, len(sources(spec)), spec.Repository),
 		func(ctx context.Context) error {
+			if err := e.checkMounts(ctx, r, desired, true, true); err != nil {
+				return err
+			}
+			guard, err := e.checkSpace(ctx, r)
+			if err != nil {
+				return err
+			}
 			if err := e.ensureRepository(ctx, r); err != nil {
 				return err
 			}
-			backupSpec := e.resticSpec(spec, append([]string{"backup"}, sourceTargets(spec)...), spec.Volumes)
-			if err := e.Run.RunContainer(ctx, r.Metadata.Node, "backup-"+name, backupSpec); err != nil {
+			backupSpec := e.resticSpec(spec, append([]string{"backup"}, sourceTargets(spec)...), sources(spec))
+			if err := e.Run.RunContainer(withGuard(ctx, guard), r.Metadata.Node, "backup-"+name, backupSpec); err != nil {
+				var low *LowDiskError
+				if errors.As(err, &low) {
+					return err
+				}
 				return describe("backup pass", err)
 			}
 			forgetArgs := retentionArgs(spec.Retention)
@@ -336,12 +361,20 @@ func (e *Engine) RunNow(ctx context.Context, planName string) error {
 		return err
 	}
 	if hasLocal(r.BackupPlan) {
-		if err := e.runBackup(ctx, r); err != nil {
+		err := e.runBackup(ctx, r, desired)
+		var low *LowDiskError
+		if errors.As(err, &low) && r.BackupPlan.Offsite != nil {
+			if oerr := e.runOffsite(ctx, r, desired, true); oerr != nil {
+				return fmt.Errorf("%v; the off-site backup instead also failed: %w", err, oerr)
+			}
+			return fmt.Errorf("%v; backed up straight off-site instead", err)
+		}
+		if err != nil {
 			return err
 		}
 	}
 	if r.BackupPlan.Offsite != nil {
-		return e.runOffsite(ctx, r, desired)
+		return e.runOffsite(ctx, r, desired, false)
 	}
 	return nil
 }
@@ -456,7 +489,7 @@ func (e *Engine) withProvenance(ctx context.Context, r resource.Resource, kind r
 func (e *Engine) resticSpec(spec *resource.BackupPlanSpec, command []string, withSources []string) resource.ContainerSpec {
 	mounts := []resource.Mount{{Source: spec.Repository, Target: "/repo"}}
 	for _, v := range withSources {
-		mounts = append(mounts, resource.Mount{Source: v, Target: "/backup/" + v, ReadOnly: true})
+		mounts = append(mounts, resource.Mount{Source: v, Target: sourceTarget(v), ReadOnly: true})
 	}
 	return resource.ContainerSpec{
 		Image: e.ResticImage,
@@ -470,13 +503,25 @@ func (e *Engine) resticSpec(spec *resource.BackupPlanSpec, command []string, wit
 	}
 }
 
+// sourceTarget is where a source appears inside the run container: a
+// volume at /backup/<name>, a node path at /backup<path> — so a snapshot
+// of /srv/wildstone/nas/movies restores to backup/srv/wildstone/nas/movies,
+// the same path it came from.
+func sourceTarget(src string) string {
+	if strings.HasPrefix(src, "/") {
+		return "/backup" + src
+	}
+	return "/backup/" + src
+}
+
 // sourceTargets returns the in-container backup paths for the plan's
-// volumes, sorted so the restic command line — and with it the container
-// spec hash — is deterministic for a given volume set.
+// sources, sorted so the restic command line — and with it the container
+// spec hash — is deterministic for a given source set.
 func sourceTargets(spec *resource.BackupPlanSpec) []string {
-	out := make([]string, 0, len(spec.Volumes))
-	for _, v := range spec.Volumes {
-		out = append(out, "/backup/"+v)
+	srcs := sources(spec)
+	out := make([]string, 0, len(srcs))
+	for _, v := range srcs {
+		out = append(out, sourceTarget(v))
 	}
 	sort.Strings(out)
 	return out

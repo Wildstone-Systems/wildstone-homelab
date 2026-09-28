@@ -170,6 +170,8 @@ func opArmFromOperation(op *wsv1.Operation) string {
 		return "SnapshotDir"
 	case *wsv1.Operation_MeasureUsage:
 		return "MeasureUsage"
+	case *wsv1.Operation_DiskSpace:
+		return "DiskSpace"
 	case *wsv1.Operation_ListBlockDevices:
 		return "ListBlockDevices"
 	case *wsv1.Operation_EnsureMount:
@@ -230,6 +232,8 @@ func opArmFromResult(res *wsv1.OpResult) string {
 		return "SnapshotDir"
 	case *wsv1.OpResult_MeasureUsage:
 		return "MeasureUsage"
+	case *wsv1.OpResult_DiskSpace:
+		return "DiskSpace"
 	case *wsv1.OpResult_ListBlockDevices:
 		return "ListBlockDevices"
 	case *wsv1.OpResult_EnsureMount:

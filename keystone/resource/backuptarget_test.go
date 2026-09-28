@@ -224,3 +224,96 @@ func TestBackupPlanOffsiteRejects(t *testing.T) {
 		}
 	}
 }
+
+func nasPlanRes() Resource {
+	return Resource{
+		ApiVersion: ApiVersion, Kind: KindBackupPlan,
+		Metadata: Metadata{Name: "movies", Owner: "owner", Node: "n1"},
+		BackupPlan: &BackupPlanSpec{
+			Paths:          []string{"/srv/wildstone/nas/media/My Movies"},
+			Repository:     "/srv/wildstone/nas/backups/movies",
+			PasswordSecret: "secret/restic-movies",
+			Schedule:       "weekly",
+			Reserve:        "50GiB",
+		},
+	}
+}
+
+// TestBackupPlanPathsAndReserve: NAS folders (spaces allowed) as sources,
+// a path as the repository, and a reserve; bad ones are named.
+func TestBackupPlanPathsAndReserve(t *testing.T) {
+	if r := nasPlanRes(); r.Validate() != nil {
+		err := r.Validate()
+		t.Fatalf("valid NAS plan rejected: %v", err)
+	}
+	for _, tc := range []struct {
+		name, field string
+		mut         func(*BackupPlanSpec)
+	}{
+		{"no sources", "spec.volumes", func(p *BackupPlanSpec) { p.Paths = nil }},
+		{"relative path", "spec.paths[0]", func(p *BackupPlanSpec) { p.Paths = []string{"nas/media"} }},
+		{"unclean path", "spec.paths[0]", func(p *BackupPlanSpec) { p.Paths = []string{"/srv/wildstone/nas/../etc"} }},
+		{"root", "spec.paths[0]", func(p *BackupPlanSpec) { p.Paths = []string{"/"} }},
+		{"control char", "spec.paths[0]", func(p *BackupPlanSpec) { p.Paths = []string{"/srv/a\nb"} }},
+		{"duplicate", "spec.paths[1]", func(p *BackupPlanSpec) { p.Paths = []string{"/srv/a", "/srv/a"} }},
+		{"repo inside source", "spec.repository", func(p *BackupPlanSpec) { p.Repository = "/srv/wildstone/nas/media/My Movies/.repo" }},
+		{"repo holds source", "spec.repository", func(p *BackupPlanSpec) { p.Repository = "/srv/wildstone/nas/media" }},
+		{"zero reserve", "spec.reserve", func(p *BackupPlanSpec) { p.Reserve = "0GiB" }},
+		{"bad reserve", "spec.reserve", func(p *BackupPlanSpec) { p.Reserve = "lots" }},
+		{"reserve 100%", "spec.reserve", func(p *BackupPlanSpec) { p.Reserve = "100%" }},
+	} {
+		r := nasPlanRes()
+		tc.mut(r.BackupPlan)
+		err := r.Validate()
+		if err == nil || !strings.Contains(err.Error(), tc.field) {
+			t.Errorf("%s: err = %v, want %s named", tc.name, err, tc.field)
+		}
+	}
+	for in, want := range map[string]uint64{"50GiB": 50 << 30, "2TiB": 2 << 40, "500MB": 500e6, "1.5GiB": 3 << 29} {
+		if b, _, err := ParseReserve(in); err != nil || b != want {
+			t.Errorf("ParseReserve(%q) = %d, %v; want %d", in, b, err, want)
+		}
+	}
+	if _, pct, err := ParseReserve("15%"); err != nil || pct != 15 {
+		t.Errorf("ParseReserve(15%%) = %v, %v", pct, err)
+	}
+}
+
+func nfsMount() Resource {
+	return Resource{
+		ApiVersion: ApiVersion, Kind: KindNetworkMount,
+		Metadata: Metadata{Name: "media", Owner: "owner", Node: "n1"},
+		NetworkMount: &NetworkMountSpec{Type: "nfs4", Source: "nas.example.internal:/volume1/media",
+			Target: "/srv/wildstone/nas/media", Options: []string{"ro", "vers=4.1", "soft"}},
+	}
+}
+
+// TestNetworkMountValidates: NFS shares in, SMB and anything that could
+// corrupt /etc/fstab or leak a password into it out.
+func TestNetworkMountValidates(t *testing.T) {
+	if r := nfsMount(); r.Validate() != nil {
+		err := r.Validate()
+		t.Fatalf("valid mount rejected: %v", err)
+	}
+	for _, tc := range []struct {
+		name, field string
+		mut         func(*NetworkMountSpec)
+	}{
+		{"smb", "spec.type", func(m *NetworkMountSpec) { m.Type = "cifs" }},
+		{"no export", "spec.source", func(m *NetworkMountSpec) { m.Source = "nas.example.internal" }},
+		{"source with space", "spec.source", func(m *NetworkMountSpec) { m.Source = "nas:/my share" }},
+		{"source with comma", "spec.source", func(m *NetworkMountSpec) { m.Source = "nas:/a,rw" }},
+		{"relative target", "spec.target", func(m *NetworkMountSpec) { m.Target = "nas/media" }},
+		{"target with space", "spec.target", func(m *NetworkMountSpec) { m.Target = "/srv/wildstone/my media" }},
+		{"option with comma", "spec.options[0]", func(m *NetworkMountSpec) { m.Options = []string{"ro,exec"} }},
+		{"password option", "spec.options[0]", func(m *NetworkMountSpec) { m.Options = []string{"password=REPLACED-x"} }},
+		{"credentials option", "spec.options[0]", func(m *NetworkMountSpec) { m.Options = []string{"credentials=/root/.smb"} }},
+	} {
+		r := nfsMount()
+		tc.mut(r.NetworkMount)
+		err := r.Validate()
+		if err == nil || !strings.Contains(err.Error(), tc.field) {
+			t.Errorf("%s: err = %v, want %s named", tc.name, err, tc.field)
+		}
+	}
+}

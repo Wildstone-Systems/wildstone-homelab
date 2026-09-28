@@ -879,6 +879,7 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 		State:       state,
 		DB:          db,
 		Run:         &backup.ApplierRunner{Applier: &reconcile.GatewayApplier{Gateway: gw}},
+		Agent:       &reconcile.GatewayApplier{Gateway: gw},
 		ResticImage: resticImage,
 		Log:         log,
 	}
@@ -1523,6 +1524,7 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	apiSrv.BackupRun = bak.RunNow // on-demand backup endpoints (ADR-W015 A3)
 	apiSrv.BackupRestore = bak.RestoreAlongside
 	apiSrv.BackupRestoreOffsite = bak.RestoreOffsite
+	apiSrv.BackupPreflight = bak.Preflight
 
 	// Butler host (ADR-W017 A4): build the configured provider, run the
 	// tool-reliability probe once at startup, and wire the ask endpoint in

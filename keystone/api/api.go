@@ -30,6 +30,7 @@ import (
 	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
 	"github.com/chickenrat17/wildstone-homelab/keystone/reconcile"
 	"github.com/chickenrat17/wildstone-homelab/keystone/redact"
+	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 	"github.com/chickenrat17/wildstone-homelab/keystone/speech"
 	"github.com/chickenrat17/wildstone-homelab/keystone/statefile"
@@ -285,6 +286,9 @@ type Server struct {
 	// BackupRestoreOffsite restores from a plan's off-site copy
 	// (ADR-W045 A3); POST .../restore?from=offsite.
 	BackupRestoreOffsite func(ctx context.Context, plan string) error
+	// BackupPreflight checks a proposal's BackupPlans fit their node's
+	// disk before a plan is recorded (ADR-W045 A3.1); nil skips it.
+	BackupPreflight func(puts []resource.Resource) error
 
 	// ConsoleEntryWindow and ConsoleStepUpWindow are how old a Console
 	// authentication may be to stay in the Console, and to perform a

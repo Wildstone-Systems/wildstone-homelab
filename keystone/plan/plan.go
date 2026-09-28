@@ -192,9 +192,13 @@ var kindOrder = map[resource.Kind]int{
 	// Ingress before everything: the base Caddyfile and every Route
 	// fragment are rendered from its posture, so a node that gains an
 	// ingress must have it recorded before anything reads it.
-	resource.KindIngress:    0,
-	resource.KindVolume:     1,
-	resource.KindConfigFile: 2,
+	resource.KindIngress: 0,
+	resource.KindVolume:  1,
+	// NetworkMount with Volume: it is storage something else reads — a
+	// backup's source or repository path, an app's bind mount — so it is
+	// mounted before them.
+	resource.KindNetworkMount: 1,
+	resource.KindConfigFile:   2,
 	// SeedFile with ConfigFile: after Volume, because it writes INTO one,
 	// and before Container, because the whole point is to land before the
 	// application first reads its config.
@@ -390,6 +394,8 @@ func specEqual(a, b resource.Resource) bool {
 		return backupPlanEqual(a.BackupPlan, b.BackupPlan)
 	case resource.KindBackupTarget:
 		return a.BackupTarget != nil && b.BackupTarget != nil && *a.BackupTarget == *b.BackupTarget
+	case resource.KindNetworkMount:
+		return a.NetworkMount != nil && b.NetworkMount != nil && reflect.DeepEqual(a.NetworkMount, b.NetworkMount)
 	case resource.KindConfigFile:
 		return a.ConfigFile != nil && b.ConfigFile != nil && *a.ConfigFile == *b.ConfigFile
 	case resource.KindSeedFile:
@@ -500,7 +506,23 @@ func backupPlanEqual(a, b *resource.BackupPlanSpec) bool {
 		a.Schedule == b.Schedule &&
 		a.Retention == b.Retention &&
 		stringSliceEqual(a.Volumes, b.Volumes) &&
+		stringSliceEqual(a.Paths, b.Paths) &&
+		a.Reserve == b.Reserve &&
 		offsiteEqual(a.Offsite, b.Offsite)
+}
+
+// subset reports whether every element of a is also in b.
+func subset(a, b []string) bool {
+	in := make(map[string]bool, len(b))
+	for _, x := range b {
+		in[x] = true
+	}
+	for _, x := range a {
+		if !in[x] {
+			return false
+		}
+	}
+	return true
 }
 
 func offsiteEqual(a, b *resource.BackupOffsite) bool {
@@ -711,13 +733,32 @@ func grade(action Action, want, have resource.Resource) (RiskGrade, string) {
 		if action == ActionUpdate && have.BackupPlan != nil {
 			haveOff = have.BackupPlan.Offsite
 		}
+		sourcesAdded := false
+		if action == ActionUpdate && have.BackupPlan != nil {
+			sourcesAdded = !subset(want.BackupPlan.Volumes, have.BackupPlan.Volumes) || !subset(want.BackupPlan.Paths, have.BackupPlan.Paths)
+		}
 		switch {
 		case wantOff != nil && (haveOff == nil || haveOff.Target != wantOff.Target || haveOff.Route != wantOff.Route):
 			return RiskHigh, fmt.Sprintf("sends these volumes off-site to BackupTarget %q (%s), encrypted before upload", wantOff.Target, wantOff.Route)
+		case wantOff != nil && sourcesAdded:
+			return RiskHigh, fmt.Sprintf("adds data to what goes off-site to BackupTarget %q, encrypted before upload", wantOff.Target)
 		case wantOff == nil && haveOff != nil:
 			return RiskMedium, "off-site copy turned off: nothing is deleted from the bucket, but new backups stop going there"
 		}
 		return RiskLow, "backup schedule declaration only; runs execute with their own provenance (ADR-W011 A4)"
+	case resource.KindNetworkMount:
+		// Mounting a declared NAS share under the mount root is the benign
+		// direction — the agent forces nosuid/nodev, confines the target,
+		// and writes fstab only after the mount worked — and Low is what
+		// lets a share that dropped (a NAS reboot) be mounted again
+		// unattended. A human still approved the share when it was first
+		// declared. Changing one is Medium: the fstab entry changes, and
+		// a share already mounted keeps the old settings until it is
+		// remounted. There is no unmount op, so a delete never happens.
+		if action == ActionUpdate {
+			return RiskMedium, "NAS share settings changed: the fstab entry is updated; a share already mounted keeps its old settings until the next remount or reboot"
+		}
+		return RiskLow, "mounts the NAS share under the mount root (nosuid, nodev) and records it in /etc/fstab"
 	case resource.KindBackupTarget:
 		// High on create and change although the declaration itself
 		// moves nothing: it decides where household data may leave the

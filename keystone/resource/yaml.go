@@ -59,6 +59,8 @@ func (r *Resource) specOf() any {
 		return r.BackupPlan
 	case KindBackupTarget:
 		return r.BackupTarget
+	case KindNetworkMount:
+		return r.NetworkMount
 	case KindConfigFile:
 		return r.ConfigFile
 	case KindSeedFile:
@@ -141,6 +143,8 @@ func (r *Resource) UnmarshalYAML(value *yaml.Node) error {
 		r.BackupPlan = spec.(*BackupPlanSpec)
 	case KindBackupTarget:
 		r.BackupTarget = spec.(*BackupTargetSpec)
+	case KindNetworkMount:
+		r.NetworkMount = spec.(*NetworkMountSpec)
 	case KindConfigFile:
 		r.ConfigFile = spec.(*ConfigFileSpec)
 	case KindSeedFile:

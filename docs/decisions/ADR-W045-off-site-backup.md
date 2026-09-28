@@ -1,8 +1,9 @@
 # ADR-W045: Off-site backup to S3-compatible storage
 
 - **Status:** accepted by the owner on 2026-09-28, including the A5
-  amendments. Being implemented under #407: I1 (#413), I2 (#414) and
-  I3 (#415) are done — off-site backups work end to end from the CLI.
+  amendments. Being implemented under #407: I1 (#413), I2 (#414),
+  I3 (#415), I4 (#416) and I5 (#417) are done — off-site backups, the
+  disk-space guard and NAS shares work end to end from the CLI.
 - **Issue:** [#407](https://github.com/chickenrat17/wildstone-homelab/issues/407).
   Audit: [`docs/design/issue-407-offsite-backup-audit.md`](../design/issue-407-offsite-backup-audit.md).
 - **Builds on:** ADR-W011 A4 (backup engine), ADR-W012 (secrets path),
@@ -146,13 +147,21 @@ three points.
    marked failed. Stopping restic mid-backup is safe: the partial data
    is removed by the next prune.
 
+- **A disk already past its reserve** still runs backups whose
+  estimated growth is at most half of what is left, and the in-run floor
+  becomes half the free space. Refusing every backup on a well-used host
+  the day it upgraded would protect nothing.
 - **Early warning.** The morning report shows each local repo's growth
   trend: "local copy of *movies* will reach the reserve in ~20 days".
+  (Moved to I7, with the other morning-report alerts.)
 
 ### A3.2. NAS shares as sources and repo locations
 
-- A NAS share is attached with the existing `EnsureMount` op (NFS/SMB),
-  under the managed mount root (`/srv/wildstone/...`).
+- A NAS share is a `NetworkMount` resource, applied with the existing
+  `EnsureMount` op under the managed mount root (`/srv/wildstone/...`).
+  NFS only for now: SMB needs a password, which `/etc/fstab` would hold
+  in plain text. Mounting a declared share is Low, so a share that
+  dropped is re-mounted unattended; changing one is Medium.
 - A plan's `paths` may point into such a mount, so NAS data is read over
   the network and never stored on the host.
 - A plan's local `repository` may be a path on such a mount, not only a

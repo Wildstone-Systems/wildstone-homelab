@@ -13,6 +13,7 @@ export type Kind =
   "Ingress" |
   "BackupPlan" |
   "BackupTarget" |
+  "NetworkMount" |
   "ConfigFile" |
   "SeedFile" |
   "Job" |
@@ -133,8 +134,10 @@ export interface BackupOffsite {
 }
 
 export interface BackupPlanSpec {
-  volumes: string[];
+  volumes?: string[];
+  paths?: string[];
   repository?: string;
+  reserve?: string;
   passwordSecret?: string;
   schedule?: string;
   retention?: BackupRetention;
@@ -151,6 +154,13 @@ export interface BackupTargetSpec {
   insecureHTTP?: boolean;
   accessKeySecret: string;
   secretKeySecret: string;
+}
+
+export interface NetworkMountSpec {
+  type: string;
+  source: string;
+  target: string;
+  options?: string[];
 }
 
 export interface ConfigFileSpec {
@@ -272,6 +282,7 @@ export type Spec =
   IngressSpec |
   BackupPlanSpec |
   BackupTargetSpec |
+  NetworkMountSpec |
   ConfigFileSpec |
   SeedFileSpec |
   JobSpec |
@@ -299,6 +310,7 @@ export interface SpecByKind {
   Ingress: IngressSpec;
   BackupPlan: BackupPlanSpec;
   BackupTarget: BackupTargetSpec;
+  NetworkMount: NetworkMountSpec;
   ConfigFile: ConfigFileSpec;
   SeedFile: SeedFileSpec;
   Job: JobSpec;
