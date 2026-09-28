@@ -120,6 +120,11 @@ func managedConfigContents(managedPrefix string, desiredByKey map[resKey]resourc
 	out[homepageSettingsPath(managedPrefix)] = string(renderHomepageSettings(desired))
 	out[homepageWidgetsPath(managedPrefix)] = string(renderHomepageWidgets())
 	out[homepageBookmarksPath(managedPrefix)] = string(renderHomepageBookmarks())
+	// The Matrix bot registrations. Synapse reads its application services
+	// once, at start, and the Job that installs them re-runs only when its
+	// digest moves — so adding or removing a bot reaches the homeserver by
+	// exactly this line, like a group reaches LLDAP by the two above.
+	out[matrixAppServicesPath(managedPrefix)] = string(renderMatrixAppServices(desired))
 
 	return out
 }

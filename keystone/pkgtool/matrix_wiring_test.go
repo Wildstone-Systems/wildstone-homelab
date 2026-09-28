@@ -6,12 +6,16 @@ package pkgtool
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/chickenrat17/wildstone-homelab/keystone/capability"
+	"github.com/chickenrat17/wildstone-homelab/keystone/pkgspec"
 	"github.com/chickenrat17/wildstone-homelab/keystone/plan"
 	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
 )
@@ -335,5 +339,161 @@ func TestElementRouteIsPrivateAndBrowserOnly(t *testing.T) {
 	web := elementResource(t, resource.KindContainer, "element-web").Container
 	if port := web.Env["ELEMENT_WEB_PORT"]; route.Upstream != "container/element-web:"+port {
 		t.Errorf("Element route points at %q but nginx listens on ELEMENT_WEB_PORT=%q", route.Upstream, port)
+	}
+}
+
+// A chat-matrix bot on the household's own homeserver is an application
+// service (ADR-W033 B7.2). The catalog walk renders chat-matrix with its
+// example homeserver_url, i.e. the external posture, so these render the
+// local one themselves and hold it to what matrix-synapse installs.
+
+func expandChatMatrix(t *testing.T, homeserverURL string) []resource.Resource {
+	t.Helper()
+	var all []*pkgspec.Package
+	var chat *pkgspec.Package
+	entries, err := os.ReadDir("../../packages")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		p, err := pkgspec.Load(filepath.Join("../../packages", e.Name(), "package.yaml"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		all = append(all, p)
+		if p.Metadata.Name == "chat-matrix" {
+			chat = p
+		}
+	}
+	rendered, err := capability.NewEngine().Expand(chat, map[string]string{
+		pkgspec.InstanceParam: "joan",
+		"node":                "n1",
+		"keystone_url":        "http://100.64.0.1:9441",
+		"homeserver_url":      homeserverURL,
+		"display_name":        "Joan",
+	}, capability.NewCatalog(all...))
+	if err != nil {
+		t.Fatalf("expanding chat-matrix with homeserver_url=%q: %v", homeserverURL, err)
+	}
+	return rendered
+}
+
+func findResource(rs []resource.Resource, kind resource.Kind, name string) (resource.Resource, bool) {
+	for _, r := range rs {
+		if r.Kind == kind && r.Metadata.Name == name {
+			return r, true
+		}
+	}
+	return resource.Resource{}, false
+}
+
+func TestLocalMatrixBotIsAnApplicationService(t *testing.T) {
+	bot := expandChatMatrix(t, "")
+	const capName = "chat-matrix-joan"
+	reg, ok := findResource(bot, resource.KindMatrixAppService, capName)
+	if !ok {
+		t.Fatal("a bot on the household's homeserver declares no MatrixAppService")
+	}
+	adapter, ok := findResource(bot, resource.KindContainer, capName)
+	if !ok {
+		t.Fatal("chat-matrix renders no adapter container")
+	}
+	env := adapter.Container.Env
+	if env["MATRIX_ACCESS_TOKEN"] != reg.MatrixAppService.AsTokenRef {
+		t.Errorf("the adapter presents %q but is registered with %q", env["MATRIX_ACCESS_TOKEN"], reg.MatrixAppService.AsTokenRef)
+	}
+	if env["MATRIX_APPSERVICE_LOCALPART"] != reg.MatrixAppService.BotLocalpart {
+		t.Errorf("the adapter acts as %q but is registered as %q", env["MATRIX_APPSERVICE_LOCALPART"], reg.MatrixAppService.BotLocalpart)
+	}
+	if env["MATRIX_DISPLAY_NAME"] != "Joan" {
+		t.Errorf("display name is %q, want the Agent's name", env["MATRIX_DISPLAY_NAME"])
+	}
+	if reg.Metadata.Node != adapter.Metadata.Node {
+		t.Errorf("registration is on %q but the bot runs on %q", reg.Metadata.Node, adapter.Metadata.Node)
+	}
+	// The adapter reaches Synapse by container name, so it must be the
+	// name and port the Synapse Route already proxies to.
+	synapseRoute := matrixResource(t, resource.KindRoute, "matrix").Route
+	if want := "http://" + strings.TrimPrefix(synapseRoute.Upstream, "container/"); env["MATRIX_HOMESERVER"] != want {
+		t.Errorf("the adapter dials %q but Synapse listens at %q", env["MATRIX_HOMESERVER"], want)
+	}
+	// Both tokens are generated on the node: nobody pastes them, and a
+	// provided secret would wait for a value that never comes.
+	for _, ref := range []string{reg.MatrixAppService.AsTokenRef, reg.MatrixAppService.HsTokenRef} {
+		secret, ok := findResource(bot, resource.KindSecret, strings.TrimPrefix(ref, "secret/"))
+		if !ok {
+			t.Errorf("%s is referenced but not declared", ref)
+			continue
+		}
+		if secret.Secret.Provided {
+			t.Errorf("%s is provided; on the household's homeserver it must be generated", ref)
+		}
+	}
+}
+
+func TestExternalMatrixBotIsUnchanged(t *testing.T) {
+	bot := expandChatMatrix(t, "https://matrix.example.com")
+	for _, r := range bot {
+		if r.Kind == resource.KindMatrixAppService {
+			t.Fatal("a bot on another homeserver declares an application service on ours")
+		}
+	}
+	token, ok := findResource(bot, resource.KindSecret, "chat-matrix-joan-token")
+	if !ok || !token.Secret.Provided {
+		t.Fatal("a bot on another homeserver must use the token the Owner pasted")
+	}
+	adapter, _ := findResource(bot, resource.KindContainer, "chat-matrix-joan")
+	if _, ok := adapter.Container.Env["MATRIX_APPSERVICE_LOCALPART"]; ok {
+		t.Error("a bot on another homeserver tries to register itself as an application service")
+	}
+	if adapter.Container.Env["MATRIX_HOMESERVER"] != "https://matrix.example.com" {
+		t.Errorf("MATRIX_HOMESERVER = %q", adapter.Container.Env["MATRIX_HOMESERVER"])
+	}
+}
+
+func TestSynapseInstallsBotRegistrationsBeforeItStarts(t *testing.T) {
+	job := matrixResource(t, resource.KindJob, "matrix-appservices-install").Job.Run
+	synapse := matrixResource(t, resource.KindContainer, "matrix-synapse").Container
+	script := matrixResource(t, resource.KindConfigFile, "matrix-appservices-install-script").ConfigFile
+	startup := matrixResource(t, resource.KindConfigFile, "matrix-oidc-start").ConfigFile.Content
+
+	if !mountsVolume(&job, "matrix-data", "/data") || !mountsVolume(synapse, "matrix-data", "/data") {
+		t.Fatal("the install Job and Synapse do not share matrix-data at /data")
+	}
+	if !mountsVolume(&job, "/etc/wildstone/matrix-homeserver", "/etc/wildstone/matrix-homeserver") {
+		t.Fatal("the install Job cannot see the merged registrations Keystone renders")
+	}
+	if !slices.Contains(job.Command, "/etc/wildstone/matrix-homeserver/"+script.Filename) {
+		t.Errorf("the install Job runs %v, not its own script %s", job.Command, script.Filename)
+	}
+	for _, want := range []string{
+		"src=/etc/wildstone/matrix-homeserver/appservices.reg",
+		"dst=/data/appservices",
+		"chown -R 991:991",
+		"/^# registration: /",
+	} {
+		if !strings.Contains(script.Content, want) {
+			t.Errorf("install script is missing %q", want)
+		}
+	}
+	if !strings.Contains(startup, `config["app_service_config_files"] = sorted(`) ||
+		!strings.Contains(startup, `Path("/data/appservices").glob("*.yaml")`) {
+		t.Error("Synapse's startup module does not list the installed registrations")
+	}
+
+	installAt, runtimeAt := -1, -1
+	for i, step := range plan.Diff(matrixPackage(t), nil).Steps {
+		switch step.Name {
+		case "matrix-appservices-install":
+			installAt = i
+		case "matrix-synapse":
+			runtimeAt = i
+		}
+	}
+	if installAt < 0 || runtimeAt < 0 || installAt >= runtimeAt {
+		t.Errorf("fresh-install plan puts the registration install at %d and Synapse at %d; the install must be first", installAt, runtimeAt)
 	}
 }

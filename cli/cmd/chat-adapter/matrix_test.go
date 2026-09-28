@@ -458,3 +458,133 @@ func TestBothTransportsSatisfyTheContract(t *testing.T) {
 	var _ Transport = (*telegram)(nil)
 	var _ Transport = (*matrix)(nil)
 }
+
+// An application-service bot (ADR-W033 B7.2) registers its own user before
+// it asks who it is, accepts that the user already exists, and names
+// itself only when its name is wrong.
+func TestMatrixAppserviceBotRegistersAndNamesItself(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		registerCode  int
+		registerBody  string
+		currentName   string
+		wantErr       bool
+		wantNameWrite bool
+	}{
+		{"first start", 200, `{"user_id":"@wildstone-joan:example.org"}`, "wildstone-joan", false, true},
+		{"restart", 400, `{"errcode":"M_USER_IN_USE","error":"User ID already taken."}`, "Joan", false, false},
+		{"refused", 403, `{"errcode":"M_EXCLUSIVE","error":"This user ID is reserved by an application service."}`, "", true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var registered map[string]any
+			var nameWritten string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case r.URL.Path == "/_matrix/client/v3/register":
+					json.NewDecoder(r.Body).Decode(&registered) //nolint:errcheck // test fake
+					w.WriteHeader(tc.registerCode)
+					w.Write([]byte(tc.registerBody)) //nolint:errcheck // test fake
+				case strings.HasSuffix(r.URL.Path, "/account/whoami"):
+					// The registration's token alone is its sender.
+					w.Write([]byte(`{"user_id":"@wildstone-joan-as:example.org"}`)) //nolint:errcheck // test fake
+				case strings.HasSuffix(r.URL.Path, "/displayname") && r.URL.Query().Get("user_id") != "@wildstone-joan:example.org":
+					t.Errorf("display name %s not made as the bot: %s", r.Method, r.URL)
+				case strings.HasSuffix(r.URL.Path, "/displayname") && r.Method == http.MethodGet:
+					json.NewEncoder(w).Encode(map[string]string{"displayname": tc.currentName}) //nolint:errcheck // test fake
+				case strings.HasSuffix(r.URL.Path, "/displayname") && r.Method == http.MethodPut:
+					var body map[string]string
+					json.NewDecoder(r.Body).Decode(&body) //nolint:errcheck // test fake
+					nameWritten = body["displayname"]
+					w.Write([]byte(`{}`)) //nolint:errcheck // test fake
+				default:
+					t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+				}
+			}))
+			defer srv.Close()
+			m := &matrix{homeserver: srv.URL, token: "as-tok", timeout: time.Second, http: srv.Client(),
+				appserviceLocalpart: "wildstone-joan", displayName: "Joan"}
+
+			id, _, err := m.Identify(context.Background())
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("a refused registration was treated as success")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if id != "@wildstone-joan:example.org" {
+				t.Errorf("Identify = %q", id)
+			}
+			if registered["type"] != "m.login.application_service" || registered["username"] != "wildstone-joan" || registered["inhibit_login"] != true {
+				t.Errorf("registration request = %v", registered)
+			}
+			if tc.wantNameWrite && nameWritten != "Joan" {
+				t.Errorf("display name written = %q, want Joan", nameWritten)
+			}
+			if !tc.wantNameWrite && nameWritten != "" {
+				t.Errorf("display name rewritten to %q although it was already right", nameWritten)
+			}
+		})
+	}
+}
+
+// A bot on somebody else's homeserver never tries to register itself.
+func TestMatrixTokenBotDoesNotRegister(t *testing.T) {
+	srv, paths := matrixServer(t, matrixSync)
+	m := &matrix{homeserver: srv.URL, token: "tok", timeout: time.Second, http: srv.Client()}
+	if _, _, err := m.Identify(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range *paths {
+		if strings.Contains(p, "/register") || strings.Contains(p, "/displayname") {
+			t.Errorf("a token bot called %s", p)
+		}
+	}
+}
+
+// Synapse refuses /sync to a registration's sender, so an
+// application-service bot acts as its own user on every request after it
+// has learned the server name: sync, join, send and media alike.
+func TestMatrixAppserviceBotActsAsItsUser(t *testing.T) {
+	var unmasked []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/_matrix/client/v3/register":
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(`{"errcode":"M_USER_IN_USE"}`)) //nolint:errcheck // test fake
+			return
+		case strings.HasSuffix(r.URL.Path, "/account/whoami"):
+			w.Write([]byte(`{"user_id":"@wildstone-joan-as:example.org"}`)) //nolint:errcheck // test fake
+			return
+		}
+		if r.URL.Query().Get("user_id") != "@wildstone-joan:example.org" {
+			unmasked = append(unmasked, r.Method+" "+r.URL.String())
+		}
+		switch {
+		case strings.Contains(r.URL.Path, "/sync"):
+			w.Write([]byte(`{"next_batch":"s1","rooms":{"join":{}}}`)) //nolint:errcheck // test fake
+		default:
+			w.Write([]byte(`{"event_id":"$sent"}`)) //nolint:errcheck // test fake
+		}
+	}))
+	defer srv.Close()
+	m := &matrix{homeserver: srv.URL, token: "as-tok", timeout: time.Second, http: srv.Client(),
+		appserviceLocalpart: "wildstone-joan"}
+	if id, _, err := m.Identify(context.Background()); err != nil || id != "@wildstone-joan:example.org" {
+		t.Fatalf("Identify = %q, %v; want the bot, not the registration's sender", id, err)
+	}
+	if _, err := m.Receive(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Send(context.Background(), "!room:example.org", "hello"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := m.download(context.Background(), "/_matrix/client/v1/media/download/example.org/abc", 1<<10); err != nil {
+		t.Fatal(err)
+	}
+	if len(unmasked) != 0 {
+		t.Errorf("requests made as the registration's sender, which Synapse refuses to sync: %v", unmasked)
+	}
+}

@@ -80,16 +80,23 @@ separate Matrix password to maintain.
 
 ## Connect an Agent
 
-Install an instance of `chat-matrix` for the Agent and use this homeserver's
-route as `homeserver_url`. The adapter still requires an access token for a
-dedicated Matrix account. Create/sign in to that service identity through the
-normal Wildstone identity flow, obtain an access token with a Matrix client,
-and provide it in the connection form. Keep that client session active: logging
-it out revokes the token the adapter uses. Invite the bot to a **new room with
-encryption disabled**; the adapter accepts Matrix room invitations
-automatically, while Keystone's normal invite-key and account-binding checks
-still decide who may speak to the Agent. The adapter boundary remains the same
-whether the homeserver is local or external.
+In the Console, open **Chat**, choose **Matrix** and keep **This household's
+Matrix server** selected. Pick the Agent and the Person; there is nothing to
+paste. Keystone installs a `chat-matrix` bot on the machine running Synapse
+and registers it with Synapse as an application service (ADR-W033 B7.2).
+The bot is the user `@wildstone-<name>:<server_name>`, and the Console says
+which. It has no password and no household account, so it cannot sign in to
+Element or to anything else the household runs. Synapse restarts once to load
+the new bot.
+
+Then invite the bot to a **new room with encryption disabled**. The adapter
+accepts room invitations automatically, and Keystone's normal invite-key and
+account-binding checks still decide who may speak to the Agent.
+
+A bot on another homeserver, or on another machine, uses **Another server**:
+give that homeserver's address and an access token for a dedicated account
+there, and keep the client session that token came from signed in, since
+signing out revokes it.
 
 `chat-matrix` does not implement Matrix end-to-end encryption. It ignores
 encrypted event contents and emits a clear adapter diagnostic naming the room,
@@ -107,7 +114,6 @@ This first slice deliberately does not include:
 
 - federation or public Matrix ingress;
 - TURN for voice/video calls;
-- automatic bot-account or access-token provisioning;
 - database-consistent pre/post backup hooks (the current package backup
   contract snapshots declared volumes, as it does for other PostgreSQL-backed
   packages).

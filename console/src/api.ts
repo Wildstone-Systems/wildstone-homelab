@@ -2197,6 +2197,7 @@ export const api = {
     credentials: Record<string, string>;
     node?: string;
     bot?: string;
+    local?: boolean;
   }) => call<ConnectionCreated>("POST", "/api/v1/connections", req),
   chatBots: () => call<{ bots: ChatBot[] }>("GET", "/api/v1/connections"),
   removeChatBot: (capability: string) =>
@@ -2290,6 +2291,9 @@ export interface ChatPlatform {
   name: string;
   label: string;
   fields: { key: string; label: string; hint: string; prefix?: string }[];
+  // Offered only for Matrix, and only while the household runs its own
+  // homeserver: a bot made there with nothing to paste (ADR-W033 B7.2).
+  local?: { label: string; hint: string; node: string };
 }
 
 // One installed chat bot and the Agent it answers for.
