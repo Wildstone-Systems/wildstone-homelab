@@ -26,6 +26,7 @@ const (
 	RuleButlerAdminScope         = "butler-admin-scope"
 	RuleAutomationActionTier     = "automation-action-tier"
 	RuleLdapUserEmailUnique      = "ldap-user-email-unique"
+	RuleBackupTargetDeclared     = "backup-target-declared"
 )
 
 // automationTiers is the closed set of action tiers a household rule may
@@ -125,6 +126,12 @@ func (e *Engine) Validate(ch Change) (violations, exempted []Violation) {
 	}
 	proposedRoutes := map[string]bool{}
 	emailOwners := ldapEmailOwners(ch.Proposed)
+	targets := map[string]resource.Resource{}
+	for _, r := range ch.Proposed {
+		if r.Kind == resource.KindBackupTarget {
+			targets[r.Metadata.Name] = r
+		}
+	}
 
 	var all []Violation
 	for _, r := range ch.Proposed {
@@ -166,6 +173,52 @@ func (e *Engine) Validate(ch Change) (violations, exempted []Violation) {
 				continue
 			}
 			all = append(all, ldapUserRules(r, emailOwners)...)
+		case resource.KindBackupTarget:
+			if r.BackupTarget == nil {
+				continue
+			}
+			all = append(all, backupTargetRules(r)...)
+		case resource.KindBackupPlan:
+			if r.BackupPlan == nil || r.BackupPlan.Offsite == nil {
+				continue
+			}
+			if v, bad := offsiteTargetRule(r, targets); bad {
+				all = append(all, v)
+			}
+		}
+	}
+	// A BackupTarget changed or removed under an UNTOUCHED plan that
+	// copies to it would leave that plan failing every run with nobody
+	// having decided that — deleted, or moved to another node where the
+	// plan's runs cannot resolve its credentials. The loop above skipped
+	// the untouched plan, so check every such plan against the targets
+	// this change touches.
+	touchedTarget := func(name string) bool {
+		key := string(resource.KindBackupTarget) + "/" + name
+		cur, was := currentByKey[key]
+		now, is := targets[name]
+		return was != is || (was && !reflect.DeepEqual(cur, now))
+	}
+	for _, r := range ch.Proposed {
+		if r.Kind != resource.KindBackupPlan || r.BackupPlan == nil || r.BackupPlan.Offsite == nil {
+			continue
+		}
+		if cur, ok := currentByKey[string(r.Kind)+"/"+r.Metadata.Name]; !ok || !reflect.DeepEqual(cur, r) {
+			continue // touched: the loop above already checked it
+		}
+		name := r.BackupPlan.Offsite.Target
+		if !touchedTarget(name) {
+			continue
+		}
+		if _, still := targets[name]; !still {
+			all = append(all, Violation{
+				Rule: RuleBackupTargetDeclared, Kind: string(resource.KindBackupTarget), Name: name,
+				Msg: fmt.Sprintf("BackupPlan %q still copies off-site to this target; change or remove its offsite block first", r.Metadata.Name),
+			})
+			continue
+		}
+		if v, bad := offsiteTargetRule(r, targets); bad {
+			all = append(all, v)
 		}
 	}
 	// Deletions of admin routes by the butler (RuleButlerAdminScope
@@ -354,6 +407,52 @@ func envSecretRules(r resource.Resource, env map[string]string) []Violation {
 		}
 	}
 	return out
+}
+
+// backupTargetRules refuses a literal credential pasted into one of a
+// BackupTarget's plain fields (ADR-W045 A2). Validation already forces
+// the two key fields to be secret/<name> references; this catches the
+// other mistake — the secret key typed into "prefix" or "bucket", which
+// would land in the Statefile and its git history. The endpoint is left
+// out: validation limits it to scheme, host and port, and a Cloudflare R2
+// host carries a 32-hex account ID that is not a secret but is shaped
+// like one.
+func backupTargetRules(r resource.Resource) []Violation {
+	var out []Violation
+	t := r.BackupTarget
+	for _, f := range []struct{ name, value string }{
+		{"bucket", t.Bucket}, {"prefix", t.Prefix}, {"region", t.Region},
+	} {
+		if redact.SecretShaped(f.value) {
+			out = append(out, Violation{
+				Rule: RuleSecretValuesForbidden, Kind: string(r.Kind), Name: r.Metadata.Name,
+				Msg: fmt.Sprintf("%s value is secret-shaped; credentials go in accessKeySecret/secretKeySecret as secret/<name> references (§9.2-3)", f.name),
+			})
+		}
+	}
+	return out
+}
+
+// offsiteTargetRule checks that a plan's off-site block names a
+// BackupTarget in the same proposed tree, on the same node: the target's
+// credential references resolve only in that node's secret store, so a
+// target on another node could never be reached by this plan's runs.
+func offsiteTargetRule(r resource.Resource, targets map[string]resource.Resource) (Violation, bool) {
+	name := r.BackupPlan.Offsite.Target
+	t, ok := targets[name]
+	switch {
+	case !ok:
+		return Violation{
+			Rule: RuleBackupTargetDeclared, Kind: string(r.Kind), Name: r.Metadata.Name,
+			Msg: fmt.Sprintf("offsite.target %q names no BackupTarget; declare the target first (ADR-W045 A2)", name),
+		}, true
+	case t.Metadata.Node != r.Metadata.Node:
+		return Violation{
+			Rule: RuleBackupTargetDeclared, Kind: string(r.Kind), Name: r.Metadata.Name,
+			Msg: fmt.Sprintf("offsite.target %q is on node %q but this plan runs on %q; its credentials would not resolve here", name, t.Metadata.Node, r.Metadata.Node),
+		}, true
+	}
+	return Violation{}, false
 }
 
 func (e *Engine) isExempt(v Violation) bool {

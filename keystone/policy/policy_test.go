@@ -444,3 +444,97 @@ func TestLdapUserEmailUnique(t *testing.T) {
 		})
 	}
 }
+
+func backupTarget(mut func(*resource.BackupTargetSpec)) resource.Resource {
+	r := resource.Resource{
+		ApiVersion: resource.ApiVersion,
+		Kind:       resource.KindBackupTarget,
+		Metadata:   resource.Metadata{Name: "offsite", Owner: "owner", Node: "n1"},
+		BackupTarget: &resource.BackupTargetSpec{
+			Type: "s3", Endpoint: "https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com",
+			Bucket: "wildstone-backups", Prefix: "home", Region: "auto",
+			AccessKeySecret: "secret/offsite-access", SecretKeySecret: "secret/offsite-secret",
+		},
+	}
+	if mut != nil {
+		mut(r.BackupTarget)
+	}
+	return r
+}
+
+// TestBackupTargetSecretShapedFields: a credential pasted into a plain
+// field is refused; a real R2 endpoint, whose account ID looks like a
+// token, is not.
+func TestBackupTargetSecretShapedFields(t *testing.T) {
+	e := NewEngine(nil)
+	if v, _ := e.Validate(Change{Proposed: []resource.Resource{backupTarget(nil)}}); len(v) != 0 {
+		t.Fatalf("clean R2 target flagged: %v", v)
+	}
+	for field, mut := range map[string]func(*resource.BackupTargetSpec){
+		"prefix": func(s *resource.BackupTargetSpec) { s.Prefix = "REPLACED-" + strings.Repeat("k7Qz", 8) },
+		"bucket": func(s *resource.BackupTargetSpec) { s.Bucket = "0123456789abcdef0123456789abcdef" },
+	} {
+		v, _ := e.Validate(Change{Proposed: []resource.Resource{backupTarget(mut)}})
+		if len(v) != 1 || v[0].Rule != RuleSecretValuesForbidden || !strings.Contains(v[0].Msg, field) {
+			t.Errorf("%s: violations = %v, want one %s naming the field", field, v, RuleSecretValuesForbidden)
+		}
+	}
+}
+
+func offsitePlan(node, target string) resource.Resource {
+	return resource.Resource{
+		ApiVersion: resource.ApiVersion,
+		Kind:       resource.KindBackupPlan,
+		Metadata:   resource.Metadata{Name: "photos", Owner: "capability/photos", Node: node},
+		BackupPlan: &resource.BackupPlanSpec{
+			Volumes: []string{"immich-library"}, Repository: "backup-repo",
+			PasswordSecret: "secret/restic-photos", Schedule: "daily",
+			Offsite: &resource.BackupOffsite{Target: target, Route: resource.BackupRouteLocalAndOffsite,
+				PasswordSecret: "secret/restic-photos-offsite", Schedule: "weekly"},
+		},
+	}
+}
+
+// TestOffsiteTargetDeclared: a plan's off-site target must exist on the
+// plan's node, and cannot be removed from under a plan still using it.
+func TestOffsiteTargetDeclared(t *testing.T) {
+	e := NewEngine(nil)
+	tgt := backupTarget(nil) // node n1
+	moved := backupTarget(nil)
+	moved.Metadata.Node = "n2"
+	rebucketed := backupTarget(func(s *resource.BackupTargetSpec) { s.Bucket = "other-bucket" })
+	for _, tc := range []struct {
+		name     string
+		ch       Change
+		wantRule bool
+	}{
+		{"target present", Change{Proposed: []resource.Resource{tgt, offsitePlan("n1", "offsite")}}, false},
+		{"target missing", Change{Proposed: []resource.Resource{offsitePlan("n1", "offsite")}}, true},
+		{"target on another node", Change{Proposed: []resource.Resource{tgt, offsitePlan("n2", "offsite")}}, true},
+		{"target deleted under an untouched plan", Change{
+			Current:  []resource.Resource{tgt, offsitePlan("n1", "offsite")},
+			Proposed: []resource.Resource{offsitePlan("n1", "offsite")},
+		}, true},
+		{"target moved to another node under an untouched plan", Change{
+			Current:  []resource.Resource{tgt, offsitePlan("n1", "offsite")},
+			Proposed: []resource.Resource{moved, offsitePlan("n1", "offsite")},
+		}, true},
+		{"target edited in place under an untouched plan", Change{
+			Current:  []resource.Resource{tgt, offsitePlan("n1", "offsite")},
+			Proposed: []resource.Resource{rebucketed, offsitePlan("n1", "offsite")},
+		}, false},
+		{"unrelated change with target intact", Change{
+			Current:  []resource.Resource{tgt, offsitePlan("n1", "offsite")},
+			Proposed: []resource.Resource{tgt, offsitePlan("n1", "offsite"), container("app", nil)},
+		}, false},
+	} {
+		v, _ := e.Validate(tc.ch)
+		got := false
+		for _, x := range v {
+			got = got || x.Rule == RuleBackupTargetDeclared
+		}
+		if got != tc.wantRule {
+			t.Errorf("%s: violations = %v, want %s: %v", tc.name, v, RuleBackupTargetDeclared, tc.wantRule)
+		}
+	}
+}

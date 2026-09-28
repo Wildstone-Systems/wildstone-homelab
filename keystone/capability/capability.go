@@ -7,6 +7,7 @@ package capability
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"github.com/chickenrat17/wildstone-homelab/keystone/sharedcalendar"
 	"sort"
@@ -205,6 +206,14 @@ func (e *Engine) Expand(pkg *pkgspec.Package, params map[string]string, catalog 
 		// would be one more thing to get wrong, and it is not a
 		// statement an author should have to make.
 		res.Metadata.Package = pkg.Metadata.Name
+
+		// Where household data may go off-site is the owner's decision
+		// alone (ADR-W045 A1: opt-in, never forced). A package that
+		// shipped a BackupTarget would make installing an app the act
+		// that points backups outside the house.
+		if res.Kind == resource.KindBackupTarget {
+			return nil, &TemplateError{Package: pkg.Metadata.Name, Index: i, Err: errors.New("a package may not declare a BackupTarget: only the owner chooses where backups go off-site (ADR-W045 A1)")}
+		}
 
 		if err := res.Validate(); err != nil {
 			return nil, &TemplateError{Package: pkg.Metadata.Name, Index: i, Err: fmt.Errorf("validating rendered resource: %w", err)}

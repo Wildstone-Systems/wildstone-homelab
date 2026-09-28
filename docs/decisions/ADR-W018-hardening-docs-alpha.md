@@ -1,6 +1,7 @@
 # ADR-W018: Hardening, docs, alpha release (E13)
 
-- **Status:** accepted; A2 amended by ADR-W033
+- **Status:** accepted; A2 amended by ADR-W033; A2 item 3 amended by
+  ADR-W045 A5 (secrets recovered from a sealed bundle)
 - **Governed by:** ADR-W033 where they overlap.
 - **Relates to:** ADR-W002 (e2e boundary), ADR-W011 (backup engine),
   ADR-W012 (secrets path), ADR-W014 (installer), implementation scope E13

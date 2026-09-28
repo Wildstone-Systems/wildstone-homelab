@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
 	"path"
 	"regexp"
 	"sort"
@@ -34,10 +35,14 @@ const (
 	KindLdapUser   Kind = "LdapUser"
 	KindIngress    Kind = "Ingress"
 	KindBackupPlan Kind = "BackupPlan"
-	KindConfigFile Kind = "ConfigFile"
-	KindSeedFile   Kind = "SeedFile"
-	KindJob        Kind = "Job"
-	KindSecret     Kind = "Secret"
+	// KindBackupTarget is an S3-compatible bucket that backups may be
+	// copied to off-site (ADR-W045 A2). Owner-declared only: a package
+	// cannot ship one (capability.Expand refuses it).
+	KindBackupTarget Kind = "BackupTarget"
+	KindConfigFile   Kind = "ConfigFile"
+	KindSeedFile     Kind = "SeedFile"
+	KindJob          Kind = "Job"
+	KindSecret       Kind = "Secret"
 	// KindMatrixAppService registers a bot with the household's Matrix
 	// homeserver as an application service: declared by the bot's
 	// capability, merged by Keystone into one file the homeserver's
@@ -846,14 +851,111 @@ type BackupPlanSpec struct {
 	// restic run container.
 	Volumes []string `yaml:"volumes"`
 	// Repository is the volume name holding the restic repository.
-	Repository string `yaml:"repository"`
+	Repository string `yaml:"repository,omitempty"`
 	// PasswordSecret is a reference of the form secret/<name> to the
 	// repository password (ADR-W005 A2) — never a literal value. Only
 	// Wardstone materializes it (E8).
-	PasswordSecret string `yaml:"passwordSecret"`
+	PasswordSecret string `yaml:"passwordSecret,omitempty"`
 	// Schedule is one of backupSchedules: daily, weekly, monthly.
+	Schedule  string          `yaml:"schedule,omitempty"`
+	Retention BackupRetention `yaml:"retention,omitempty"`
+	// Offsite, when set, also sends this plan's backups to a BackupTarget
+	// (ADR-W045 A3). With route offsite-only, Repository, PasswordSecret,
+	// Schedule and Retention are left empty: the off-site block carries
+	// them, and nothing is stored locally.
+	Offsite *BackupOffsite `yaml:"offsite,omitempty"`
+}
+
+// Off-site routes (ADR-W045 A3).
+const (
+	// BackupRouteOffsiteOnly backs the sources up straight into the
+	// off-site repository. No local repository, so no local disk space.
+	BackupRouteOffsiteOnly = "offsite-only"
+	// BackupRouteLocalAndOffsite backs up into the local repository as
+	// usual, then copies its snapshots to the off-site repository.
+	BackupRouteLocalAndOffsite = "local-and-offsite"
+)
+
+// backupRoutes is the closed set of BackupOffsite.Route values.
+var backupRoutes = map[string]bool{
+	BackupRouteOffsiteOnly:     true,
+	BackupRouteLocalAndOffsite: true,
+}
+
+// BackupOffsite is a BackupPlan's off-site copy (ADR-W045 A3): which
+// BackupTarget it goes to, by which route, under which password, how
+// often, and how much history the off-site repository keeps. Its
+// password is separate from the local one, so one leaked password never
+// opens both copies.
+type BackupOffsite struct {
+	// Target names a BackupTarget on the same node.
+	Target string `yaml:"target"`
+	// Route is one of backupRoutes.
+	Route string `yaml:"route"`
+	// PasswordSecret is the off-site repository password, a secret/<name>
+	// reference that must differ from the plan's local one.
+	PasswordSecret string `yaml:"passwordSecret"`
+	// Schedule is one of daily, weekly, monthly.
 	Schedule  string          `yaml:"schedule"`
 	Retention BackupRetention `yaml:"retention,omitempty"`
+}
+
+// backupTargetTypes is the closed set of BackupTargetSpec.Type values.
+var backupTargetTypes = map[string]bool{"s3": true}
+
+// bucketRegexp is the S3 bucket-name shape: 3-63 characters, letters,
+// digits, dots and hyphens, starting and ending with a letter or digit.
+// Upper case is allowed because some providers (Backblaze B2) accept it.
+var bucketRegexp = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9.-]{1,61}[A-Za-z0-9]$`)
+
+// prefixSegmentRegexp is one "/"-separated segment of a BackupTarget
+// prefix.
+var prefixSegmentRegexp = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+
+// regionRegexp is a provider region name: "us-east-1", "us-west-004",
+// R2's "auto".
+var regionRegexp = regexp.MustCompile(`^[a-z0-9-]{1,32}$`)
+
+// BackupTargetSpec is the spec for kind BackupTarget (ADR-W045 A2): one
+// S3-compatible bucket off-site backups may be copied into. It works for
+// AWS S3, Cloudflare R2, Backblaze B2, Wasabi and MinIO alike — the
+// provider is chosen by the endpoint, never by a provider-specific field.
+//
+// Declaring one moves no data. It only names a place; a BackupPlan's
+// off-site block is what sends anything there, and restic encrypts on
+// the node before upload, so the provider only ever holds ciphertext.
+//
+// Credentials are secret/<name> references only (ADR-W012), set with
+// `wild secret set` on the node that runs the backups. Node-scoped for
+// that reason: the references resolve in that node's secret store.
+type BackupTargetSpec struct {
+	// Type is one of backupTargetTypes: "s3".
+	Type string `yaml:"type"`
+	// Endpoint is the provider's S3 API base URL, e.g.
+	// https://s3.us-east-1.amazonaws.com or
+	// https://<account-id>.r2.cloudflarestorage.com. Scheme and host
+	// (and optional port) only: no path, query or credentials.
+	Endpoint string `yaml:"endpoint"`
+	// Bucket is the bucket name; it must already exist.
+	Bucket string `yaml:"bucket"`
+	// Prefix is an optional folder inside the bucket, so one bucket can
+	// hold several installs: "home" or "wildstone/home".
+	Prefix string `yaml:"prefix,omitempty"`
+	// Region is the provider region; optional for providers that ignore
+	// it. R2 uses "auto".
+	Region string `yaml:"region,omitempty"`
+	// PathStyle selects path-style bucket addressing
+	// (https://host/bucket) instead of virtual-host style
+	// (https://bucket.host). MinIO and most self-hosted stores need it.
+	PathStyle bool `yaml:"pathStyle,omitempty"`
+	// InsecureHTTP allows an http:// endpoint. Only for a store on the
+	// home network (a LAN MinIO); backups stay encrypted by restic, but
+	// requests and metadata cross the network in the clear.
+	InsecureHTTP bool `yaml:"insecureHTTP,omitempty"`
+	// AccessKeySecret and SecretKeySecret reference the access key ID and
+	// secret access key as secret/<name>, never literal values.
+	AccessKeySecret string `yaml:"accessKeySecret"`
+	SecretKeySecret string `yaml:"secretKeySecret"`
 }
 
 // Resource is the typed machine-layer record the Reconciler drives
@@ -877,13 +979,15 @@ type Resource struct {
 	LdapUser   *LdapUserSpec   `yaml:"-"`
 	Ingress    *IngressSpec    `yaml:"-"`
 	BackupPlan *BackupPlanSpec `yaml:"-"`
-	ConfigFile *ConfigFileSpec `yaml:"-"`
-	SeedFile   *SeedFileSpec   `yaml:"-"`
-	Job        *JobSpec        `yaml:"-"`
-	Secret     *SecretSpec     `yaml:"-"`
-	Automation *AutomationSpec `yaml:"-"`
-	Meter      *MeterSpec      `yaml:"-"`
-	Commitment *CommitmentSpec `yaml:"-"`
+	// BackupTarget is the spec for KindBackupTarget (ADR-W045 A2).
+	BackupTarget *BackupTargetSpec `yaml:"-"`
+	ConfigFile   *ConfigFileSpec   `yaml:"-"`
+	SeedFile     *SeedFileSpec     `yaml:"-"`
+	Job          *JobSpec          `yaml:"-"`
+	Secret       *SecretSpec       `yaml:"-"`
+	Automation   *AutomationSpec   `yaml:"-"`
+	Meter        *MeterSpec        `yaml:"-"`
+	Commitment   *CommitmentSpec   `yaml:"-"`
 
 	MatrixAppService *MatrixAppServiceSpec `yaml:"-"`
 }
@@ -985,6 +1089,13 @@ var registry = map[Kind]kindEntry{
 	KindBackupPlan: {
 		newSpec:    func() any { return &BackupPlanSpec{} },
 		validate:   validateBackupPlan,
+		nodeScoped: true,
+	},
+	KindBackupTarget: {
+		// Node-scoped: its credential references resolve in the secret
+		// store of the node that runs the backups.
+		newSpec:    func() any { return &BackupTargetSpec{} },
+		validate:   validateBackupTarget,
 		nodeScoped: true,
 	},
 	KindConfigFile: {
@@ -1103,18 +1214,19 @@ func (r *Resource) Validate() error {
 // per-kind validator, which reports it with a more specific message.
 func (r *Resource) validateSpecExclusivity() error {
 	populated := map[Kind]bool{
-		KindContainer:  r.Container != nil,
-		KindVolume:     r.Volume != nil,
-		KindRoute:      r.Route != nil,
-		KindDnsRecord:  r.DnsRecord != nil,
-		KindOidcClient: r.OidcClient != nil,
-		KindLdapGroup:  r.LdapGroup != nil,
-		KindBackupPlan: r.BackupPlan != nil,
-		KindConfigFile: r.ConfigFile != nil,
-		KindSeedFile:   r.SeedFile != nil,
-		KindAutomation: r.Automation != nil,
-		KindMeter:      r.Meter != nil,
-		KindCommitment: r.Commitment != nil,
+		KindContainer:    r.Container != nil,
+		KindVolume:       r.Volume != nil,
+		KindRoute:        r.Route != nil,
+		KindDnsRecord:    r.DnsRecord != nil,
+		KindOidcClient:   r.OidcClient != nil,
+		KindLdapGroup:    r.LdapGroup != nil,
+		KindBackupPlan:   r.BackupPlan != nil,
+		KindBackupTarget: r.BackupTarget != nil,
+		KindConfigFile:   r.ConfigFile != nil,
+		KindSeedFile:     r.SeedFile != nil,
+		KindAutomation:   r.Automation != nil,
+		KindMeter:        r.Meter != nil,
+		KindCommitment:   r.Commitment != nil,
 
 		KindMatrixAppService: r.MatrixAppService != nil,
 	}
@@ -1590,31 +1702,153 @@ func validateSeedFile(r *Resource) error {
 var secretRefInSeed = regexp.MustCompile(`(pbkdf2:)?secret/[A-Za-z0-9][A-Za-z0-9._-]{0,63}`)
 
 func validateBackupPlan(r *Resource) error {
-	if r.BackupPlan == nil {
-		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec", Msg: "backup plan spec missing"}
+	bad := func(field, msg string) error {
+		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: field, Msg: msg}
 	}
-	if len(r.BackupPlan.Volumes) == 0 {
-		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.volumes", Msg: "must name at least one source volume"}
+	p := r.BackupPlan
+	if p == nil {
+		return bad("spec", "backup plan spec missing")
 	}
-	for i, v := range r.BackupPlan.Volumes {
+	if len(p.Volumes) == 0 {
+		return bad("spec.volumes", "must name at least one source volume")
+	}
+	for i, v := range p.Volumes {
 		if v == "" {
-			return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: fmt.Sprintf("spec.volumes[%d]", i), Msg: "must not be empty"}
+			return bad(fmt.Sprintf("spec.volumes[%d]", i), "must not be empty")
 		}
 	}
-	if r.BackupPlan.Repository == "" {
-		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.repository", Msg: "must name the repository volume"}
+	if o := p.Offsite; o != nil && o.Route == BackupRouteOffsiteOnly {
+		// Nothing is kept locally, so a local field here would be a
+		// setting that silently does nothing.
+		const why = "must be empty for route offsite-only: the offsite block carries the password, schedule and retention"
+		switch {
+		case p.Repository != "":
+			return bad("spec.repository", why)
+		case p.PasswordSecret != "":
+			return bad("spec.passwordSecret", why)
+		case p.Schedule != "":
+			return bad("spec.schedule", why)
+		case p.Retention != (BackupRetention{}):
+			return bad("spec.retention", why)
+		}
+	} else {
+		if p.Repository == "" {
+			return bad("spec.repository", "must name the repository volume")
+		}
+		if !secretRefRegexp.MatchString(p.PasswordSecret) {
+			return bad("spec.passwordSecret", "must be a reference of the form secret/<name> (ADR-W005 A2), never a literal secret value")
+		}
+		if !backupSchedules[p.Schedule] {
+			return bad("spec.schedule", "must be one of daily, weekly, monthly")
+		}
+		if err := validateRetention(p.Retention); err != "" {
+			return bad("spec.retention", err)
+		}
 	}
-	if !secretRefRegexp.MatchString(r.BackupPlan.PasswordSecret) {
-		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.passwordSecret", Msg: "must be a reference of the form secret/<name> (ADR-W005 A2), never a literal secret value"}
-	}
-	if !backupSchedules[r.BackupPlan.Schedule] {
-		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.schedule", Msg: "must be one of daily, weekly, monthly"}
-	}
-	ret := r.BackupPlan.Retention
-	if ret.KeepDaily < 0 || ret.KeepWeekly < 0 || ret.KeepMonthly < 0 {
-		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.retention", Msg: "keep counts must not be negative"}
+	if o := p.Offsite; o != nil {
+		if !nameRegexp.MatchString(o.Target) {
+			return bad("spec.offsite.target", "must name a BackupTarget")
+		}
+		if !backupRoutes[o.Route] {
+			return bad("spec.offsite.route", "must be offsite-only or local-and-offsite")
+		}
+		if !secretRefRegexp.MatchString(o.PasswordSecret) {
+			return bad("spec.offsite.passwordSecret", "must be a reference of the form secret/<name> (ADR-W005 A2), never a literal secret value")
+		}
+		if o.PasswordSecret == p.PasswordSecret {
+			return bad("spec.offsite.passwordSecret", "must differ from the local passwordSecret: one leaked password must not open both copies (ADR-W045 A3)")
+		}
+		if !backupSchedules[o.Schedule] {
+			return bad("spec.offsite.schedule", "must be one of daily, weekly, monthly")
+		}
+		if err := validateRetention(o.Retention); err != "" {
+			return bad("spec.offsite.retention", err)
+		}
 	}
 	return nil
+}
+
+func validateRetention(ret BackupRetention) string {
+	if ret.KeepDaily < 0 || ret.KeepWeekly < 0 || ret.KeepMonthly < 0 {
+		return "keep counts must not be negative"
+	}
+	return ""
+}
+
+func validateBackupTarget(r *Resource) error {
+	t := r.BackupTarget
+	bad := func(field, msg string) error {
+		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: field, Msg: msg}
+	}
+	if t == nil {
+		return bad("spec", "backup target spec missing")
+	}
+	if !backupTargetTypes[t.Type] {
+		return bad("spec.type", `must be "s3"`)
+	}
+	if err := validateEndpoint(t.Endpoint, t.InsecureHTTP); err != "" {
+		return bad("spec.endpoint", err)
+	}
+	if !bucketRegexp.MatchString(t.Bucket) || strings.Contains(t.Bucket, "..") {
+		return bad("spec.bucket", "must be a bucket name: 3-63 letters, digits, dots or hyphens, starting and ending with a letter or digit")
+	}
+	if t.Prefix != "" {
+		if len(t.Prefix) > 256 {
+			return bad("spec.prefix", "must be at most 256 characters")
+		}
+		for _, seg := range strings.Split(t.Prefix, "/") {
+			if !prefixSegmentRegexp.MatchString(seg) || seg == "." || seg == ".." {
+				return bad("spec.prefix", `must be folder names of letters, digits, ".", "_" or "-" separated by "/", with no leading, trailing or doubled "/" and no "." or ".." segment`)
+			}
+		}
+	}
+	if t.Region != "" && !regionRegexp.MatchString(t.Region) {
+		return bad("spec.region", `must be a region name such as "us-east-1" or "auto"`)
+	}
+	if !secretRefRegexp.MatchString(t.AccessKeySecret) {
+		return bad("spec.accessKeySecret", "must be a reference of the form secret/<name> (ADR-W012), never a literal key")
+	}
+	if !secretRefRegexp.MatchString(t.SecretKeySecret) {
+		return bad("spec.secretKeySecret", "must be a reference of the form secret/<name> (ADR-W012), never a literal key")
+	}
+	if t.AccessKeySecret == t.SecretKeySecret {
+		return bad("spec.secretKeySecret", "must reference a different secret than accessKeySecret")
+	}
+	return nil
+}
+
+// validateEndpoint checks a BackupTarget endpoint and returns "" when it
+// is acceptable, else the reason. The endpoint is interpolated into the
+// restic repository URL, so everything but scheme, host and port is
+// refused rather than normalised: a path would move the bucket, and
+// userinfo would put a credential in the Statefile.
+func validateEndpoint(raw string, insecureHTTP bool) string {
+	u, err := url.Parse(raw)
+	if err != nil || raw == "" {
+		return "must be a URL such as https://s3.us-east-1.amazonaws.com"
+	}
+	switch u.Scheme {
+	case "https":
+	case "http":
+		if !insecureHTTP {
+			return "must use https:// (set insecureHTTP only for a store on the home network)"
+		}
+	default:
+		return "must be an https:// URL"
+	}
+	if u.User != nil {
+		return "must not carry credentials; use accessKeySecret and secretKeySecret"
+	}
+	if u.Hostname() == "" {
+		return "must name a host"
+	}
+	if (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" || u.Opaque != "" {
+		return "must be scheme and host only (the bucket and prefix are separate fields)"
+	}
+	if strings.ContainsAny(raw, " \t\n") {
+		return "must not contain whitespace"
+	}
+	return ""
 }
 
 // validateLdapUser mirrors validateLdapGroup's strictness for the same
