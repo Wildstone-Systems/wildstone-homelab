@@ -108,9 +108,12 @@ live volumes ──backup──▶ local restic repo (volume)   ← fast restore
 Slices 1–3 + 5 give a minimal usable feature; 4 and 8 are needed before
 calling it trustworthy.
 
-## 5. Open questions for the owner
+## 5. Owner decisions (2026-09-28)
 
-1. Accept the "copy from local" model, or allow direct-to-S3 plans (no local repo)?
-2. Separate off-site repo password from the local one (recommended), or share?
-3. Is Statefile replication (recovery input #2) in scope for S3 too?
-4. Should host bind-mount data (media/files) be selectable, or volumes only for v1?
+1. **Copy from local** — local repo first, then `restic copy` off-site.
+2. **Separate password** for the off-site repo.
+3. **Whole-site recovery** — Statefile, runtime DB and (sealed) secrets go
+   off-site too, so a total loss restores "like nothing happened".
+4. **Host folders selectable** — the user decides, e.g. hard-to-replace movies.
+
+Captured in [ADR-W045](../decisions/ADR-W045-off-site-backup.md).
