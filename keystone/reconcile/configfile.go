@@ -112,6 +112,16 @@ func (r *Reconciler) applyConfigFileStep(ctx context.Context, nodeID string, ste
 	case plan.ActionDelete:
 		// No delete-file op exists (only Write/Read), same as Route.
 		content = []byte{}
+		// Unless this path is one Homepage's own generator still owns
+		// once this ConfigFile is gone (#410's mirror image): this
+		// tick's earlier prereq repair already restored the regenerated
+		// fallback there the moment the claim disappeared from desired
+		// state, and clearing it here would throw that away for one
+		// tick instead of handing ownership back with a single correct
+		// write. See homepageFallbackContent.
+		if fallback, ok := homepageFallbackContent(r.ManagedPrefix, desiredByKey, filePath); ok {
+			content = fallback
+		}
 	default:
 		sr.Error = "unexpected action " + step.Action.String()
 		return sr
@@ -134,8 +144,11 @@ func (r *Reconciler) applyConfigFileStep(ctx context.Context, nodeID string, ste
 		checkRes, checkErr := r.Applier.Apply(ctx, nodeID, &wsv1.Operation{Op: &wsv1.Operation_ReadManagedFile{
 			ReadManagedFile: &wsv1.ReadManagedFile{Path: filePath},
 		}})
+		// Ordinarily content is empty and this reduces to "reads back
+		// empty"; at a path homepageFallbackContent claimed above, it
+		// checks the regenerated fallback landed instead.
 		sr.HealthOK = checkErr == nil && checkRes.GetError() == nil &&
-			len(checkRes.GetReadManagedFile().GetContent()) == 0
+			managedFileMatches(checkRes.GetReadManagedFile(), content)
 		if sr.HealthOK {
 			r.markManaged(nodeID, key, false)
 			r.forgetConfigFilePath(nodeID, key)

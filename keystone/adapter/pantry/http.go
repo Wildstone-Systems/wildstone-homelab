@@ -48,6 +48,8 @@ const (
 	CapCookAbandon = "pantry.cook.abandon"
 	CapTimerSet    = "pantry.timer.set"
 	CapTimerCancel = "pantry.timer.cancel"
+	CapMealLog     = "pantry.meal.log"
+	CapMealUndo    = "pantry.meal.undo"
 )
 
 // ErrRejected is PantryOS refusing a request it understood: a list that
@@ -68,6 +70,7 @@ var knownCapabilities = []adapter.Capability{
 	{Kind: "action", Name: CapCookStart}, {Kind: "action", Name: CapCookStep},
 	{Kind: "action", Name: CapCookFinish}, {Kind: "action", Name: CapCookAbandon},
 	{Kind: "action", Name: CapTimerSet}, {Kind: "action", Name: CapTimerCancel},
+	{Kind: "action", Name: CapMealLog}, {Kind: "action", Name: CapMealUndo},
 }
 
 // HTTP is a running PantryOS.

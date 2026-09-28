@@ -395,7 +395,7 @@ func TestCatalogShipsTheLaunchServiceSet(t *testing.T) {
 		// unblocked by protocol minor 12 (F98)
 		"vpn-gluetun",
 		// asked for after the expansion
-		"podcasts-podgrab", "matrix-synapse",
+		"podcasts-podgrab", "matrix-synapse", "matrix-element",
 		// The household's own calendar (ADR-W034). Listed here rather
 		// than left to the count because it is the only calendar a
 		// household can run that does not need a mail provider behind

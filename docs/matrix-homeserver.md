@@ -23,9 +23,10 @@ capability and dashboard status.
 ## Install
 
 The interactive first-install flow offers **Matrix — private household
-messaging**. It is off by default. Matrix needs the same private ingress and
-identity packages as the rest of the household web applications, so select a
-tailnet ingress during that install.
+messaging**. It is off by default, and choosing it installs both
+`matrix-synapse` and its browser client, `matrix-element`. Matrix needs the
+same private ingress and identity packages as the rest of the household web
+applications, so select a tailnet ingress during that install.
 
 For an existing installation, enable `matrix-synapse` through the Console's
 package form or with the capability API. The normal parameters are:
@@ -39,6 +40,29 @@ package form or with the capability API. The normal parameters are:
 Choose `server_name` carefully. It becomes the domain in every Matrix user ID
 and room identity and cannot be changed safely after the homeserver contains
 data.
+
+Then enable `matrix-element` the same way, with the same `node` and
+`public_domain`. If you set a custom `server_name` on `matrix-synapse`, give
+`matrix-element` the same value; the two must agree.
+
+## Use it in a browser
+
+`matrix-element` serves Element Web at the `element` route, next to the
+homeserver's `matrix` route. It is locked to this homeserver (there is no
+server picker) and sends a signed-out visitor straight to **Continue with
+Wildstone**, since Synapse accepts no passwords. Synapse trusts that origin
+after sign-in, so there is no extra "continue to this site?" page.
+
+Element keeps each browser's session and encryption keys in storage tied to
+that exact address, which is why its route label, like `matrix`, is pinned
+and not configurable. Set up key backup (Element prompts for it) so a
+cleared browser does not lose access to old encrypted messages.
+
+By default the client reaches nothing outside the household. Element's
+built-in defaults would send conference calls to Element's hosted Jitsi and
+Element Call services and offer its hosted integration manager, so calls,
+widgets and integrations are turned off, along with location sharing (no map
+tile service) and identity-server lookups.
 
 ## Try it from a native client
 
@@ -56,16 +80,23 @@ separate Matrix password to maintain.
 
 ## Connect an Agent
 
-Install an instance of `chat-matrix` for the Agent and use this homeserver's
-route as `homeserver_url`. The adapter still requires an access token for a
-dedicated Matrix account. Create/sign in to that service identity through the
-normal Wildstone identity flow, obtain an access token with a Matrix client,
-and provide it in the connection form. Keep that client session active: logging
-it out revokes the token the adapter uses. Invite the bot to a **new room with
-encryption disabled**; the adapter accepts Matrix room invitations
-automatically, while Keystone's normal invite-key and account-binding checks
-still decide who may speak to the Agent. The adapter boundary remains the same
-whether the homeserver is local or external.
+In the Console, open **Chat**, choose **Matrix** and keep **This household's
+Matrix server** selected. Pick the Agent and the Person; there is nothing to
+paste. Keystone installs a `chat-matrix` bot on the machine running Synapse
+and registers it with Synapse as an application service (ADR-W033 B7.2).
+The bot is the user `@wildstone-<name>:<server_name>`, and the Console says
+which. It has no password and no household account, so it cannot sign in to
+Element or to anything else the household runs. Synapse restarts once to load
+the new bot.
+
+Then invite the bot to a **new room with encryption disabled**. The adapter
+accepts room invitations automatically, and Keystone's normal invite-key and
+account-binding checks still decide who may speak to the Agent.
+
+A bot on another homeserver, or on another machine, uses **Another server**:
+give that homeserver's address and an access token for a dedicated account
+there, and keep the client session that token came from signed in, since
+signing out revokes it.
 
 `chat-matrix` does not implement Matrix end-to-end encryption. It ignores
 encrypted event contents and emits a clear adapter diagnostic naming the room,
@@ -82,9 +113,7 @@ uses end-to-end encryption.
 This first slice deliberately does not include:
 
 - federation or public Matrix ingress;
-- an embedded Element Web client;
 - TURN for voice/video calls;
-- automatic bot-account or access-token provisioning;
 - database-consistent pre/post backup hooks (the current package backup
   contract snapshots declared volumes, as it does for other PostgreSQL-backed
   packages).

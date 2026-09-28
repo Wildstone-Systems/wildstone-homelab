@@ -43,6 +43,11 @@ const (
 	KindSeedFile     Kind = "SeedFile"
 	KindJob          Kind = "Job"
 	KindSecret       Kind = "Secret"
+	// KindMatrixAppService registers a bot with the household's Matrix
+	// homeserver as an application service: declared by the bot's
+	// capability, merged by Keystone into one file the homeserver's
+	// capability loads.
+	KindMatrixAppService Kind = "MatrixAppService"
 	// KindAutomation is a household rule (ADR-W024 A1): Keystone-owned,
 	// applied at no node, run by the automation engine.
 	KindAutomation Kind = "Automation"
@@ -983,6 +988,8 @@ type Resource struct {
 	Automation   *AutomationSpec   `yaml:"-"`
 	Meter        *MeterSpec        `yaml:"-"`
 	Commitment   *CommitmentSpec   `yaml:"-"`
+
+	MatrixAppService *MatrixAppServiceSpec `yaml:"-"`
 }
 
 // ValidationError is a typed validation failure, identifying the resource
@@ -1063,6 +1070,13 @@ var registry = map[Kind]kindEntry{
 		// it is declared against is the one running the directory.
 		newSpec:    func() any { return &LdapUserSpec{} },
 		validate:   validateLdapUser,
+		nodeScoped: true,
+	},
+	KindMatrixAppService: {
+		// Rendered into the homeserver's managed subtree on the node
+		// running it, like an OidcClient into the identity provider's.
+		newSpec:    func() any { return &MatrixAppServiceSpec{} },
+		validate:   validateMatrixAppService,
 		nodeScoped: true,
 	},
 	KindIngress: {
@@ -1213,6 +1227,8 @@ func (r *Resource) validateSpecExclusivity() error {
 		KindAutomation:   r.Automation != nil,
 		KindMeter:        r.Meter != nil,
 		KindCommitment:   r.Commitment != nil,
+
+		KindMatrixAppService: r.MatrixAppService != nil,
 	}
 	for k, isSet := range populated {
 		if k == r.Kind {
@@ -1952,6 +1968,73 @@ func validateLdapGroup(r *Resource) error {
 	if !ldapGroupNameRegexp.MatchString(r.LdapGroup.Name) {
 		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.name",
 			Msg: "must be an LLDAP group name (lowercase alphanumerics and '_'; start/end alphanumeric; ≤ 63 chars) — it is interpolated into an LDAP filter and a distinguished name"}
+	}
+	return nil
+}
+
+// MatrixAppServiceSpec is the spec for kind MatrixAppService: one bot
+// registered with the household's Matrix homeserver as an application
+// service, so it needs no person's account, password or sign-in.
+//
+// The registration's id is the resource's Metadata.Name, and everything
+// else about its users is DERIVED from BotLocalpart: the sender is
+// "<bot>-as", and the exclusive namespace is those two users and nobody
+// else. A package states which user it is, never a regex, so one bot's
+// registration cannot claim another's user or a person's.
+//
+// The bot is not the sender because Synapse refuses /sync to an
+// application service's sender, and the adapter reads its rooms by /sync.
+// It acts as the bot user instead, with the registration's token and a
+// user_id parameter, which is what a namespace is for.
+//
+// No url is ever rendered: the homeserver pushes nothing to the bot,
+// which reads its rooms by /sync like any client and so dials out only.
+type MatrixAppServiceSpec struct {
+	// BotLocalpart is the user the bot speaks as, without "@" or server
+	// name.
+	BotLocalpart string `yaml:"botLocalpart"`
+	// AsTokenRef is the token the bot presents to the homeserver; the
+	// same reference goes in the bot's own environment.
+	AsTokenRef string `yaml:"asTokenRef"`
+	// HsTokenRef is the token the homeserver would present to the bot.
+	// Unused while nothing is pushed, but a registration requires one,
+	// and it must not be the bot's own.
+	HsTokenRef string `yaml:"hsTokenRef"`
+}
+
+// matrixLocalpartRegexp is the lowercase subset of a Matrix user
+// localpart. Narrower than the spec on purpose: this string is placed in
+// a YAML file and in a regex, and the bots Wildstone names never need '/'
+// or '='.
+//
+// Sixty characters, so the derived sender ("<bot>-as") still fits in 63.
+var matrixLocalpartRegexp = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,59}$`)
+
+// MatrixAppServiceSender is the registration's own user for a bot: never
+// used by anything, but every registration must name one, and it must not
+// be the bot (see MatrixAppServiceSpec).
+func MatrixAppServiceSender(botLocalpart string) string {
+	return botLocalpart + "-as"
+}
+
+func validateMatrixAppService(r *Resource) error {
+	s := r.MatrixAppService
+	if s == nil {
+		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec", Msg: "matrix app service spec missing"}
+	}
+	if !matrixLocalpartRegexp.MatchString(s.BotLocalpart) {
+		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.botLocalpart",
+			Msg: "must be a lowercase Matrix localpart (letters, digits, '.', '_', '-'; ≤ 60 chars)"}
+	}
+	if !secretRefRegexp.MatchString(s.AsTokenRef) {
+		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.asTokenRef", Msg: "must be a secret/<name> reference"}
+	}
+	if !secretRefRegexp.MatchString(s.HsTokenRef) {
+		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.hsTokenRef", Msg: "must be a secret/<name> reference"}
+	}
+	if s.AsTokenRef == s.HsTokenRef {
+		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.hsTokenRef",
+			Msg: "must differ from asTokenRef: the homeserver and the bot must not be able to pass as each other"}
 	}
 	return nil
 }

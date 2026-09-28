@@ -59,6 +59,26 @@ type matrix struct {
 	// txn numbers outgoing messages: Matrix deduplicates on the
 	// transaction id, so a retried send is not a second message.
 	txn atomic.Int64
+
+	// members is each joined room's last reported member count. The
+	// homeserver reports it only when it changes, so a room's count has
+	// to outlive the sync that carried it; a room never reported is
+	// unknown, and unknown is treated as a group.
+	members map[string]int
+
+	// appserviceLocalpart is set when this bot is an application service
+	// of the household's own homeserver (ADR-W033 B7.2). Its token then
+	// acts as that user, which the adapter registers once, before first
+	// use; displayName is what that user is called in rooms. Both are
+	// empty for a bot on anyone else's homeserver, whose account already
+	// exists and is named by whoever made it.
+	appserviceLocalpart string
+	displayName         string
+	// asUser is the bot's full user ID once known, added to every request
+	// as user_id. The registration's token on its own acts as the
+	// registration's sender, which Synapse does not let /sync; with
+	// user_id it acts as the bot, a user in the registration's namespace.
+	asUser string
 }
 
 func newMatrix(homeserver, token string, pollWait time.Duration) (Transport, error) {
@@ -95,7 +115,10 @@ type syncResponse struct {
 		Leave  map[string]struct{} `json:"leave"`
 		Join   map[string]struct {
 			Summary struct {
-				JoinedMemberCount int `json:"m.joined_member_count"`
+				// Absent more often than present: Synapse sends a
+				// summary only to a lazy-loading client, and only when
+				// membership changed. A pointer tells "absent" from 0.
+				JoinedMemberCount *int `json:"m.joined_member_count"`
 			} `json:"summary"`
 			Timeline struct {
 				Events []struct {
@@ -127,6 +150,26 @@ type syncResponse struct {
 	} `json:"rooms"`
 }
 
+// matrixSyncFilter asks for lazy-loaded members, which is what makes the
+// homeserver send a room summary (m.joined_member_count) at all.
+const matrixSyncFilter = `{"room":{"state":{"lazy_load_members":true}}}`
+
+// recordMembers keeps the member counts a sync reported, and forgets the
+// rooms the bot has left.
+func (m *matrix) recordMembers(sync syncResponse) {
+	if m.members == nil {
+		m.members = map[string]int{}
+	}
+	for roomID, room := range sync.Rooms.Join {
+		if n := room.Summary.JoinedMemberCount; n != nil {
+			m.members[roomID] = *n
+		}
+	}
+	for roomID := range sync.Rooms.Leave {
+		delete(m.members, roomID)
+	}
+}
+
 // Identify reports this bot's MXID. Matrix has no invite payload, so
 // the link it produces only opens the conversation — the code is still
 // sent by hand — but naming the right bot is most of the problem when a
@@ -146,7 +189,13 @@ func (m *matrix) Receive(ctx context.Context) ([]Incoming, error) {
 			return nil, err
 		}
 	}
-	q := url.Values{"timeout": {strconv.Itoa(int(m.timeout.Milliseconds()))}}
+	q := url.Values{
+		"timeout": {strconv.Itoa(int(m.timeout.Milliseconds()))},
+		// Without lazy-loaded members Synapse sends no room summary at
+		// all, so every room would count as a group and a private chat
+		// would go unanswered unless the bot were mentioned.
+		"filter": {matrixSyncFilter},
+	}
 	if m.since != "" {
 		q.Set("since", m.since)
 	} else {
@@ -161,6 +210,10 @@ func (m *matrix) Receive(ctx context.Context) ([]Incoming, error) {
 		return nil, err
 	}
 	first := m.since == ""
+	// Before the first-sync return below: the first sync's messages are
+	// skipped, but its summaries are the only count some rooms will get
+	// until somebody joins or leaves them.
+	m.recordMembers(sync)
 	m.scheduleInvitedRooms(ctx, sync.Rooms.Invite, sync.Rooms.Leave)
 	problems := m.takeInviteProblems()
 	m.since = sync.NextBatch
@@ -210,7 +263,7 @@ func (m *matrix) Receive(ctx context.Context) ([]Incoming, error) {
 			default:
 				continue // an image, a file, a location
 			}
-			group := room.Summary.JoinedMemberCount != 2
+			group := m.members[roomID] != 2
 			text, addressed := ev.Content.Body, !group
 			if voice != nil {
 				// The body of an audio event is its file name, not
@@ -451,7 +504,7 @@ func (m *matrix) fetchMedia(ctx context.Context, server, media string, limit int
 var errMediaUnrecognized = errors.New("matrix: the homeserver does not recognise this media endpoint")
 
 func (m *matrix) download(ctx context.Context, path string, limit int64) ([]byte, int, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, m.homeserver+path, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, m.homeserver+m.actingAs(path), nil)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -486,7 +539,15 @@ func (m *matrix) download(ctx context.Context, path string, limit int64) ([]byte
 
 // whoami reads this bot's own MXID. It is not optional: without it the
 // adapter cannot tell its own replies from somebody's questions.
+//
+// An application-service bot makes sure its user exists first, and then
+// that it is called what the household calls its Agent.
 func (m *matrix) whoami(ctx context.Context) error {
+	if m.appserviceLocalpart != "" {
+		if err := m.registerAppserviceUser(ctx); err != nil {
+			return err
+		}
+	}
 	var who struct {
 		UserID string `json:"user_id"`
 	}
@@ -497,7 +558,67 @@ func (m *matrix) whoami(ctx context.Context) error {
 		return fmt.Errorf("matrix whoami returned no user id")
 	}
 	m.userID = who.UserID
+	if m.appserviceLocalpart != "" {
+		// That was the sender, "@<bot>-as:<server>". The bot is the same
+		// server's "@<bot>", and every request from here on is its.
+		_, server, ok := strings.Cut(who.UserID, ":")
+		if !ok || server == "" {
+			return fmt.Errorf("matrix whoami: %q has no server name", who.UserID)
+		}
+		m.userID = "@" + m.appserviceLocalpart + ":" + server
+		m.asUser = m.userID
+	}
+	if m.displayName != "" {
+		// Cosmetic, so never fatal: a bot with its localpart for a name
+		// still answers.
+		m.ensureDisplayName(ctx)
+	}
 	return nil
+}
+
+// actingAs adds the application service's user_id to a request path, and
+// leaves every other bot's requests as they were.
+func (m *matrix) actingAs(path string) string {
+	if m.asUser == "" {
+		return path
+	}
+	sep := "?"
+	if strings.Contains(path, "?") {
+		sep = "&"
+	}
+	return path + sep + "user_id=" + url.QueryEscape(m.asUser)
+}
+
+// registerAppserviceUser creates this bot's user through its application
+// service registration. Idempotent: every start asks, and a user that
+// already exists is the expected answer after the first.
+func (m *matrix) registerAppserviceUser(ctx context.Context) error {
+	err := m.call(ctx, http.MethodPost, "/_matrix/client/v3/register", map[string]any{
+		"type":     "m.login.application_service",
+		"username": m.appserviceLocalpart,
+		// The registration's token already acts as this user; a second
+		// access token would be one more credential to leak.
+		"inhibit_login": true,
+	}, nil)
+	var httpErr *matrixHTTPError
+	if err == nil || (errors.As(err, &httpErr) && strings.Contains(httpErr.text, "M_USER_IN_USE")) {
+		return nil
+	}
+	return fmt.Errorf("matrix: registering application-service user %s: %w", m.appserviceLocalpart, err)
+}
+
+// ensureDisplayName sets the bot's name only when it differs. Setting it
+// unconditionally would post a membership change into every room the bot
+// is in, on every restart.
+func (m *matrix) ensureDisplayName(ctx context.Context) {
+	path := "/_matrix/client/v3/profile/" + url.PathEscape(m.userID) + "/displayname"
+	var current struct {
+		DisplayName string `json:"displayname"`
+	}
+	if err := m.call(ctx, http.MethodGet, path, nil, &current); err == nil && current.DisplayName == m.displayName {
+		return
+	}
+	_ = m.call(ctx, http.MethodPut, path, map[string]string{"displayname": m.displayName}, nil)
 }
 
 func (m *matrix) Send(ctx context.Context, conversation, body string) error {
@@ -536,7 +657,7 @@ func (m *matrix) call(ctx context.Context, method, path string, body, out any) e
 		}
 		reader = strings.NewReader(string(data))
 	}
-	req, err := http.NewRequestWithContext(ctx, method, m.homeserver+path, reader)
+	req, err := http.NewRequestWithContext(ctx, method, m.homeserver+m.actingAs(path), reader)
 	if err != nil {
 		return err
 	}

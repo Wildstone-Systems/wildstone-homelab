@@ -47,6 +47,8 @@ func (r *Resource) specOf() any {
 		return r.DnsRecord
 	case KindOidcClient:
 		return r.OidcClient
+	case KindMatrixAppService:
+		return r.MatrixAppService
 	case KindLdapGroup:
 		return r.LdapGroup
 	case KindLdapUser:
@@ -127,6 +129,8 @@ func (r *Resource) UnmarshalYAML(value *yaml.Node) error {
 		r.DnsRecord = spec.(*DnsRecordSpec)
 	case KindOidcClient:
 		r.OidcClient = spec.(*OidcClientSpec)
+	case KindMatrixAppService:
+		r.MatrixAppService = spec.(*MatrixAppServiceSpec)
 	case KindLdapGroup:
 		r.LdapGroup = spec.(*LdapGroupSpec)
 	case KindLdapUser:

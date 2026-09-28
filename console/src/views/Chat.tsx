@@ -158,12 +158,17 @@ export function ConnectForm({ bots, onDone }: { bots: ChatBot[]; onDone: () => v
   const nodeList: NodeInfo[] = nodes.data?.nodes ?? [];
   const [node, setNode] = useState("");
 
+  // On the household's own homeserver there is nothing to paste, so that
+  // is the default whenever it is offered.
+  const [ownServer, setOwnServer] = useState(true);
+  const local = !useExisting && !!platform?.local && ownServer;
+
   const [values, setValues] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<ConnectionCreated | null>(null);
 
-  const credentialsReady = useExisting || (platform?.fields.every((f) => (values[f.key] ?? "").trim() !== "") ?? false);
+  const credentialsReady = useExisting || local || (platform?.fields.every((f) => (values[f.key] ?? "").trim() !== "") ?? false);
   const ready = platform && agent && who && credentialsReady;
   const reset = () => {
     setValues({});
@@ -171,6 +176,7 @@ export function ConnectForm({ bots, onDone }: { bots: ChatBot[]; onDone: () => v
     setError(null);
     setNewBot(false);
     setBot("");
+    setOwnServer(true);
   };
   const submit = () => {
     if (!platform || !agent || !who) return;
@@ -181,9 +187,11 @@ export function ConnectForm({ bots, onDone }: { bots: ChatBot[]; onDone: () => v
         platform: platform.name,
         butler: agent.name,
         person: who.member,
-        credentials: useExisting ? {} : values,
+        credentials: useExisting || local ? {} : values,
         bot: useExisting ? bot || existing[0]?.capability : undefined,
-        node: !useExisting && nodeList.length > 1 ? node || nodeList[0]?.id : undefined,
+        // A local bot runs where the homeserver does; Keystone places it.
+        node: !useExisting && !local && nodeList.length > 1 ? node || nodeList[0]?.id : undefined,
+        local: local || undefined,
       })
       .then((r) => {
         setDone(r);
@@ -273,25 +281,41 @@ export function ConnectForm({ bots, onDone }: { bots: ChatBot[]; onDone: () => v
           </button>
         </div>
       ) : (
-        platform?.fields.map((f) => (
-          <div className="field" key={platform.name + f.key}>
-            <label htmlFor={`connect-${f.key}`}>
-              {f.label}
-              <span className="muted">{f.hint}</span>
-            </label>
-            <input
-              id={`connect-${f.key}`}
-              type={f.key === "homeserver" ? "url" : "password"}
-              autoComplete="off"
-              placeholder={f.prefix ? `${f.prefix}…` : undefined}
-              value={values[f.key] ?? ""}
-              onChange={(e) => setValues({ ...values, [f.key]: e.target.value })}
-            />
-          </div>
-        ))
+        <>
+          {platform?.local && (
+            <div className="field">
+              <div className="seg" role="tablist" aria-label="Which Matrix server">
+                <button role="tab" aria-selected={ownServer} className={ownServer ? "on" : ""} onClick={() => setOwnServer(true)}>
+                  {platform.local.label}
+                </button>
+                <button role="tab" aria-selected={!ownServer} className={!ownServer ? "on" : ""} onClick={() => setOwnServer(false)}>
+                  Another server
+                </button>
+              </div>
+              {local && <div className="muted">{platform.local.hint}</div>}
+            </div>
+          )}
+          {!local &&
+            platform?.fields.map((f) => (
+              <div className="field" key={platform.name + f.key}>
+                <label htmlFor={`connect-${f.key}`}>
+                  {f.label}
+                  <span className="muted">{f.hint}</span>
+                </label>
+                <input
+                  id={`connect-${f.key}`}
+                  type={f.key === "homeserver" ? "url" : "password"}
+                  autoComplete="off"
+                  placeholder={f.prefix ? `${f.prefix}…` : undefined}
+                  value={values[f.key] ?? ""}
+                  onChange={(e) => setValues({ ...values, [f.key]: e.target.value })}
+                />
+              </div>
+            ))}
+        </>
       )}
 
-      {!useExisting && nodeList.length > 1 && (
+      {!useExisting && !local && nodeList.length > 1 && (
         <div className="field">
           <label htmlFor="connect-node">Machine that runs the bot</label>
           <select id="connect-node" value={node || nodeList[0]?.id} onChange={(e) => setNode(e.target.value)}>

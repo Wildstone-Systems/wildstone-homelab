@@ -30,7 +30,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: pantry-pantryos
-  version: 0.2.1
+  version: 0.3.0
   capability: pantry
   profile: pantryos
   # One pantry. A second PantryOS would be a second grocery list.
@@ -95,6 +95,18 @@ publishes:
         - { name: days_left, type: number }
         - { name: quantity, type: number }
         - { name: unit, type: string }
+    - type: pantry.item_spoiled
+      subject: household
+      description: Food went off and was thrown out. Sent once per item thrown out.
+      fields:
+        - { name: item, type: string, required: true }
+        - { name: quantity, type: number }
+        - { name: unit, type: string }
+    - type: pantry.shopping_list_changed
+      subject: household
+      description: The grocery list changed. Sent once a burst of edits has been quiet for a minute; carries only how many things are on it.
+      fields:
+        - { name: item_count, type: number, required: true }
     - type: pantry.timer_finished
       subject: member
       description: A kitchen timer went off — set on the tablet or by an agent. Sent once per timer. The subject is whoever set it (the member an agent was asked by, or the member linked to the tablet's profile); a timer set by nobody known has none.
@@ -132,3 +144,6 @@ agentTools:
   - { name: add_to_grocery_list, risk: domestic }
   - { name: check_grocery_item, risk: domestic }
   - { name: finish_cooking, risk: confirm }
+  # Only the eater's own log, and undo exists.
+  - { name: log_meal, risk: domestic }
+  - { name: undo_meal, risk: domestic }

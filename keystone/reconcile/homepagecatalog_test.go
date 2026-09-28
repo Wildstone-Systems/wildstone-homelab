@@ -24,10 +24,11 @@ import (
 // exactly how a new package gets left out of the coverage meant to bound
 // it.
 //
-// Two exclusions, and they are the SAME two the renderer applies, read
-// from the package rather than assumed: a `portal` Route is the login
-// page, and the dashboard's own Route is the page being rendered.
-// Neither is ever listed, so neither needs a row.
+// Three exclusions, and they are the SAME three the renderer applies,
+// read from the package rather than assumed: a `portal` Route is the
+// login page, the dashboard's own Route is the page being rendered, and
+// the Matrix client-API Route is a backend Element already talks to.
+// None of the three is ever listed, so none needs a row.
 func TestEveryShippedRouteHasAPresentationRow(t *testing.T) {
 	root, err := filepath.Abs("../../packages")
 	if err != nil {
@@ -63,6 +64,12 @@ func TestEveryShippedRouteHasAPresentationRow(t *testing.T) {
 			if container == "" {
 				// An "ip:port" upstream is something Wildstone does not
 				// run and cannot be expected to describe.
+				continue
+			}
+			if container == "matrix-synapse" {
+				// The Matrix client-API Route: Element is the page a
+				// person opens, and every install of one package
+				// installs the other. See homepageEntries.
 				continue
 			}
 			checked++

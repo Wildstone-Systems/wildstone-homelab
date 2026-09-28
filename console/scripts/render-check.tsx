@@ -863,7 +863,7 @@ check("the group map names no capability the catalog dropped",
   stale_.length === 0, `no longer shipped: ${stale_.join(", ")}`);
 for (const [cap, want] of [["media", "Media"], ["photos", "Media"], ["dns", "Network"], ["zigbee", "Home"],
                            ["identity", "Identity"], ["ai-chat", "AI"], ["chat-matrix", "Chat"],
-                           ["matrix-homeserver", "Chat"],
+                           ["matrix-homeserver", "Chat"], ["matrix-client", "Chat"],
                            ["documents", "Documents"], ["monitoring", "Ops"]] as const) {
   check(`${cap} files under ${want}`, groupOf({ capability: cap }) === want);
 }

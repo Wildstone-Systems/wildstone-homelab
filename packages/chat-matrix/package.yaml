@@ -39,11 +39,19 @@
 # THE BOT ACCOUNT. An ordinary Matrix account on your homeserver, used
 # as the bot. The Owner gives its homeserver address and its access
 # token.
+#
+# ON THE HOUSEHOLD'S OWN HOMESERVER, none of that (ADR-W033 B7.2). With
+# homeserver_url empty the bot is an application service of matrix-synapse
+# on the same node: its token is generated here and never seen, a
+# MatrixAppService registers it as the user @wildstone-<instance>, and the
+# adapter reaches Synapse on the container network instead of through the
+# household's front door. No person's account, password or sign-in is
+# involved, so the bot cannot sign in to anything else the household runs.
 apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: chat-matrix
-  version: 2.0.0
+  version: 2.1.1
   capability: chat-matrix
   profile: matrix
   instanced: true
@@ -55,13 +63,35 @@ params:
     source: keystone_url
     description: "The Keystone API as the ADAPTER can reach it — usually the tailnet address, not 127.0.0.1."
     example: "http://100.64.0.1:9441"
-  - { name: homeserver_url, required: true, example: "https://matrix.example.com", description: "The homeserver the bot account lives on." }
+  - { name: homeserver_url, default: "", example: "https://matrix.example.com", description: "The homeserver the bot account lives on. Leave empty to use this household's own Matrix homeserver, which must run on the same machine." }
+  - { name: display_name, default: "", description: "The name the bot shows in Matrix, on the household's own homeserver. Defaults to the instance name." }
 templates:
   - |
     apiVersion: wildstone.dev/v1
     kind: Secret
     metadata: { name: "{{ .Capability }}-token", node: "{{ .Params.node }}" }
-    spec: { name: "{{ .Capability }}-token", provided: true }
+    # Pasted by the Owner for another homeserver; generated on the node for
+    # the household's own, where it is the application service's token.
+    spec: { name: "{{ .Capability }}-token", provided: {{ if .Params.homeserver_url }}true{{ else }}false{{ end }} }
+  - |
+    {{- if not .Params.homeserver_url }}
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: "{{ .Capability }}-hs-token", node: "{{ .Params.node }}" }
+    spec:
+      name: "{{ .Capability }}-hs-token"
+      purpose: "The token Synapse would present to this bot. Required by the registration; nothing is pushed today."
+    {{- end }}
+  - |
+    {{- if not .Params.homeserver_url }}
+    apiVersion: wildstone.dev/v1
+    kind: MatrixAppService
+    metadata: { name: "{{ .Capability }}", node: "{{ .Params.node }}" }
+    spec:
+      botLocalpart: "wildstone-{{ .Params.instance }}"
+      asTokenRef: "secret/{{ .Capability }}-token"
+      hsTokenRef: "secret/{{ .Capability }}-hs-token"
+    {{- end }}
   - |
     apiVersion: wildstone.dev/v1
     kind: Secret
@@ -79,8 +109,14 @@ templates:
       env:
         CHAT_TRANSPORT: matrix
         KEYSTONE_API: "{{ .Params.keystone_url }}"
-        MATRIX_HOMESERVER: "{{ .Params.homeserver_url }}"
+        # The household's own homeserver by its container name: same node,
+        # same container network, and no trip through the ingress.
+        MATRIX_HOMESERVER: "{{ or .Params.homeserver_url "http://matrix-synapse:8008" }}"
         MATRIX_ACCESS_TOKEN: "secret/{{ .Capability }}-token"
+        {{- if not .Params.homeserver_url }}
+        MATRIX_APPSERVICE_LOCALPART: "wildstone-{{ .Params.instance }}"
+        MATRIX_DISPLAY_NAME: "{{ or .Params.display_name .Params.instance }}"
+        {{- end }}
         KEYSTONE_TOKEN: "secret/{{ .Capability }}-adapter"
       restart: unless-stopped
 agentTools:

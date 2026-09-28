@@ -529,3 +529,53 @@ func TestTheFinishQuestionNamesTheBoundCook(t *testing.T) {
 		t.Fatalf("asked %+v; the question must name the bound cook (Flatbread)", *asked)
 	}
 }
+
+// "I had two eggs for breakfast": logged for the member asking, and the
+// answer says how to take it back. An uncertain food is PantryOS's refusal
+// naming the candidates, passed on for the model to ask about.
+func TestLoggingAMealForTheMemberAsking(t *testing.T) {
+	var sent map[string]any
+	up := &scriptedPantry{answers: map[string]func(map[string]any) (adapter.Answer, error){
+		pantry.CapMealLog: func(req map[string]any) (adapter.Answer, error) {
+			sent = req
+			if req["food"] == "noodle" {
+				return adapter.Answer{}, fmt.Errorf("%w: pantry.meal.log: which 'noodle'? Egg noodles (item_id e1); Rice noodles (item_id r1) — send the item_id", pantry.ErrRejected)
+			}
+			return adapter.Answer{Data: map[string]any{"meal": map[string]any{
+				"event_id": "m1", "food": "Eggs", "quantity": 2.0, "unit": "each", "from_stock": true,
+			}}}, nil
+		},
+		pantry.CapMealUndo: func(req map[string]any) (adapter.Answer, error) {
+			return adapter.Answer{Data: map[string]any{"undone": req["event_id"], "already_undone": false}}, nil
+		},
+	}}
+	g, _, _ := pantryGateway(t, up, true)
+	ctx := context.Background()
+
+	r, err := g.Dispatch(ctx, pantryCall(PantryToolLogMeal, map[string]string{"food": "eggs", "quantity": "2", "meal_type": "breakfast"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sent["member"] != "sam" || sent["food"] != "eggs" || sent["quantity"] != 2.0 || sent["meal_type"] != "breakfast" {
+		t.Fatalf("PantryOS was sent %v", sent)
+	}
+	if r.Summary != "Logged 2 Eggs for breakfast, taken from the pantry. To take it back: undo_meal with event_id m1." {
+		t.Fatalf("summary = %q", r.Summary)
+	}
+
+	_, err = g.Dispatch(ctx, pantryCall(PantryToolLogMeal, map[string]string{"food": "noodle"}))
+	if err == nil || !strings.Contains(err.Error(), "Egg noodles (item_id e1)") {
+		t.Fatalf("uncertain food = %v", err)
+	}
+
+	for _, bad := range []string{"0", "-1", "NaN", "lots"} {
+		if _, err := g.Dispatch(ctx, pantryCall(PantryToolLogMeal, map[string]string{"food": "eggs", "quantity": bad})); err == nil {
+			t.Fatalf("quantity %q was sent to PantryOS", bad)
+		}
+	}
+
+	undo, err := g.Dispatch(ctx, pantryCall(PantryToolUndoMeal, map[string]string{"event_id": "m1"}))
+	if err != nil || !strings.Contains(undo.Summary, "Took that meal back") {
+		t.Fatalf("undo = %+v %v", undo, err)
+	}
+}

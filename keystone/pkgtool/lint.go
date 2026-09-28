@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/capability"
+	"github.com/chickenrat17/wildstone-homelab/keystone/integration"
 	"github.com/chickenrat17/wildstone-homelab/keystone/pkgspec"
 	"github.com/chickenrat17/wildstone-homelab/keystone/policy"
 	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
@@ -116,6 +117,7 @@ func Lint(dir string, opts LintOptions) ([]Issue, error) {
 	issues = append(issues, paramShapeIssues(pkg)...)
 	issues = append(issues, selfURLFromDomain(pkg)...)
 	issues = append(issues, accessGroupIssues(pkg)...)
+	issues = append(issues, integrationIssues(pkg)...)
 
 	rendered, err := capability.NewEngine().Expand(pkg, params, catalog)
 	if err != nil {
@@ -191,6 +193,35 @@ func Lint(dir string, opts LintOptions) ([]Issue, error) {
 // who did not write the package. On the `provides` side there was no
 // failure at all — a package advertising a name nobody spells the same
 // way is silently useful to nobody.
+// integrationIssues holds a package's published events to the closed
+// integration vocabulary (keystone/integration) wherever a domain is
+// declared: an event in a declared domain's namespace must be one of its
+// well-known events. A query or action name there is a category mistake,
+// and anything else is a typo nothing downstream would ever match.
+// Namespaces with no declared domain stay open (ADR-W024).
+func integrationIssues(pkg *pkgspec.Package) []Issue {
+	if pkg.Publishes == nil {
+		return nil
+	}
+	var issues []Issue
+	for i, ev := range pkg.Publishes.Events {
+		domain, ok := integration.DomainOf(ev.Type)
+		if !ok || integration.IsEvent(ev.Type) {
+			continue
+		}
+		field := fmt.Sprintf("publishes.events[%d]", i)
+		if integration.IsQuery(ev.Type) || integration.IsAction(ev.Type) {
+			issues = append(issues, Issue{Rule: "integration", Msg: fmt.Sprintf(
+				"%s: %q is a %s query or action, not an event", field, ev.Type, domain.Name)})
+			continue
+		}
+		issues = append(issues, Issue{Rule: "integration", Msg: fmt.Sprintf(
+			"%s: %q is not a %s event in the vocabulary (%s). Adding one is a reviewed change to keystone/integration",
+			field, ev.Type, domain.Name, strings.Join(domain.Events, ", "))})
+	}
+	return issues
+}
+
 func traitIssues(pkg *pkgspec.Package) []Issue {
 	var issues []Issue
 

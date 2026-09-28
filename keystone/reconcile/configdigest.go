@@ -110,16 +110,27 @@ func managedConfigContents(managedPrefix string, desiredByKey map[resKey]resourc
 	// Caddy above does not apply: for these, replacing the container IS
 	// the reload.
 	out[autheliaAccessPath(managedPrefix)] = string(renderAutheliaAccess(desired))
-	out[homepageServicesPath(managedPrefix)] = string(renderHomepageServices(desired))
 
-	// The dashboard's chrome, for the identical reason (F87). Homepage
-	// reads settings.yaml, widgets.yaml and bookmarks.yaml exactly once
-	// at start, so a layout corrected on disk and not restarted is the
-	// same silent no-op F73 describes — and the layout is the file that
-	// changes when a capability adds the first Admin-classified Route.
-	out[homepageSettingsPath(managedPrefix)] = string(renderHomepageSettings(desired))
-	out[homepageWidgetsPath(managedPrefix)] = string(renderHomepageWidgets())
-	out[homepageBookmarksPath(managedPrefix)] = string(renderHomepageBookmarks())
+	// The dashboard's service list and chrome, for the identical reason
+	// (F87). Homepage reads services.yaml, settings.yaml, widgets.yaml
+	// and bookmarks.yaml exactly once at start, so a layout corrected on
+	// disk and not restarted is the same silent no-op F73 describes — and
+	// the layout is the file that changes when a capability adds the
+	// first Admin-classified Route.
+	//
+	// homepagePrereqFiles is the same selection the prereq writer uses,
+	// which drops any of these whose path a declared ConfigFile already
+	// claims (#410): the loop above already put that ConfigFile's own
+	// content in `out` at that path, and this digest must not disagree
+	// with it.
+	for _, f := range homepagePrereqFiles(managedPrefix, desired) {
+		out[f.path] = string(f.want)
+	}
+	// The Matrix bot registrations. Synapse reads its application services
+	// once, at start, and the Job that installs them re-runs only when its
+	// digest moves — so adding or removing a bot reaches the homeserver by
+	// exactly this line, like a group reaches LLDAP by the two above.
+	out[matrixAppServicesPath(managedPrefix)] = string(renderMatrixAppServices(desired))
 
 	return out
 }

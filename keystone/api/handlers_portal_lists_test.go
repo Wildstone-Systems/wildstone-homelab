@@ -188,3 +188,50 @@ func TestTheListsPageAndDeletingAList(t *testing.T) {
 		t.Fatalf("after delete = %+v", card)
 	}
 }
+
+// #405: while PantryOS is installed it owns the grocery list, so the Lists
+// page cannot grow or tick a grocery list of its own — that would be half a
+// grocery list next to the assistant's. An old grocery list can still be
+// cleared out and deleted, and other lists are untouched.
+func TestWhilePantryOSIsInstalledTheGroceryListIsNotKeptHere(t *testing.T) {
+	h, _ := portalHarness(t)
+	installLists(t, h)
+	const groups = "lists_users"
+	if code := listsDo(t, h, http.MethodPost, "/api/v1/lists/items", "sam", groups,
+		map[string]any{"list": "Shopping", "items": []string{"milk", "eggs"}}, nil); code != http.StatusOK {
+		t.Fatalf("before PantryOS: add = %d", code)
+	}
+	installPantry(t, h)
+
+	var card listsCard
+	if code := listsDo(t, h, http.MethodGet, "/api/v1/lists", "sam", groups, nil, &card); code != http.StatusOK || !card.GroceriesInPantryOS {
+		t.Fatalf("read = %d %+v", code, card)
+	}
+	for _, write := range []struct {
+		path string
+		body map[string]any
+	}{
+		{"/api/v1/lists/items", map[string]any{"list": "shopping", "items": []string{"bread"}}},
+		{"/api/v1/lists/items", map[string]any{"list": "Groceries", "items": []string{"bread"}}},
+		{"/api/v1/lists/check", map[string]any{"list": "shopping", "items": []string{"milk"}}},
+	} {
+		var out map[string]any
+		if code := listsDo(t, h, http.MethodPost, write.path, "sam", groups, write.body, &out); code != http.StatusConflict {
+			t.Fatalf("%s %v = %d, want 409", write.path, write.body["list"], code)
+		}
+	}
+	// Other lists are the Lists page's as ever.
+	if code := listsDo(t, h, http.MethodPost, "/api/v1/lists/items", "sam", groups,
+		map[string]any{"list": "Chores", "items": []string{"bins"}}, nil); code != http.StatusOK {
+		t.Fatalf("chores = %d", code)
+	}
+	// The old grocery list can be cleared out and deleted.
+	if code := listsDo(t, h, http.MethodPost, "/api/v1/lists/remove", "sam", groups,
+		map[string]any{"list": "shopping", "items": []string{"milk"}}, nil); code != http.StatusOK {
+		t.Fatalf("remove = %d", code)
+	}
+	if code := listsDo(t, h, http.MethodPost, "/api/v1/lists/delete", "sam", groups,
+		map[string]any{"list": "shopping"}, nil); code != http.StatusOK {
+		t.Fatalf("delete = %d", code)
+	}
+}

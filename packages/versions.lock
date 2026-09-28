@@ -21,7 +21,7 @@ calendar-radicale 2.1.0 073e921ad3b21dac
 cameras-frigate 1.0.1 0ac585beb5876da1
 captcha-flaresolverr 1.0.1 6420402a747e2ee5
 chat-discord 2.0.0 f18460627b32cd15
-chat-matrix 2.0.0 ecc85c0ff5b1a5d0
+chat-matrix 2.1.1 94161d2dc154aea0
 chat-slack 2.0.2 cf78429005a88e11
 chat-telegram 2.0.0 84b38bec04e10fc1
 code-gitea 1.0.1 44a8494cd02dee51
@@ -46,7 +46,8 @@ ingress-tailnet-ts 1.1.1 61c1e5cfa0848b4b
 inventory-homebox 1.1.0 d1e66d5bca1ebdb5
 lists-wildstone 1.0.0 0d908ac2d2b01860
 mail-roundcube 1.0.3 263209fecaf58b8d
-matrix-synapse 1.0.7 53eff3f635e2f094
+matrix-element 1.0.0 38ed3c2159679e0e
+matrix-synapse 1.0.9 2246360afb310c6e
 media-jellyfin 1.0.3 c1c73df7add23280
 media-plex 1.0.2 5b792e3919a95d8a
 metrics-grafana 1.0.2 a6451806df20268c
@@ -58,7 +59,7 @@ mqtt-mosquitto 1.0.0 655714a2a046b37b
 music-lidarr 1.0.2 1550d84b6977656a
 music-navidrome 1.0.1 343ee7aea309fac7
 notifications 1.0.1 3a33ed5c22f13118
-pantry-pantryos 0.2.1 690e180a0fe9e54d
+pantry-pantryos 0.3.0 da4284bf373553e0
 passwords-vaultwarden 1.0.1 9d174311e604cacf
 pdf-stirling 1.0.0 406324d4385b76a0
 photos-immich 1.0.1 ca6bb9afd82a91af

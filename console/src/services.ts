@@ -130,6 +130,7 @@ const GROUP_OF: Record<string, Group> = {
   "chat-discord": "Chat",
   "chat-matrix": "Chat",
   "matrix-homeserver": "Chat",
+  "matrix-client": "Chat",
   "chat-slack": "Chat",
   "chat-telegram": "Chat",
 
