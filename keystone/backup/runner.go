@@ -48,6 +48,9 @@ type ApplierRunner struct {
 	// Timeout bounds one run. <= 0 uses 30 minutes. A deadline on the
 	// run's context replaces it.
 	Timeout time.Duration
+	// GuardEvery is how often a run's guard (see withGuard) is checked
+	// while the container runs. <= 0 uses 30s.
+	GuardEvery time.Duration
 }
 
 func (a *ApplierRunner) RunContainer(ctx context.Context, node, name string, spec resource.ContainerSpec) error {
@@ -89,6 +92,12 @@ func (a *ApplierRunner) RunContainer(ctx context.Context, node, name string, spe
 	if timeout <= 0 {
 		timeout = 30 * time.Minute
 	}
+	guard := guardFrom(ctx)
+	guardEvery := a.GuardEvery
+	if guardEvery <= 0 {
+		guardEvery = guardEvery30
+	}
+	nextGuard := time.Now().Add(guardEvery)
 	deadline := time.Now().Add(timeout)
 	// A caller that set its own deadline (an off-site run, bounded in
 	// days rather than minutes) is the authority on how long this run
@@ -118,6 +127,15 @@ func (a *ApplierRunner) RunContainer(ctx context.Context, node, name string, spe
 		}
 		if time.Now().After(deadline) {
 			return fmt.Errorf("run %s: still running after %s", name, timeout)
+		}
+		// The disk-space guard: stop restic before the disk fills, not
+		// after. The deferred remove stops the container; restic's
+		// partial pack files are cleaned by the next prune.
+		if guard != nil && !time.Now().Before(nextGuard) {
+			nextGuard = time.Now().Add(guardEvery)
+			if err := guard(ctx); err != nil {
+				return err
+			}
 		}
 		select {
 		case <-ctx.Done():
