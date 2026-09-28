@@ -60,11 +60,18 @@ spec:
 - A target can be tested before use ("test connection": list/stat
   against the bucket) without writing data.
 
-### A3. Local first, then copy off-site
+### A3. Each plan picks a route
+
+Two routes. The owner picks one per BackupPlan.
+
+| Route | Copies | Extra local space | Good for |
+|---|---|---|---|
+| `offsite-only` | S3 only | None (small cache) | Big data whose original already lives on a NAS: movies, media |
+| `local-and-offsite` | Local repo, then S3 | About the size of the data | Small, critical app data: fast, offline restores |
 
 ```
-live data ──backup──▶ local restic repo ──restic copy──▶ BackupTarget
-                      (fast restore)                     (disaster copy)
+offsite-only:       source ──backup──────────────────────────▶ BackupTarget
+local-and-offsite:  source ──backup──▶ local repo ──restic copy──▶ BackupTarget
 ```
 
 - `BackupPlan` gains an optional `offsite` block:
@@ -72,38 +79,88 @@ live data ──backup──▶ local restic repo ──restic copy──▶ Bac
   ```yaml
   offsite:
     target: offsite
+    route: local-and-offsite        # or offsite-only
     passwordSecret: secret/restic-photos-offsite   # separate from local
     schedule: daily
     retention: { keepDaily: 7, keepWeekly: 8, keepMonthly: 12 }
   ```
 
-- The off-site step is `restic copy` from the local repo. Live data is
-  read once, by the local backup.
-- The off-site repo is created with `restic init --copy-chunker-params`
-  so both repos split files the same way, and copies stay deduplicated.
+- **offsite-only** runs `restic backup` straight into the off-site repo.
+  Files stream from the source (host or NAS) through the run container
+  to S3; nothing but restic's cache is written locally. The plan's local
+  `repository` is omitted.
+- **local-and-offsite** runs the local backup, then `restic copy` to the
+  off-site repo. Live data is read once. The off-site repo is created
+  with `restic init --copy-chunker-params`, so both repos split files the
+  same way and copies stay deduplicated.
+- **Where the local repo lives** is the owner's choice: a host volume, or
+  a NAS share (A3.2).
 - **Separate password.** A leaked local password does not open the
   off-site copy, and the other way round.
 - Off-site has its own schedule and retention. A broken endpoint fails
   only the off-site step; local backups keep running.
-- Rejected: direct-to-S3 plans with no local repo — slow restores, and
-  every run re-reads live data across the network.
+
+### A3.1. Disk-space guard
+
+A local copy must never fill the disk it lives on. It is checked at
+three points.
+
+- **New agent op `DiskSpace{path}`** returns total and free bytes for the
+  filesystem holding a managed path or volume (host disk or NAS mount).
+  Today the agent only reports free space on the root disk.
+- **Reserve.** Every local repo location keeps a reserve free: by default
+  the larger of 10% of the disk or 20 GiB. The owner can change it per
+  location, never to zero.
+
+1. **Before approval.** The plan shows source size (`MeasureUsage`), the
+   estimated local repo size, and free space at the repo location. The
+   estimate is source size × 1.2 (a margin for kept older versions). If
+   it would cut into the reserve, the plan is **refused** with a plain
+   message and two suggestions: switch to `offsite-only`, or put the
+   local repo on the NAS.
+2. **Before every run.** Free space is checked again, because data
+   grows. If the reserve would be crossed, the local step is **skipped**
+   and the run backs up **directly off-site** for that run instead. The
+   data stays protected, the ledger records `skipped-local: low disk`,
+   and the morning report asks the owner to act.
+3. **During a run.** The runner checks free space on every poll. If it
+   reaches the reserve, the restic container is stopped and the run is
+   marked failed. Stopping restic mid-backup is safe: the partial data
+   is removed by the next prune.
+
+- **Early warning.** The morning report shows each local repo's growth
+  trend: "local copy of *movies* will reach the reserve in ~20 days".
+
+### A3.2. NAS shares as sources and repo locations
+
+- A NAS share is attached with the existing `EnsureMount` op (NFS/SMB),
+  under the managed mount root (`/srv/wildstone/...`).
+- A plan's `paths` may point into such a mount, so NAS data is read over
+  the network and never stored on the host.
+- A plan's local `repository` may be a path on such a mount, not only a
+  Docker volume name.
+- A run whose source or repo mount is missing fails loudly. It never
+  backs up an empty mount point as "nothing changed", and never writes a
+  repo onto the host disk underneath a missing mount.
 
 ### A4. The user chooses what goes off-site, including host folders
 
 - **Per plan.** Off-site is switched on or off per BackupPlan, so per app
   or dataset.
-- **Host folders.** `BackupPlanSpec` gains `paths: []string` next to
-  `volumes`, so owner-authored plans can cover folders such as
-  `/srv/wildstone/media/movies`. Only paths under the Wardstone managed
-  prefix are accepted — the agent already refuses other host mounts.
+- **Host and NAS folders.** `BackupPlanSpec` gains `paths: []string`
+  next to `volumes`, so owner-authored plans can cover folders such as
+  `/srv/wildstone/media/movies`, on the host or on a NAS mount (A3.2).
+  Only paths under the Wardstone managed prefix are accepted — the agent
+  already refuses other host mounts.
 - **Owner-authored plans.** The user may create plans that no package
   ships ("my movie library"). Package plans stay as they are.
 - **Excludes.** `exclude: []string` (restic `--exclude` patterns) per plan.
 - **Data class.** Packages tag each plan `critical`, `important` or
   `rebuildable`. The Console groups plans by class, so choosing is easy;
   the class does not change engine behaviour.
-- **Cost is visible before approval.** The plan shows source size (via
-  `MeasureUsage`) and a rough monthly storage estimate.
+- **Cost and space are visible before approval.** The plan shows source
+  size (`MeasureUsage`), a rough monthly storage estimate, and the
+  disk-space check (A3.1).
 
 ### A5. Whole-site recovery set
 
@@ -183,7 +240,8 @@ copy is cryptographically gone — by design.
 
 ## Rejected alternatives
 
-- **Direct-to-S3 plans** — see A3.
+- **Local-first for every plan** — doubles the storage for big NAS data
+  the owner cannot fit locally; replaced by the per-plan route (A3).
 - **Sharing the local password** — one leak opens both copies.
 - **rclone-syncing the local repo volume** — this also copies local
   corruption or deletion off-site, and there is no independent retention.
@@ -196,11 +254,13 @@ copy is cryptographically gone — by design.
 |---|---|---|
 | I1 | Truthful run results (exit-code arm) | — |
 | I2 | `BackupTarget` kind, validation, policy, risk grading | — |
-| I3 | Off-site copy in the engine (`offsite` block, `restic copy`, egress) | I1, I2 |
-| I4 | Selection: `paths`, `exclude`, owner-authored plans, data class | I2 |
-| I5 | Verification: `restic check`, off-site drill, freshness and shrink alerts | I3 |
-| I6 | API, CLI and Console: plans list, targets, test connection, toggles, cost | I2–I4 |
-| I7 | Whole-site set: Statefile bundle, runtime DB snapshot, sealed secrets, recovery kit | I3 |
-| I8 | DB consistency hooks for DB-backed packages (pg_dump, sqlite) | I1 |
-| I9 | Hardening: Object Lock, key rotation guide, provider guides | I3 |
-| I10 | Total-loss runbook and CI exit drill against MinIO | I5, I7 |
+| I3 | Off-site routes in the engine (`offsite` block, `offsite-only` backup, `restic copy`, egress) | I1, I2 |
+| I4 | Disk-space guard: `DiskSpace` op, reserve, approval/run/in-run checks, growth warning | I1 |
+| I5 | NAS shares as backup sources and local repo locations | I4 |
+| I6 | Selection: `paths`, `exclude`, owner-authored plans, data class | I2, I5 |
+| I7 | Verification: `restic check`, off-site drill, freshness and shrink alerts | I3 |
+| I8 | API, CLI and Console: plans list, targets, test connection, route picker, space and cost | I2–I6 |
+| I9 | Whole-site set: Statefile bundle, runtime DB snapshot, sealed secrets, recovery kit | I3 |
+| I10 | DB consistency hooks for DB-backed packages (pg_dump, sqlite) | I1 |
+| I11 | Hardening: Object Lock, key rotation guide, provider guides | I3 |
+| I12 | Total-loss runbook and CI exit drill against MinIO | I7, I9 |

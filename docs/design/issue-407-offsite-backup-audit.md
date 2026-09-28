@@ -110,7 +110,10 @@ calling it trustworthy.
 
 ## 5. Owner decisions (2026-09-28)
 
-1. **Copy from local** — local repo first, then `restic copy` off-site.
+1. **Per-plan route** — `offsite-only` (straight to S3, for big NAS data)
+   or `local-and-offsite` (local repo, then `restic copy`). A disk-space
+   guard stops a local copy from filling its disk; the local repo may
+   live on a NAS. (Revised from "always copy from local".)
 2. **Separate password** for the off-site repo.
 3. **Whole-site recovery** — Statefile, runtime DB and (sealed) secrets go
    off-site too, so a total loss restores "like nothing happened".
