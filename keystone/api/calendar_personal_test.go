@@ -137,11 +137,11 @@ func TestAMembersOwnCalendarsAreTheirsAlone(t *testing.T) {
 		if c.Personal {
 			own = &choices[i]
 		}
-		if c.ID == "personal:secret" {
+		if c.ID == "personal:alex/secret" {
 			t.Fatal("sam was offered alex's calendar")
 		}
 	}
-	if own == nil || own.ID != "personal:personal" || !own.Writable || own.Color != defaultPersonalColor {
+	if own == nil || own.ID != "personal:sam/personal" || !own.Writable || own.Color != defaultPersonalColor {
 		t.Fatalf("sam's own calendar = %+v in %+v", own, choices)
 	}
 	var events []calendarPageEvent
@@ -160,7 +160,7 @@ func TestAMembersOwnCalendarsAreTheirsAlone(t *testing.T) {
 	}
 
 	// Naming somebody else's calendar reaches nothing.
-	for _, id := range []string{"personal:secret", "personal:../alex/secret", "personal:"} {
+	for _, id := range []string{"personal:alex/secret", "personal:sam/../alex/secret", "personal:"} {
 		h.unthrottled()
 		r := h.member("GET", "/api/v1/calendar/events?from=2026-09-01&to=2026-09-30&calendar="+url.QueryEscape(id), "sam", "calendar_users", nil, "")
 		r.Body.Close()
@@ -177,7 +177,7 @@ func TestAMembersOwnCalendarsAreTheirsAlone(t *testing.T) {
 
 	// Their own is theirs to write, and the household activity does not
 	// repeat what is on it.
-	if status, out := h.calendarSend("sam", "/api/v1/calendar/events", `{"calendar":"personal:personal","title":"Therapy","date":"2026-09-21","allDay":true}`); status != http.StatusOK {
+	if status, out := h.calendarSend("sam", "/api/v1/calendar/events", `{"calendar":"personal:sam/personal","title":"Therapy","date":"2026-09-21","allDay":true}`); status != http.StatusOK {
 		t.Fatal(status, out)
 	}
 	if len(accounts["sam"].books["personal"].writes) != 1 {
@@ -194,7 +194,7 @@ func TestAMembersOwnCalendarsAreTheirsAlone(t *testing.T) {
 	}
 
 	// Hiding it is remembered like any other calendar.
-	if status, out := h.calendarSend("sam", "/api/v1/calendar/visibility", `{"calendar":"personal:personal","visible":false}`); status != http.StatusOK {
+	if status, out := h.calendarSend("sam", "/api/v1/calendar/visibility", `{"calendar":"personal:sam/personal","visible":false}`); status != http.StatusOK {
 		t.Fatal(status, out)
 	}
 	json.Unmarshal(h.calendarGet("sam", "")["events"], &events)
@@ -203,7 +203,7 @@ func TestAMembersOwnCalendarsAreTheirsAlone(t *testing.T) {
 			t.Fatal("a hidden personal calendar was still shown")
 		}
 	}
-	if status, _ := h.calendarSend("sam", "/api/v1/calendar/visibility", `{"calendar":"personal:secret","visible":false}`); status != http.StatusForbidden {
+	if status, _ := h.calendarSend("sam", "/api/v1/calendar/visibility", `{"calendar":"personal:alex/secret","visible":false}`); status != http.StatusForbidden {
 		t.Fatal("stored a preference for somebody else's calendar")
 	}
 }
@@ -211,12 +211,12 @@ func TestAMembersOwnCalendarsAreTheirsAlone(t *testing.T) {
 func TestAnEventDoesNotCrossBetweenSharedAndPersonal(t *testing.T) {
 	h, accounts := personalHarness(t)
 	status, out := h.calendarSend("sam", "/api/v1/calendar/events/update",
-		`{"calendar":"household","targetCalendar":"personal:personal","href":"/GROUPS/Y2FsZW5kYXJfdXNlcnM=/x.ics","title":"x","date":"2026-09-21","allDay":true}`)
+		`{"calendar":"household","targetCalendar":"personal:sam/personal","href":"/GROUPS/Y2FsZW5kYXJfdXNlcnM=/x.ics","title":"x","date":"2026-09-21","allDay":true}`)
 	if status != http.StatusBadRequest {
 		t.Fatal(status, out)
 	}
 	status, out = h.calendarSend("sam", "/api/v1/calendar/events/update",
-		`{"calendar":"personal:personal","targetCalendar":"household","href":"/sam/personal/x.ics","title":"x","date":"2026-09-21","allDay":true}`)
+		`{"calendar":"personal:sam/personal","targetCalendar":"household","href":"/sam/personal/x.ics","title":"x","date":"2026-09-21","allDay":true}`)
 	if status != http.StatusBadRequest {
 		t.Fatal(status, out)
 	}
@@ -244,6 +244,33 @@ func TestCreatingAPersonalCalendar(t *testing.T) {
 		if status, _ := h.calendarSend("sam", "/api/v1/calendar/personal", bad); status != http.StatusBadRequest {
 			t.Errorf("%s answered %d", bad, status)
 		}
+	}
+}
+
+// A rename does not lose the calendars made under the old login: Radicale
+// keeps them there, and the page still lists them, while a new calendar
+// is made under the login the member now signs in with.
+func TestPersonalCalendarsSurviveARename(t *testing.T) {
+	h, accounts := personalHarness(t)
+	accounts["samuel"] = &fakeAccount{missing: true, books: map[string]*fakeBook{}}
+	if err := h.s.DB.RenameButlerMemberHandle("sam", "samuel"); err != nil {
+		t.Fatal(err)
+	}
+	var choices []calendarChoice
+	json.Unmarshal(h.calendarGet("samuel", "")["calendars"], &choices)
+	found := false
+	for _, c := range choices {
+		found = found || c.ID == "personal:sam/personal"
+	}
+	if !found {
+		t.Fatalf("the calendar made before the rename is gone: %+v", choices)
+	}
+	if status, out := h.calendarSend("samuel", "/api/v1/calendar/personal", `{"name":"New"}`); status != http.StatusOK ||
+		!strings.HasPrefix(out["id"].(string), "personal:samuel/") {
+		t.Fatal(status, out)
+	}
+	if len(accounts["samuel"].calendars) != 1 || len(accounts["sam"].calendars) != 1 {
+		t.Fatal("the new calendar was not made under the current login")
 	}
 }
 

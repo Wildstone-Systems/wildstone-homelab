@@ -409,6 +409,11 @@ volume.
 - **New calendar.** The page can make the member a new calendar in their
   own account, so it reaches their phone as well. For somebody who has
   never signed in to the calendar, the principal is created first.
+- **A rename keeps them.** Radicale keeps a person's calendars under the
+  login that made them and does not move them when the login changes. The
+  page lists calendars under every login the Person has had (#372) and
+  makes new ones under the current login, which is the one a phone signs
+  in with.
 - **Undeclared shared collections stay out.** The service account's
   personal rules exclude `GROUPS/`, so a shared calendar removed from the
   registry is not the service's to read.

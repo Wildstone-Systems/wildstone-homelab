@@ -116,3 +116,36 @@ func (db *DB) PersonalFilesDir(member, propose string) (dir string, ok bool, err
 	}
 	return propose, true, nil
 }
+
+// PersonHandles returns every handle the Person currently called member
+// has carried: the current one first, then earlier ones, oldest first. A
+// member with no Person on record has only their own name.
+//
+// The member is matched by the handle they carry NOW, not through retired
+// handles, so a directory account that happens to share somebody's old
+// name is not given that somebody's history.
+func (db *DB) PersonHandles(member string) ([]string, error) {
+	var id string
+	err := db.sql.QueryRow(`SELECT person_id FROM butler_members WHERE member = ?`, member).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return []string{member}, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("runtimedb: reading the handles of %q: %w", member, err)
+	}
+	rows, err := db.sql.Query(
+		`SELECT handle FROM person_handles WHERE person_id = ? AND handle <> ? ORDER BY recorded_at, handle`, id, member)
+	if err != nil {
+		return nil, fmt.Errorf("runtimedb: reading the handles of %q: %w", member, err)
+	}
+	defer rows.Close()
+	out := []string{member}
+	for rows.Next() {
+		var h string
+		if err := rows.Scan(&h); err != nil {
+			return nil, err
+		}
+		out = append(out, h)
+	}
+	return out, rows.Err()
+}

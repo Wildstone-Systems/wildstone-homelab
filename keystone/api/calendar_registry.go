@@ -334,8 +334,11 @@ func (s *Server) bookingCalendar(id string) (sharedcalendar.Calendar, CalendarBo
 // The dashboard, the agenda, bookings and every Butler tool read declared
 // shared calendars only.
 
-// personalCalendarPrefix marks a personal calendar's identifier. A colon
-// cannot appear in a declared calendar id, so the two never collide.
+// personalCalendarPrefix marks a personal calendar's identifier,
+// `personal:<principal>/<collection>`. A colon cannot appear in a declared
+// calendar id, so the two never collide. The identifier only ever selects
+// from the member's own listing, so naming another principal in it
+// reaches nothing.
 const personalCalendarPrefix = "personal:"
 
 // defaultPersonalColor is used for a calendar whose client set none.
@@ -369,10 +372,11 @@ func findPersonal(list []personalCalendar, id string) *personalCalendar {
 	return nil
 }
 
-// personalPrincipal is the member's own principal address, and the
-// collections client that reaches it.
-func (s *Server) personalPrincipal(member string) (string, calendarCollections, error) {
-	name := strings.ToLower(strings.TrimSpace(member))
+// personalPrincipal is the address of the principal a login name signs in
+// to, and the collections client that reaches it. Callers pass only the
+// member's own names.
+func (s *Server) personalPrincipal(login string) (string, calendarCollections, error) {
+	name := strings.ToLower(strings.TrimSpace(login))
 	if !principalPattern.MatchString(name) || strings.Trim(name, ".") == "" {
 		return "", nil, fmt.Errorf("your sign-in name can't be used for a calendar")
 	}
@@ -391,32 +395,66 @@ func (s *Server) personalPrincipal(member string) (string, calendarCollections, 
 	return principal, collections, nil
 }
 
+// personalLogins is every login the member's calendars can be under: the
+// name they sign in with now, then the names they signed in with before a
+// rename. Radicale keeps a person's calendars under the login that made
+// them and does not move them when a login changes, so after a rename the
+// page still finds the ones made under the old name (#372). They stay
+// reachable here; a phone signed in with the new name sees only the new
+// principal, which is where new calendars are made.
+func (s *Server) personalLogins(member string) []string {
+	if s.DB == nil {
+		return []string{member}
+	}
+	handles, err := s.DB.PersonHandles(member)
+	if err != nil {
+		s.Log.Warn("calendar: reading a member's earlier names", "err", err)
+		return []string{member}
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, h := range handles {
+		if l := strings.ToLower(strings.TrimSpace(h)); l != "" && !seen[l] {
+			seen[l] = true
+			out = append(out, h)
+		}
+	}
+	return out
+}
+
 // personalCalendars lists the member's own event calendars.
 func (s *Server) personalCalendars(ctx context.Context, member string) ([]personalCalendar, error) {
-	principal, collections, err := s.personalPrincipal(member)
-	if err != nil {
-		return nil, err
-	}
-	found, err := collections.Calendars(ctx, principal)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]personalCalendar, 0, len(found))
-	for _, c := range found {
-		// Confined again here, against the principal this derived: a
-		// collection is used only if it is directly under it.
-		if !strings.HasPrefix(c.URL, principal) || strings.Contains(strings.TrimSuffix(strings.TrimPrefix(c.URL, principal), "/"), "/") {
+	var out []personalCalendar
+	for i, login := range s.personalLogins(member) {
+		principal, collections, err := s.personalPrincipal(login)
+		if err != nil {
+			if i == 0 {
+				return nil, err
+			}
+			// An earlier name that can't be a principal holds nothing.
 			continue
 		}
-		color := c.Color
-		if color == "" {
-			color = defaultPersonalColor
+		found, err := collections.Calendars(ctx, principal)
+		if err != nil {
+			return nil, err
 		}
-		out = append(out, personalCalendar{
-			Calendar: sharedcalendar.Calendar{ID: personalCalendarPrefix + c.Segment, Name: c.Name, Color: color, Personal: true},
-			URL:      c.URL,
-			book:     s.CalendarBookFor(c.URL),
-		})
+		name := strings.ToLower(strings.TrimSpace(login))
+		for _, c := range found {
+			// Confined again here, against the principal this derived: a
+			// collection is used only if it is directly under it.
+			if !strings.HasPrefix(c.URL, principal) || strings.Contains(strings.TrimSuffix(strings.TrimPrefix(c.URL, principal), "/"), "/") {
+				continue
+			}
+			color := c.Color
+			if color == "" {
+				color = defaultPersonalColor
+			}
+			out = append(out, personalCalendar{
+				Calendar: sharedcalendar.Calendar{ID: personalCalendarPrefix + name + "/" + c.Segment, Name: c.Name, Color: color, Personal: true},
+				URL:      c.URL,
+				book:     s.CalendarBookFor(c.URL),
+			})
+		}
 	}
 	return out, nil
 }
@@ -491,7 +529,8 @@ func (s *Server) calendarPersonalCreate(_ http.ResponseWriter, r *http.Request, 
 	// The household activity names the act and not the calendar: its
 	// name is the member's own business.
 	s.event("calendar.personal.create", "", portalActor(member), fmt.Sprintf("%s added a calendar of their own", member))
-	return calendarChoice{ID: personalCalendarPrefix + segment, Name: name, Color: color, Writable: true, Visible: true, Personal: true}, http.StatusOK, nil
+	login := strings.ToLower(strings.TrimSpace(member))
+	return calendarChoice{ID: personalCalendarPrefix + login + "/" + segment, Name: name, Color: color, Writable: true, Visible: true, Personal: true}, http.StatusOK, nil
 }
 
 // portalActor is the acting identity the portal records events under.

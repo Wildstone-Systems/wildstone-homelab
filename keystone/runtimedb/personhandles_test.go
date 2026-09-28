@@ -137,3 +137,18 @@ func TestMigration0093CarriesHandlesPreferencesAndFolders(t *testing.T) {
 		t.Fatalf("carried folder = %q, %v, %v; want the lower-cased folder already in use", dir, ok, err)
 	}
 }
+
+func TestPersonHandlesListsTheCurrentNameFirst(t *testing.T) {
+	db := openWith(t, "sam")
+	if err := db.RenameButlerMemberHandle("sam", "samuel"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := db.PersonHandles("samuel")
+	if err != nil || len(got) != 2 || got[0] != "samuel" || got[1] != "sam" {
+		t.Fatalf("PersonHandles = %v, %v", got, err)
+	}
+	// A name that is only somebody's old handle is not that somebody.
+	if got, _ := db.PersonHandles("sam"); len(got) != 1 || got[0] != "sam" {
+		t.Fatalf("an old handle reached its Person's history: %v", got)
+	}
+}
