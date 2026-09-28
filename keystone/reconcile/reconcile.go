@@ -355,7 +355,7 @@ type managedFile struct {
 // supposed to bound it.
 func nodePrereqFiles(managedPrefix string, desired []resource.Resource) []managedFile {
 	clientsFile := renderAutheliaClients(desired)
-	return []managedFile{
+	files := []managedFile{
 		{baseCaddyfilePath(managedPrefix), renderBaseCaddyfile(postureOf(desired)), false},
 		{placeholderFragmentPath(managedPrefix), renderPlaceholderFragment(), false},
 		// The merged Authelia clients file qualifies for the same reason
@@ -391,20 +391,72 @@ func nodePrereqFiles(managedPrefix string, desired []resource.Resource) []manage
 		// that must already be on disk when the fragment goes live. No
 		// secret references, so no materialization.
 		{autheliaAccessPath(managedPrefix), renderAutheliaAccess(desired), false},
-		// Homepage's service list. Same category again: the dashboard
-		// container bind-mounts this file, so it must be on disk before
-		// the container is created — which is exactly what a prereq
-		// guarantees, and why a file mount is safe here (F55).
+	}
+	// Homepage's service list and chrome (F87): the dashboard container
+	// bind-mounts these files, so they must be on disk before the
+	// container is created — which is exactly what a prereq guarantees,
+	// and why a file mount is safe here (F55). Ordered last so the layout
+	// naming a group is never on disk before the services in it.
+	//
+	// homepagePrereqFiles drops any of these whose exact path a declared
+	// ConfigFile already claims (#410): a package that ships its own
+	// dashboard settings owns that path, and the generic renderer must
+	// not compete with it for the same file on every tick.
+	return append(files, homepagePrereqFiles(managedPrefix, desired)...)
+}
+
+// homepageClaimedPaths is the set of managed paths, under this prefix,
+// that a declared ConfigFile already owns.
+//
+// A generated Homepage file sharing one of these paths is the #410 bug:
+// two writers for one file, with the reconciler's own prereq repair
+// overwriting the package's declared content on every tick and
+// manufacturing drift no approval could ever resolve, because approving
+// the repair just restored the file the next tick immediately
+// re-overwrote.
+func homepageClaimedPaths(managedPrefix string, desired []resource.Resource) map[string]bool {
+	claimed := make(map[string]bool)
+	for _, r := range desired {
+		if r.Kind != resource.KindConfigFile || r.ConfigFile == nil {
+			continue
+		}
+		p, err := configFilePath(managedPrefix, r)
+		if err != nil {
+			// Unresolvable path: applyConfigFileStep will fail on it with
+			// the same error, so it never lands on disk and claims
+			// nothing.
+			continue
+		}
+		claimed[p] = true
+	}
+	return claimed
+}
+
+// homepagePrereqFiles is the Homepage-generated chrome — services,
+// settings, widgets, bookmarks — minus any file whose path a declared
+// ConfigFile already claims.
+//
+// Both the prereq writer (nodePrereqFiles) and the container config
+// digest (managedConfigContents) draw from this one selection, so a
+// path has exactly one owner everywhere Keystone touches it: the
+// declared ConfigFile where one exists, the generic renderer everywhere
+// else.
+func homepagePrereqFiles(managedPrefix string, desired []resource.Resource) []managedFile {
+	claimed := homepageClaimedPaths(managedPrefix, desired)
+	candidates := []managedFile{
 		{homepageServicesPath(managedPrefix), renderHomepageServices(desired), false},
-		// The dashboard's chrome (F87): the layout that turns the service
-		// list into a grid, the info widgets, and an empty bookmark list
-		// that stops Homepage seeding its sample one. Same category as the
-		// service list above, and ordered after it so the layout naming a
-		// group is never on disk before the services in it.
 		{homepageSettingsPath(managedPrefix), renderHomepageSettings(desired), false},
 		{homepageWidgetsPath(managedPrefix), renderHomepageWidgets(), false},
 		{homepageBookmarksPath(managedPrefix), renderHomepageBookmarks(), false},
 	}
+	out := make([]managedFile, 0, len(candidates))
+	for _, f := range candidates {
+		if claimed[f.path] {
+			continue
+		}
+		out = append(out, f)
+	}
+	return out
 }
 
 // prereqRepairedClients reports whether the merged Authelia clients file

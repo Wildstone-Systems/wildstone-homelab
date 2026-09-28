@@ -217,6 +217,47 @@ func TestPrefixRootMountIsASpectator(t *testing.T) {
 	}
 }
 
+// TestDeclaredDashboardSettingsAreNotOverwrittenInTheDigest pins #410: a
+// package that declares its own dashboard/settings.yaml ConfigFile is the
+// one owner of that path. Before the fix, managedConfigContents collected
+// the declared ConfigFile and then unconditionally overwrote the same key
+// with the generated Homepage settings, so the digest never reflected the
+// declared owner — the container hash "converged" against content nothing
+// ever wrote to disk (prereq writes and the digest disagreeing is exactly
+// how the recurring drift proposal was manufactured).
+func TestDeclaredDashboardSettingsAreNotOverwrittenInTheDigest(t *testing.T) {
+	declared := "householdName: The Smiths\naccentHue: 210\nsearchEngine: duckduckgo\n"
+	settings := cfgFile("dashboard-settings", "dashboard", "settings.yaml", declared)
+
+	contents := managedConfigContents(cfgPrefix, byKey(settings))
+	got, ok := contents[homepageSettingsPath(cfgPrefix)]
+	if !ok {
+		t.Fatal("declared dashboard settings missing from the digest contents entirely")
+	}
+	if got != declared {
+		t.Errorf("dashboard/settings.yaml in the digest = %q, want the declared ConfigFile content %q", got, declared)
+	}
+}
+
+// TestAnUnrelatedCapabilitysSettingsDoesNotSuppressHomepage guards the
+// other direction of the same fix: the exclusion is keyed by the exact
+// managed PATH a ConfigFile claims, not by filename. A different
+// capability that happens to also ship a "settings.yaml" must not stop
+// Homepage's own chrome from being generated, because the two files live
+// in different capability subtrees and never collide on disk.
+func TestAnUnrelatedCapabilitysSettingsDoesNotSuppressHomepage(t *testing.T) {
+	other := cfgFile("pantryos-settings", "pantryos", "settings.yaml", "some: other-app-setting\n")
+
+	contents := managedConfigContents(cfgPrefix, byKey(other))
+	got, ok := contents[homepageSettingsPath(cfgPrefix)]
+	if !ok {
+		t.Fatal("Homepage's own settings.yaml was suppressed by an unrelated capability's file of the same name")
+	}
+	if want := string(renderHomepageSettings(nil)); got != want {
+		t.Errorf("Homepage settings in the digest = %q, want the generated chrome %q", got, want)
+	}
+}
+
 // keyed builds the desired-set map managedConfigContents expects.
 func keyed(rs ...resource.Resource) map[resKey]resource.Resource {
 	out := map[resKey]resource.Resource{}

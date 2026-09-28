@@ -100,6 +100,66 @@ func TestPrereqFilesAreRepairedOnATick(t *testing.T) {
 	}
 }
 
+// TestDeclaredDashboardSettingsSurviveRepair pins #410: a household using
+// the native dashboard declares its own ConfigFile at the exact path the
+// generic Homepage renderer also writes to (dashboard/settings.yaml).
+// Before the fix, repairNodePrereqs unconditionally rewrote that path on
+// every tick — BEFORE observe runs — so the declared file was clobbered
+// the moment it landed, observe then saw the ConfigFile as drifted
+// (RiskMedium, requires approval), and no approval could ever converge it:
+// approving the repair only restored the file the very next tick
+// immediately overwrote again.
+func TestDeclaredDashboardSettingsSurviveRepair(t *testing.T) {
+	h := startGateway(t, []string{"tok"})
+	agent := newTestAgent(t, h, "node-a", "tok")
+	if !h.gw.WaitConnected("node-a", 10*time.Second) {
+		t.Fatal("agent never connected")
+	}
+	rec := newReconciler(&GatewayApplier{Gateway: h.gw})
+
+	settings := configFile("dashboard-settings", "capability/dashboard", "settings.yaml",
+		"householdName: The Smiths\naccentHue: 210\nsearchEngine: duckduckgo\n")
+	desired := []resource.Resource{settings}
+
+	if _, err := rec.Reconcile(t.Context(), "node-a", desired); err != nil {
+		t.Fatalf("first tick: %v", err)
+	}
+
+	settingsPath := managedPathForTest(agent, homepageSettingsPath(testManagedPrefix))
+	got, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != settings.ConfigFile.Content {
+		t.Fatalf("declared dashboard settings not on disk after the first tick:\n%s", got)
+	}
+
+	// Three more ticks with no approval of anything: the file the
+	// household declared must simply stay converged, not oscillate
+	// between the declared content and Homepage's own generated chrome.
+	for tick := 2; tick <= 4; tick++ {
+		out, err := rec.Reconcile(t.Context(), "node-a", desired)
+		if err != nil {
+			t.Fatalf("tick %d: %v", tick, err)
+		}
+		for _, p := range out.PrereqRepaired {
+			if p == homepageSettingsPath(testManagedPrefix) {
+				t.Fatalf("tick %d: the prereq writer overwrote the declared dashboard settings", tick)
+			}
+		}
+		if out.PendingApproval {
+			t.Fatalf("tick %d: a drift proposal was manufactured for a file only Keystone itself was changing", tick)
+		}
+		got, err := os.ReadFile(settingsPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(got) != settings.ConfigFile.Content {
+			t.Fatalf("tick %d: declared dashboard settings overwritten:\n%s", tick, got)
+		}
+	}
+}
+
 // TestReservedRouteNameIsRefused pins F35. The placeholder fragment lives
 // at a fixed path with no reservation on the Route name that renders
 // there, so a Route could claim it: it applied and served, the next
