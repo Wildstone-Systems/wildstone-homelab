@@ -54,6 +54,7 @@
   </div>
 
   <div id="note"></div>
+  <div id="pantry"></div>
 
   <div class="lists-grid">
     <nav class="lists-rail" aria-label="The household's lists">
@@ -78,8 +79,9 @@
         </button>
       </div>
       <div id="confirm"></div>
+      <div id="old-groceries"></div>
       <div id="items"></div>
-      <div class="composer">
+      <div class="composer" id="add-box">
         <label class="sr" for="add-text">Add to the list</label>
         <textarea id="add-text" rows="1" placeholder="Add items — milk, eggs"></textarea>
         <button class="hbtn hbtn-primary send" id="add" type="button" aria-label="Add">
@@ -122,6 +124,14 @@
   }
 
   var lists = [], current = "";
+  // While PantryOS is installed it keeps the grocery list (ADR-W044 A3): a
+  // grocery-named list here is the old one, to clear out, never to grow.
+  var groceriesInPantryOS = false;
+  var groceryNames = { "groceries": 1, "grocery": 1, "shopping": 1, "grocery list": 1, "shopping list": 1, "groceries list": 1 };
+  function isGroceryList(name) {
+    return !!groceryNames[String(name || "").trim().toLowerCase().split(/\s+/).join(" ")];
+  }
+  function oldGroceries(name) { return groceriesInPantryOS && isGroceryList(name); }
   // A list the person named with New list exists only once its first
   // item is added, the same as asking the assistant.
   var pendingNew = "";
@@ -150,13 +160,14 @@
       })
       .then(function (j) {
         lists = j.lists || [];
+        groceriesInPantryOS = !!j.groceriesInPantryOS;
         var names = lists.map(function (l) { return l.name; });
         var keep = names.filter(function (n) { return n.toLowerCase() === current.toLowerCase(); })[0];
         if (keep) {
           current = keep;
           if (pendingNew && pendingNew.toLowerCase() === keep.toLowerCase()) { pendingNew = ""; }
         } else if (!(pendingNew && current === pendingNew)) {
-          current = names[0] || pendingNew || "Shopping";
+          current = names[0] || pendingNew || (groceriesInPantryOS ? "" : "Shopping");
         }
         paint();
       })
@@ -164,6 +175,16 @@
   }
 
   function paint() {
+    var pantry = el("pantry");
+    clear(pantry);
+    if (groceriesInPantryOS) {
+      var p = make("div", "note note-info");
+      p.style.marginBottom = "var(--space-4)";
+      p.appendChild(icon("package"));
+      p.appendChild(make("div", null, "Your grocery list lives in PantryOS: add and tick groceries there, " +
+        "or ask the assistant. These lists are for everything else."));
+      pantry.appendChild(p);
+    }
     var rail = el("rail");
     clear(rail);
     var shown = lists.slice();
@@ -197,6 +218,15 @@
     el("clear").hidden = !list.done;
     el("delete").hidden = !!list.pending;
 
+    var old = oldGroceries(list.name);
+    el("add-box").hidden = old;
+    var oldBox = el("old-groceries");
+    clear(oldBox);
+    if (old && !list.pending) {
+      oldBox.appendChild(make("div", "note note-warn", "This is the old grocery list, from before PantryOS. " +
+        "Nothing can be added or ticked here any more; remove what you have moved, or delete the list."));
+    }
+
     var box = el("items");
     clear(box);
     if (!list.items || !list.items.length) {
@@ -210,6 +240,7 @@
       var tick = document.createElement("input");
       tick.type = "checkbox";
       tick.checked = !!it.checked;
+      tick.disabled = old;
       tick.addEventListener("change", function () {
         post("/api/v1/lists/check", { list: list.name, items: [it.text], checked: tick.checked })
           .then(load).catch(function (err) { tick.checked = !tick.checked; failed(err); });
@@ -251,6 +282,11 @@
   function startNew() {
     var box = el("new-name"), name = box.value.trim().slice(0, 60);
     if (!name) { box.focus(); return; }
+    if (oldGroceries(name)) {
+      note("bad", "The grocery list lives in PantryOS while it is installed. Add groceries there, or ask the assistant.");
+      box.focus();
+      return;
+    }
     var existing = lists.filter(function (l) { return l.name.toLowerCase() === name.toLowerCase(); })[0];
     current = existing ? existing.name : name;
     pendingNew = existing ? "" : name;
