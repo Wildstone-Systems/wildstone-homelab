@@ -580,4 +580,26 @@ func TestBackupVolumesDeclared(t *testing.T) {
 	if n := count(pathRepo, vol("immich-library", "n1")); n != 0 {
 		t.Fatalf("a path repository was treated as a volume: %d", n)
 	}
+
+	// An UNTOUCHED plan still counts when the change removes or moves a
+	// volume it uses; an unrelated volume change does not flag it.
+	current := []resource.Resource{plan(), vol("immich-library", "n1"), vol("backup-repo", "n1")}
+	for name, tc := range map[string]struct {
+		proposed []resource.Resource
+		want     bool
+	}{
+		"source volume deleted":  {[]resource.Resource{plan(), vol("backup-repo", "n1")}, true},
+		"source volume moved":    {[]resource.Resource{plan(), vol("immich-library", "n2"), vol("backup-repo", "n1")}, true},
+		"repo volume deleted":    {[]resource.Resource{plan(), vol("immich-library", "n1")}, true},
+		"unrelated volume added": {[]resource.Resource{plan(), vol("immich-library", "n1"), vol("backup-repo", "n1"), vol("other", "n1")}, false},
+	} {
+		v, _ := e.Validate(Change{Current: current, Proposed: tc.proposed})
+		got := false
+		for _, x := range v {
+			got = got || x.Rule == RuleBackupVolumesDeclared
+		}
+		if got != tc.want {
+			t.Errorf("%s: violation %v, want %v (%v)", name, got, tc.want, v)
+		}
+	}
 }

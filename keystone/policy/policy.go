@@ -199,6 +199,41 @@ func (e *Engine) Validate(ch Change) (violations, exempted []Violation) {
 			}
 		}
 	}
+	// A Volume removed or moved under an UNTOUCHED plan that backs it up
+	// (or keeps its repository in it) would leave that plan backing up
+	// an empty volume Docker creates on the spot. Same reverse check as
+	// for targets below.
+	touchedVolume := func(name string) bool {
+		key := string(resource.KindVolume) + "/" + name
+		cur, was := currentByKey[key]
+		var now resource.Resource
+		is := false
+		for _, r := range ch.Proposed {
+			if r.Kind == resource.KindVolume && r.Metadata.Name == name {
+				now, is = r, true
+				break
+			}
+		}
+		return was != is || (was && !reflect.DeepEqual(cur, now))
+	}
+	for _, r := range ch.Proposed {
+		if r.Kind != resource.KindBackupPlan || r.BackupPlan == nil {
+			continue
+		}
+		if cur, ok := currentByKey[string(r.Kind)+"/"+r.Metadata.Name]; !ok || !reflect.DeepEqual(cur, r) {
+			continue // touched: the loop above already checked it
+		}
+		refs := append([]string{}, r.BackupPlan.Volumes...)
+		if repo := r.BackupPlan.Repository; repo != "" && !strings.HasPrefix(repo, "/") {
+			refs = append(refs, repo)
+		}
+		for _, v := range refs {
+			if touchedVolume(v) {
+				all = append(all, backupVolumesRule(r, volumeNodes)...)
+				break
+			}
+		}
+	}
 	// A BackupTarget changed or removed under an UNTOUCHED plan that
 	// copies to it would leave that plan failing every run with nobody
 	// having decided that — deleted, or moved to another node where the

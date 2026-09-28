@@ -291,6 +291,11 @@ spec:
 On a plan that goes off-site, removing an exclude is High risk: it sends
 more out of the house. Adding one is not.
 
+Excludes also hold for what is already stored locally: every snapshot is
+tagged with the plan's sources and excludes, and a `local-and-offsite`
+copy takes only snapshots made under the current ones. Snapshots taken
+before you added an exclude stay home.
+
 **Say how much it matters** with `class: critical` (irreplaceable),
 `important` (painful to rebuild) or `rebuildable`. Every package's plan
 already carries one; it only groups plans when you choose what goes

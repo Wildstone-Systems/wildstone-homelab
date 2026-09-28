@@ -26,6 +26,8 @@
 package backup
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -506,6 +508,8 @@ func (e *Engine) resticSpec(spec *resource.BackupPlanSpec, command []string, wit
 // backupCommand is `restic backup` over the plan's sources, with its
 // excludes. An absolute exclude names a folder under one of the plan's
 // paths, which sits at /backup<path> in the container (see sourceTarget).
+// Every snapshot is tagged with configTag, so an off-site copy can take
+// only snapshots made under the plan's current sources and excludes.
 func backupCommand(spec *resource.BackupPlanSpec) []string {
 	cmd := append([]string{"backup"}, sourceTargets(spec)...)
 	for _, x := range spec.Exclude {
@@ -514,7 +518,22 @@ func backupCommand(spec *resource.BackupPlanSpec) []string {
 		}
 		cmd = append(cmd, "--exclude", x)
 	}
-	return cmd
+	return append(cmd, "--tag", configTag(spec))
+}
+
+// configTag names what a snapshot holds: a digest of the plan's sources
+// and excludes. `restic copy` copies whole snapshots, so without it an
+// exclude added later — or off-site turned on over an old local
+// repository — would still send the excluded data out in the snapshots
+// taken before it (ADR-W045 A4). A copy takes only snapshots carrying the
+// current tag; older ones stay home.
+func configTag(spec *resource.BackupPlanSpec) string {
+	src := append([]string{}, sources(spec)...)
+	ex := append([]string{}, spec.Exclude...)
+	sort.Strings(src)
+	sort.Strings(ex)
+	sum := sha256.Sum256([]byte(strings.Join(src, "\x00") + "\x01" + strings.Join(ex, "\x00")))
+	return "wscfg-" + hex.EncodeToString(sum[:6])
 }
 
 // sourceTarget is where a source appears inside the run container: a
