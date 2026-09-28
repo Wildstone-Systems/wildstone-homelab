@@ -177,6 +177,12 @@ var wellKnown = map[string]int{
 	// matrix-synapse. Matrix clients keep this origin as their homeserver
 	// address, so installing an unrelated service must never move it.
 	"matrix": 52443,
+
+	// matrix-element. Element keeps each device's session and encryption
+	// keys in browser storage for its origin, so a moved port signs the
+	// household out. This is the last port in PortBlock: the next pinned
+	// service has to extend the block (and the ingress package with it).
+	"element": 53443,
 }
 
 // Of derives the addressing posture from desired state.

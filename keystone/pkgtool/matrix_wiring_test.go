@@ -5,9 +5,12 @@ package pkgtool
 // sides of a credential, config path, or private-federation boundary agree.
 
 import (
+	"encoding/json"
 	"slices"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/plan"
 	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
@@ -191,5 +194,146 @@ func TestMatrixPostgresSocketAndBackupAreComplete(t *testing.T) {
 	}
 	if backup.Schedule != "daily" {
 		t.Errorf("Matrix backup schedule is %q, want daily", backup.Schedule)
+	}
+}
+
+// Element Web (packages/matrix-element) is a separate package from the
+// homeserver, so nothing structural stops the two from drifting apart: the
+// client could name a homeserver Synapse is not served at, and Synapse could
+// fail to recognise the client's origin after SSO. These checks hold the two
+// packages to each other.
+
+func elementResource(t *testing.T, kind resource.Kind, name string) resource.Resource {
+	t.Helper()
+	rendered, ok := renderShippedPackages(t)["matrix-element"]
+	if !ok {
+		t.Fatal("matrix-element is not in the catalog")
+	}
+	for _, r := range rendered {
+		if r.Kind == kind && r.Metadata.Name == name {
+			return r
+		}
+	}
+	t.Fatalf("matrix-element renders no %s/%s", kind, name)
+	return resource.Resource{}
+}
+
+// elementConfig is the subset of Element's config.json these checks read.
+type elementConfig struct {
+	DefaultServerConfig struct {
+		Homeserver struct {
+			BaseURL    string `json:"base_url"`
+			ServerName string `json:"server_name"`
+		} `json:"m.homeserver"`
+	} `json:"default_server_config"`
+	DisableCustomURLs  bool            `json:"disable_custom_urls"`
+	DisableGuests      bool            `json:"disable_guests"`
+	SSORedirectOptions map[string]bool `json:"sso_redirect_options"`
+	PermalinkPrefix    string          `json:"permalink_prefix"`
+	ElementCall        struct {
+		Disable bool `json:"disable"`
+	} `json:"element_call"`
+	SettingDefaults map[string]any `json:"setting_defaults"`
+	// Every top-level key as written. Decoding into a struct cannot tell an
+	// explicit null from an absent key, and for the integration manager that
+	// is the whole difference: absent falls back to Element's hosted one.
+	raw map[string]json.RawMessage
+}
+
+func renderedElementConfig(t *testing.T) elementConfig {
+	t.Helper()
+	var cfg elementConfig
+	content := elementResource(t, resource.KindConfigFile, "element-config").ConfigFile.Content
+	if err := json.Unmarshal([]byte(content), &cfg); err != nil {
+		t.Fatalf("Element's config.json is not valid JSON, so Element would start with its defaults: %v\n%s", err, content)
+	}
+	if err := json.Unmarshal([]byte(content), &cfg.raw); err != nil {
+		t.Fatal(err)
+	}
+	return cfg
+}
+
+// synapseConfig is the subset of matrix-synapse's private.yaml these checks read.
+type synapseConfig struct {
+	ServerName    string `yaml:"server_name"`
+	PublicBaseURL string `yaml:"public_baseurl"`
+	SSO           struct {
+		ClientWhitelist []string `yaml:"client_whitelist"`
+	} `yaml:"sso"`
+}
+
+func renderedSynapseConfig(t *testing.T) synapseConfig {
+	t.Helper()
+	var cfg synapseConfig
+	content := matrixResource(t, resource.KindConfigFile, "matrix-private").ConfigFile.Content
+	if err := yaml.Unmarshal([]byte(content), &cfg); err != nil {
+		t.Fatalf("Synapse's private.yaml does not parse: %v", err)
+	}
+	return cfg
+}
+
+func TestElementIsLockedToTheHouseholdHomeserver(t *testing.T) {
+	element := renderedElementConfig(t)
+	synapse := renderedSynapseConfig(t)
+
+	hs := element.DefaultServerConfig.Homeserver
+	if hs.BaseURL+"/" != synapse.PublicBaseURL {
+		t.Errorf("Element connects to %q but Synapse is served at %q", hs.BaseURL, synapse.PublicBaseURL)
+	}
+	if hs.ServerName != synapse.ServerName {
+		t.Errorf("Element expects server_name %q but Synapse's is %q", hs.ServerName, synapse.ServerName)
+	}
+	if !element.DisableCustomURLs {
+		t.Error("Element lets a person point it at another homeserver")
+	}
+	if !element.DisableGuests {
+		t.Error("Element offers guest access that Synapse refuses")
+	}
+	// Synapse has password login off, so the login form could never work.
+	if !element.SSORedirectOptions["immediate"] {
+		t.Error("Element shows a login form instead of going straight to household SSO")
+	}
+}
+
+func TestElementSendsNothingToThirdPartiesByDefault(t *testing.T) {
+	element := renderedElementConfig(t)
+	for _, key := range []string{"integrations_ui_url", "integrations_rest_url", "integrations_widgets_urls"} {
+		if v, ok := element.raw[key]; !ok || string(v) != "null" {
+			t.Errorf("%s must be an explicit null, or Element falls back to its hosted integration manager", key)
+		}
+	}
+	if !element.ElementCall.Disable {
+		t.Error("Element Call is enabled, and its default is Element's hosted call service")
+	}
+	for _, feature := range []string{"UIFeature.voip", "UIFeature.widgets", "UIFeature.identityServer"} {
+		if element.SettingDefaults[feature] != false {
+			t.Errorf("setting_defaults[%q] is %v, want false", feature, element.SettingDefaults[feature])
+		}
+	}
+}
+
+func TestSynapseTrustsElementAfterSSO(t *testing.T) {
+	element := renderedElementConfig(t)
+	synapse := renderedSynapseConfig(t)
+	// permalink_prefix is Element's own origin, rendered by the same origin
+	// function from the same pinned label as its Route.
+	want := element.PermalinkPrefix + "/"
+	if !slices.Contains(synapse.SSO.ClientWhitelist, want) {
+		t.Errorf("Synapse's sso.client_whitelist %v does not contain Element's origin %q; every sign-in would stop at a confirmation page",
+			synapse.SSO.ClientWhitelist, want)
+	}
+}
+
+func TestElementRouteIsPrivateAndBrowserOnly(t *testing.T) {
+	route := elementResource(t, resource.KindRoute, "element").Route
+	if route.Auth != "authelia_oidc" || route.Classification != "family_private" {
+		t.Errorf("Element route is auth=%q classification=%q; want authelia_oidc on family_private", route.Auth, route.Classification)
+	}
+	if route.Host != "element.example.internal" {
+		t.Errorf("Element route host is %q; it must retain the pinned element label", route.Host)
+	}
+	web := elementResource(t, resource.KindContainer, "element-web").Container
+	if port := web.Env["ELEMENT_WEB_PORT"]; route.Upstream != "container/element-web:"+port {
+		t.Errorf("Element route points at %q but nginx listens on ELEMENT_WEB_PORT=%q", route.Upstream, port)
 	}
 }

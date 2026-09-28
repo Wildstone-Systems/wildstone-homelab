@@ -468,6 +468,12 @@ step_services() {
       *" matrix-synapse "*)
         [ "${WANT_TAILSCALE:-no}" = yes ] ||
           fail "Matrix requires private ingress; rerun with Tailscale enabled or remove matrix-synapse from the saved service selection"
+        # Answers saved before the web client shipped name the homeserver
+        # alone; the Matrix choice has meant both since.
+        case " $SERVICES " in
+          *" matrix-element "*) ;;
+          *) SERVICES="$SERVICES matrix-element" ;;
+        esac
         ;;
     esac
     log "services chosen previously: ${SERVICES:-none}"
@@ -479,7 +485,10 @@ step_services() {
   ask_yes_no "  Jellyfin — films and television" y && chosen="$chosen media-jellyfin"
   ask_yes_no "  Photos — your photo library"    y && chosen="$chosen photos-immich"
   if [ "${WANT_TAILSCALE:-no}" = yes ]; then
-    ask_yes_no "  Matrix — private household messaging" n && chosen="$chosen matrix-synapse"
+    # The homeserver and its browser client together: on its own Synapse is
+    # reachable only from a Matrix app, and the web client is a page anyone
+    # in the household can open.
+    ask_yes_no "  Matrix — private household messaging" n && chosen="$chosen matrix-synapse matrix-element"
   else
     echo "  Matrix — requires private ingress (enable Tailscale to install)"
   fi
@@ -504,7 +513,7 @@ step_summary() {
   # there will be one.
   local home=""
   [ "${WANT_TAILSCALE:-no}" = yes ] && home=", household homepage (with files, the assistant and calendar)"
-  echo "  - install: identity${home}${SERVICES:+, $(echo "$SERVICES" | sed 's/media-jellyfin/jellyfin/g;s/photos-immich/photos/g;s/matrix-synapse/matrix/g;s/documents-paperless/documents/g;s/ /, /g')}"
+  echo "  - install: identity${home}${SERVICES:+, $(echo "$SERVICES" | sed 's/ /, /g;s/media-jellyfin/jellyfin/g;s/photos-immich/photos/g;s/matrix-synapse, matrix-element/matrix (with the Element web app)/g;s/matrix-synapse/matrix/g;s/documents-paperless/documents/g')}"
   echo
   echo "Approving here approves the plans this creates; they are recorded"
   echo "in the audit trail against your account."

@@ -23,9 +23,10 @@ capability and dashboard status.
 ## Install
 
 The interactive first-install flow offers **Matrix — private household
-messaging**. It is off by default. Matrix needs the same private ingress and
-identity packages as the rest of the household web applications, so select a
-tailnet ingress during that install.
+messaging**. It is off by default, and choosing it installs both
+`matrix-synapse` and its browser client, `matrix-element`. Matrix needs the
+same private ingress and identity packages as the rest of the household web
+applications, so select a tailnet ingress during that install.
 
 For an existing installation, enable `matrix-synapse` through the Console's
 package form or with the capability API. The normal parameters are:
@@ -39,6 +40,29 @@ package form or with the capability API. The normal parameters are:
 Choose `server_name` carefully. It becomes the domain in every Matrix user ID
 and room identity and cannot be changed safely after the homeserver contains
 data.
+
+Then enable `matrix-element` the same way, with the same `node` and
+`public_domain`. If you set a custom `server_name` on `matrix-synapse`, give
+`matrix-element` the same value; the two must agree.
+
+## Use it in a browser
+
+`matrix-element` serves Element Web at the `element` route, next to the
+homeserver's `matrix` route. It is locked to this homeserver (there is no
+server picker) and sends a signed-out visitor straight to **Continue with
+Wildstone**, since Synapse accepts no passwords. Synapse trusts that origin
+after sign-in, so there is no extra "continue to this site?" page.
+
+Element keeps each browser's session and encryption keys in storage tied to
+that exact address, which is why its route label, like `matrix`, is pinned
+and not configurable. Set up key backup (Element prompts for it) so a
+cleared browser does not lose access to old encrypted messages.
+
+By default the client reaches nothing outside the household. Element's
+built-in defaults would send conference calls to Element's hosted Jitsi and
+Element Call services and offer its hosted integration manager, so calls,
+widgets and integrations are turned off, along with location sharing (no map
+tile service) and identity-server lookups.
 
 ## Try it from a native client
 
@@ -82,7 +106,6 @@ uses end-to-end encryption.
 This first slice deliberately does not include:
 
 - federation or public Matrix ingress;
-- an embedded Element Web client;
 - TURN for voice/video calls;
 - automatic bot-account or access-token provisioning;
 - database-consistent pre/post backup hooks (the current package backup
