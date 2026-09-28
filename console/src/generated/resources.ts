@@ -12,6 +12,7 @@ export type Kind =
   "LdapUser" |
   "Ingress" |
   "BackupPlan" |
+  "BackupTarget" |
   "ConfigFile" |
   "SeedFile" |
   "Job" |
@@ -130,6 +131,18 @@ export interface BackupPlanSpec {
   retention?: BackupRetention;
 }
 
+export interface BackupTargetSpec {
+  type: string;
+  endpoint: string;
+  bucket: string;
+  prefix?: string;
+  region?: string;
+  pathStyle?: boolean;
+  insecureHTTP?: boolean;
+  accessKeySecret: string;
+  secretKeySecret: string;
+}
+
 export interface ConfigFileSpec {
   filename: string;
   content: string;
@@ -242,6 +255,7 @@ export type Spec =
   LdapUserSpec |
   IngressSpec |
   BackupPlanSpec |
+  BackupTargetSpec |
   ConfigFileSpec |
   SeedFileSpec |
   JobSpec |
@@ -267,6 +281,7 @@ export interface SpecByKind {
   LdapUser: LdapUserSpec;
   Ingress: IngressSpec;
   BackupPlan: BackupPlanSpec;
+  BackupTarget: BackupTargetSpec;
   ConfigFile: ConfigFileSpec;
   SeedFile: SeedFileSpec;
   Job: JobSpec;

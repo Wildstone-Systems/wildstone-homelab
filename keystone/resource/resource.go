@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
 	"path"
 	"regexp"
 	"sort"
@@ -34,10 +35,14 @@ const (
 	KindLdapUser   Kind = "LdapUser"
 	KindIngress    Kind = "Ingress"
 	KindBackupPlan Kind = "BackupPlan"
-	KindConfigFile Kind = "ConfigFile"
-	KindSeedFile   Kind = "SeedFile"
-	KindJob        Kind = "Job"
-	KindSecret     Kind = "Secret"
+	// KindBackupTarget is an S3-compatible bucket that backups may be
+	// copied to off-site (ADR-W045 A2). Owner-declared only: a package
+	// cannot ship one (capability.Expand refuses it).
+	KindBackupTarget Kind = "BackupTarget"
+	KindConfigFile   Kind = "ConfigFile"
+	KindSeedFile     Kind = "SeedFile"
+	KindJob          Kind = "Job"
+	KindSecret       Kind = "Secret"
 	// KindAutomation is a household rule (ADR-W024 A1): Keystone-owned,
 	// applied at no node, run by the automation engine.
 	KindAutomation Kind = "Automation"
@@ -851,6 +856,64 @@ type BackupPlanSpec struct {
 	Retention BackupRetention `yaml:"retention,omitempty"`
 }
 
+// backupTargetTypes is the closed set of BackupTargetSpec.Type values.
+var backupTargetTypes = map[string]bool{"s3": true}
+
+// bucketRegexp is the S3 bucket-name shape: 3-63 characters, letters,
+// digits, dots and hyphens, starting and ending with a letter or digit.
+// Upper case is allowed because some providers (Backblaze B2) accept it.
+var bucketRegexp = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9.-]{1,61}[A-Za-z0-9]$`)
+
+// prefixSegmentRegexp is one "/"-separated segment of a BackupTarget
+// prefix.
+var prefixSegmentRegexp = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+
+// regionRegexp is a provider region name: "us-east-1", "us-west-004",
+// R2's "auto".
+var regionRegexp = regexp.MustCompile(`^[a-z0-9-]{1,32}$`)
+
+// BackupTargetSpec is the spec for kind BackupTarget (ADR-W045 A2): one
+// S3-compatible bucket off-site backups may be copied into. It works for
+// AWS S3, Cloudflare R2, Backblaze B2, Wasabi and MinIO alike — the
+// provider is chosen by the endpoint, never by a provider-specific field.
+//
+// Declaring one moves no data. It only names a place; a BackupPlan's
+// off-site block is what sends anything there, and restic encrypts on
+// the node before upload, so the provider only ever holds ciphertext.
+//
+// Credentials are secret/<name> references only (ADR-W012), set with
+// `wild secret set` on the node that runs the backups. Node-scoped for
+// that reason: the references resolve in that node's secret store.
+type BackupTargetSpec struct {
+	// Type is one of backupTargetTypes: "s3".
+	Type string `yaml:"type"`
+	// Endpoint is the provider's S3 API base URL, e.g.
+	// https://s3.us-east-1.amazonaws.com or
+	// https://<account-id>.r2.cloudflarestorage.com. Scheme and host
+	// (and optional port) only: no path, query or credentials.
+	Endpoint string `yaml:"endpoint"`
+	// Bucket is the bucket name; it must already exist.
+	Bucket string `yaml:"bucket"`
+	// Prefix is an optional folder inside the bucket, so one bucket can
+	// hold several installs: "home" or "wildstone/home".
+	Prefix string `yaml:"prefix,omitempty"`
+	// Region is the provider region; optional for providers that ignore
+	// it. R2 uses "auto".
+	Region string `yaml:"region,omitempty"`
+	// PathStyle selects path-style bucket addressing
+	// (https://host/bucket) instead of virtual-host style
+	// (https://bucket.host). MinIO and most self-hosted stores need it.
+	PathStyle bool `yaml:"pathStyle,omitempty"`
+	// InsecureHTTP allows an http:// endpoint. Only for a store on the
+	// home network (a LAN MinIO); backups stay encrypted by restic, but
+	// requests and metadata cross the network in the clear.
+	InsecureHTTP bool `yaml:"insecureHTTP,omitempty"`
+	// AccessKeySecret and SecretKeySecret reference the access key ID and
+	// secret access key as secret/<name>, never literal values.
+	AccessKeySecret string `yaml:"accessKeySecret"`
+	SecretKeySecret string `yaml:"secretKeySecret"`
+}
+
 // Resource is the typed machine-layer record the Reconciler drives
 // (ADR-W004 A1). Exactly one of the Spec fields is populated, matching
 // Metadata's Kind (enforced by Validate and by the (de)serialization
@@ -872,13 +935,15 @@ type Resource struct {
 	LdapUser   *LdapUserSpec   `yaml:"-"`
 	Ingress    *IngressSpec    `yaml:"-"`
 	BackupPlan *BackupPlanSpec `yaml:"-"`
-	ConfigFile *ConfigFileSpec `yaml:"-"`
-	SeedFile   *SeedFileSpec   `yaml:"-"`
-	Job        *JobSpec        `yaml:"-"`
-	Secret     *SecretSpec     `yaml:"-"`
-	Automation *AutomationSpec `yaml:"-"`
-	Meter      *MeterSpec      `yaml:"-"`
-	Commitment *CommitmentSpec `yaml:"-"`
+	// BackupTarget is the spec for KindBackupTarget (ADR-W045 A2).
+	BackupTarget *BackupTargetSpec `yaml:"-"`
+	ConfigFile   *ConfigFileSpec   `yaml:"-"`
+	SeedFile     *SeedFileSpec     `yaml:"-"`
+	Job          *JobSpec          `yaml:"-"`
+	Secret       *SecretSpec       `yaml:"-"`
+	Automation   *AutomationSpec   `yaml:"-"`
+	Meter        *MeterSpec        `yaml:"-"`
+	Commitment   *CommitmentSpec   `yaml:"-"`
 }
 
 // ValidationError is a typed validation failure, identifying the resource
@@ -971,6 +1036,13 @@ var registry = map[Kind]kindEntry{
 	KindBackupPlan: {
 		newSpec:    func() any { return &BackupPlanSpec{} },
 		validate:   validateBackupPlan,
+		nodeScoped: true,
+	},
+	KindBackupTarget: {
+		// Node-scoped: its credential references resolve in the secret
+		// store of the node that runs the backups.
+		newSpec:    func() any { return &BackupTargetSpec{} },
+		validate:   validateBackupTarget,
 		nodeScoped: true,
 	},
 	KindConfigFile: {
@@ -1089,18 +1161,19 @@ func (r *Resource) Validate() error {
 // per-kind validator, which reports it with a more specific message.
 func (r *Resource) validateSpecExclusivity() error {
 	populated := map[Kind]bool{
-		KindContainer:  r.Container != nil,
-		KindVolume:     r.Volume != nil,
-		KindRoute:      r.Route != nil,
-		KindDnsRecord:  r.DnsRecord != nil,
-		KindOidcClient: r.OidcClient != nil,
-		KindLdapGroup:  r.LdapGroup != nil,
-		KindBackupPlan: r.BackupPlan != nil,
-		KindConfigFile: r.ConfigFile != nil,
-		KindSeedFile:   r.SeedFile != nil,
-		KindAutomation: r.Automation != nil,
-		KindMeter:      r.Meter != nil,
-		KindCommitment: r.Commitment != nil,
+		KindContainer:    r.Container != nil,
+		KindVolume:       r.Volume != nil,
+		KindRoute:        r.Route != nil,
+		KindDnsRecord:    r.DnsRecord != nil,
+		KindOidcClient:   r.OidcClient != nil,
+		KindLdapGroup:    r.LdapGroup != nil,
+		KindBackupPlan:   r.BackupPlan != nil,
+		KindBackupTarget: r.BackupTarget != nil,
+		KindConfigFile:   r.ConfigFile != nil,
+		KindSeedFile:     r.SeedFile != nil,
+		KindAutomation:   r.Automation != nil,
+		KindMeter:        r.Meter != nil,
+		KindCommitment:   r.Commitment != nil,
 	}
 	for k, isSet := range populated {
 		if k == r.Kind {
@@ -1599,6 +1672,82 @@ func validateBackupPlan(r *Resource) error {
 		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.retention", Msg: "keep counts must not be negative"}
 	}
 	return nil
+}
+
+func validateBackupTarget(r *Resource) error {
+	t := r.BackupTarget
+	bad := func(field, msg string) error {
+		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: field, Msg: msg}
+	}
+	if t == nil {
+		return bad("spec", "backup target spec missing")
+	}
+	if !backupTargetTypes[t.Type] {
+		return bad("spec.type", `must be "s3"`)
+	}
+	if err := validateEndpoint(t.Endpoint, t.InsecureHTTP); err != "" {
+		return bad("spec.endpoint", err)
+	}
+	if !bucketRegexp.MatchString(t.Bucket) || strings.Contains(t.Bucket, "..") {
+		return bad("spec.bucket", "must be a bucket name: 3-63 letters, digits, dots or hyphens, starting and ending with a letter or digit")
+	}
+	if t.Prefix != "" {
+		if len(t.Prefix) > 256 {
+			return bad("spec.prefix", "must be at most 256 characters")
+		}
+		for _, seg := range strings.Split(t.Prefix, "/") {
+			if !prefixSegmentRegexp.MatchString(seg) || seg == "." || seg == ".." {
+				return bad("spec.prefix", `must be folder names of letters, digits, ".", "_" or "-" separated by "/", with no leading, trailing or doubled "/" and no "." or ".." segment`)
+			}
+		}
+	}
+	if t.Region != "" && !regionRegexp.MatchString(t.Region) {
+		return bad("spec.region", `must be a region name such as "us-east-1" or "auto"`)
+	}
+	if !secretRefRegexp.MatchString(t.AccessKeySecret) {
+		return bad("spec.accessKeySecret", "must be a reference of the form secret/<name> (ADR-W012), never a literal key")
+	}
+	if !secretRefRegexp.MatchString(t.SecretKeySecret) {
+		return bad("spec.secretKeySecret", "must be a reference of the form secret/<name> (ADR-W012), never a literal key")
+	}
+	if t.AccessKeySecret == t.SecretKeySecret {
+		return bad("spec.secretKeySecret", "must reference a different secret than accessKeySecret")
+	}
+	return nil
+}
+
+// validateEndpoint checks a BackupTarget endpoint and returns "" when it
+// is acceptable, else the reason. The endpoint is interpolated into the
+// restic repository URL, so everything but scheme, host and port is
+// refused rather than normalised: a path would move the bucket, and
+// userinfo would put a credential in the Statefile.
+func validateEndpoint(raw string, insecureHTTP bool) string {
+	u, err := url.Parse(raw)
+	if err != nil || raw == "" {
+		return "must be a URL such as https://s3.us-east-1.amazonaws.com"
+	}
+	switch u.Scheme {
+	case "https":
+	case "http":
+		if !insecureHTTP {
+			return "must use https:// (set insecureHTTP only for a store on the home network)"
+		}
+	default:
+		return "must be an https:// URL"
+	}
+	if u.User != nil {
+		return "must not carry credentials; use accessKeySecret and secretKeySecret"
+	}
+	if u.Hostname() == "" {
+		return "must name a host"
+	}
+	if (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" || u.Opaque != "" {
+		return "must be scheme and host only (the bucket and prefix are separate fields)"
+	}
+	if strings.ContainsAny(raw, " \t\n") {
+		return "must not contain whitespace"
+	}
+	return ""
 }
 
 // validateLdapUser mirrors validateLdapGroup's strictness for the same

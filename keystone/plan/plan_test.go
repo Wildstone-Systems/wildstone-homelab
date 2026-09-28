@@ -432,3 +432,44 @@ func TestDiffAutomation(t *testing.T) {
 			KindOrder(resource.KindAutomation), KindOrder(resource.KindContainer))
 	}
 }
+
+func backupTargetRes(bucket string) resource.Resource {
+	return resource.Resource{
+		Kind:     resource.KindBackupTarget,
+		Metadata: resource.Metadata{Name: "offsite", Owner: "owner", Node: "n1"},
+		BackupTarget: &resource.BackupTargetSpec{
+			Type: "s3", Endpoint: "https://s3.example.com", Bucket: bucket,
+			AccessKeySecret: "secret/offsite-access", SecretKeySecret: "secret/offsite-secret",
+		},
+	}
+}
+
+// TestDiffBackupTarget: naming storage outside the house is High on
+// create and change (ADR-W045 A7); removing it is Medium.
+func TestDiffBackupTarget(t *testing.T) {
+	p := Diff([]resource.Resource{backupTargetRes("b-one")}, nil)
+	if len(p.Steps) != 1 || p.Steps[0].Action != ActionCreate || p.OverallRisk != RiskHigh {
+		t.Fatalf("create plan = %+v", p)
+	}
+	p = Diff([]resource.Resource{backupTargetRes("b-one")}, []resource.Resource{backupTargetRes("b-one")})
+	if len(p.Steps) != 0 {
+		t.Fatalf("unchanged BackupTarget produced steps: %+v", p.Steps)
+	}
+	p = Diff([]resource.Resource{backupTargetRes("b-two")}, []resource.Resource{backupTargetRes("b-one")})
+	if len(p.Steps) != 1 || p.Steps[0].Action != ActionUpdate || p.OverallRisk != RiskHigh {
+		t.Fatalf("update plan = %+v", p)
+	}
+	p = Diff(nil, []resource.Resource{backupTargetRes("b-one")})
+	if len(p.Steps) != 1 || p.Steps[0].Action != ActionDelete || p.OverallRisk != RiskMedium {
+		t.Fatalf("delete plan = %+v", p)
+	}
+}
+
+// TestBackupTargetOrderedBeforeBackupPlan: a plan's off-site copy names
+// its target, so the target is declared first.
+func TestBackupTargetOrderedBeforeBackupPlan(t *testing.T) {
+	if KindOrder(resource.KindBackupTarget) >= KindOrder(resource.KindBackupPlan) {
+		t.Fatalf("BackupTarget order %d is not before BackupPlan %d",
+			KindOrder(resource.KindBackupTarget), KindOrder(resource.KindBackupPlan))
+	}
+}

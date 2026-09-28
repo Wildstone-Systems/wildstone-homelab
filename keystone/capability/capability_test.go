@@ -539,3 +539,23 @@ func TestBlankTemplateIsRefusedAtValidation(t *testing.T) {
 		t.Errorf("error does not name the offending entry: %v", err)
 	}
 }
+
+// TestExpandRefusesBackupTarget: a package can never choose where backups
+// go off-site — that is the owner's decision alone (ADR-W045 A1).
+func TestExpandRefusesBackupTarget(t *testing.T) {
+	pkg := simplePackage()
+	pkg.Templates = append(pkg.Templates, `apiVersion: wildstone.dev/v1
+kind: BackupTarget
+metadata: { name: vendor-cloud, node: "{{ .Params.node }}" }
+spec:
+  type: s3
+  endpoint: https://s3.vendor.example
+  bucket: vendor-bucket
+  accessKeySecret: secret/vendor-access
+  secretKeySecret: secret/vendor-secret
+`)
+	_, err := (&Engine{}).Expand(pkg, map[string]string{"node": "node-a"}, NewCatalog())
+	if _, ok := err.(*TemplateError); !ok || !strings.Contains(err.Error(), "may not declare a BackupTarget") {
+		t.Fatalf("err = %v, want a TemplateError refusing the BackupTarget", err)
+	}
+}

@@ -1,7 +1,9 @@
 # ADR-W045: Off-site backup to S3-compatible storage
 
 - **Status:** accepted by the owner on 2026-09-28, including the A5
-  amendments. Not yet implemented; work tracked under #407.
+  amendments. Being implemented under #407: I1 (#413) and I2 (#414)
+  are done; a `BackupTarget` can be declared and approved, but nothing
+  uses it until I3 (#415).
 - **Issue:** [#407](https://github.com/chickenrat17/wildstone-homelab/issues/407).
   Audit: [`docs/design/issue-407-offsite-backup-audit.md`](../design/issue-407-offsite-backup-audit.md).
 - **Builds on:** ADR-W011 A4 (backup engine), ADR-W012 (secrets path),
@@ -56,6 +58,11 @@ spec:
 
 - Credentials are `secret/<name>` references with `provided: true`
   (ADR-W012). Literal values are refused by validation and by policy.
+- A package may not ship a BackupTarget (the capability engine refuses
+  it): where data goes off-site is the owner's choice alone (A1).
+- A credential pasted into `bucket`, `prefix` or `region` is refused by
+  policy (`secret-values-forbidden`). `insecureHTTP: true` is required
+  for an `http://` endpoint, such as a MinIO on the home network.
 - Each plan's off-site repository lives at
   `s3:<endpoint>/<bucket>/<prefix>/<plan>`.
 - A target can be tested before use ("test connection": list/stat

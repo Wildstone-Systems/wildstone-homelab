@@ -166,6 +166,11 @@ func (e *Engine) Validate(ch Change) (violations, exempted []Violation) {
 				continue
 			}
 			all = append(all, ldapUserRules(r, emailOwners)...)
+		case resource.KindBackupTarget:
+			if r.BackupTarget == nil {
+				continue
+			}
+			all = append(all, backupTargetRules(r)...)
 		}
 	}
 	// Deletions of admin routes by the butler (RuleButlerAdminScope
@@ -350,6 +355,30 @@ func envSecretRules(r resource.Resource, env map[string]string) []Violation {
 			out = append(out, Violation{
 				Rule: RuleSecretValuesForbidden, Kind: string(r.Kind), Name: r.Metadata.Name,
 				Msg: fmt.Sprintf("env %q value is secret-shaped; literal secrets never enter the Statefile (§9.2-3)", key),
+			})
+		}
+	}
+	return out
+}
+
+// backupTargetRules refuses a literal credential pasted into one of a
+// BackupTarget's plain fields (ADR-W045 A2). Validation already forces
+// the two key fields to be secret/<name> references; this catches the
+// other mistake — the secret key typed into "prefix" or "bucket", which
+// would land in the Statefile and its git history. The endpoint is left
+// out: validation limits it to scheme, host and port, and a Cloudflare R2
+// host carries a 32-hex account ID that is not a secret but is shaped
+// like one.
+func backupTargetRules(r resource.Resource) []Violation {
+	var out []Violation
+	t := r.BackupTarget
+	for _, f := range []struct{ name, value string }{
+		{"bucket", t.Bucket}, {"prefix", t.Prefix}, {"region", t.Region},
+	} {
+		if redact.SecretShaped(f.value) {
+			out = append(out, Violation{
+				Rule: RuleSecretValuesForbidden, Kind: string(r.Kind), Name: r.Metadata.Name,
+				Msg: fmt.Sprintf("%s value is secret-shaped; credentials go in accessKeySecret/secretKeySecret as secret/<name> references (§9.2-3)", f.name),
 			})
 		}
 	}

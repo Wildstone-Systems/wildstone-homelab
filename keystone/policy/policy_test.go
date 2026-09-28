@@ -444,3 +444,39 @@ func TestLdapUserEmailUnique(t *testing.T) {
 		})
 	}
 }
+
+func backupTarget(mut func(*resource.BackupTargetSpec)) resource.Resource {
+	r := resource.Resource{
+		ApiVersion: resource.ApiVersion,
+		Kind:       resource.KindBackupTarget,
+		Metadata:   resource.Metadata{Name: "offsite", Owner: "owner", Node: "n1"},
+		BackupTarget: &resource.BackupTargetSpec{
+			Type: "s3", Endpoint: "https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com",
+			Bucket: "wildstone-backups", Prefix: "home", Region: "auto",
+			AccessKeySecret: "secret/offsite-access", SecretKeySecret: "secret/offsite-secret",
+		},
+	}
+	if mut != nil {
+		mut(r.BackupTarget)
+	}
+	return r
+}
+
+// TestBackupTargetSecretShapedFields: a credential pasted into a plain
+// field is refused; a real R2 endpoint, whose account ID looks like a
+// token, is not.
+func TestBackupTargetSecretShapedFields(t *testing.T) {
+	e := NewEngine(nil)
+	if v, _ := e.Validate(Change{Proposed: []resource.Resource{backupTarget(nil)}}); len(v) != 0 {
+		t.Fatalf("clean R2 target flagged: %v", v)
+	}
+	for field, mut := range map[string]func(*resource.BackupTargetSpec){
+		"prefix": func(s *resource.BackupTargetSpec) { s.Prefix = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY" },
+		"bucket": func(s *resource.BackupTargetSpec) { s.Bucket = "0123456789abcdef0123456789abcdef" },
+	} {
+		v, _ := e.Validate(Change{Proposed: []resource.Resource{backupTarget(mut)}})
+		if len(v) != 1 || v[0].Rule != RuleSecretValuesForbidden || !strings.Contains(v[0].Msg, field) {
+			t.Errorf("%s: violations = %v, want one %s naming the field", field, v, RuleSecretValuesForbidden)
+		}
+	}
+}

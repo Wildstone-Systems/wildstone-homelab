@@ -38,6 +38,7 @@ var kindSpecs = []struct {
 	{resource.KindLdapUser, reflect.TypeOf(resource.LdapUserSpec{})},
 	{resource.KindIngress, reflect.TypeOf(resource.IngressSpec{})},
 	{resource.KindBackupPlan, reflect.TypeOf(resource.BackupPlanSpec{})},
+	{resource.KindBackupTarget, reflect.TypeOf(resource.BackupTargetSpec{})},
 	{resource.KindConfigFile, reflect.TypeOf(resource.ConfigFileSpec{})},
 	{resource.KindSeedFile, reflect.TypeOf(resource.SeedFileSpec{})},
 	{resource.KindJob, reflect.TypeOf(resource.JobSpec{})},

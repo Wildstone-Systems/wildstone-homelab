@@ -480,7 +480,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, nodeID string, desired []res
 	for _, res := range desired {
 		switch res.Kind {
 		case resource.KindContainer, resource.KindVolume, resource.KindRoute, resource.KindOidcClient,
-			resource.KindLdapGroup, resource.KindLdapUser, resource.KindIngress, resource.KindBackupPlan, resource.KindConfigFile, resource.KindSeedFile, resource.KindJob,
+			resource.KindLdapGroup, resource.KindLdapUser, resource.KindIngress, resource.KindBackupPlan, resource.KindBackupTarget, resource.KindConfigFile, resource.KindSeedFile, resource.KindJob,
 			resource.KindSecret:
 			wsDesired = append(wsDesired, res)
 		case resource.KindDnsRecord:
@@ -649,6 +649,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, nodeID string, desired []res
 			sr = r.applyIngressStep(ctx, nodeID, step, desiredByKey)
 		case resource.KindBackupPlan:
 			sr = r.applyBackupPlanStep(ctx, nodeID, step, desiredByKey)
+		case resource.KindBackupTarget:
+			sr = r.applyBackupTargetStep(ctx, nodeID, step, desiredByKey)
 		case resource.KindConfigFile:
 			sr = r.applyConfigFileStep(ctx, nodeID, step, desiredByKey)
 		case resource.KindSeedFile:
@@ -794,8 +796,8 @@ func (r *Reconciler) observe(ctx context.Context, nodeID string, desired []resou
 			if present {
 				observed = append(observed, obs)
 			}
-		case resource.KindLdapGroup, resource.KindLdapUser, resource.KindIngress, resource.KindBackupPlan:
-			// Declared-only kinds (ADR-W005 A3 / ADR-W011 A4):
+		case resource.KindLdapGroup, resource.KindLdapUser, resource.KindIngress, resource.KindBackupPlan, resource.KindBackupTarget:
+			// Declared-only kinds (ADR-W005 A3 / ADR-W011 A4 / ADR-W045 A2):
 			// "observe-by-apply", same mechanism as Volume — present iff a
 			// prior successful apply recorded it in the Reconciler's
 			// managed cache. No external call is ever made; for BackupPlan
@@ -1033,6 +1035,8 @@ func placeholderResource(kind resource.Kind, name string) resource.Resource {
 		r.Ingress = &resource.IngressSpec{}
 	case resource.KindBackupPlan:
 		r.BackupPlan = &resource.BackupPlanSpec{}
+	case resource.KindBackupTarget:
+		r.BackupTarget = &resource.BackupTargetSpec{}
 	case resource.KindConfigFile:
 		r.ConfigFile = &resource.ConfigFileSpec{}
 	case resource.KindSeedFile:
@@ -1297,7 +1301,7 @@ func observableKind(k resource.Kind) bool {
 	case resource.KindSecret, resource.KindJob, resource.KindContainer,
 		resource.KindVolume, resource.KindRoute, resource.KindOidcClient,
 		resource.KindConfigFile, resource.KindSeedFile, resource.KindLdapGroup, resource.KindLdapUser,
-		resource.KindIngress, resource.KindBackupPlan:
+		resource.KindIngress, resource.KindBackupPlan, resource.KindBackupTarget:
 		return true
 	default:
 		return false

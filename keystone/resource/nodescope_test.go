@@ -98,6 +98,9 @@ func validResourceOfKind(t *testing.T, k Kind) Resource {
 	case KindBackupPlan:
 		r.BackupPlan = &BackupPlanSpec{Volumes: []string{"r1"}, Repository: "r1-repo",
 			PasswordSecret: "secret/restic-r1", Schedule: "daily"}
+	case KindBackupTarget:
+		r.BackupTarget = &BackupTargetSpec{Type: "s3", Endpoint: "https://s3.example.com", Bucket: "r1-bucket",
+			AccessKeySecret: "secret/r1-access", SecretKeySecret: "secret/r1-secret"}
 	case KindConfigFile:
 		// A ConfigFile's path is derived from its owning capability, so
 		// unlike every other kind it cannot be owned by "system".
