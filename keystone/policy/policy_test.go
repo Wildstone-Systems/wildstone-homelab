@@ -471,7 +471,7 @@ func TestBackupTargetSecretShapedFields(t *testing.T) {
 		t.Fatalf("clean R2 target flagged: %v", v)
 	}
 	for field, mut := range map[string]func(*resource.BackupTargetSpec){
-		"prefix": func(s *resource.BackupTargetSpec) { s.Prefix = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY" },
+		"prefix": func(s *resource.BackupTargetSpec) { s.Prefix = "REPLACED-" + strings.Repeat("k7Qz", 8) },
 		"bucket": func(s *resource.BackupTargetSpec) { s.Bucket = "0123456789abcdef0123456789abcdef" },
 	} {
 		v, _ := e.Validate(Change{Proposed: []resource.Resource{backupTarget(mut)}})

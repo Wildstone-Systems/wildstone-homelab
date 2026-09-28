@@ -78,8 +78,8 @@ func TestBackupTargetRejects(t *testing.T) {
 		{"prefix dotdot", "spec.prefix", func(s *BackupTargetSpec) { s.Prefix = "a/../b" }},
 		{"prefix too long", "spec.prefix", func(s *BackupTargetSpec) { s.Prefix = strings.Repeat("a", 257) }},
 		{"bad region", "spec.region", func(s *BackupTargetSpec) { s.Region = "US East" }},
-		{"literal access key", "spec.accessKeySecret", func(s *BackupTargetSpec) { s.AccessKeySecret = "AKIAIOSFODNN7EXAMPLE" }},
-		{"literal secret key", "spec.secretKeySecret", func(s *BackupTargetSpec) { s.SecretKeySecret = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY" }},
+		{"literal access key", "spec.accessKeySecret", func(s *BackupTargetSpec) { s.AccessKeySecret = "REPLACED-" + strings.Repeat("A", 16) }},
+		{"literal secret key", "spec.secretKeySecret", func(s *BackupTargetSpec) { s.SecretKeySecret = "REPLACED-" + strings.Repeat("k7Qz", 8) }},
 		{"same secret twice", "spec.secretKeySecret", func(s *BackupTargetSpec) { s.SecretKeySecret = s.AccessKeySecret }},
 	} {
 		r := backupTarget()
