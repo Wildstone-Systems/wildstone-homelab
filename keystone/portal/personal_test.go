@@ -220,6 +220,10 @@ func TestThePersonalSpaceFollowsThePersonThroughARename(t *testing.T) {
 	if err != nil || len(items) != 1 || items[0].Name != "diary.txt" {
 		t.Fatalf("after the rename samuel sees %v, %v; want their diary", items, err)
 	}
+	// Somebody signing in with the old name is not them.
+	if items, err := store("sam").List("me"); err == nil {
+		t.Fatalf("the old name reached samuel's folder: %v", items)
+	}
 	if items, _ := store("alex").List("me"); len(items) != 0 {
 		t.Fatalf("alex sees %v", items)
 	}

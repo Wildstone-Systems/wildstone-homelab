@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -402,30 +403,59 @@ func (s *Server) personalPrincipal(login string) (string, calendarCollections, e
 // page still finds the ones made under the old name (#372). They stay
 // reachable here; a phone signed in with the new name sees only the new
 // principal, which is where new calendars are made.
-func (s *Server) personalLogins(member string) []string {
+func (s *Server) personalLogins(member string) ([]string, error) {
 	if s.DB == nil {
-		return []string{member}
+		return []string{member}, nil
 	}
 	handles, err := s.DB.PersonHandles(member)
 	if err != nil {
-		s.Log.Warn("calendar: reading a member's earlier names", "err", err)
-		return []string{member}
+		return nil, err
+	}
+	own := ""
+	if m, err := s.DB.GetButlerMember(member); err == nil {
+		own = m.PersonID
+	} else if !errors.Is(err, runtimedb.ErrNotFound) {
+		return nil, err
 	}
 	seen := map[string]bool{}
 	var out []string
-	for _, h := range handles {
-		if l := strings.ToLower(strings.TrimSpace(h)); l != "" && !seen[l] {
-			seen[l] = true
-			out = append(out, h)
+	for i, h := range handles {
+		l := strings.ToLower(strings.TrimSpace(h))
+		if l == "" || seen[l] {
+			continue
 		}
+		seen[l] = true
+		// A principal belongs to whoever has carried its name, ignoring
+		// case as Radicale does. Somebody signing in under a name another
+		// Person carries or once carried — a new account after a rename,
+		// or a case variant — is not shown that Person's calendars, and
+		// an earlier name of this Person's that somebody else has also
+		// carried is left alone.
+		owners, err := s.DB.HandleOwners(l)
+		if err != nil {
+			return nil, err
+		}
+		if slices.ContainsFunc(owners, func(p string) bool { return p != own }) {
+			if i == 0 {
+				return nil, errPersonalLoginClaimed
+			}
+			continue
+		}
+		out = append(out, h)
 	}
-	return out
+	return out, nil
 }
+
+var errPersonalLoginClaimed = errors.New("your sign-in name belonged to somebody else in this household, so its calendars aren't shown here; ask whoever runs Wildstone to add you to the household's list of people")
 
 // personalCalendars lists the member's own event calendars.
 func (s *Server) personalCalendars(ctx context.Context, member string) ([]personalCalendar, error) {
+	logins, err := s.personalLogins(member)
+	if err != nil {
+		return nil, err
+	}
 	var out []personalCalendar
-	for i, login := range s.personalLogins(member) {
+	for i, login := range logins {
 		principal, collections, err := s.personalPrincipal(login)
 		if err != nil {
 			if i == 0 {
@@ -504,6 +534,9 @@ func (s *Server) calendarPersonalCreate(_ http.ResponseWriter, r *http.Request, 
 	}
 	if !calendarColorPattern.MatchString(color) {
 		return nil, http.StatusBadRequest, fmt.Errorf("pick a colour")
+	}
+	if _, err := s.personalLogins(member); err != nil {
+		return nil, http.StatusForbidden, err
 	}
 	principal, collections, err := s.personalPrincipal(member)
 	if err != nil {

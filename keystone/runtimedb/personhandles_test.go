@@ -152,3 +152,34 @@ func TestPersonHandlesListsTheCurrentNameFirst(t *testing.T) {
 		t.Fatalf("an old handle reached its Person's history: %v", got)
 	}
 }
+
+// Somebody signed in under a name another Person used to carry gets none
+// of that Person's own things (#426 review).
+func TestAnOldNameDoesNotSignInAsItsPerson(t *testing.T) {
+	db := openWith(t, "sam")
+	if _, _, err := db.PersonalFilesDir("sam", "sam"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SetCalendarVisibility("sam", "school", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.RenameButlerMemberHandle("sam", "samuel"); err != nil {
+		t.Fatal(err)
+	}
+	// "sam" is now only a directory account with no Person.
+	if dir, ok, err := db.PersonalFilesDir("sam", "sam"); ok || err == nil {
+		t.Fatalf("the old name reached the Person's folder: %q %v %v", dir, ok, err)
+	}
+	if prefs, err := db.CalendarVisibility("sam"); err != nil || len(prefs) != 0 {
+		t.Fatalf("the old name read the Person's choices: %v %v", prefs, err)
+	}
+	if err := db.SetCalendarVisibility("sam", "school", true); err == nil {
+		t.Fatal("the old name wrote the Person's choices")
+	}
+	samuel, _ := db.ResolvePersonRef("samuel")
+	for _, login := range []string{"sam", "SAM", "samuel"} {
+		if owners, err := db.HandleOwners(login); err != nil || len(owners) != 1 || owners[0] != samuel {
+			t.Fatalf("HandleOwners(%s) = %v %v", login, owners, err)
+		}
+	}
+}

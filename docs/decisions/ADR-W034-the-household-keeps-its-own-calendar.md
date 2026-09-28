@@ -413,7 +413,12 @@ volume.
   login that made them and does not move them when the login changes. The
   page lists calendars under every login the Person has had (#372) and
   makes new ones under the current login, which is the one a phone signs
-  in with.
+  in with. A principal belongs to every Person who has carried its name,
+  ignoring case as Radicale does: somebody signing in under a name another
+  Person carries or once carried is shown none of that Person's calendars
+  and cannot make one there. Radicale itself still gives a directory login
+  its own principal, so a retired name should not be reissued as a
+  directory account; Wildstone already refuses it to a new Person (0093).
 - **Undeclared shared collections stay out.** The service account's
   personal rules exclude `GROUPS/`, so a shared calendar removed from the
   registry is not the service's to read.

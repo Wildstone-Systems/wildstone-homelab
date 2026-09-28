@@ -3,11 +3,12 @@ package runtimedb
 import "fmt"
 
 // CalendarVisibility returns a member's per-calendar display choices,
-// keyed by the Person so a rename keeps them (0093). A member with no
-// Person on record has made no choices.
+// keyed by the Person so a rename keeps them (0093). The member is matched
+// by the handle they carry now. A member with no Person on record has made
+// no choices.
 func (db *DB) CalendarVisibility(member string) (map[string]bool, error) {
 	out := map[string]bool{}
-	id, err := resolvePersonRef(db.sql, member)
+	id, err := signedInPerson(db.sql, member)
 	if err != nil || id == "" {
 		return out, err
 	}
@@ -34,7 +35,7 @@ func (db *DB) SetCalendarVisibility(member, id string, visible bool) error {
 	if err := db.gate(GateIngestion); err != nil {
 		return err
 	}
-	person, err := resolvePersonRef(db.sql, member)
+	person, err := signedInPerson(db.sql, member)
 	if err != nil {
 		return err
 	}

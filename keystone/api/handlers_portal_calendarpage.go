@@ -144,6 +144,9 @@ func (s *Server) calendarPageEvents(_ http.ResponseWriter, r *http.Request, memb
 	if err != nil {
 		s.Log.Warn("calendar: listing a member's own calendars", "member", member, "err", err)
 		personalNote = "Your own calendars can't be read right now, so only the shared ones are shown."
+		if errors.Is(err, errPersonalLoginClaimed) {
+			personalNote = "Your own calendars aren't shown: " + err.Error() + "."
+		}
 		personal = nil
 	}
 	events, choices, err := s.calendarEvents(r.Context(), member, forwardedGroups(r), desired, from, to, r.URL.Query().Get("calendar"), personal)

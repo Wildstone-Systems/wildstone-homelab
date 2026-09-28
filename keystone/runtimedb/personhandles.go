@@ -54,6 +54,47 @@ func resolvePersonRef(q personRower, ref string) (string, error) {
 	return id, nil
 }
 
+// signedInPerson resolves the member who is ACTING — a signed-in portal
+// member, a Butler's subject — by the handle they carry now, never through
+// a retired one. A directory account that happens to share somebody's old
+// name is not that somebody; only references somebody WROTE are resolved
+// through history (resolvePersonRef). "" means no Person on record.
+func signedInPerson(q personRower, member string) (string, error) {
+	if member == "" {
+		return "", nil
+	}
+	var id string
+	err := q.QueryRow(`SELECT person_id FROM butler_members WHERE member = ?`, member).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("runtimedb: resolving the person behind %q: %w", member, err)
+	}
+	return id, nil
+}
+
+// HandleOwners returns every Person who carries or once carried a handle
+// equal to login, ignoring case. Radicale lower-cases logins, so a
+// calendar principal is claimed by any of them.
+func (db *DB) HandleOwners(login string) ([]string, error) {
+	rows, err := db.sql.Query(
+		`SELECT DISTINCT person_id FROM person_handles WHERE handle = ? COLLATE NOCASE ORDER BY person_id`, login)
+	if err != nil {
+		return nil, fmt.Errorf("runtimedb: reading who has been called %q: %w", login, err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
 // PersonHandle returns the handle a Person carries now, or ErrNoSuchPerson.
 func (db *DB) PersonHandle(personID string) (string, error) {
 	var handle string
@@ -79,16 +120,32 @@ func (db *DB) PersonHandle(personID string) (string, error) {
 // shared folders are the ones 0093 found already shared by handles that
 // differ in case, which the household had before this change.
 //
-// ok is false for a member with no Person on record.
+// ok is false for a member with no Person on record. The member is matched
+// by the handle they carry now: an account named after somebody's old
+// handle does not get their folder.
 func (db *DB) PersonalFilesDir(member, propose string) (dir string, ok bool, err error) {
 	tx, err := db.sql.Begin()
 	if err != nil {
 		return "", false, fmt.Errorf("runtimedb: reading a personal folder: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	id, err := resolvePersonRef(tx, member)
-	if err != nil || id == "" {
+	id, err := signedInPerson(tx, member)
+	if err != nil {
 		return "", false, err
+	}
+	if id == "" {
+		// No Person: the caller falls back to the folder the login names,
+		// unless that folder is already a Person's.
+		if propose != "" {
+			var taken int
+			if err := tx.QueryRow(`SELECT COUNT(*) FROM person_file_dirs WHERE dir = ?`, propose).Scan(&taken); err != nil {
+				return "", false, fmt.Errorf("runtimedb: reading a personal folder: %w", err)
+			}
+			if taken > 0 {
+				return "", false, fmt.Errorf("runtimedb: the folder %q belongs to a person on record", propose)
+			}
+		}
+		return "", false, nil
 	}
 	err = tx.QueryRow(`SELECT dir FROM person_file_dirs WHERE person_id = ?`, id).Scan(&dir)
 	if err == nil {
@@ -125,13 +182,12 @@ func (db *DB) PersonalFilesDir(member, propose string) (dir string, ok bool, err
 // handles, so a directory account that happens to share somebody's old
 // name is not given that somebody's history.
 func (db *DB) PersonHandles(member string) ([]string, error) {
-	var id string
-	err := db.sql.QueryRow(`SELECT person_id FROM butler_members WHERE member = ?`, member).Scan(&id)
-	if errors.Is(err, sql.ErrNoRows) {
-		return []string{member}, nil
-	}
+	id, err := signedInPerson(db.sql, member)
 	if err != nil {
-		return nil, fmt.Errorf("runtimedb: reading the handles of %q: %w", member, err)
+		return nil, err
+	}
+	if id == "" {
+		return []string{member}, nil
 	}
 	rows, err := db.sql.Query(
 		`SELECT handle FROM person_handles WHERE person_id = ? AND handle <> ? ORDER BY recorded_at, handle`, id, member)

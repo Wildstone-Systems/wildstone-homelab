@@ -274,6 +274,38 @@ func TestPersonalCalendarsSurviveARename(t *testing.T) {
 	}
 }
 
+// Somebody who signs in under a name a renamed Person used to carry is
+// not shown, and cannot write, that Person's calendars (#426 review).
+func TestAnOldLoginDoesNotReachItsPersonsCalendars(t *testing.T) {
+	h, accounts := personalHarness(t)
+	accounts["samuel"] = &fakeAccount{books: map[string]*fakeBook{}}
+	if err := h.s.DB.RenameButlerMemberHandle("sam", "samuel"); err != nil {
+		t.Fatal(err)
+	}
+	// "sam" is now a directory account with no Person, which the portal
+	// door admits.
+	b := h.calendarGet("sam", "")
+	var choices []calendarChoice
+	json.Unmarshal(b["calendars"], &choices)
+	for _, c := range choices {
+		if c.Personal {
+			t.Fatalf("the old login was shown %+v", c)
+		}
+	}
+	if len(b["personalNote"]) == 0 {
+		t.Fatal("the page did not say why")
+	}
+	if status, _ := h.calendarSend("sam", "/api/v1/calendar/events", `{"calendar":"personal:sam/personal","title":"x","date":"2026-09-21","allDay":true}`); status != http.StatusForbidden {
+		t.Fatalf("the old login wrote the Person's calendar: %d", status)
+	}
+	if status, _ := h.calendarSend("sam", "/api/v1/calendar/personal", `{"name":"x"}`); status != http.StatusForbidden {
+		t.Fatalf("the old login made a calendar in the Person's account: %d", status)
+	}
+	if len(accounts["sam"].books["personal"].writes) != 0 || len(accounts["sam"].calendars) != 1 {
+		t.Fatal("the Person's account was changed")
+	}
+}
+
 // A shared grant written for somebody follows them through a rename.
 func TestASharedGrantFollowsItsPersonThroughARename(t *testing.T) {
 	h, _, _, reg := sharedCalendarHarness(t)
