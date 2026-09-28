@@ -73,6 +73,39 @@ func TestBackupEndpoints(t *testing.T) {
 	}
 }
 
+// TestBackupRestoreFrom: ?from picks the local or the off-site copy, and
+// anything else is refused rather than guessed.
+func TestBackupRestoreFrom(t *testing.T) {
+	h := newHarness(t)
+	var local, offsite []string
+	h.s.BackupRestore = func(_ context.Context, plan string) error { local = append(local, plan); return nil }
+	path := "/api/v1/backups/photos/restore"
+
+	// Unwired off-site restore: 503, and the local path is not used instead.
+	if resp := h.do(runtimedb.RoleOperator, http.MethodPost, path+"?from=offsite", nil, nil); resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("unwired off-site restore = %d, want 503", resp.StatusCode)
+	}
+	h.s.BackupRestoreOffsite = func(_ context.Context, plan string) error { offsite = append(offsite, plan); return nil }
+
+	for _, q := range []string{"", "?from=local"} {
+		if resp := h.do(runtimedb.RoleOperator, http.MethodPost, path+q, nil, nil); resp.StatusCode != http.StatusOK {
+			t.Fatalf("restore%s = %d", q, resp.StatusCode)
+		}
+	}
+	if resp := h.do(runtimedb.RoleOperator, http.MethodPost, path+"?from=offsite", nil, nil); resp.StatusCode != http.StatusOK {
+		t.Fatalf("off-site restore = %d", resp.StatusCode)
+	}
+	if resp := h.do(runtimedb.RoleOperator, http.MethodPost, path+"?from=cloud", nil, nil); resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("from=cloud = %d, want 400", resp.StatusCode)
+	}
+	if resp := h.do(runtimedb.RoleButler, http.MethodPost, path+"?from=offsite", nil, nil); resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("butler off-site restore = %d, want 403", resp.StatusCode)
+	}
+	if len(local) != 2 || len(offsite) != 1 || offsite[0] != "photos" {
+		t.Fatalf("engine calls: local %v, offsite %v", local, offsite)
+	}
+}
+
 func TestContainerLogsEndpointDemuxes(t *testing.T) {
 	h := newHarness(t)
 	// Framed docker stream: stdout "hello\n", stderr "oops\n".

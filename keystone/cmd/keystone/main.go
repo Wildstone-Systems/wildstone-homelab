@@ -1522,6 +1522,7 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	apiSrv.CoordinatorHolder = coordinatorHolder(dataDir)
 	apiSrv.BackupRun = bak.RunNow // on-demand backup endpoints (ADR-W015 A3)
 	apiSrv.BackupRestore = bak.RestoreAlongside
+	apiSrv.BackupRestoreOffsite = bak.RestoreOffsite
 
 	// Butler host (ADR-W017 A4): build the configured provider, run the
 	// tool-reliability probe once at startup, and wire the ask endpoint in

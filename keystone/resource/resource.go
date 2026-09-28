@@ -846,12 +846,51 @@ type BackupPlanSpec struct {
 	// restic run container.
 	Volumes []string `yaml:"volumes"`
 	// Repository is the volume name holding the restic repository.
-	Repository string `yaml:"repository"`
+	Repository string `yaml:"repository,omitempty"`
 	// PasswordSecret is a reference of the form secret/<name> to the
 	// repository password (ADR-W005 A2) — never a literal value. Only
 	// Wardstone materializes it (E8).
-	PasswordSecret string `yaml:"passwordSecret"`
+	PasswordSecret string `yaml:"passwordSecret,omitempty"`
 	// Schedule is one of backupSchedules: daily, weekly, monthly.
+	Schedule  string          `yaml:"schedule,omitempty"`
+	Retention BackupRetention `yaml:"retention,omitempty"`
+	// Offsite, when set, also sends this plan's backups to a BackupTarget
+	// (ADR-W045 A3). With route offsite-only, Repository, PasswordSecret,
+	// Schedule and Retention are left empty: the off-site block carries
+	// them, and nothing is stored locally.
+	Offsite *BackupOffsite `yaml:"offsite,omitempty"`
+}
+
+// Off-site routes (ADR-W045 A3).
+const (
+	// BackupRouteOffsiteOnly backs the sources up straight into the
+	// off-site repository. No local repository, so no local disk space.
+	BackupRouteOffsiteOnly = "offsite-only"
+	// BackupRouteLocalAndOffsite backs up into the local repository as
+	// usual, then copies its snapshots to the off-site repository.
+	BackupRouteLocalAndOffsite = "local-and-offsite"
+)
+
+// backupRoutes is the closed set of BackupOffsite.Route values.
+var backupRoutes = map[string]bool{
+	BackupRouteOffsiteOnly:     true,
+	BackupRouteLocalAndOffsite: true,
+}
+
+// BackupOffsite is a BackupPlan's off-site copy (ADR-W045 A3): which
+// BackupTarget it goes to, by which route, under which password, how
+// often, and how much history the off-site repository keeps. Its
+// password is separate from the local one, so one leaked password never
+// opens both copies.
+type BackupOffsite struct {
+	// Target names a BackupTarget on the same node.
+	Target string `yaml:"target"`
+	// Route is one of backupRoutes.
+	Route string `yaml:"route"`
+	// PasswordSecret is the off-site repository password, a secret/<name>
+	// reference that must differ from the plan's local one.
+	PasswordSecret string `yaml:"passwordSecret"`
+	// Schedule is one of daily, weekly, monthly.
 	Schedule  string          `yaml:"schedule"`
 	Retention BackupRetention `yaml:"retention,omitempty"`
 }
@@ -1647,31 +1686,77 @@ func validateSeedFile(r *Resource) error {
 var secretRefInSeed = regexp.MustCompile(`(pbkdf2:)?secret/[A-Za-z0-9][A-Za-z0-9._-]{0,63}`)
 
 func validateBackupPlan(r *Resource) error {
-	if r.BackupPlan == nil {
-		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec", Msg: "backup plan spec missing"}
+	bad := func(field, msg string) error {
+		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: field, Msg: msg}
 	}
-	if len(r.BackupPlan.Volumes) == 0 {
-		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.volumes", Msg: "must name at least one source volume"}
+	p := r.BackupPlan
+	if p == nil {
+		return bad("spec", "backup plan spec missing")
 	}
-	for i, v := range r.BackupPlan.Volumes {
+	if len(p.Volumes) == 0 {
+		return bad("spec.volumes", "must name at least one source volume")
+	}
+	for i, v := range p.Volumes {
 		if v == "" {
-			return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: fmt.Sprintf("spec.volumes[%d]", i), Msg: "must not be empty"}
+			return bad(fmt.Sprintf("spec.volumes[%d]", i), "must not be empty")
 		}
 	}
-	if r.BackupPlan.Repository == "" {
-		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.repository", Msg: "must name the repository volume"}
+	if o := p.Offsite; o != nil && o.Route == BackupRouteOffsiteOnly {
+		// Nothing is kept locally, so a local field here would be a
+		// setting that silently does nothing.
+		const why = "must be empty for route offsite-only: the offsite block carries the password, schedule and retention"
+		switch {
+		case p.Repository != "":
+			return bad("spec.repository", why)
+		case p.PasswordSecret != "":
+			return bad("spec.passwordSecret", why)
+		case p.Schedule != "":
+			return bad("spec.schedule", why)
+		case p.Retention != (BackupRetention{}):
+			return bad("spec.retention", why)
+		}
+	} else {
+		if p.Repository == "" {
+			return bad("spec.repository", "must name the repository volume")
+		}
+		if !secretRefRegexp.MatchString(p.PasswordSecret) {
+			return bad("spec.passwordSecret", "must be a reference of the form secret/<name> (ADR-W005 A2), never a literal secret value")
+		}
+		if !backupSchedules[p.Schedule] {
+			return bad("spec.schedule", "must be one of daily, weekly, monthly")
+		}
+		if err := validateRetention(p.Retention); err != "" {
+			return bad("spec.retention", err)
+		}
 	}
-	if !secretRefRegexp.MatchString(r.BackupPlan.PasswordSecret) {
-		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.passwordSecret", Msg: "must be a reference of the form secret/<name> (ADR-W005 A2), never a literal secret value"}
-	}
-	if !backupSchedules[r.BackupPlan.Schedule] {
-		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.schedule", Msg: "must be one of daily, weekly, monthly"}
-	}
-	ret := r.BackupPlan.Retention
-	if ret.KeepDaily < 0 || ret.KeepWeekly < 0 || ret.KeepMonthly < 0 {
-		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.retention", Msg: "keep counts must not be negative"}
+	if o := p.Offsite; o != nil {
+		if !nameRegexp.MatchString(o.Target) {
+			return bad("spec.offsite.target", "must name a BackupTarget")
+		}
+		if !backupRoutes[o.Route] {
+			return bad("spec.offsite.route", "must be offsite-only or local-and-offsite")
+		}
+		if !secretRefRegexp.MatchString(o.PasswordSecret) {
+			return bad("spec.offsite.passwordSecret", "must be a reference of the form secret/<name> (ADR-W005 A2), never a literal secret value")
+		}
+		if o.PasswordSecret == p.PasswordSecret {
+			return bad("spec.offsite.passwordSecret", "must differ from the local passwordSecret: one leaked password must not open both copies (ADR-W045 A3)")
+		}
+		if !backupSchedules[o.Schedule] {
+			return bad("spec.offsite.schedule", "must be one of daily, weekly, monthly")
+		}
+		if err := validateRetention(o.Retention); err != "" {
+			return bad("spec.offsite.retention", err)
+		}
 	}
 	return nil
+}
+
+func validateRetention(ret BackupRetention) string {
+	if ret.KeepDaily < 0 || ret.KeepWeekly < 0 || ret.KeepMonthly < 0 {
+		return "keep counts must not be negative"
+	}
+	return ""
 }
 
 func validateBackupTarget(r *Resource) error {

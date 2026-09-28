@@ -145,6 +145,88 @@ Get a field wrong and the API says which one, indexed to the document
 that carried it — `put[1]: ... line 3: field repositoryVolume not found
 in type resource.BackupPlanSpec`.
 
+## Off-site copies (S3-compatible storage)
+
+A BackupPlan can also send its data to an S3-compatible bucket — AWS S3,
+Cloudflare R2, Backblaze B2, Wasabi, or an S3 server of your own — so a
+fire or theft that takes the host, the NAS and the local copies
+together still leaves one copy (ADR-W045). It is off until you turn it
+on, and only encrypted data leaves the house: restic encrypts on the
+node, and the provider never sees file names or contents.
+
+Each plan picks a **route**:
+
+- `offsite-only` — straight to the bucket, nothing stored locally. For
+  big data whose original already lives on a NAS, like a movie library.
+- `local-and-offsite` — the local repository as usual, then its
+  snapshots are copied to the bucket. Fast local restores, plus the
+  off-site copy.
+
+The off-site copy has its **own password**, separate from the local one.
+
+```sh
+# The bucket's key (limit it to this one bucket), and one password per plan.
+printf '%s' '<access-key-id>'     | wild secret set offsite-s3-access-key -node node1
+printf '%s' '<secret-access-key>' | wild secret set offsite-s3-secret-key -node node1
+printf '%s' '<offsite-password>'  | wild secret set restic-photos-offsite -node node1
+```
+
+The target — where the bucket is:
+
+```yaml
+apiVersion: wildstone.dev/v1
+kind: BackupTarget
+metadata:
+  name: offsite
+  owner: owner
+  node: node1
+spec:
+  type: s3
+  endpoint: https://<account-id>.r2.cloudflarestorage.com  # AWS: https://s3.<region>.amazonaws.com
+  region: auto                                               # AWS: e.g. us-east-1
+  bucket: wildstone-backups
+  prefix: home                     # optional folder inside the bucket
+  accessKeySecret: secret/offsite-s3-access-key
+  secretKeySecret: secret/offsite-s3-secret-key
+```
+
+Then an `offsite` block on the plan (the photos plan above):
+
+```yaml
+spec:
+  volumes: [photos-data]
+  repository: photos-repo
+  passwordSecret: secret/photos-restic
+  schedule: daily
+  retention: {keepDaily: 7, keepWeekly: 4, keepMonthly: 6}
+  offsite:
+    target: offsite
+    route: local-and-offsite
+    passwordSecret: secret/restic-photos-offsite   # never the local one
+    schedule: weekly
+    retention: {keepWeekly: 8, keepMonthly: 12}
+```
+
+For `offsite-only`, leave out `repository`, `passwordSecret`, `schedule`
+and `retention` at the top level: the `offsite` block carries them.
+
+Propose both documents in one plan and approve it. Pointing data
+off-site is **High** risk, so it always needs your approval. `wild
+backup run <plan>` runs the local backup and then the off-site copy;
+`wild backup list` shows them as `backup` and `offsite` rows.
+
+An S3 server on your home network over plain `http://` needs
+`insecureHTTP: true`; most self-hosted servers also need
+`pathStyle: true`.
+
+**Put these in your password manager**, or the off-site copy is
+cryptographically gone with the house: the endpoint and bucket, the
+bucket key, and every off-site password.
+
+Not yet built (tracked under #407): the monthly restore drill and
+integrity checks for the off-site copy, a disk-space guard, NAS folders
+as sources, and Console screens.
+
 ## Losing a host: the restore procedure
 
 Mirrors the drill phase-for-phase.
@@ -206,13 +288,26 @@ backups are cryptographically gone.
 
 The reconciler reads the restored Statefile and recreates volumes and
 containers on the re-joined nodes (creates are Low-risk and repair
-unattended). Watch `wild status` / the Console until observed matches
+unattended).
+
+**If you use off-site copies**, the rebuild includes your BackupTarget
+and off-site plans, which are High-risk: nothing is rebuilt until you
+approve it. Find the drift-repair plan with `wild plan list` and
+approve it once — that single approval is you confirming that backups
+may go off-site again from the new host. Watch `wild status` / the Console until observed matches
 desired. Volumes come back **empty** — that's the next step.
 
 ### 5. Restore data alongside, then move it
 
 ```sh
 wild backup restore <plan>        # latest snapshot -> volume <plan>-restore
+```
+
+If the local repository did not survive, restore from the off-site copy
+instead (an `offsite-only` plan always restores from there):
+
+```sh
+wild backup restore <plan> -from offsite
 ```
 
 Restore-alongside is deliberate (ADR-W011): nothing overwrites live

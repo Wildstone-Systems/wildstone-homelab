@@ -75,11 +75,19 @@ type Engine struct {
 	// fails every time (a wrong password, a full disk) would re-run on
 	// every tick, all day. RunNow and RestoreAlongside ignore it.
 	RetryAfter time.Duration
-	Log        *slog.Logger
+	// OffsiteTimeout bounds one off-site run or restore. <= 0 uses 72
+	// hours: a first upload of a large library over a home connection
+	// can take days, and restic resumes from what it already uploaded.
+	OffsiteTimeout time.Duration
+	Log            *slog.Logger
 
 	// running holds one entry per plan with a run in progress, so a
 	// scheduled run and an on-demand one never share a container name.
 	running sync.Map
+	// workers holds one entry per plan whose scheduled work is in
+	// flight, so a slow plan (a days-long first upload) is not started
+	// twice and never holds up the others.
+	workers sync.Map
 }
 
 // resticExit describes restic's documented exit codes (restic 0.17+) for
@@ -122,31 +130,71 @@ type RunReport struct {
 	Err  string // "" = succeeded
 }
 
-// Tick evaluates every BackupPlan in the Statefile once: any plan whose
-// last successful backup (or drill) is older than its cadence runs now.
+// Tick evaluates every BackupPlan in the Statefile once and waits for
+// the work it starts: any plan whose last successful backup, drill or
+// off-site run is older than its cadence runs now. Plans run in
+// parallel, one worker each; within a plan the order is backup, drill,
+// off-site, so an off-site copy carries the snapshot just taken.
 // Failures are reported per plan and never stop the others; a failed run
 // leaves no successful ledger row, so it is retried once RetryAfter has
 // passed rather than waiting out a full interval.
 func (e *Engine) Tick(ctx context.Context) ([]RunReport, error) {
+	var mu sync.Mutex
+	var reports []RunReport
+	wg, err := e.start(ctx, func(reps []RunReport) {
+		mu.Lock()
+		reports = append(reports, reps...)
+		mu.Unlock()
+	})
+	if err != nil {
+		return nil, err
+	}
+	wg.Wait()
+	sort.SliceStable(reports, func(i, j int) bool { return reports[i].Plan < reports[j].Plan })
+	return reports, nil
+}
+
+// start launches one worker per BackupPlan that has none running and
+// returns without waiting; each worker hands its reports to done.
+func (e *Engine) start(ctx context.Context, done func([]RunReport)) (*sync.WaitGroup, error) {
 	desired, err := e.State.Load()
 	if err != nil {
 		return nil, fmt.Errorf("backup: loading statefile: %w", err)
 	}
-	var reports []RunReport
+	var wg sync.WaitGroup
 	for _, r := range desired {
-		if r.Kind != resource.KindBackupPlan {
+		if r.Kind != resource.KindBackupPlan || r.BackupPlan == nil {
 			continue
 		}
-		if e.due(r.Metadata.Name, runtimedb.BackupRunBackup, scheduleIntervals[r.BackupPlan.Schedule]) {
-			err := e.runBackup(ctx, r)
-			reports = append(reports, report(r.Metadata.Name, runtimedb.BackupRunBackup, err))
+		if _, busy := e.workers.LoadOrStore(r.Metadata.Name, struct{}{}); busy {
+			continue
 		}
-		if e.due(r.Metadata.Name, runtimedb.BackupRunDrill, e.drillEvery()) {
-			err := e.runDrill(ctx, r)
-			reports = append(reports, report(r.Metadata.Name, runtimedb.BackupRunDrill, err))
+		wg.Add(1)
+		go func(r resource.Resource) {
+			defer wg.Done()
+			defer e.workers.Delete(r.Metadata.Name)
+			done(e.planWork(ctx, r, desired))
+		}(r)
+	}
+	return &wg, nil
+}
+
+// planWork runs whatever of one plan's duties is due, in order.
+func (e *Engine) planWork(ctx context.Context, r resource.Resource, desired []resource.Resource) []RunReport {
+	spec, name := r.BackupPlan, r.Metadata.Name
+	var reports []RunReport
+	if hasLocal(spec) {
+		if e.due(name, runtimedb.BackupRunBackup, scheduleIntervals[spec.Schedule]) {
+			reports = append(reports, report(name, runtimedb.BackupRunBackup, e.runBackup(ctx, r)))
+		}
+		if e.due(name, runtimedb.BackupRunDrill, e.drillEvery()) {
+			reports = append(reports, report(name, runtimedb.BackupRunDrill, e.runDrill(ctx, r)))
 		}
 	}
-	return reports, nil
+	if o := spec.Offsite; o != nil && e.due(name, runtimedb.BackupRunOffsite, scheduleIntervals[o.Schedule]) {
+		reports = append(reports, report(name, runtimedb.BackupRunOffsite, e.runOffsite(ctx, r, desired)))
+	}
+	return reports
 }
 
 func report(plan string, kind runtimedb.BackupRunKind, err error) RunReport {
@@ -274,14 +322,28 @@ func (e *Engine) runDrill(ctx context.Context, r resource.Resource) error {
 // RunNow executes planName's backup immediately, schedule
 // notwithstanding, with the same provenance as a scheduled run — the
 // on-demand path behind POST /api/v1/backups/{plan}/run (ADR-W015 A2).
-// A successful RunNow also resets the schedule clock: the ledger row it
-// writes is the "last success" the next due() check reads.
+// A plan with an off-site copy runs that too, after the local backup
+// (or instead of it, for offsite-only). A successful RunNow also resets
+// the schedule clock: the ledger row it writes is the "last success" the
+// next due() check reads.
+//
+// The caller going away does not stop the run: a closed browser tab
+// must not kill a backup halfway. It finishes, and the ledger says how.
 func (e *Engine) RunNow(ctx context.Context, planName string) error {
-	r, err := e.findPlan(planName)
+	ctx = context.WithoutCancel(ctx)
+	r, desired, err := e.findPlan(planName)
 	if err != nil {
 		return err
 	}
-	return e.runBackup(ctx, r)
+	if hasLocal(r.BackupPlan) {
+		if err := e.runBackup(ctx, r); err != nil {
+			return err
+		}
+	}
+	if r.BackupPlan.Offsite != nil {
+		return e.runOffsite(ctx, r, desired)
+	}
+	return nil
 }
 
 // RestoreAlongside restores planName's latest snapshot into the fresh
@@ -294,10 +356,17 @@ func (e *Engine) RunNow(ctx context.Context, planName string) error {
 // restoring during an incident is not running a rehearsal. Keeping the
 // kinds distinct also means a manual restore no longer resets the
 // scheduled drill's clock — due() reads the last successful *drill*.
+//
+// An offsite-only plan has no local copy, so its restore comes from the
+// off-site repository (see RestoreOffsite).
 func (e *Engine) RestoreAlongside(ctx context.Context, planName string) error {
-	r, err := e.findPlan(planName)
+	ctx = context.WithoutCancel(ctx)
+	r, desired, err := e.findPlan(planName)
 	if err != nil {
 		return err
+	}
+	if !hasLocal(r.BackupPlan) {
+		return e.restoreOffsite(ctx, r, desired)
 	}
 	return e.withProvenance(ctx, r, runtimedb.BackupRunRestore,
 		fmt.Sprintf("restore alongside: %s (latest -> volume %s-restore)", planName, planName),
@@ -306,17 +375,19 @@ func (e *Engine) RestoreAlongside(ctx context.Context, planName string) error {
 		})
 }
 
-func (e *Engine) findPlan(planName string) (resource.Resource, error) {
+// findPlan returns the named BackupPlan and the desired state it came
+// from, which an off-site run needs to find its BackupTarget.
+func (e *Engine) findPlan(planName string) (resource.Resource, []resource.Resource, error) {
 	desired, err := e.State.Load()
 	if err != nil {
-		return resource.Resource{}, fmt.Errorf("backup: loading statefile: %w", err)
+		return resource.Resource{}, nil, fmt.Errorf("backup: loading statefile: %w", err)
 	}
 	for _, r := range desired {
-		if r.Kind == resource.KindBackupPlan && r.Metadata.Name == planName {
-			return r, nil
+		if r.Kind == resource.KindBackupPlan && r.Metadata.Name == planName && r.BackupPlan != nil {
+			return r, desired, nil
 		}
 	}
-	return resource.Resource{}, fmt.Errorf("backup: no BackupPlan %q in the Statefile", planName)
+	return resource.Resource{}, nil, fmt.Errorf("backup: no BackupPlan %q in the Statefile", planName)
 }
 
 func (e *Engine) restoreInto(ctx context.Context, r resource.Resource, targetVolume, containerName string) error {
@@ -427,6 +498,16 @@ func retentionArgs(ret resource.BackupRetention) []string {
 	return args
 }
 
+func (e *Engine) logReports(reports []RunReport) {
+	for _, rep := range reports {
+		if rep.Err != "" {
+			e.log().Warn("backup run failed", "plan", rep.Plan, "kind", string(rep.Kind), "err", rep.Err)
+		} else {
+			e.log().Info("backup run completed", "plan", rep.Plan, "kind", string(rep.Kind))
+		}
+	}
+}
+
 func (e *Engine) event(typ, node, msg string, attrs map[string]string) {
 	if _, err := e.DB.AppendEvent(runtimedb.Event{Type: typ, Node: node, Message: msg, Attrs: attrs}); err != nil {
 		e.log().Error("backup: event append failed", "type", typ, "err", err)
@@ -449,17 +530,10 @@ func (e *Engine) RunLoop(ctx context.Context, interval time.Duration) {
 			return
 		case <-time.After(interval):
 		}
-		reports, err := e.Tick(ctx)
-		if err != nil {
+		// Not Tick: the loop must not wait for a slow plan. A plan still
+		// working from an earlier tick is skipped, not started again.
+		if _, err := e.start(ctx, e.logReports); err != nil {
 			e.log().Error("backup tick", "err", err)
-			continue
-		}
-		for _, rep := range reports {
-			if rep.Err != "" {
-				e.log().Warn("backup run failed", "plan", rep.Plan, "kind", string(rep.Kind), "err", rep.Err)
-			} else {
-				e.log().Info("backup run completed", "plan", rep.Plan, "kind", string(rep.Kind))
-			}
 		}
 	}
 }

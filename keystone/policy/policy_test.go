@@ -480,3 +480,50 @@ func TestBackupTargetSecretShapedFields(t *testing.T) {
 		}
 	}
 }
+
+func offsitePlan(node, target string) resource.Resource {
+	return resource.Resource{
+		ApiVersion: resource.ApiVersion,
+		Kind:       resource.KindBackupPlan,
+		Metadata:   resource.Metadata{Name: "photos", Owner: "capability/photos", Node: node},
+		BackupPlan: &resource.BackupPlanSpec{
+			Volumes: []string{"immich-library"}, Repository: "backup-repo",
+			PasswordSecret: "secret/restic-photos", Schedule: "daily",
+			Offsite: &resource.BackupOffsite{Target: target, Route: resource.BackupRouteLocalAndOffsite,
+				PasswordSecret: "secret/restic-photos-offsite", Schedule: "weekly"},
+		},
+	}
+}
+
+// TestOffsiteTargetDeclared: a plan's off-site target must exist on the
+// plan's node, and cannot be removed from under a plan still using it.
+func TestOffsiteTargetDeclared(t *testing.T) {
+	e := NewEngine(nil)
+	tgt := backupTarget(nil) // node n1
+	for _, tc := range []struct {
+		name     string
+		ch       Change
+		wantRule bool
+	}{
+		{"target present", Change{Proposed: []resource.Resource{tgt, offsitePlan("n1", "offsite")}}, false},
+		{"target missing", Change{Proposed: []resource.Resource{offsitePlan("n1", "offsite")}}, true},
+		{"target on another node", Change{Proposed: []resource.Resource{tgt, offsitePlan("n2", "offsite")}}, true},
+		{"target deleted under an untouched plan", Change{
+			Current:  []resource.Resource{tgt, offsitePlan("n1", "offsite")},
+			Proposed: []resource.Resource{offsitePlan("n1", "offsite")},
+		}, true},
+		{"unrelated change with target intact", Change{
+			Current:  []resource.Resource{tgt, offsitePlan("n1", "offsite")},
+			Proposed: []resource.Resource{tgt, offsitePlan("n1", "offsite"), container("app", nil)},
+		}, false},
+	} {
+		v, _ := e.Validate(tc.ch)
+		got := false
+		for _, x := range v {
+			got = got || x.Rule == RuleBackupTargetDeclared
+		}
+		if got != tc.wantRule {
+			t.Errorf("%s: violations = %v, want %s: %v", tc.name, v, RuleBackupTargetDeclared, tc.wantRule)
+		}
+	}
+}

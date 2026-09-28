@@ -282,6 +282,9 @@ type Server struct {
 	// leaves the backup endpoints answering 503.
 	BackupRun     func(ctx context.Context, plan string) error
 	BackupRestore func(ctx context.Context, plan string) error
+	// BackupRestoreOffsite restores from a plan's off-site copy
+	// (ADR-W045 A3); POST .../restore?from=offsite.
+	BackupRestoreOffsite func(ctx context.Context, plan string) error
 
 	// ConsoleEntryWindow and ConsoleStepUpWindow are how old a Console
 	// authentication may be to stay in the Console, and to perform a

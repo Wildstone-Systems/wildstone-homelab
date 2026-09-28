@@ -45,7 +45,8 @@ type ApplierRunner struct {
 	Applier reconcile.Applier
 	// Poll is the completion-poll interval. <= 0 uses 2s.
 	Poll time.Duration
-	// Timeout bounds one run. <= 0 uses 30 minutes.
+	// Timeout bounds one run. <= 0 uses 30 minutes. A deadline on the
+	// run's context replaces it.
 	Timeout time.Duration
 }
 
@@ -89,6 +90,13 @@ func (a *ApplierRunner) RunContainer(ctx context.Context, node, name string, spe
 		timeout = 30 * time.Minute
 	}
 	deadline := time.Now().Add(timeout)
+	// A caller that set its own deadline (an off-site run, bounded in
+	// days rather than minutes) is the authority on how long this run
+	// may take.
+	if d, ok := ctx.Deadline(); ok {
+		deadline = d
+		timeout = time.Until(d).Round(time.Second)
+	}
 	for {
 		res, err := a.Applier.Apply(ctx, node, &wsv1.Operation{Op: &wsv1.Operation_InspectContainer{
 			InspectContainer: &wsv1.InspectContainer{Name: name},

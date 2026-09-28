@@ -123,12 +123,21 @@ export interface BackupRetention {
   keepMonthly?: number;
 }
 
-export interface BackupPlanSpec {
-  volumes: string[];
-  repository: string;
+export interface BackupOffsite {
+  target: string;
+  route: string;
   passwordSecret: string;
   schedule: string;
   retention?: BackupRetention;
+}
+
+export interface BackupPlanSpec {
+  volumes: string[];
+  repository?: string;
+  passwordSecret?: string;
+  schedule?: string;
+  retention?: BackupRetention;
+  offsite?: BackupOffsite;
 }
 
 export interface BackupTargetSpec {

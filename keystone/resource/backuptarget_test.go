@@ -149,3 +149,78 @@ spec:
 		t.Fatal("unknown field accessKey was accepted")
 	}
 }
+
+func offsitePlanRes(route string) Resource {
+	r := Resource{
+		ApiVersion: ApiVersion,
+		Kind:       KindBackupPlan,
+		Metadata:   Metadata{Name: "photos", Owner: "capability/photos", Node: "n1"},
+		BackupPlan: &BackupPlanSpec{
+			Volumes:        []string{"immich-library"},
+			Repository:     "backup-repo",
+			PasswordSecret: "secret/restic-photos",
+			Schedule:       "daily",
+			Offsite: &BackupOffsite{
+				Target: "offsite", Route: route, PasswordSecret: "secret/restic-photos-offsite",
+				Schedule: "weekly", Retention: BackupRetention{KeepWeekly: 8},
+			},
+		},
+	}
+	if route == BackupRouteOffsiteOnly {
+		r.BackupPlan.Repository, r.BackupPlan.PasswordSecret, r.BackupPlan.Schedule = "", "", ""
+	}
+	return r
+}
+
+// TestBackupPlanOffsiteValidates: both routes, as documented.
+func TestBackupPlanOffsiteValidates(t *testing.T) {
+	for _, route := range []string{BackupRouteLocalAndOffsite, BackupRouteOffsiteOnly} {
+		r := offsitePlanRes(route)
+		if err := r.Validate(); err != nil {
+			t.Errorf("%s: %v", route, err)
+		}
+		data, err := Marshal(r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		back, err := Unmarshal(data)
+		if err != nil {
+			t.Fatalf("%s: round trip: %v", route, err)
+		}
+		if back.BackupPlan.Offsite == nil || *back.BackupPlan.Offsite != *r.BackupPlan.Offsite {
+			t.Errorf("%s: offsite lost in round trip: %+v", route, back.BackupPlan.Offsite)
+		}
+	}
+}
+
+// TestBackupPlanOffsiteRejects: each bad off-site setting is refused and
+// the field named.
+func TestBackupPlanOffsiteRejects(t *testing.T) {
+	for _, tc := range []struct {
+		name, route, field string
+		mut                func(*BackupPlanSpec)
+	}{
+		{"no target", BackupRouteLocalAndOffsite, "spec.offsite.target", func(p *BackupPlanSpec) { p.Offsite.Target = "" }},
+		{"bad route", BackupRouteLocalAndOffsite, "spec.offsite.route", func(p *BackupPlanSpec) { p.Offsite.Route = "cloud" }},
+		{"literal password", BackupRouteLocalAndOffsite, "spec.offsite.passwordSecret", func(p *BackupPlanSpec) { p.Offsite.PasswordSecret = "hunter2" }},
+		{"shared password", BackupRouteLocalAndOffsite, "spec.offsite.passwordSecret", func(p *BackupPlanSpec) { p.Offsite.PasswordSecret = p.PasswordSecret }},
+		{"bad schedule", BackupRouteLocalAndOffsite, "spec.offsite.schedule", func(p *BackupPlanSpec) { p.Offsite.Schedule = "hourly" }},
+		{"negative retention", BackupRouteLocalAndOffsite, "spec.offsite.retention", func(p *BackupPlanSpec) { p.Offsite.Retention.KeepDaily = -1 }},
+		{"local needs repository", BackupRouteLocalAndOffsite, "spec.repository", func(p *BackupPlanSpec) { p.Repository = "" }},
+		{"offsite-only with repository", BackupRouteOffsiteOnly, "spec.repository", func(p *BackupPlanSpec) { p.Repository = "repo" }},
+		{"offsite-only with local password", BackupRouteOffsiteOnly, "spec.passwordSecret", func(p *BackupPlanSpec) { p.PasswordSecret = "secret/x" }},
+		{"offsite-only with local schedule", BackupRouteOffsiteOnly, "spec.schedule", func(p *BackupPlanSpec) { p.Schedule = "daily" }},
+		{"offsite-only with local retention", BackupRouteOffsiteOnly, "spec.retention", func(p *BackupPlanSpec) { p.Retention.KeepDaily = 7 }},
+	} {
+		r := offsitePlanRes(tc.route)
+		tc.mut(r.BackupPlan)
+		err := r.Validate()
+		if err == nil {
+			t.Errorf("%s: accepted", tc.name)
+			continue
+		}
+		if !strings.Contains(err.Error(), tc.field) {
+			t.Errorf("%s: error %q does not name %s", tc.name, err, tc.field)
+		}
+	}
+}

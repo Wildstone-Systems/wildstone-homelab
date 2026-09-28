@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-// BackupRunKind distinguishes the three things that can write a row to
+// BackupRunKind distinguishes the things that can write a row to
 // the backup_runs ledger (ADR-W011 A4): an ordinary backup, the scheduled
 // restore drill, and an operator-initiated restore-alongside. The last
 // two share one mechanism — RestoreAlongside IS the drill — but the
@@ -19,6 +19,14 @@ const (
 	BackupRunBackup  BackupRunKind = "backup"
 	BackupRunDrill   BackupRunKind = "drill"
 	BackupRunRestore BackupRunKind = "restore"
+	// BackupRunOffsite is a plan's off-site run (ADR-W045 A3): a copy of
+	// the local repository to the BackupTarget, or, for an offsite-only
+	// plan, a backup straight into it.
+	BackupRunOffsite BackupRunKind = "offsite"
+	// BackupRunOffsiteRestore is a restore-alongside from the off-site
+	// repository — the path after a total loss, when no local copy
+	// survived.
+	BackupRunOffsiteRestore BackupRunKind = "offsite-restore"
 )
 
 // BackupRunStatus is the lifecycle of one ledger row.

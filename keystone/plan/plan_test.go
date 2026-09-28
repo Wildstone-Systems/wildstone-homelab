@@ -473,3 +473,45 @@ func TestBackupTargetOrderedBeforeBackupPlan(t *testing.T) {
 			KindOrder(resource.KindBackupTarget), KindOrder(resource.KindBackupPlan))
 	}
 }
+
+func offsiteBP(off *resource.BackupOffsite) resource.Resource {
+	return resource.Resource{
+		Kind:     resource.KindBackupPlan,
+		Metadata: resource.Metadata{Name: "photos", Owner: "capability/photos", Node: "n1"},
+		BackupPlan: &resource.BackupPlanSpec{
+			Volumes: []string{"immich-library"}, Repository: "backup-repo",
+			PasswordSecret: "secret/restic-photos", Schedule: "daily", Offsite: off,
+		},
+	}
+}
+
+// TestDiffBackupPlanOffsite: sending data off-site, or changing where it
+// goes, is High; turning it off is Medium; tuning its schedule is Low.
+func TestDiffBackupPlanOffsite(t *testing.T) {
+	off := func(target, route, schedule string) *resource.BackupOffsite {
+		return &resource.BackupOffsite{Target: target, Route: route, PasswordSecret: "secret/restic-photos-offsite", Schedule: schedule}
+	}
+	base := off("offsite", resource.BackupRouteLocalAndOffsite, "weekly")
+	for _, tc := range []struct {
+		name       string
+		want, have *resource.BackupOffsite
+		observed   bool
+		risk       RiskGrade
+	}{
+		{"create with offsite", base, nil, false, RiskHigh},
+		{"offsite added", base, nil, true, RiskHigh},
+		{"target changed", off("other", resource.BackupRouteLocalAndOffsite, "weekly"), base, true, RiskHigh},
+		{"route changed", off("offsite", resource.BackupRouteOffsiteOnly, "weekly"), base, true, RiskHigh},
+		{"schedule changed", off("offsite", resource.BackupRouteLocalAndOffsite, "monthly"), base, true, RiskLow},
+		{"offsite removed", nil, base, true, RiskMedium},
+	} {
+		var observed []resource.Resource
+		if tc.observed {
+			observed = []resource.Resource{offsiteBP(tc.have)}
+		}
+		p := Diff([]resource.Resource{offsiteBP(tc.want)}, observed)
+		if len(p.Steps) != 1 || p.OverallRisk != tc.risk {
+			t.Errorf("%s: plan = %+v, want one step at %s", tc.name, p.Steps, tc.risk)
+		}
+	}
+}

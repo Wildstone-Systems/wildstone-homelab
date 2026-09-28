@@ -493,7 +493,15 @@ func backupPlanEqual(a, b *resource.BackupPlanSpec) bool {
 		a.PasswordSecret == b.PasswordSecret &&
 		a.Schedule == b.Schedule &&
 		a.Retention == b.Retention &&
-		stringSliceEqual(a.Volumes, b.Volumes)
+		stringSliceEqual(a.Volumes, b.Volumes) &&
+		offsiteEqual(a.Offsite, b.Offsite)
+}
+
+func offsiteEqual(a, b *resource.BackupOffsite) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
 }
 
 func containerEqual(a, b *resource.ContainerSpec) bool {
@@ -677,6 +685,21 @@ func grade(action Action, want, have resource.Resource) (RiskGrade, string) {
 		// volumes stops, which the owner should consciously confirm.
 		if action == ActionDelete {
 			return RiskMedium, "backup coverage removed: no data deleted, but the named volumes stop being backed up"
+		}
+		// Sending a plan's data off-site, or changing where or how it
+		// goes, is High (ADR-W045 A7): it is the step that lets household
+		// data leave the house, so it always passes a human with step-up.
+		// Turning it off is Medium, the same judgement as removing a plan.
+		wantOff := want.BackupPlan.Offsite
+		var haveOff *resource.BackupOffsite
+		if action == ActionUpdate && have.BackupPlan != nil {
+			haveOff = have.BackupPlan.Offsite
+		}
+		switch {
+		case wantOff != nil && (haveOff == nil || haveOff.Target != wantOff.Target || haveOff.Route != wantOff.Route):
+			return RiskHigh, fmt.Sprintf("sends these volumes off-site to BackupTarget %q (%s), encrypted before upload", wantOff.Target, wantOff.Route)
+		case wantOff == nil && haveOff != nil:
+			return RiskMedium, "off-site copy turned off: nothing is deleted from the bucket, but new backups stop going there"
 		}
 		return RiskLow, "backup schedule declaration only; runs execute with their own provenance (ADR-W011 A4)"
 	case resource.KindBackupTarget:

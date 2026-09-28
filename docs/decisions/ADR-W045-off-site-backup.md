@@ -1,9 +1,8 @@
 # ADR-W045: Off-site backup to S3-compatible storage
 
 - **Status:** accepted by the owner on 2026-09-28, including the A5
-  amendments. Being implemented under #407: I1 (#413) and I2 (#414)
-  are done; a `BackupTarget` can be declared and approved, but nothing
-  uses it until I3 (#415).
+  amendments. Being implemented under #407: I1 (#413), I2 (#414) and
+  I3 (#415) are done — off-site backups work end to end from the CLI.
 - **Issue:** [#407](https://github.com/chickenrat17/wildstone-homelab/issues/407).
   Audit: [`docs/design/issue-407-offsite-backup-audit.md`](../design/issue-407-offsite-backup-audit.md).
 - **Builds on:** ADR-W011 A4 (backup engine), ADR-W012 (secrets path),
@@ -107,6 +106,17 @@ local-and-offsite:  source ──backup──▶ local repo ──restic copy─
   off-site copy, and the other way round.
 - Off-site has its own schedule and retention. A broken endpoint fails
   only the off-site step; local backups keep running.
+- **Long runs.** An off-site run is bounded by 72 hours, not the 30
+  minutes a local pass gets: a first upload of a large library over a
+  home connection can take days. Each plan runs in its own worker, so a
+  slow upload never delays another plan's backups.
+- **Restoring.** `wild backup restore <plan> -from offsite` restores the
+  latest off-site snapshot alongside, into `<plan>-restore`. An
+  offsite-only plan restores from there by default.
+- **After a total loss** the rebuilt desired state includes the target
+  and the off-site plans, which are High. Reconcile therefore holds the
+  whole rebuild for one approval: the owner confirming that backups may
+  go off-site again from the new host.
 
 ### A3.1. Disk-space guard
 
@@ -271,4 +281,4 @@ copy is cryptographically gone — by design.
 | I9 | Whole-site set: Statefile bundle, runtime DB snapshot, sealed secrets, recovery kit | I3 |
 | I10 | DB consistency hooks for DB-backed packages (pg_dump, sqlite) | I1 |
 | I11 | Hardening: Object Lock, key rotation guide, provider guides | I3 |
-| I12 | Total-loss runbook and CI exit drill against MinIO | I7, I9 |
+| I12 | Total-loss runbook and CI exit drill against a local S3 server | I7, I9 |

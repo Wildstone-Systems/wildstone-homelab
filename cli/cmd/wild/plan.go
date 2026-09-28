@@ -132,7 +132,7 @@ func runLogs(args []string) int {
 
 func runBackup(args []string) int {
 	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "usage: wild backup list|run <plan>|restore <plan> [-api URL]")
+		fmt.Fprintln(os.Stderr, "usage: wild backup list|run <plan>|restore <plan> [-from local|offsite] [-api URL]")
 		return 2
 	}
 	sub, rest := args[0], args[1:]
@@ -146,6 +146,7 @@ func runBackup(args []string) int {
 	}
 	fs := flag.NewFlagSet("wild backup "+sub, flag.ExitOnError)
 	apiBase := fs.String("api", "http://127.0.0.1:9441", "Keystone public API base URL")
+	from := fs.String("from", "local", "restore only: local, or offsite to restore from the plan's off-site copy")
 	fs.Parse(rest) //nolint:errcheck // ExitOnError
 	token, ok := requireToken("backup")
 	if !ok {
@@ -157,9 +158,13 @@ func runBackup(args []string) int {
 	case "run":
 		return simpleCall("backup", *apiBase, token, http.MethodPost, "/api/v1/backups/"+url.PathEscape(plan)+"/run", nil)
 	case "restore":
-		return simpleCall("backup", *apiBase, token, http.MethodPost, "/api/v1/backups/"+url.PathEscape(plan)+"/restore", nil)
+		path := "/api/v1/backups/" + url.PathEscape(plan) + "/restore"
+		if *from != "local" {
+			path += "?from=" + url.QueryEscape(*from)
+		}
+		return simpleCall("backup", *apiBase, token, http.MethodPost, path, nil)
 	default:
-		fmt.Fprintln(os.Stderr, "usage: wild backup list|run <plan>|restore <plan> [-api URL]")
+		fmt.Fprintln(os.Stderr, "usage: wild backup list|run <plan>|restore <plan> [-from local|offsite] [-api URL]")
 		return 2
 	}
 }
