@@ -196,7 +196,14 @@ func newTransport(name string, pollWait time.Duration) (Transport, error) {
 	case "telegram":
 		return newTelegram(os.Getenv("TELEGRAM_BOT_TOKEN"), pollWait)
 	case "matrix":
-		return newMatrix(os.Getenv("MATRIX_HOMESERVER"), os.Getenv("MATRIX_ACCESS_TOKEN"), pollWait)
+		t, err := newMatrix(os.Getenv("MATRIX_HOMESERVER"), os.Getenv("MATRIX_ACCESS_TOKEN"), pollWait)
+		if err != nil {
+			return nil, err
+		}
+		m := t.(*matrix)
+		m.appserviceLocalpart = os.Getenv("MATRIX_APPSERVICE_LOCALPART")
+		m.displayName = os.Getenv("MATRIX_DISPLAY_NAME")
+		return m, nil
 	case "discord":
 		return newDiscord(os.Getenv("DISCORD_BOT_TOKEN"), pollWait)
 	case "slack":

@@ -30,6 +30,16 @@
 # leaves generated signing material persistent without putting secret values
 # in desired state.
 #
+# CHAT BOTS. A chat-matrix bot on this homeserver is an application service,
+# not a person's account (ADR-W033 B7.2): it declares a MatrixAppService, and
+# Keystone renders every one into appservices.reg in this capability's
+# subtree. That file carries the bots' tokens, so the node writes it 0600
+# root, and Synapse runs as uid 991. matrix-appservices-install is the root
+# step between them: it splits the file into one registration per bot in
+# matrix-data, owned by 991, and the startup module lists those for Synapse.
+# The file is in the config digest, so a bot added or removed re-runs the Job
+# and replaces Synapse, which loads application services only at start.
+#
 # STORAGE AND RESTORE. Synapse media/signing/config data and PostgreSQL are the
 # durable service. Both are backed up daily into an encrypted repository. The
 # OIDC credential file is ephemeral and is re-materialized on every start.
@@ -42,7 +52,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: matrix-synapse
-  version: 1.0.8
+  version: 1.0.9
   capability: matrix-homeserver
   profile: synapse
 requires:
@@ -208,6 +218,12 @@ templates:
             config = yaml.safe_load(source)
         config["database"]["args"]["host"] = "/run/postgresql"
         config["database"]["args"].pop("password", None)
+        # Chat bots, installed into the data volume by the root Job
+        # matrix-appservices-install. Set on every start, so a bot that was
+        # removed is no longer listed; an empty list registers none.
+        config["app_service_config_files"] = sorted(
+            str(p) for p in Path("/data/appservices").glob("*.yaml")
+        )
         config_temporary = config_path.with_suffix(".yaml.tmp")
         config_descriptor = os.open(
             config_temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600
@@ -221,6 +237,56 @@ templates:
             sys.executable,
             [sys.executable, "-m", "synapse.app.homeserver", *sys.argv[1:]],
         )
+
+  # Split Keystone's merged bot registrations (see CHAT BOTS above) into one
+  # file per bot that Synapse's uid can read. Replaces the whole directory,
+  # so a removed bot's registration goes with it.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: ConfigFile
+    metadata: { name: matrix-appservices-install-script, node: "{{ .Params.node }}" }
+    spec:
+      filename: install-appservices.sh
+      content: |
+        #!/bin/sh
+        # managed by wildstone — do not edit
+        set -eu
+        src=/etc/wildstone/matrix-homeserver/appservices.reg
+        dst=/data/appservices
+        rm -rf "$dst.new"
+        mkdir -p "$dst.new"
+        if [ -f "$src" ]; then
+          # Each registration starts at a "# registration: <id>" line;
+          # Keystone validates ids as DNS labels, so they are safe names.
+          awk -v dir="$dst.new" '
+            /^# registration: / { if (out) close(out); out = dir "/" $3 ".yaml"; next }
+            out { print > out }
+          ' "$src"
+        fi
+        chown -R 991:991 "$dst.new"
+        chmod 700 "$dst.new"
+        find "$dst.new" -type f -exec chmod 600 {} +
+        rm -rf "$dst.old"
+        if [ -d "$dst" ]; then mv "$dst" "$dst.old"; fi
+        mv "$dst.new" "$dst"
+        rm -rf "$dst.old"
+        echo "matrix: installed $(find "$dst" -type f | wc -l) application service registration(s)"
+
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Job
+    # Must sort before matrix-synapse, like matrix-config-generate: the
+    # runtime reads what this writes. Root, from alpine, because the
+    # merged file it reads is 0600 root and what it writes must be 991's.
+    metadata: { name: matrix-appservices-install, node: "{{ .Params.node }}" }
+    spec:
+      run:
+        image: "alpine@sha256:48b0309ca019d89d40f670aa1bc06e426dc0931948452e8491e3d65087abc07d"
+        # alpine declares no ENTRYPOINT, so this is the whole argv.
+        command: ["/bin/sh", "/etc/wildstone/matrix-homeserver/install-appservices.sh"]
+        mounts:
+          - { source: /etc/wildstone/matrix-homeserver, target: /etc/wildstone/matrix-homeserver, readOnly: true }
+          - { source: matrix-data, target: /data }
 
   # Generate the official base configuration and signing keys. migrate_config
   # uses the image's maintained template and preserves its generated secrets

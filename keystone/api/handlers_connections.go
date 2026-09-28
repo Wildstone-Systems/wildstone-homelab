@@ -44,6 +44,8 @@ import (
 	"strings"
 	"time"
 
+	"gopkg.in/yaml.v3"
+
 	"github.com/chickenrat17/wildstone-homelab/keystone/pkgspec"
 	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
 	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
@@ -58,6 +60,18 @@ type chatPlatform struct {
 	// stored as the provided secret "<capability>-<Secret>", except a
 	// field with Param set, which is an install param instead.
 	Fields []chatField `json:"fields"`
+	// Local, when present, offers a bot on the household's own server for
+	// this platform, which needs none of Fields (ADR-W033 B7.2). Only
+	// Matrix has one, and only while the household runs a homeserver.
+	Local *chatLocal `json:"local,omitempty"`
+}
+
+// chatLocal describes the no-credential option on the Connect form.
+type chatLocal struct {
+	Label string `json:"label"`
+	Hint  string `json:"hint"`
+	// Node is the machine the bot must run on: the homeserver's.
+	Node string `json:"node"`
 }
 
 type chatField struct {
@@ -108,7 +122,93 @@ func chatPlatformNamed(name string) (chatPlatform, bool) {
 
 // listChatPlatforms is what the Connect form is built from.
 func (s *Server) listChatPlatforms(_ *http.Request, _ principal.Identity) (any, int, error) {
-	return map[string]any{"platforms": chatPlatforms}, http.StatusOK, nil
+	out := append([]chatPlatform(nil), chatPlatforms...)
+	if hs, ok := s.localMatrixHomeserver(); ok && hs.appServices {
+		for i := range out {
+			if out[i].Name == "matrix" {
+				out[i].Local = &chatLocal{
+					Label: "This household's Matrix server",
+					Hint: "Nothing to paste: the bot is made on your own homeserver as " + localMatrixBotHint(hs.serverName) +
+						", and cannot sign in to anything else.",
+					Node: hs.node,
+				}
+			}
+		}
+	}
+	return map[string]any{"platforms": out}, http.StatusOK, nil
+}
+
+// localMatrixServer is the household's own homeserver, as far as a bot on
+// it needs to know.
+type localMatrixServer struct {
+	node       string
+	serverName string
+	// appServices is whether the installed homeserver can load a bot at
+	// all. A matrix-synapse from before B7.2 (1.0.8 and earlier) has a
+	// private.yaml but neither the Job that installs registrations nor
+	// the startup code that lists them, and installing chat-matrix does
+	// not re-render it: a local bot there would be reported connected
+	// and never be able to register or sync.
+	appServices bool
+}
+
+// localMatrixAppServicesJob is the matrix-synapse Job that installs bot
+// registrations. It ships in the same package version as the startup code
+// that loads them, so its presence in current state is what says the
+// homeserver accepts application services.
+const localMatrixAppServicesJob = "matrix-appservices-install"
+
+// localMatrixHomeserver finds the matrix-homeserver capability in current
+// state: the node it runs on, and the server_name its rendered config
+// carries — the value Synapse actually uses, whether it was set or
+// derived, rather than a second derivation that could disagree.
+func (s *Server) localMatrixHomeserver() (localMatrixServer, bool) {
+	if s.State == nil {
+		return localMatrixServer{}, false
+	}
+	current, err := s.State.Load()
+	if err != nil {
+		return localMatrixServer{}, false
+	}
+	var (
+		hs       localMatrixServer
+		found    bool
+		installs bool
+	)
+	for _, r := range current {
+		if r.Metadata.Owner != "capability/matrix-homeserver" {
+			continue
+		}
+		if r.Kind == resource.KindJob && r.Metadata.Name == localMatrixAppServicesJob {
+			installs = true
+			continue
+		}
+		if found || r.Kind != resource.KindConfigFile || r.ConfigFile == nil || r.ConfigFile.Filename != "private.yaml" {
+			continue
+		}
+		var cfg struct {
+			ServerName string `yaml:"server_name"`
+		}
+		if yaml.Unmarshal([]byte(r.ConfigFile.Content), &cfg) != nil || cfg.ServerName == "" || r.Metadata.Node == "" {
+			return localMatrixServer{}, false
+		}
+		hs, found = localMatrixServer{node: r.Metadata.Node, serverName: cfg.ServerName}, true
+	}
+	if !found {
+		return localMatrixServer{}, false
+	}
+	hs.appServices = installs
+	return hs, true
+}
+
+// localMatrixBotID is the user a local bot is registered as: the
+// chat-matrix package's botLocalpart on this server.
+func localMatrixBotID(instance, serverName string) string {
+	return "@wildstone-" + instance + ":" + serverName
+}
+
+func localMatrixBotHint(serverName string) string {
+	return "@wildstone-<name>:" + serverName
 }
 
 type connectRequest struct {
@@ -119,6 +219,9 @@ type connectRequest struct {
 	// Node is which machine runs the bot. Optional: a household with one
 	// machine is not asked.
 	Node string `json:"node,omitempty"`
+	// Local asks for a bot on the household's own homeserver, which needs
+	// no credentials (ADR-W033 B7.2). Matrix only.
+	Local bool `json:"local,omitempty"`
 	// Bot names one of the Agent's existing bots to invite the Person to,
 	// when it has several on this platform. With no credentials given,
 	// the Person is invited to the Agent's existing bot instead of a new
@@ -169,7 +272,7 @@ func (s *Server) createConnection(r *http.Request, id principal.Identity) (any, 
 	// No credential: invite them to the bot the Agent already has. One
 	// bot serves many people; a second bot on the same token would be
 	// the same bot polled twice, each stealing the other's messages.
-	if !anyCredential(req.Credentials) {
+	if !req.Local && !anyCredential(req.Credentials) {
 		return s.inviteToExistingBot(r, id, agent, platform, person, strings.TrimSpace(req.Bot))
 	}
 	// A new bot mints a credential, which is consequential (A4.1);
@@ -177,20 +280,51 @@ func (s *Server) createConnection(r *http.Request, id principal.Identity) (any, 
 	if body, code, err := s.stepUpRefusal(id); err != nil {
 		return body, code, err
 	}
-	values, params, err := platformValues(platform, req.Credentials)
-	if err != nil {
-		return nil, http.StatusBadRequest, err
+	var (
+		values, params map[string]string
+		fingerprint    string
+		local          localMatrixServer
+		asked          = req.Node
+	)
+	if req.Local {
+		// The household's own homeserver: nothing is pasted, and the bot
+		// runs where Synapse does, because its registration is a file in
+		// Synapse's subtree and its token a secret on that node.
+		if platform.Name != "matrix" {
+			return nil, http.StatusBadRequest, fmt.Errorf("only Matrix bots can use the household's own server")
+		}
+		if anyCredential(req.Credentials) {
+			return nil, http.StatusBadRequest, fmt.Errorf("a bot on the household's own Matrix server takes no token; leave the fields empty")
+		}
+		var ok bool
+		if local, ok = s.localMatrixHomeserver(); !ok {
+			return nil, http.StatusBadRequest, fmt.Errorf("this household does not run a Matrix homeserver; install matrix-synapse first, or connect a bot on another server with its token")
+		}
+		if !local.appServices {
+			return nil, http.StatusBadRequest, fmt.Errorf("this household's Matrix server is too old to host a bot; upgrade matrix-synapse to 1.0.9 or later first, or connect a bot on another server with its token")
+		}
+		if asked != "" && asked != local.node {
+			return nil, http.StatusBadRequest, fmt.Errorf("a bot on the household's own Matrix server runs on %s, the machine running Matrix", local.node)
+		}
+		asked = local.node
+		values = map[string]string{}
+		params = map[string]string{"homeserver_url": "", "display_name": agent.Name}
+	} else {
+		values, params, err = platformValues(platform, req.Credentials)
+		if err != nil {
+			return nil, http.StatusBadRequest, err
+		}
+		fingerprint = credentialFingerprint(platform.Name, values)
+		switch at, used, err := s.DB.ConnectionUsingCredential(fingerprint); {
+		case err != nil:
+			return nil, http.StatusInternalServerError, err
+		case used:
+			return nil, http.StatusConflict, fmt.Errorf(
+				"that token is already %s's %s bot (%s). To connect another person to it, leave the token empty",
+				at.Butler, platform.Label, at.ExternalID)
+		}
 	}
-	fingerprint := credentialFingerprint(platform.Name, values)
-	switch at, used, err := s.DB.ConnectionUsingCredential(fingerprint); {
-	case err != nil:
-		return nil, http.StatusInternalServerError, err
-	case used:
-		return nil, http.StatusConflict, fmt.Errorf(
-			"that token is already %s's %s bot (%s). To connect another person to it, leave the token empty",
-			at.Butler, platform.Label, at.ExternalID)
-	}
-	node, keystoneURL, err := s.connectionPlacement(req.Node)
+	node, keystoneURL, err := s.connectionPlacement(asked)
 	if err != nil {
 		return nil, http.StatusBadRequest, err
 	}
@@ -199,6 +333,11 @@ func (s *Server) createConnection(r *http.Request, id principal.Identity) (any, 
 		return nil, http.StatusConflict, err
 	}
 	capName := pkg.Metadata.Capability + "-" + instance
+	if req.Local {
+		// No credential exists to fingerprint. The capability name stands
+		// in, so the one-token-one-bot record stays unique per bot.
+		fingerprint = credentialFingerprint(platform.Name+"-local", map[string]string{"capability": capName})
+	}
 
 	step := func(what string, h handlerFunc, body any, path map[string]string) (map[string]any, error) {
 		out, code, err := s.subcall(r, id, h, body, path)
@@ -257,7 +396,11 @@ func (s *Server) createConnection(r *http.Request, id principal.Identity) (any, 
 
 	note := fmt.Sprintf("%s's %s bot is being installed. %s will find their invite on %s, and get their key there.",
 		agent.Name, platform.Label, person, where)
-	if platform.Name == "matrix" {
+	switch {
+	case req.Local:
+		note += fmt.Sprintf(" Invite %s to a new room with encryption disabled; it will accept the room invitation automatically.",
+			localMatrixBotID(instance, local.serverName))
+	case platform.Name == "matrix":
 		note += " Invite the bot to a new room with encryption disabled; it will accept the room invitation automatically."
 	}
 	return map[string]any{

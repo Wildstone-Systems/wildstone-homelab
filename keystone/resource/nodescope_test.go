@@ -90,6 +90,9 @@ func validResourceOfKind(t *testing.T, k Kind) Resource {
 			RedirectUris: []string{"https://r1.example.com/cb"}, SecretRef: "secret/r1-oidc", AuthPolicy: "two_factor"}
 	case KindLdapGroup:
 		r.LdapGroup = &LdapGroupSpec{Name: "r1_users"}
+	case KindMatrixAppService:
+		r.MatrixAppService = &MatrixAppServiceSpec{BotLocalpart: "wildstone-r1",
+			AsTokenRef: "secret/r1-as", HsTokenRef: "secret/r1-hs"}
 	case KindIngress:
 		r.Ingress = &IngressSpec{TLS: "internal", TrustedProxies: []string{"private_ranges"}}
 	case KindLdapUser:

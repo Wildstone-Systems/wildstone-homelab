@@ -126,6 +126,11 @@ func managedConfigContents(managedPrefix string, desiredByKey map[resKey]resourc
 	for _, f := range homepagePrereqFiles(managedPrefix, desired) {
 		out[f.path] = string(f.want)
 	}
+	// The Matrix bot registrations. Synapse reads its application services
+	// once, at start, and the Job that installs them re-runs only when its
+	// digest moves — so adding or removing a bot reaches the homeserver by
+	// exactly this line, like a group reaches LLDAP by the two above.
+	out[matrixAppServicesPath(managedPrefix)] = string(renderMatrixAppServices(desired))
 
 	return out
 }

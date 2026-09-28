@@ -355,6 +355,7 @@ type managedFile struct {
 // supposed to bound it.
 func nodePrereqFiles(managedPrefix string, desired []resource.Resource) []managedFile {
 	clientsFile := renderAutheliaClients(desired)
+	matrixRegs := renderMatrixAppServices(desired)
 	files := []managedFile{
 		{baseCaddyfilePath(managedPrefix), renderBaseCaddyfile(postureOf(desired)), false},
 		{placeholderFragmentPath(managedPrefix), renderPlaceholderFragment(), false},
@@ -402,7 +403,15 @@ func nodePrereqFiles(managedPrefix string, desired []resource.Resource) []manage
 	// ConfigFile already claims (#410): a package that ships its own
 	// dashboard settings owns that path, and the generic renderer must
 	// not compete with it for the same file on every tick.
-	return append(files, homepagePrereqFiles(managedPrefix, desired)...)
+	files = append(files, homepagePrereqFiles(managedPrefix, desired)...)
+	return append(files, managedFile{
+		// The merged Matrix bot registrations. Same category as the
+		// Authelia clients file: a third party reads it (through the
+		// homeserver's split Job), so its token references are resolved
+		// on the node, and like that file it is materialized only when it
+		// carries a registration at all.
+		matrixAppServicesPath(managedPrefix), matrixRegs, configFileNeedsMaterialization(string(matrixRegs)),
+	})
 }
 
 // homepageClaimedPaths is the set of managed paths, under this prefix,
@@ -566,7 +575,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, nodeID string, desired []res
 		switch res.Kind {
 		case resource.KindContainer, resource.KindVolume, resource.KindRoute, resource.KindOidcClient,
 			resource.KindLdapGroup, resource.KindLdapUser, resource.KindIngress, resource.KindBackupPlan, resource.KindConfigFile, resource.KindSeedFile, resource.KindJob,
-			resource.KindSecret:
+			resource.KindSecret, resource.KindMatrixAppService:
 			wsDesired = append(wsDesired, res)
 		case resource.KindDnsRecord:
 			providerDesired = append(providerDesired, res)
@@ -728,6 +737,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, nodeID string, desired []res
 			}
 		case resource.KindLdapGroup:
 			sr = r.applyLdapGroupStep(ctx, nodeID, step, desiredByKey)
+		case resource.KindMatrixAppService:
+			sr = r.applyMatrixAppServiceStep(ctx, nodeID, step, desiredByKey)
 		case resource.KindLdapUser:
 			sr = r.applyLdapUserStep(ctx, nodeID, step, desiredByKey)
 		case resource.KindIngress:
@@ -879,7 +890,7 @@ func (r *Reconciler) observe(ctx context.Context, nodeID string, desired []resou
 			if present {
 				observed = append(observed, obs)
 			}
-		case resource.KindLdapGroup, resource.KindLdapUser, resource.KindIngress, resource.KindBackupPlan:
+		case resource.KindLdapGroup, resource.KindLdapUser, resource.KindIngress, resource.KindBackupPlan, resource.KindMatrixAppService:
 			// Declared-only kinds (ADR-W005 A3 / ADR-W011 A4):
 			// "observe-by-apply", same mechanism as Volume — present iff a
 			// prior successful apply recorded it in the Reconciler's
@@ -1112,6 +1123,8 @@ func placeholderResource(kind resource.Kind, name string) resource.Resource {
 		r.OidcClient = &resource.OidcClientSpec{}
 	case resource.KindLdapGroup:
 		r.LdapGroup = &resource.LdapGroupSpec{Name: name}
+	case resource.KindMatrixAppService:
+		r.MatrixAppService = &resource.MatrixAppServiceSpec{}
 	case resource.KindLdapUser:
 		r.LdapUser = &resource.LdapUserSpec{Username: name}
 	case resource.KindIngress:
@@ -1382,7 +1395,7 @@ func observableKind(k resource.Kind) bool {
 	case resource.KindSecret, resource.KindJob, resource.KindContainer,
 		resource.KindVolume, resource.KindRoute, resource.KindOidcClient,
 		resource.KindConfigFile, resource.KindSeedFile, resource.KindLdapGroup, resource.KindLdapUser,
-		resource.KindIngress, resource.KindBackupPlan:
+		resource.KindIngress, resource.KindBackupPlan, resource.KindMatrixAppService:
 		return true
 	default:
 		return false

@@ -205,7 +205,11 @@ var kindOrder = map[resource.Kind]int{
 	// because the provisioning job is what reaches the directory.
 	resource.KindLdapUser:   4,
 	resource.KindOidcClient: 4,
-	resource.KindContainer:  5,
+	// MatrixAppService with OidcClient, and for the same reason: it is
+	// identity wiring the homeserver loads at start, so it is declared
+	// before the Job that installs it and the Container that reads it.
+	resource.KindMatrixAppService: 4,
+	resource.KindContainer:        5,
 	// Job after Container, because a job provisions a service that has
 	// to be running to be provisioned. It is NOT a dependency edge and
 	// deliberately not modelled as one: a job whose service is not ready
@@ -371,6 +375,8 @@ func specEqual(a, b resource.Resource) bool {
 		return oidcClientEqual(a.OidcClient, b.OidcClient)
 	case resource.KindLdapGroup:
 		return ldapGroupEqual(a.LdapGroup, b.LdapGroup)
+	case resource.KindMatrixAppService:
+		return a.MatrixAppService != nil && b.MatrixAppService != nil && *a.MatrixAppService == *b.MatrixAppService
 	case resource.KindLdapUser:
 		return ldapUserEqual(a.LdapUser, b.LdapUser)
 	case resource.KindIngress:
@@ -652,6 +658,16 @@ func grade(action Action, want, have resource.Resource) (RiskGrade, string) {
 		default:
 			return RiskMedium, "running a provisioning job: it mutates an external system and nothing reverses it"
 		}
+	case resource.KindMatrixAppService:
+		// The declaration touches nothing itself: the homeserver's own
+		// Job installs the merged registrations and its container is
+		// replaced to load them, and both are steps of their own. What
+		// this step decides is whether a bot may speak on Matrix, so
+		// taking that away is the direction worth a second look.
+		if action == ActionDelete {
+			return RiskMedium, "bot registration removed: the bot can no longer reach Matrix, and the people it serves lose that way to their Agent"
+		}
+		return RiskLow, "registers one bot user with the household's Matrix homeserver; it can act only as itself"
 	case resource.KindLdapGroup:
 		// The declaration itself still touches nothing: it is the
 		// rendered group list plus the identity capability's
