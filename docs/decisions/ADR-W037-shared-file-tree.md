@@ -52,7 +52,7 @@ Personal memory, and Shared is not Household memory.
 * Mine uses the authenticated Person to resolve its root. The folder
   (`Members/<name>`, first the lower-cased handle) is recorded for the Person the
   first time and kept, so a rename does not move them to an empty folder
-  (runtimedb 0093), and from 0094 at the moment the Person is created. A folder
+  (runtimedb 0093), and from 0094 at the moment the Person is created (0095 fills in anybody created between the two). A folder
   another Person holds is refused, not shared. The
   signed-in member is matched by the handle they carry now, never by an old
   one. A directory account with no Person keeps the folder its username

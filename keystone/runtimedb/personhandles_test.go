@@ -214,10 +214,10 @@ func TestAFolderUsedBeforeBecomingAPersonStaysTheirs(t *testing.T) {
 	}
 }
 
-// A Person recorded between 0093 and 0094 is backfilled from the handle
+// A Person recorded between 0093 and 0094 is backfilled by 0095 from the handle
 // they were created with, so a rename before their next Files visit keeps
 // their folder (#426 review).
-func TestMigration0094BackfillsPeopleMissedBy0093(t *testing.T) {
+func TestMigration0095BackfillsPeopleMissedBy0093(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "keystone.db")
 	old, err := openUnmigrated(path)
 	if err != nil {
@@ -237,10 +237,15 @@ func TestMigration0094BackfillsPeopleMissedBy0093(t *testing.T) {
 			t.Fatalf("seeding: %v", err)
 		}
 	}
+	// A pilot that already applied 0094 as first published, before the
+	// backfill existed.
+	if err := old.migrateThrough("migrations/0094_person_file_dirs_at_creation.sql"); err != nil {
+		t.Fatalf("migrating through 0094: %v", err)
+	}
 	old.Close()
 	db, err := Open(path)
 	if err != nil {
-		t.Fatalf("Open (applies 0094): %v", err)
+		t.Fatalf("Open (applies 0095): %v", err)
 	}
 	defer db.Close()
 	if dir, ok, err := db.PersonalFilesDir("samuel", "samuel"); err != nil || !ok || dir != "sam" {
