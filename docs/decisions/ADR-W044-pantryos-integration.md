@@ -293,3 +293,22 @@ connected yet.
   Wildstone's own result types.
 - One list rule to explain to people: groceries live in PantryOS when it is
   there; everything else lives in Wildstone.
+
+## Amendment A7: the closed vocabulary, meal logging, and two more events
+
+- **Vocabulary (#381).** The pantry domain's queries, actions (with proposed
+  class) and well-known events are declared in `keystone/integration`, a
+  leaf package closed by review (docs/catalog-integration-contract.md §3).
+  Package lint fails an event published in the `pantry.*` namespace that
+  is not a well-known pantry event — a typo, or a query or action name used
+  as an event. Namespaces with no declared domain stay open (ADR-W024). A
+  test holds the adapter's capability constants to the same vocabulary.
+- **Meal logging (PantryOS #79).** `pantry.meal.log` and `pantry.meal.undo`;
+  tools `log_meal` and `undo_meal`, both `domestic` (the eater's own log,
+  and undo exists). The member asking is the eater. When PantryOS is not
+  sure which food is meant, it refuses with the candidates and the model
+  asks, then calls again with the chosen `item_id` or `fdc_id` — it never
+  guesses.
+- **Events (PantryOS #78).** `pantry.item_spoiled` (once per item thrown
+  out) and `pantry.shopping_list_changed` (once per burst of grocery-list
+  edits, after a quiet minute; only a count). Package 0.3.0.

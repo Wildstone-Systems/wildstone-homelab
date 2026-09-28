@@ -25,6 +25,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/chickenrat17/wildstone-homelab/keystone/domestic"
 	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 )
@@ -33,6 +34,38 @@ var surfaceLists = portalSurface{capability: "lists", title: "Lists"}
 
 type listsCard struct {
 	Lists []runtimedb.HouseholdList `json:"lists"`
+	// GroceriesInPantryOS is set while PantryOS is installed: it owns the
+	// grocery list then (ADR-W044 A3), so the page shows a pointer to it
+	// and treats a grocery-named list here as the old one, to clear out.
+	GroceriesInPantryOS bool `json:"groceriesInPantryOS,omitempty"`
+}
+
+// errGroceriesInPantryOS is the answer to adding to, or ticking, a grocery
+// list here while PantryOS owns it (#405). Otherwise the Lists page and the
+// assistant would each keep half a grocery list.
+var errGroceriesInPantryOS = errors.New("the grocery list lives in PantryOS while it is installed: add and tick " +
+	"groceries there, or ask the assistant. An old grocery list here can still be cleared or deleted")
+
+// groceriesInPantryOS reports whether PantryOS is installed and so owns the
+// grocery list.
+func (s *Server) groceriesInPantryOS() (bool, error) {
+	return s.CapabilityEnabled(PantryCapability)
+}
+
+// refuseGroceryWrite answers a write that would grow or tick a grocery list
+// here while PantryOS owns it.
+func (s *Server) refuseGroceryWrite(list string) (int, error) {
+	if !domestic.IsGroceryList(list) {
+		return 0, nil
+	}
+	owned, err := s.groceriesInPantryOS()
+	if err != nil {
+		return http.StatusInternalServerError, err
+	}
+	if owned {
+		return http.StatusConflict, errGroceriesInPantryOS
+	}
+	return 0, nil
 }
 
 // listsRead answers every list with its items, most recently changed
@@ -44,7 +77,11 @@ func (s *Server) listsRead(_ http.ResponseWriter, _ *http.Request, _ string, _ [
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
-	out := listsCard{Lists: make([]runtimedb.HouseholdList, 0, len(summaries))}
+	owned, err := s.groceriesInPantryOS()
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	out := listsCard{Lists: make([]runtimedb.HouseholdList, 0, len(summaries)), GroceriesInPantryOS: owned}
 	for _, l := range summaries {
 		full, err := s.DB.HouseholdList(l.Name)
 		if errors.Is(err, runtimedb.ErrListNotFound) {
@@ -93,6 +130,9 @@ func (s *Server) listsAdd(_ http.ResponseWriter, r *http.Request, member string,
 	if err != nil {
 		return nil, code, err
 	}
+	if code, err := s.refuseGroceryWrite(req.List); err != nil {
+		return nil, code, err
+	}
 	change, err := s.DB.AddListItems(req.List, req.Items, member)
 	if err != nil {
 		code, err := listWriteStatus(err)
@@ -104,6 +144,9 @@ func (s *Server) listsAdd(_ http.ResponseWriter, r *http.Request, member string,
 func (s *Server) listsCheck(_ http.ResponseWriter, r *http.Request, member string, _ []resource.Resource) (any, int, error) {
 	req, code, err := decodeListRequest(r)
 	if err != nil {
+		return nil, code, err
+	}
+	if code, err := s.refuseGroceryWrite(req.List); err != nil {
 		return nil, code, err
 	}
 	checked := true
