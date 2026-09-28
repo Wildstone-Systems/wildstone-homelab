@@ -588,3 +588,56 @@ func TestMatrixAppserviceBotActsAsItsUser(t *testing.T) {
 		t.Errorf("requests made as the registration's sender, which Synapse refuses to sync: %v", unmasked)
 	}
 }
+
+// Synapse sends a room summary only to a client that lazy-loads members,
+// and only when membership changes — the first sync, a join. A message in
+// a quiet private chat arrives with no summary at all, and must still be
+// answered as the private chat it is: that is how a Person's key reaches
+// Keystone without their having to mention the bot.
+func TestMatrixPrivateChatSurvivesASyncWithoutASummary(t *testing.T) {
+	var filters []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, "/account/whoami"):
+			w.Write([]byte(`{"user_id":"@butler:example.org"}`)) //nolint:errcheck // test fake
+		case strings.Contains(r.URL.Path, "/sync"):
+			filters = append(filters, r.URL.Query().Get("filter"))
+			if !strings.Contains(r.URL.RawQuery, "since=") {
+				// The initial sync: the only summary the direct room gets.
+				w.Write([]byte(`{"next_batch":"s1","rooms":{"join":{
+				  "!direct:example.org":{"summary":{"m.joined_member_count":2},"timeline":{"events":[]}},
+				  "!unknown:example.org":{"timeline":{"events":[]}}}}}`)) //nolint:errcheck // test fake
+				return
+			}
+			w.Write([]byte(`{"next_batch":"s2","rooms":{"join":{
+			  "!direct:example.org":{"timeline":{"events":[
+			    {"type":"m.room.message","event_id":"$k","sender":"@sam:example.org","content":{"msgtype":"m.text","body":"KEY-123"}}]}},
+			  "!unknown:example.org":{"timeline":{"events":[
+			    {"type":"m.room.message","event_id":"$u","sender":"@sam:example.org","content":{"msgtype":"m.text","body":"hello"}}]}}}}}`)) //nolint:errcheck // test fake
+		}
+	}))
+	defer srv.Close()
+	m := &matrix{homeserver: srv.URL, token: "tok", timeout: time.Second, http: srv.Client()}
+	if _, err := m.Receive(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	got, err := m.Receive(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	addressed := map[string]bool{}
+	for _, in := range got {
+		addressed[in.Conversation] = in.Addressed
+	}
+	if !addressed["!direct:example.org"] {
+		t.Error("a message in a known two-person room, sent without a summary, was treated as a group chat and ignored")
+	}
+	if addressed["!unknown:example.org"] {
+		t.Error("a room whose size was never reported was treated as private; unknown must stay a group")
+	}
+	for _, f := range filters {
+		if !strings.Contains(f, `"lazy_load_members":true`) {
+			t.Errorf("sync filter %q does not lazy-load members, so Synapse sends no summary", f)
+		}
+	}
+}

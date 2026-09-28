@@ -60,6 +60,12 @@ type matrix struct {
 	// transaction id, so a retried send is not a second message.
 	txn atomic.Int64
 
+	// members is each joined room's last reported member count. The
+	// homeserver reports it only when it changes, so a room's count has
+	// to outlive the sync that carried it; a room never reported is
+	// unknown, and unknown is treated as a group.
+	members map[string]int
+
 	// appserviceLocalpart is set when this bot is an application service
 	// of the household's own homeserver (ADR-W033 B7.2). Its token then
 	// acts as that user, which the adapter registers once, before first
@@ -109,7 +115,10 @@ type syncResponse struct {
 		Leave  map[string]struct{} `json:"leave"`
 		Join   map[string]struct {
 			Summary struct {
-				JoinedMemberCount int `json:"m.joined_member_count"`
+				// Absent more often than present: Synapse sends a
+				// summary only to a lazy-loading client, and only when
+				// membership changed. A pointer tells "absent" from 0.
+				JoinedMemberCount *int `json:"m.joined_member_count"`
 			} `json:"summary"`
 			Timeline struct {
 				Events []struct {
@@ -141,6 +150,26 @@ type syncResponse struct {
 	} `json:"rooms"`
 }
 
+// matrixSyncFilter asks for lazy-loaded members, which is what makes the
+// homeserver send a room summary (m.joined_member_count) at all.
+const matrixSyncFilter = `{"room":{"state":{"lazy_load_members":true}}}`
+
+// recordMembers keeps the member counts a sync reported, and forgets the
+// rooms the bot has left.
+func (m *matrix) recordMembers(sync syncResponse) {
+	if m.members == nil {
+		m.members = map[string]int{}
+	}
+	for roomID, room := range sync.Rooms.Join {
+		if n := room.Summary.JoinedMemberCount; n != nil {
+			m.members[roomID] = *n
+		}
+	}
+	for roomID := range sync.Rooms.Leave {
+		delete(m.members, roomID)
+	}
+}
+
 // Identify reports this bot's MXID. Matrix has no invite payload, so
 // the link it produces only opens the conversation — the code is still
 // sent by hand — but naming the right bot is most of the problem when a
@@ -160,7 +189,13 @@ func (m *matrix) Receive(ctx context.Context) ([]Incoming, error) {
 			return nil, err
 		}
 	}
-	q := url.Values{"timeout": {strconv.Itoa(int(m.timeout.Milliseconds()))}}
+	q := url.Values{
+		"timeout": {strconv.Itoa(int(m.timeout.Milliseconds()))},
+		// Without lazy-loaded members Synapse sends no room summary at
+		// all, so every room would count as a group and a private chat
+		// would go unanswered unless the bot were mentioned.
+		"filter": {matrixSyncFilter},
+	}
 	if m.since != "" {
 		q.Set("since", m.since)
 	} else {
@@ -175,6 +210,10 @@ func (m *matrix) Receive(ctx context.Context) ([]Incoming, error) {
 		return nil, err
 	}
 	first := m.since == ""
+	// Before the first-sync return below: the first sync's messages are
+	// skipped, but its summaries are the only count some rooms will get
+	// until somebody joins or leaves them.
+	m.recordMembers(sync)
 	m.scheduleInvitedRooms(ctx, sync.Rooms.Invite, sync.Rooms.Leave)
 	problems := m.takeInviteProblems()
 	m.since = sync.NextBatch
@@ -224,7 +263,7 @@ func (m *matrix) Receive(ctx context.Context) ([]Incoming, error) {
 			default:
 				continue // an image, a file, a location
 			}
-			group := room.Summary.JoinedMemberCount != 2
+			group := m.members[roomID] != 2
 			text, addressed := ev.Content.Body, !group
 			if voice != nil {
 				// The body of an audio event is its file name, not
