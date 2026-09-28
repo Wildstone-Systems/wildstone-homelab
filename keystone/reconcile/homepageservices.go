@@ -151,8 +151,14 @@ var homepageApps = map[string]homepageApp{
 	// as a broken image — the same reasoning as Davis above. The
 	// description says which password to type, because this one is the
 	// household sign-in and Davis's, one card away, is not.
-	"radicale":       {"Calendar", "mdi-calendar-blank", "The household's own calendars, on every phone — your household sign-in"},
-	"matrix-synapse": {"Matrix", "matrix", "Private household messaging — sign in with your household account"},
+	"radicale":    {"Calendar", "mdi-calendar-blank", "The household's own calendars, on every phone — your household sign-in"},
+	"element-web": {"Messages", "element", "Household chat in the browser — sign in with your household account"},
+
+	// matrix-synapse has no row on purpose: its Route is the Matrix
+	// client-API only, not a page — Element (above) is what a person
+	// opens, and the install path never offers one package without the
+	// other. homepageEntries excludes its Route outright rather than
+	// presenting a card that would 404 on a browser.
 }
 
 // homepageFallbackIcon is what an app with no row gets. A generic
@@ -403,10 +409,12 @@ func (e homepageEntry) widgetSrc() string {
 
 // renderHomepageServices builds Homepage's services.yaml from the Routes.
 //
-// Two exclusions, both so the page shows what a person would actually
+// Three exclusions, all so the page shows what a person would actually
 // click. A `portal` Route is the login page — listing it as a service
 // invites someone to log in to the thing they are already logged into.
-// The dashboard's own Route is the page being rendered.
+// The dashboard's own Route is the page being rendered. The Matrix
+// client-API Route is a backend Element already talks to, not a page of
+// its own (homepageEntries below).
 //
 // The scheme is https, hardcoded. That is what a browser uses and what
 // Authelia requires (ADR-W019 A2: the issuer is a string that must
@@ -483,6 +491,14 @@ func homepageEntries(desired []resource.Resource) []homepageEntry {
 		}
 		owner := strings.TrimPrefix(r.Metadata.Owner, "capability/")
 		if owner == "dashboard" {
+			continue
+		}
+		if upstreamContainerName(r.Route.Upstream) == "matrix-synapse" {
+			// The Matrix client-API Route: Element (the "element-web"
+			// Route, below) is the page a person opens, and every
+			// install of one package installs the other. A card here
+			// would open Synapse's bare client API in the browser
+			// instead of a chat UI.
 			continue
 		}
 

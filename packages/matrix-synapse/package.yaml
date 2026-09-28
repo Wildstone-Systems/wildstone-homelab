@@ -42,7 +42,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: matrix-synapse
-  version: 1.0.7
+  version: 1.0.8
   capability: matrix-homeserver
   profile: synapse
 requires:
@@ -141,6 +141,17 @@ templates:
               config:
                 localpart_template: '{{`{{ user.preferred_username }}`}}'
                 display_name_template: '{{`{{ user.name }}`}}'
+
+        # packages/matrix-element is the household's browser client. Synapse
+        # otherwise ends every SSO sign-in that client starts with a
+        # "continue to this site?" page, because a redirect it has not been
+        # told about could be a page phishing for the login token. The origin
+        # is derived exactly as that package's pinned Route is, so this is
+        # right whether or not the client is installed yet. The trailing
+        # slash stops a longer host that shares the prefix from matching.
+        sso:
+          client_whitelist:
+            - '{{ origin (printf "element.%s" .Params.public_domain) }}/'
 
         # Both halves matter. Omitting federation from the listener closes the
         # inbound server API; the empty outbound allowlist prevents a local

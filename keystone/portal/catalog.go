@@ -154,6 +154,7 @@ var categoryOf = map[string]string{
 	"language-models":   "talk",
 	"speech":            "talk",
 	"matrix-homeserver": "talk",
+	"matrix-client":     "talk",
 	// Everything else, named rather than defaulted, so a capability
 	// landing in "other" is a gap in this table rather than a decision.
 	"code":      "other",
@@ -171,7 +172,7 @@ func CategoryFor(capability string) string {
 // profileAliases fill the gaps where a package's profile is not the
 // container name the launcher's description table is keyed by.
 //
-// Five rows, and each one is a package a household would plausibly
+// Seven rows, and each one is a package a household would plausibly
 // request. Everything else that misses the table is operator-class and
 // never reaches this surface.
 var profileAliases = map[string]string{
@@ -181,6 +182,7 @@ var profileAliases = map[string]string{
 	"matrix":    "open-webui",
 	"telegram":  "open-webui",
 	"synapse":   "matrix-synapse",
+	"element":   "element-web",
 }
 
 // DescribeKey maps a package profile onto the key its description is
