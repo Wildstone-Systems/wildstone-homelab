@@ -135,10 +135,15 @@ func (db *DB) PersonalFilesDir(member, propose string) (dir string, ok bool, err
 	}
 	if id == "" {
 		// No Person: the caller falls back to the folder the login names,
-		// unless that folder is already a Person's.
+		// unless that folder is a Person's — recorded for one, or named
+		// after a handle one carries or once carried, ignoring case as the
+		// folder name does.
 		if propose != "" {
 			var taken int
-			if err := tx.QueryRow(`SELECT COUNT(*) FROM person_file_dirs WHERE dir = ?`, propose).Scan(&taken); err != nil {
+			if err := tx.QueryRow(
+				`SELECT (SELECT COUNT(*) FROM person_file_dirs WHERE dir = ?)
+				      + (SELECT COUNT(*) FROM person_handles WHERE handle = ? COLLATE NOCASE)`,
+				propose, propose).Scan(&taken); err != nil {
 				return "", false, fmt.Errorf("runtimedb: reading a personal folder: %w", err)
 			}
 			if taken > 0 {

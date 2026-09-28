@@ -92,7 +92,13 @@ func TestAPersonalFolderStaysPutThroughARename(t *testing.T) {
 	if err != nil || !ok || dir != "sam" {
 		t.Fatalf("folder after rename = %q, %v, %v; want the same folder", dir, ok, err)
 	}
-	if _, _, err := db.PersonalFilesDir("alex", "sam"); err == nil {
+	if dir, _, err := db.PersonalFilesDir("alex", "sam"); err != nil || dir != "alex" {
+		t.Fatalf("alex's folder = %q %v; a recorded folder is never replaced by a proposal", dir, err)
+	}
+	// A new Person whose name gives a folder somebody already holds is not
+	// put in it.
+	record(t, db, "Sam")
+	if _, _, err := db.PersonalFilesDir("Sam", "sam"); err == nil {
 		t.Fatal("two People were given one folder")
 	}
 	if _, ok, err := db.PersonalFilesDir("stranger", "stranger"); ok || err != nil {
@@ -181,5 +187,29 @@ func TestAnOldNameDoesNotSignInAsItsPerson(t *testing.T) {
 		if owners, err := db.HandleOwners(login); err != nil || len(owners) != 1 || owners[0] != samuel {
 			t.Fatalf("HandleOwners(%s) = %v %v", login, owners, err)
 		}
+	}
+}
+
+// Somebody who used Files as a plain directory account, became a Person and
+// was renamed before opening Files again keeps their folder, and a new
+// account under the old name does not get it (#426 review).
+func TestAFolderUsedBeforeBecomingAPersonStaysTheirs(t *testing.T) {
+	db := openWith(t)
+	if _, ok, err := db.PersonalFilesDir("sam", "sam"); ok || err != nil {
+		t.Fatalf("no Person yet: %v %v", ok, err)
+	}
+	record(t, db, "sam")
+	if err := db.RenameButlerMemberHandle("sam", "samuel"); err != nil {
+		t.Fatal(err)
+	}
+	if dir, ok, err := db.PersonalFilesDir("samuel", "samuel"); err != nil || !ok || dir != "sam" {
+		t.Fatalf("samuel's folder = %q %v %v; want the one they had", dir, ok, err)
+	}
+	if dir, ok, err := db.PersonalFilesDir("sam", "sam"); ok || err == nil {
+		t.Fatalf("a new account under the old name got the folder: %q %v %v", dir, ok, err)
+	}
+	// A case variant of a Person's handle is theirs too.
+	if _, ok, err := db.PersonalFilesDir("SAMUEL", "samuel"); ok || err == nil {
+		t.Fatal("a case variant reached the Person's folder")
 	}
 }
