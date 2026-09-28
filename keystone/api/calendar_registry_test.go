@@ -23,6 +23,16 @@ func sharedCalendarHarness(t *testing.T) (*harness, *fakeBook, *fakeBook, shared
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Every member is a Person on record, as in any provisioned household:
+	// display choices and Person-keyed grants are stored against one.
+	for _, m := range []string{"sam", "mika", "alex"} {
+		if err := h.s.DB.RecordButlerMember(m, "member", "", ""); err != nil {
+			t.Fatal(err)
+		}
+		if err := h.s.DB.AdmitButlerMember(m, "root-admin"); err != nil {
+			t.Fatal(err)
+		}
+	}
 	school := &fakeBook{}
 	schoolURL, _ := reg.Calendars[1].CollectionURL(testCollection)
 	h.s.CalendarBookFor = func(u string) CalendarBook {
@@ -31,6 +41,9 @@ func sharedCalendarHarness(t *testing.T) (*harness, *fakeBook, *fakeBook, shared
 		}
 		if u == schoolURL {
 			return school
+		}
+		if isPrincipalURL(u) {
+			return &fakeAccount{}
 		}
 		t.Fatalf("unauthorized calendar reached upstream: %s", u)
 		return nil

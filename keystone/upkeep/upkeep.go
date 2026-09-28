@@ -203,9 +203,9 @@ func (e *Engine) standing(res resource.Resource, meters map[string]commitment.Me
 	spec := res.Commitment
 	st := Standing{
 		Name: res.Metadata.Name, Description: spec.Description,
-		Owner: res.Metadata.Owner, Scope: spec.Scope, PartOfDay: spec.PartOfDay,
+		Owner: e.currentPerson(res.Metadata.Owner), Scope: spec.Scope, PartOfDay: spec.PartOfDay,
 		Every:       firstDueEvery(spec),
-		MayComplete: spec.MayComplete, Notify: spec.Notify, Disabled: spec.Disabled,
+		MayComplete: e.currentPeople(spec.MayComplete), Notify: e.currentPeople(spec.Notify), Disabled: spec.Disabled,
 		Rollover: spec.Rollover, RequiresBooking: spec.RequiresBooking,
 	}
 	in, booking, err := e.input(res, meters, now)
@@ -456,4 +456,43 @@ func firstDueEvery(spec *resource.CommitmentSpec) string {
 		return ""
 	}
 	return spec.Due[0].Every
+}
+
+// currentPerson rewrites `household/<person>` to the handle that Person
+// carries now (#372, ADR-W035 A21).
+//
+// A commitment names a person as the household typed them: by the handle
+// they had then, or by their person_id. Everything downstream compares
+// and displays the current handle, so the reference is brought up to date
+// once, here, where every standing is built. A handle that belonged to
+// somebody who has since been renamed still reaches them, because 0093
+// keeps every handle a Person has carried. A reference naming nobody on
+// record is left as written, and so matches nobody.
+func (e *Engine) currentPerson(ref string) string {
+	rest, ok := strings.CutPrefix(ref, "household/")
+	if !ok || rest == "" || e.DB == nil {
+		return ref
+	}
+	id, err := e.DB.ResolvePersonRef(rest)
+	if err != nil || id == "" {
+		return ref
+	}
+	handle, err := e.DB.PersonHandle(id)
+	if err != nil {
+		return ref
+	}
+	return "household/" + handle
+}
+
+// currentPeople is currentPerson over a list, on a copy: the spec is the
+// household's declaration and is not rewritten.
+func (e *Engine) currentPeople(refs []string) []string {
+	if refs == nil {
+		return nil
+	}
+	out := make([]string, len(refs))
+	for i, r := range refs {
+		out[i] = e.currentPerson(r)
+	}
+	return out
 }

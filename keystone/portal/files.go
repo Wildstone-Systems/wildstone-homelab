@@ -152,6 +152,46 @@ type FileStore struct {
 	// unavailable rather than shared, so a bug that forgets to set it
 	// fails closed.
 	Member string
+	// Folders, when set, is where each Person's own folder is recorded,
+	// so the folder follows the Person rather than their current handle
+	// (#372). Without it, or for a member with no Person on record, the
+	// folder is the one PersonalDir derives from the handle.
+	Folders PersonalFolders
+}
+
+// PersonalFolders records which folder under Members/ belongs to which
+// Person. runtimedb.DB implements it.
+type PersonalFolders interface {
+	// PersonalFilesDir returns the member's recorded folder, recording
+	// propose when there is none yet; ok is false when the member is not
+	// a Person on record.
+	PersonalFilesDir(member, propose string) (dir string, ok bool, err error)
+}
+
+// PersonalDirFor resolves one member's own folder, preferring the folder
+// recorded for their Person. A recorded folder is still held to the
+// strict name rule, and any failure to read the record fails closed:
+// the personal space is unavailable rather than a guess.
+func PersonalDirFor(member string, folders PersonalFolders) (string, bool) {
+	derived, ok := PersonalDir(member)
+	if folders == nil {
+		return derived, ok
+	}
+	propose := ""
+	if ok {
+		propose = strings.TrimPrefix(derived, personalRoot+"/")
+	}
+	dir, recorded, err := folders.PersonalFilesDir(strings.TrimSpace(member), propose)
+	if err != nil {
+		return "", false
+	}
+	if !recorded {
+		return derived, ok
+	}
+	if !memberDir.MatchString(dir) || strings.Trim(dir, ".") == "" {
+		return "", false
+	}
+	return personalRoot + "/" + dir, true
 }
 
 // Item is one stored file as a person sees it: what it is called, how
@@ -199,7 +239,7 @@ func (s *FileStore) namespace(key string) (Namespace, error) {
 	if ns.Dir != "" {
 		return ns, nil
 	}
-	dir, ok := PersonalDir(s.Member)
+	dir, ok := PersonalDirFor(s.Member, s.Folders)
 	if !ok {
 		// No usable member: the personal space is ABSENT, never
 		// silently the shared one. An upload that landed in Shared

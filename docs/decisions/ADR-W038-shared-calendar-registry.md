@@ -30,16 +30,28 @@ a Butler chooses an origin or sends a filesystem path.
 
 The registry is a resource-specific rule (ADR-W033 A0 layer 2): it can narrow
 what ADR-W033 A10 lets a reader see on the household agenda, never widen it.
-Read/write groups belong to the one household group namespace (ADR-W033 B8.1);
-direct member grants name a Person (ADR-W033 A2). Write implies read.
+Read/write groups are directory groups (such as `calendar_users`) or household
+groups of the one namespace (ADR-W033 B8.1), named by their permanent id
+(`grp_` and 16 hex digits) so a renamed group re-points nothing. Direct member
+grants name a Person (ADR-W033 A2): by `person_id` (`psn_…`), or by a handle
+they carry or once carried. Write implies read.
+
+Keystone resolves both on every check. A member reference matches the Person it
+names, whatever they are called now; only a handle naming nobody on record is
+compared as a directory username, which keeps an unmanaged account's grant. A
+retired handle is never given to another Person (runtimedb 0093), so an old
+grant cannot pass to a newcomer. Radicale knows only usernames and directory
+groups, so the reconcile loop renders its rights file again on every pass, on a
+copy of desired state, with the Persons and household groups resolved to current
+usernames. A change reaches Radicale as a restart through the config digest. A
+grant that reaches nobody — an unknown household group, a handle naming nobody,
+a directory group no package declares — is reported once as a
+`projection.calendar` event.
 The portal uses the identity
 proxy's proven member and group list. Butler calls resolve declared directory
 membership and current Wildstone entitlement projections for their acting
 person; they cannot supply groups. Groups maintained only outside Wildstone's
 declarations/entitlements are not inferred by a Butler from a user's claim.
-_Code not yet conformant: members are keyed by directory username and groups
-are only checked for syntax (`^[a-z][a-z0-9_-]{0,47}$`), not existence; a
-rename detaches the grant._
 
 Radicale's LDAP authentication still requires `calendar_users`, independently
 of the collection grant. Give authorized people that application entitlement
@@ -65,12 +77,14 @@ Changing the default cannot redirect a previously approved deletion.
 
 Radicale 3.8.0's built-in group discovery maps one collection to each encoded
 group name. That cannot represent two calendars readable by the same group
-without extra discovery handling. A small storage subclass extends principal
-listings with synthetic collection group names derived from the registry. It
-does not grant permissions. A generated `from_file` rights configuration applies
+without extra discovery handling. A small storage subclass extends every
+principal listing with each declared calendar's collection. It grants nothing:
+PROPFIND drops every collection the signed-in user has no right to, so the
+rights file alone decides who discovers which calendar. A generated `from_file` rights configuration applies
 the same read/write grants to every returned collection and subsequent request.
-The service account receives access only to declared shared collections; existing
-personal-principal rights stay bound to the authenticated username.
+The service account receives access to declared shared collections and to each
+person's own collections (ADR-W034 C2), never to an undeclared shared one; every
+person's own rights stay bound to their authenticated username.
 
 Household keeps `GROUPS/Y2FsZW5kYXJfdXNlcnM=`. Additional collections use
 `GROUPS/<base64(wildstone_calendar_<id>)>`. The IDs cannot contain paths or URL
@@ -103,6 +117,6 @@ A database failure after an upstream move is reported as a booking-link failure;
 there is no distributed transaction between SQLite and Radicale.
 
 Migration 0080 adds a `calendar_id` with default `household` to existing booking
-rows and a per-member visibility table. Synchronization and replacement use each
+rows and a per-member visibility table, which 0093 keys by Person. Synchronization and replacement use each
 booking's stored calendar, not today's default. An undeclared or unreachable
 collection does not cancel a booking merely because it cannot be read.

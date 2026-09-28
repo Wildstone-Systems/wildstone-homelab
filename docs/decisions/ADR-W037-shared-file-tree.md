@@ -49,10 +49,13 @@ Personal memory, and Shared is not Household memory.
 * Operator events identify the Person, operation and relative path. Household
   events contain no filename, including in their event ID. Rename, move and
   mkdir do not add household activity noise.
-* Mine uses the authenticated Person to resolve its root (`Members/<username>`,
-  lower-cased); requests cannot select another Person. Nested operations preserve
-  personal-space isolation. _Code not yet conformant: keyed by directory handle,
-  not the canonical Person (ADR-W033 A2); a rename detaches it._
+* Mine uses the authenticated Person to resolve its root. The folder
+  (`Members/<name>`, first the lower-cased handle) is recorded for the Person the
+  first time and kept, so a rename does not move them to an empty folder
+  (runtimedb 0093). A folder another Person holds is refused, not shared. A
+  directory account with no Person keeps the folder its username gives.
+  Requests cannot select another Person. Nested operations preserve
+  personal-space isolation.
 * The page states that everyone with filedrop access can change shared content.
   This is a collaborative folder, not a per-folder/read-only permission system.
   URLs carry namespace and directory, with breadcrumbs and browser history.

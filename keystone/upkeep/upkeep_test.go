@@ -644,3 +644,45 @@ func TestAnEventDoesNotCloseTheCycleItsOwnWorkOpened(t *testing.T) {
 		t.Errorf("cycle = %d, want %d: one visit advanced the commitment more than one cycle", got, before+1)
 	}
 }
+
+// A commitment written for somebody keeps its standing when they are
+// renamed (#372, ADR-W035 A21): who it is about, who may answer it and who
+// hears about it all follow the Person, and read as their current name.
+func TestACommitmentFollowsItsPeopleThroughARename(t *testing.T) {
+	f := newFixture(t)
+	for _, h := range []string{"kai", "mika"} {
+		if err := f.db.RecordButlerMember(h, runtimedb.RoleMember, "", ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mika, _ := f.db.ResolvePersonRef("mika")
+	spec := checkup()
+	spec.MayComplete = []string{"household/mika", "household/" + mika, "household/nobody", "group/parents"}
+	spec.Notify = []string{"household/mika"}
+	f.commitment("kai-checkup", spec)
+	for from, to := range map[string]string{"kai": "kaito", "mika": "micah"} {
+		if err := f.db.RenameButlerMemberHandle(from, to); err != nil {
+			t.Fatal(err)
+		}
+	}
+	standings, err := f.e.Evaluate()
+	if err != nil || len(standings) != 1 {
+		t.Fatalf("Evaluate = %v, %v", standings, err)
+	}
+	st := standings[0]
+	if st.Owner != "household/kaito" {
+		t.Errorf("owner = %q, want the renamed subject", st.Owner)
+	}
+	want := []string{"household/micah", "household/micah", "household/nobody", "group/parents"}
+	if len(st.MayComplete) != len(want) {
+		t.Fatalf("mayComplete = %v", st.MayComplete)
+	}
+	for i := range want {
+		if st.MayComplete[i] != want[i] {
+			t.Errorf("mayComplete[%d] = %q, want %q", i, st.MayComplete[i], want[i])
+		}
+	}
+	if len(st.Notify) != 1 || st.Notify[0] != "household/micah" {
+		t.Errorf("notify = %v", st.Notify)
+	}
+}

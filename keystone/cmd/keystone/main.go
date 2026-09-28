@@ -1342,7 +1342,7 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	// anything. Enabled is the install gate (ADR-W026 A8's posture),
 	// and the domestic gateway's declaration check is in front of both.
 	if cat != nil {
-		filedrop := &domestic.Filedrop{Authority: db,
+		filedrop := &domestic.Filedrop{Authority: db, Folders: db,
 			Settings:      apiSrv.FiledropSettings,
 			RequiredMount: apiSrv.FiledropRequiredMount,
 			Enabled:       func() (bool, error) { return apiSrv.CapabilityEnabled(domestic.FiledropCapability) },

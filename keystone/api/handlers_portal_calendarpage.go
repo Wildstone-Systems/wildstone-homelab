@@ -9,11 +9,15 @@ package api
 // way to put something on the family calendar from a browser was to ask
 // the assistant.
 //
-// THESE ARE DECLARED SHARED CALENDARS ONLY. Keystone reaches Radicale as the
-// calendar's service account, which holds the household collection and
-// nobody's personal ones — and a portal member arrives by forwarded
-// identity, with no CalDAV password Keystone could use on their behalf.
-// Personal calendars stay where their owner's own login reaches them.
+// DECLARED SHARED CALENDARS, AND THE MEMBER'S OWN. Keystone reaches
+// Radicale as the calendar's service account, which holds the declared
+// shared collections and every person's own ones (ADR-W034 C2). A portal
+// member arrives by forwarded identity, with no CalDAV password Keystone
+// could use, so the boundary between one member's calendars and
+// another's is the principal: it is derived from the proven member and
+// from nothing a request carries. A member's own calendars appear on
+// this page only — never on the dashboard, the agenda, a booking or a
+// Butler tool.
 //
 // THE GATE IS THE CALENDAR'S OWN GROUP. The surface is keyed on the
 // `calendar` capability, so portalGroup finds calendar_users — the
@@ -36,7 +40,6 @@ import (
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/adapter"
 	"github.com/chickenrat17/wildstone-homelab/keystone/adapter/caldav"
-	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
 	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
 	"github.com/chickenrat17/wildstone-homelab/keystone/sharedcalendar"
 )
@@ -79,6 +82,7 @@ type calendarPageEvent struct {
 	CalendarName string    `json:"calendarName"`
 	Color        string    `json:"color"`
 	Writable     bool      `json:"writable"`
+	Personal     bool      `json:"personal,omitempty"` // on one of the member's own calendars
 	Href         string    `json:"calendarEvent"`
 	Title        string    `json:"title"`
 	Start        time.Time `json:"start"`
@@ -133,7 +137,16 @@ func (s *Server) calendarPageEvents(_ http.ResponseWriter, r *http.Request, memb
 		return nil, http.StatusBadRequest, fmt.Errorf("ask for between 1 and %d days", maxCalendarPageDays)
 	}
 
-	events, err := s.visibleCalendarEvents(r.Context(), member, forwardedGroups(r), desired, from, to, r.URL.Query().Get("calendar"))
+	// Their own calendars are listed first, and a failure there does not
+	// take the shared calendars down with it: the page says so instead.
+	personalNote := ""
+	personal, err := s.personalCalendars(r.Context(), member)
+	if err != nil {
+		s.Log.Warn("calendar: listing a member's own calendars", "member", member, "err", err)
+		personalNote = "Your own calendars can't be read right now, so only the shared ones are shown."
+		personal = nil
+	}
+	events, choices, err := s.calendarEvents(r.Context(), member, forwardedGroups(r), desired, from, to, r.URL.Query().Get("calendar"), personal)
 	if err != nil {
 		if errors.Is(err, errCalendarAccess) {
 			return nil, http.StatusForbidden, err
@@ -143,8 +156,8 @@ func (s *Server) calendarPageEvents(_ http.ResponseWriter, r *http.Request, memb
 	out := make([]calendarPageEvent, 0, len(events))
 	for _, e := range events {
 		p := pageEvent(e.Event, loc)
-		p.Calendar, p.CalendarName, p.Color = e.Calendar.ID, e.Calendar.Name, e.Calendar.Color
-		p.Writable = e.Calendar.Allows(member, forwardedGroups(r), true)
+		p.Calendar, p.CalendarName, p.Color, p.Personal = e.Calendar.ID, e.Calendar.Name, e.Calendar.Color, e.Calendar.Personal
+		p.Writable = s.calendarAllows(e.Calendar, member, forwardedGroups(r), true)
 		out = append(out, p)
 	}
 	sort.SliceStable(out, func(i, j int) bool {
@@ -157,17 +170,17 @@ func (s *Server) calendarPageEvents(_ http.ResponseWriter, r *http.Request, memb
 		}
 		return out[i].Start.Before(out[j].Start)
 	})
-	choices, err := s.calendarChoices(member, forwardedGroups(r), desired)
-	if err != nil {
-		return nil, http.StatusInternalServerError, err
-	}
 	now := time.Now().In(loc)
-	return map[string]any{
+	body := map[string]any{
 		"events":    out,
 		"calendars": choices,
 		"today":     now.Format("2006-01-02"),
 		"timezone":  loc.String(),
-	}, http.StatusOK, nil
+	}
+	if personalNote != "" {
+		body["personalNote"] = personalNote
+	}
+	return body, http.StatusOK, nil
 }
 
 func pageEvent(e caldav.Event, loc *time.Location) calendarPageEvent {
@@ -304,7 +317,7 @@ func (s *Server) calendarPageCreate(_ http.ResponseWriter, r *http.Request, memb
 	if err != nil {
 		return nil, http.StatusBadRequest, err
 	}
-	_, book, _, err := s.selectCalendar(desired, member, forwardedGroups(r), req.Calendar, true)
+	calendar, book, _, err := s.selectPageCalendar(r.Context(), desired, member, forwardedGroups(r), req.Calendar, true)
 	if err != nil {
 		return nil, http.StatusForbidden, err
 	}
@@ -316,8 +329,8 @@ func (s *Server) calendarPageCreate(_ http.ResponseWriter, r *http.Request, memb
 	if err != nil {
 		return nil, calendarWriteStatus(err), err
 	}
-	s.event("calendar.create", "", principal.Identity{Name: portalPrincipal, ActingFor: member},
-		fmt.Sprintf("%s added %q on %s", member, strings.TrimSpace(req.Title), req.Date))
+	s.event("calendar.create", "", portalActor(member),
+		calendarActivity(calendar, fmt.Sprintf("%s added %q on %s", member, strings.TrimSpace(req.Title), req.Date), member+" added an event to their own calendar"))
 	return ans.Data, http.StatusOK, nil
 }
 
@@ -331,7 +344,7 @@ func (s *Server) calendarPageUpdate(_ http.ResponseWriter, r *http.Request, memb
 	if err != nil {
 		return nil, http.StatusBadRequest, err
 	}
-	calendar, book, collection, err := s.selectCalendar(desired, member, forwardedGroups(r), req.Calendar, true)
+	calendar, book, collection, err := s.selectPageCalendar(r.Context(), desired, member, forwardedGroups(r), req.Calendar, true)
 	if err != nil {
 		return nil, http.StatusForbidden, err
 	}
@@ -350,9 +363,17 @@ func (s *Server) calendarPageUpdate(_ http.ResponseWriter, r *http.Request, memb
 	targetURL := collection
 	if req.TargetCalendar != "" && req.TargetCalendar != calendar.ID {
 		var e error
-		target, _, targetURL, e = s.selectCalendar(desired, member, forwardedGroups(r), req.TargetCalendar, true)
+		target, _, targetURL, e = s.selectPageCalendar(r.Context(), desired, member, forwardedGroups(r), req.TargetCalendar, true)
 		if e != nil {
 			return nil, http.StatusForbidden, e
+		}
+		// Between two shared calendars, or two of the member's own; never
+		// across. A shared event may carry a booking, which lives only
+		// on declared calendars, and an event moved from somebody's own
+		// calendar onto a shared one would publish what they chose to
+		// keep to themselves without their saying so in so many words.
+		if target.Personal != calendar.Personal {
+			return nil, http.StatusBadRequest, fmt.Errorf("an event can't be moved between a shared calendar and your own; add it to the other one instead")
 		}
 		if _, ok := book.(interface {
 			MoveEvent(context.Context, string, string) (string, error)
@@ -372,15 +393,15 @@ func (s *Server) calendarPageUpdate(_ http.ResponseWriter, r *http.Request, memb
 		if moveErr != nil {
 			return nil, calendarWriteStatus(moveErr), fmt.Errorf("event changes were saved, but the move failed: %w", moveErr)
 		}
-		if s.DB != nil {
+		if s.DB != nil && !calendar.Personal {
 			if err := s.DB.MoveBookingCalendar(calendar.ID, href, target.ID, moved); err != nil {
 				return nil, 500, fmt.Errorf("event moved, but booking link could not be updated: %w", err)
 			}
 		}
 		ans.Data = map[string]any{"href": moved, "calendar": target.ID}
 	}
-	s.event("calendar.update", "", principal.Identity{Name: portalPrincipal, ActingFor: member},
-		fmt.Sprintf("%s changed %q", member, strings.TrimSpace(req.Title)))
+	s.event("calendar.update", "", portalActor(member),
+		calendarActivity(calendar, fmt.Sprintf("%s changed %q", member, strings.TrimSpace(req.Title)), member+" changed an event on their own calendar"))
 	return ans.Data, http.StatusOK, nil
 }
 
@@ -392,7 +413,7 @@ func (s *Server) calendarPageDelete(_ http.ResponseWriter, r *http.Request, memb
 	if err != nil {
 		return nil, http.StatusBadRequest, err
 	}
-	_, book, collection, err := s.selectCalendar(desired, member, forwardedGroups(r), req.Calendar, true)
+	calendar, book, collection, err := s.selectPageCalendar(r.Context(), desired, member, forwardedGroups(r), req.Calendar, true)
 	if err != nil {
 		return nil, http.StatusForbidden, err
 	}
@@ -407,7 +428,17 @@ func (s *Server) calendarPageDelete(_ http.ResponseWriter, r *http.Request, memb
 	if err != nil {
 		return nil, calendarWriteStatus(err), err
 	}
-	s.event("calendar.delete", "", principal.Identity{Name: portalPrincipal, ActingFor: member},
-		fmt.Sprintf("%s removed %q", member, strings.TrimSpace(req.Title)))
+	s.event("calendar.delete", "", portalActor(member),
+		calendarActivity(calendar, fmt.Sprintf("%s removed %q", member, strings.TrimSpace(req.Title)), member+" removed an event from their own calendar"))
 	return ans.Data, http.StatusOK, nil
+}
+
+// calendarActivity is what the household's activity says about a change.
+// On somebody's own calendar it names the act and not the event: what is
+// on a person's own calendar is theirs to tell.
+func calendarActivity(c sharedcalendar.Calendar, shared, personal string) string {
+	if c.Personal {
+		return personal
+	}
+	return shared
 }

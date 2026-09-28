@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 )
 
 // A member's own space resolves under their own name, and nothing a
@@ -188,5 +190,44 @@ func TestRecentDoesNotLeakAnotherPersonsFiles(t *testing.T) {
 		if strings.Contains(i.Name, "maya-secret") {
 			t.Errorf("sandy's recent list carries %s", i.Name)
 		}
+	}
+}
+
+// A rename does not move somebody to an empty folder (#372): the folder
+// recorded for their Person is the one they keep.
+func TestThePersonalSpaceFollowsThePersonThroughARename(t *testing.T) {
+	root := t.TempDir()
+	db, err := runtimedb.Open(filepath.Join(t.TempDir(), "keystone.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	for _, h := range []string{"sam", "alex"} {
+		if err := db.RecordButlerMember(h, runtimedb.RoleMember, "", ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	store := func(member string) *FileStore {
+		return &FileStore{BeforeWrite: func() error { return nil }, Root: root, Member: member, Folders: db}
+	}
+	if _, err := store("sam").Save("me", "diary.txt", strings.NewReader("sam's")); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.RenameButlerMemberHandle("sam", "samuel"); err != nil {
+		t.Fatal(err)
+	}
+	items, err := store("samuel").List("me")
+	if err != nil || len(items) != 1 || items[0].Name != "diary.txt" {
+		t.Fatalf("after the rename samuel sees %v, %v; want their diary", items, err)
+	}
+	if items, _ := store("alex").List("me"); len(items) != 0 {
+		t.Fatalf("alex sees %v", items)
+	}
+	// A directory account with no Person keeps the folder its name gives.
+	if _, err := store("visitor").Save("me", "a.txt", strings.NewReader("x")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "Members", "visitor", "a.txt")); err != nil {
+		t.Fatal(err)
 	}
 }
