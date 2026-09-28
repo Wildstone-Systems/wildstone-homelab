@@ -72,8 +72,13 @@ func (a *ApplierRunner) RunContainer(ctx context.Context, node, name string, spe
 	// Clear any leftover of the same name first (a Keystone that died
 	// mid-run never reached its deferred remove). EnsureContainer keeps a
 	// same-image container rather than recreating it, so a leftover would
-	// hand back the PREVIOUS run's exit code as this run's verdict.
-	a.remove(ctx, node, name)
+	// hand back the PREVIOUS run's exit code as this run's verdict — or,
+	// still running, have this run attach to its stale command, mounts
+	// and credentials. So the clear-out must succeed; "nothing there" is
+	// success.
+	if err := a.clearLeftover(ctx, node, name); err != nil {
+		return err
+	}
 
 	res, err := a.Applier.Apply(ctx, node, ensureOp(name, spec))
 	if err != nil {
@@ -166,6 +171,22 @@ func finished(name string, inspect *wsv1.InspectContainerResult) (bool, error) {
 	default:
 		return false, nil
 	}
+}
+
+// clearLeftover force-removes any container called name — running or
+// not — and fails if it could not. A missing container is not an error
+// (RemoveContainer answers existed=false).
+func (a *ApplierRunner) clearLeftover(ctx context.Context, node, name string) error {
+	res, err := a.Applier.Apply(ctx, node, &wsv1.Operation{Op: &wsv1.Operation_RemoveContainer{
+		RemoveContainer: &wsv1.RemoveContainer{Name: name, Force: true},
+	}})
+	if err != nil {
+		return fmt.Errorf("clearing a leftover %s: %w", name, err)
+	}
+	if oe := res.GetError(); oe != nil {
+		return fmt.Errorf("clearing a leftover %s: %s: %s", name, oe.GetCode(), oe.GetMessage())
+	}
+	return nil
 }
 
 func (a *ApplierRunner) remove(ctx context.Context, node, name string) {
