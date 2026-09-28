@@ -213,3 +213,43 @@ func TestAFolderUsedBeforeBecomingAPersonStaysTheirs(t *testing.T) {
 		t.Fatal("a case variant reached the Person's folder")
 	}
 }
+
+// A Person recorded between 0093 and 0094 is backfilled from the handle
+// they were created with, so a rename before their next Files visit keeps
+// their folder (#426 review).
+func TestMigration0094BackfillsPeopleMissedBy0093(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "keystone.db")
+	old, err := openUnmigrated(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := old.migrateThrough("migrations/0093_person_handles.sql"); err != nil {
+		t.Fatalf("migrating through 0093: %v", err)
+	}
+	for _, stmt := range []string{
+		`INSERT INTO butler_members (person_id, member, role, admitted, generation, created_at)
+		 VALUES ('psn_00000000000000aa', 'sam', 'member', 1, 1, '2026-01-01T00:00:00Z'),
+		        ('psn_00000000000000bb', 'Alex', 'member', 1, 1, '2026-01-01T00:00:00Z'),
+		        ('psn_00000000000000cc', 'alex', 'member', 1, 1, '2026-01-01T00:00:00Z')`,
+		`UPDATE butler_members SET member = 'samuel' WHERE member = 'sam'`,
+	} {
+		if _, err := old.sql.Exec(stmt); err != nil {
+			t.Fatalf("seeding: %v", err)
+		}
+	}
+	old.Close()
+	db, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open (applies 0094): %v", err)
+	}
+	defer db.Close()
+	if dir, ok, err := db.PersonalFilesDir("samuel", "samuel"); err != nil || !ok || dir != "sam" {
+		t.Fatalf("samuel's folder = %q %v %v; want the one made as sam", dir, ok, err)
+	}
+	// Two people whose names fold to one folder: only the earlier gets it.
+	a, _, errA := db.PersonalFilesDir("Alex", "alex")
+	b, _, errB := db.PersonalFilesDir("alex", "alex")
+	if (errA == nil) == (errB == nil) || (a != "alex" && b != "alex") {
+		t.Fatalf("Alex=%q %v, alex=%q %v; want exactly one of them in the folder", a, errA, b, errB)
+	}
+}
