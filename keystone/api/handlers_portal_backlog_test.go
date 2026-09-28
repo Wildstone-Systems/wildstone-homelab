@@ -443,6 +443,23 @@ func TestTheDrillIsFoundBehindAYearOfBackups(t *testing.T) {
 	}
 }
 
+// An offsite-only plan's backups are "offsite" runs; a household whose
+// plans all go straight off-site must still see its last backup
+// (ADR-W045 A3).
+func TestOffsiteOnlyBackupsCountOnTheCard(t *testing.T) {
+	h := homeHarness(t)
+	seq, err := h.s.DB.StartBackupRun("movies", runtimedb.BackupRunOffsite, "p1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.s.DB.FinishBackupRun(seq, runtimedb.BackupRunSucceeded, ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.summary(t, "sandy"); got.Machines.LastBackup.IsZero() {
+		t.Fatal("a successful off-site backup left the card saying nothing was ever backed up")
+	}
+}
+
 // Clear means all of them, not a window's worth.
 func TestClearingNotificationsClearsMoreThanAWindow(t *testing.T) {
 	h := homeHarness(t)

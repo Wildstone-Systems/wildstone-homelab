@@ -233,9 +233,14 @@ var kindOrder = map[resource.Kind]int{
 	// household reading a plan wants the number declared before the
 	// thing that comes due against it.
 	resource.KindCommitment: 9,
+	// BackupTarget just before BackupPlan: a plan's off-site copy names
+	// the target it goes to (ADR-W045 A3), so the target is declared
+	// first. Nothing else depends on it.
+	resource.KindBackupTarget: 9,
 	// BackupPlan last: a backup declaration depends on the volumes it
-	// names, and nothing depends on it (ADR-W011 A4).
-	resource.KindBackupPlan: 9,
+	// names and the target it copies to, and nothing depends on it
+	// (ADR-W011 A4).
+	resource.KindBackupPlan: 10,
 }
 
 // key identifies a resource for matching desired against observed:
@@ -383,6 +388,8 @@ func specEqual(a, b resource.Resource) bool {
 		return ingressEqual(a.Ingress, b.Ingress)
 	case resource.KindBackupPlan:
 		return backupPlanEqual(a.BackupPlan, b.BackupPlan)
+	case resource.KindBackupTarget:
+		return a.BackupTarget != nil && b.BackupTarget != nil && *a.BackupTarget == *b.BackupTarget
 	case resource.KindConfigFile:
 		return a.ConfigFile != nil && b.ConfigFile != nil && *a.ConfigFile == *b.ConfigFile
 	case resource.KindSeedFile:
@@ -492,7 +499,15 @@ func backupPlanEqual(a, b *resource.BackupPlanSpec) bool {
 		a.PasswordSecret == b.PasswordSecret &&
 		a.Schedule == b.Schedule &&
 		a.Retention == b.Retention &&
-		stringSliceEqual(a.Volumes, b.Volumes)
+		stringSliceEqual(a.Volumes, b.Volumes) &&
+		offsiteEqual(a.Offsite, b.Offsite)
+}
+
+func offsiteEqual(a, b *resource.BackupOffsite) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
 }
 
 func containerEqual(a, b *resource.ContainerSpec) bool {
@@ -687,7 +702,33 @@ func grade(action Action, want, have resource.Resource) (RiskGrade, string) {
 		if action == ActionDelete {
 			return RiskMedium, "backup coverage removed: no data deleted, but the named volumes stop being backed up"
 		}
+		// Sending a plan's data off-site, or changing where or how it
+		// goes, is High (ADR-W045 A7): it is the step that lets household
+		// data leave the house, so it always passes a human with step-up.
+		// Turning it off is Medium, the same judgement as removing a plan.
+		wantOff := want.BackupPlan.Offsite
+		var haveOff *resource.BackupOffsite
+		if action == ActionUpdate && have.BackupPlan != nil {
+			haveOff = have.BackupPlan.Offsite
+		}
+		switch {
+		case wantOff != nil && (haveOff == nil || haveOff.Target != wantOff.Target || haveOff.Route != wantOff.Route):
+			return RiskHigh, fmt.Sprintf("sends these volumes off-site to BackupTarget %q (%s), encrypted before upload", wantOff.Target, wantOff.Route)
+		case wantOff == nil && haveOff != nil:
+			return RiskMedium, "off-site copy turned off: nothing is deleted from the bucket, but new backups stop going there"
+		}
 		return RiskLow, "backup schedule declaration only; runs execute with their own provenance (ADR-W011 A4)"
+	case resource.KindBackupTarget:
+		// High on create and change although the declaration itself
+		// moves nothing: it decides where household data may leave the
+		// house for (ADR-W045 A1, A7), and "data stays home" is principle
+		// one. It must always pass a human with step-up, never drift
+		// repair. Removing one is Medium: nothing is deleted from the
+		// bucket, but off-site protection through it stops.
+		if action == ActionDelete {
+			return RiskMedium, "off-site backup target removed: nothing is deleted from the bucket, but backups stop being copied there"
+		}
+		return RiskHigh, "names storage outside the house that backups may be copied to (encrypted before upload); review the endpoint and bucket"
 	case resource.KindAutomation:
 		// A rule acts on the household on its own once approved — that
 		// approval is the whole point (ADR-W024 A1), so creating or

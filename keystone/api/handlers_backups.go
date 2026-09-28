@@ -32,8 +32,18 @@ func (s *Server) runBackup(r *http.Request, id principal.Identity) (any, int, er
 	return s.backupExec(r, id, s.BackupRun, "backup run")
 }
 
+// restoreBackup restores alongside from the local repository, or with
+// ?from=offsite from the plan's off-site copy (ADR-W045 A3) — the path
+// after a total loss, when the local copy is gone too.
 func (s *Server) restoreBackup(r *http.Request, id principal.Identity) (any, int, error) {
-	return s.backupExec(r, id, s.BackupRestore, "restore")
+	switch from := r.URL.Query().Get("from"); from {
+	case "", "local":
+		return s.backupExec(r, id, s.BackupRestore, "restore")
+	case "offsite":
+		return s.backupExec(r, id, s.BackupRestoreOffsite, "off-site restore")
+	default:
+		return nil, http.StatusBadRequest, fmt.Errorf("from must be local or offsite, not %q", from)
+	}
 }
 
 func (s *Server) backupExec(r *http.Request, id principal.Identity, hook func(context.Context, string) error, what string) (any, int, error) {

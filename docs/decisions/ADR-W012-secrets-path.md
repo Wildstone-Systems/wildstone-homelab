@@ -1,6 +1,7 @@
 # ADR-W012: Secrets path — node-side store, materializer, rotation
 
-- **Status:** accepted; retained and scoped by ADR-W033
+- **Status:** accepted; retained and scoped by ADR-W033; A1 amended by
+  ADR-W045 A5 (sealed off-site secret bundle)
 - **Relates to:** ADR-W003 (closed op surface), ADR-W005 A2 (`secret/`
   references), ADR-W008 (level-triggered reconcile), implementation
   scope E8

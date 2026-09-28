@@ -55,3 +55,40 @@ func (r *Reconciler) applyBackupPlanStep(ctx context.Context, nodeID string, ste
 		return sr
 	}
 }
+
+// applyBackupTargetStep records step's BackupTarget as managed or
+// unmanaged (ADR-W045 A2) — the same declared-only pattern as a
+// BackupPlan. No op is dispatched: a target is only a name for a bucket,
+// and the backup engine's off-site runs are what reach it, each with its
+// own provenance. Its credentials stay secret references throughout.
+func (r *Reconciler) applyBackupTargetStep(ctx context.Context, nodeID string, step plan.PlanStep, desiredByKey map[resKey]resource.Resource) StepResult {
+	_ = ctx // no external call is made; accepted for signature symmetry
+	sr := StepResult{Step: step}
+	key := resKey{step.Kind, step.Name}
+
+	switch step.Action {
+	case plan.ActionCreate, plan.ActionUpdate:
+		want, ok := desiredByKey[key]
+		if !ok || want.BackupTarget == nil {
+			sr.Error = "internal: no desired BackupTarget spec for " + step.Name
+			return sr
+		}
+		log.Printf("reconcile: BackupTarget %q declared: %s bucket=%s (off-site runs are the backup engine's)",
+			step.Name, want.BackupTarget.Endpoint, want.BackupTarget.Bucket)
+		sr.Applied = true
+		sr.HealthOK = true
+		r.markManaged(nodeID, key, true)
+		return sr
+
+	case plan.ActionDelete:
+		log.Printf("reconcile: BackupTarget %q removed from desired state (nothing in the bucket is touched)", step.Name)
+		sr.Applied = true
+		sr.HealthOK = true
+		r.markManaged(nodeID, key, false)
+		return sr
+
+	default:
+		sr.Error = "unexpected action " + step.Action.String()
+		return sr
+	}
+}

@@ -1174,6 +1174,18 @@ func (s *Server) homeMachines(ctx context.Context, now time.Time) machinesCard {
 	if ok {
 		card.LastBackup = lastBackup.FinishedAt
 	}
+	// An offsite-only plan never writes a local "backup" row: its backups
+	// are "offsite" runs (ADR-W045 A3). Without these, a household whose
+	// plans all go straight off-site would be told nothing was ever saved.
+	lastOffsite, ok, err := s.DB.LatestBackupRun(runtimedb.BackupRunOffsite, true)
+	if err != nil {
+		s.Log.Error("home machines off-site backups", "err", err)
+		card.Problem = "Can't tell when the last backup was."
+		return card
+	}
+	if ok && lastOffsite.FinishedAt.After(card.LastBackup) {
+		card.LastBackup = lastOffsite.FinishedAt
+	}
 	// The newest drill decides, pass or fail. A household that is told
 	// "a restore was proved" by an older success while last night's
 	// drill failed has been reassured by a card that is wrong about the
