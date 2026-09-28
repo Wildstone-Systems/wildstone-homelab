@@ -42,6 +42,8 @@ approval for all its runs.
 ### Undermining trust in any off-site copy
 - **Success = container finished**, not restic's exit code
   (`backup.go:21`). A failed upload would be recorded as succeeded.
+  (Fixed by #413: the exit code was already on the wire since protocol
+  minor 11; the engine never read it.)
 - No `restic check`; the only verification is the local restore drill.
 - **No DB consistency**: live Postgres/SQLite dirs (immich-pgdata,
   paperless-pgdata, …) are copied while running. No pre/post hooks.
@@ -95,7 +97,7 @@ live volumes ──backup──▶ local restic repo (volume)   ← fast restore
 | # | Slice | Why / scope |
 |---|---|---|
 | 0 | ADR: off-site backup | Principle carve-out, copy model, risk grading, key-recovery model |
-| 1 | Truthful run results | Protocol exit-code arm; engine fails runs on non-zero restic exit. **Prerequisite** |
+| 1 | Truthful run results | Engine reads the exit code the protocol already reports (minor 11) and fails runs on non-zero restic exit. **Prerequisite** |
 | 2 | `BackupTarget` kind + validation | Schema, secret refs, policy (no literals), plan risk High |
 | 3 | Off-site copy in engine | `offsite` block on BackupPlan, `restic copy`, off-site retention, container egress |
 | 4 | Verification | `restic check` (+ `--read-data-subset`) on both repos; off-site drill; freshness alerts in morning report |

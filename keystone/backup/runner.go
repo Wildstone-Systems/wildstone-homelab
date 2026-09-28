@@ -2,6 +2,7 @@ package backup
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -10,13 +11,36 @@ import (
 	wsv1 "github.com/chickenrat17/wildstone-homelab/proto/gen/wardstone/v1"
 )
 
+// ExitError is a run whose container exited with a non-zero code. The
+// engine reads Code with errors.As to tell restic's verdicts apart (see
+// resticExit): "repository does not exist" is a reason to init, "wrong
+// password" is a reason to stop.
+type ExitError struct {
+	Name string
+	Code int32
+}
+
+func (e *ExitError) Error() string {
+	return fmt.Sprintf("%s: exited %d", e.Name, e.Code)
+}
+
+// exitCode returns the container exit code err carries, and whether it
+// carries one at all.
+func exitCode(err error) (int32, bool) {
+	var ee *ExitError
+	if errors.As(err, &ee) {
+		return ee.Code, true
+	}
+	return 0, false
+}
+
 // ApplierRunner is the production Runner: EnsureContainer through the
 // same closed op surface every other container takes (the agent's
 // ownership labels and guards apply unchanged), poll InspectContainer
-// until the one-shot exits, then remove it. The op surface has no exit-
-// code arm yet, so "ran to completion" is the success signal (see the
-// package doc); a container still running at Timeout is treated as failed
-// and removed.
+// until the one-shot exits, then remove it. Success is the container's
+// own exit code 0 (InspectContainerResult.exit_code, protocol minor 11);
+// a non-zero code is an *ExitError. A container still running at Timeout
+// is treated as failed and removed.
 type ApplierRunner struct {
 	Applier reconcile.Applier
 	// Poll is the completion-poll interval. <= 0 uses 2s.
@@ -40,6 +64,12 @@ func (a *ApplierRunner) RunContainer(ctx context.Context, node, name string, spe
 	if oe := pres.GetError(); oe != nil {
 		return fmt.Errorf("pull %s: %s: %s", spec.Image, oe.GetCode(), oe.GetMessage())
 	}
+
+	// Clear any leftover of the same name first (a Keystone that died
+	// mid-run never reached its deferred remove). EnsureContainer keeps a
+	// same-image container rather than recreating it, so a leftover would
+	// hand back the PREVIOUS run's exit code as this run's verdict.
+	a.remove(ctx, node, name)
 
 	res, err := a.Applier.Apply(ctx, node, ensureOp(name, spec))
 	if err != nil {
@@ -68,12 +98,15 @@ func (a *ApplierRunner) RunContainer(ctx context.Context, node, name string, spe
 		}
 		if oe := res.GetError(); oe != nil {
 			if oe.GetCode() == wsv1.ErrorCode_ERROR_CODE_NOT_FOUND {
-				return nil // exited and auto-removed
+				// Nothing Wildstone creates here auto-removes, so a vanished
+				// container took its exit code with it: the run's outcome is
+				// unknown, and unknown is never success.
+				return fmt.Errorf("run %s: container disappeared before its exit code was read", name)
 			}
 			return fmt.Errorf("inspect %s: %s: %s", name, oe.GetCode(), oe.GetMessage())
 		}
-		if !res.GetInspectContainer().GetRunning() {
-			return nil
+		if done, err := finished(name, res.GetInspectContainer()); done {
+			return err
 		}
 		if time.Now().After(deadline) {
 			return fmt.Errorf("run %s: still running after %s", name, timeout)
@@ -83,6 +116,29 @@ func (a *ApplierRunner) RunContainer(ctx context.Context, node, name string, spe
 			return ctx.Err()
 		case <-time.After(poll):
 		}
+	}
+}
+
+// finished reports whether the one-shot has reached a terminal state and,
+// if so, its outcome. It mirrors reconcile's classifyJob: "created",
+// "paused" and "restarting" are not finished; "exited" and "dead" are,
+// with the exit code as the verdict. An agent older than protocol minor
+// 11 reports no status, so a stopped container's result cannot be known
+// — that fails the run rather than guessing either way.
+func finished(name string, inspect *wsv1.InspectContainerResult) (bool, error) {
+	if inspect.GetRunning() {
+		return false, nil
+	}
+	switch inspect.GetStatus() {
+	case "":
+		return true, fmt.Errorf("run %s: the node agent reports no exit status (needs protocol minor 11 or later)", name)
+	case "exited", "dead":
+		if code := inspect.GetExitCode(); code != 0 {
+			return true, &ExitError{Name: name, Code: code}
+		}
+		return true, nil
+	default:
+		return false, nil
 	}
 }
 

@@ -207,9 +207,9 @@ copy is cryptographically gone — by design.
 
 ### A6. A backup counts only when it is proven
 
-- **Prerequisite:** the protocol gains a container exit-code arm, and a
-  run whose restic exit code is non-zero is a failed run. This is the
-  follow-up `keystone/backup/backup.go` already names.
+- **Prerequisite:** a run whose restic exit code is non-zero is a failed
+  run. The protocol already reports exit codes (`InspectContainerResult`,
+  minor 11); the engine now reads them (#413).
 - `restic check` runs on both repos on a schedule; off-site uses
   `--read-data-subset` to bound download cost.
 - There is a monthly off-site restore drill into a scratch volume.
@@ -253,7 +253,7 @@ copy is cryptographically gone — by design.
 
 | # | Package | Depends on |
 |---|---|---|
-| I1 | Truthful run results (exit-code arm) | — |
+| I1 | Truthful run results (read restic exit codes) | — |
 | I2 | `BackupTarget` kind, validation, policy, risk grading | — |
 | I3 | Off-site routes in the engine (`offsite` block, `offsite-only` backup, `restic copy`, egress) | I1, I2 |
 | I4 | Disk-space guard: `DiskSpace` op, reserve, approval/run/in-run checks, growth warning | I1 |

@@ -18,11 +18,11 @@
 // snapshot into a fresh "<plan>-restore" volume, from which the owner (or
 // a future guided flow) moves data deliberately.
 //
-// The engine never parses restic output and the op surface exposes no
-// container exit code yet — a run "succeeds" when its container runs to
-// completion under the Runner (see Runner). An exit-code arm on the
-// protocol is the known follow-up (a minor-7 candidate) that will make
-// success reporting truthful to restic's own verdict.
+// The engine never parses restic output. restic's own exit code is the
+// verdict (InspectContainerResult.exit_code, protocol minor 11): a pass
+// succeeds only on exit 0, and the ledger detail names what a non-zero
+// code means (see resticExit). Exit codes 10 and 12 need restic 0.17 or
+// later, which the pinned image is.
 package backup
 
 import (
@@ -31,6 +31,7 @@ import (
 	"log/slog"
 	"sort"
 	"strconv"
+	"sync"
 	"time"
 
 	"context"
@@ -69,7 +70,42 @@ type Engine struct {
 	// DrillEvery is the restore-drill cadence. <= 0 uses 30 days
 	// (ADR-W011 A4: "monthly restore-drill").
 	DrillEvery time.Duration
+	// RetryAfter is how long a failed scheduled run waits before the
+	// schedule tries it again. <= 0 uses 1 hour. Without it a plan that
+	// fails every time (a wrong password, a full disk) would re-run on
+	// every tick, all day. RunNow and RestoreAlongside ignore it.
+	RetryAfter time.Duration
 	Log        *slog.Logger
+
+	// running holds one entry per plan with a run in progress, so a
+	// scheduled run and an on-demand one never share a container name.
+	running sync.Map
+}
+
+// resticExit describes restic's documented exit codes (restic 0.17+) for
+// the ledger. Anything unlisted is reported by number alone.
+var resticExit = map[int32]string{
+	1:   "fatal error",
+	3:   "snapshot saved but incomplete: some source files could not be read",
+	10:  "repository does not exist",
+	11:  "repository is locked by another process",
+	12:  "wrong repository password",
+	130: "interrupted",
+}
+
+// resticExitNoRepo is the one exit code that makes an init correct.
+const resticExitNoRepo = 10
+
+// describe turns a pass error into ledger text: which pass, and what
+// restic's exit code means when it gave one.
+func describe(pass string, err error) error {
+	if code, ok := exitCode(err); ok {
+		if meaning, known := resticExit[code]; known {
+			return fmt.Errorf("%s: restic exited %d (%s)", pass, code, meaning)
+		}
+		return fmt.Errorf("%s: restic exited %d", pass, code)
+	}
+	return fmt.Errorf("%s: %w", pass, err)
 }
 
 // scheduleIntervals maps BackupPlanSpec.Schedule to a due interval.
@@ -89,8 +125,8 @@ type RunReport struct {
 // Tick evaluates every BackupPlan in the Statefile once: any plan whose
 // last successful backup (or drill) is older than its cadence runs now.
 // Failures are reported per plan and never stop the others; a failed run
-// leaves no successful ledger row, so it is retried on the next tick
-// rather than waiting out a full interval.
+// leaves no successful ledger row, so it is retried once RetryAfter has
+// passed rather than waiting out a full interval.
 func (e *Engine) Tick(ctx context.Context) ([]RunReport, error) {
 	desired, err := e.State.Load()
 	if err != nil {
@@ -128,6 +164,13 @@ func (e *Engine) drillEvery() time.Duration {
 	return 30 * 24 * time.Hour
 }
 
+func (e *Engine) retryAfter() time.Duration {
+	if e.RetryAfter > 0 {
+		return e.RetryAfter
+	}
+	return time.Hour
+}
+
 func (e *Engine) now() time.Time {
 	if e.Now != nil {
 		return e.Now()
@@ -136,42 +179,51 @@ func (e *Engine) now() time.Time {
 }
 
 // due reports whether (plan, kind) has no successful ledger row within
-// interval. An unknown schedule value maps to interval 0 and is never due
-// — resource validation makes that unreachable for committed plans.
+// interval and no failed one within RetryAfter. An unknown schedule value
+// maps to interval 0 and is never due — resource validation makes that
+// unreachable for committed plans.
 func (e *Engine) due(plan string, kind runtimedb.BackupRunKind, interval time.Duration) bool {
 	if interval <= 0 {
 		return false
 	}
-	last, err := e.DB.LastBackupRun(plan, kind, runtimedb.BackupRunSucceeded)
+	if recent, ok := e.within(plan, kind, runtimedb.BackupRunFailed, e.retryAfter()); !ok || recent {
+		return false
+	}
+	recent, ok := e.within(plan, kind, runtimedb.BackupRunSucceeded, interval)
+	return ok && !recent
+}
+
+// within reports whether (plan, kind) has a ledger row with status that
+// started less than d ago. ok is false when the ledger could not be read:
+// fail safe, don't run on a broken ledger read.
+func (e *Engine) within(plan string, kind runtimedb.BackupRunKind, status runtimedb.BackupRunStatus, d time.Duration) (recent, ok bool) {
+	last, err := e.DB.LastBackupRun(plan, kind, status)
 	if errors.Is(err, runtimedb.ErrNotFound) {
-		return true
+		return false, true
 	}
 	if err != nil {
 		e.log().Error("backup: reading run ledger", "plan", plan, "err", err)
-		return false // fail safe: don't run on a broken ledger read
+		return false, false
 	}
-	return e.now().Sub(last.StartedAt) >= interval
+	return e.now().Sub(last.StartedAt) < d, true
 }
 
-// runBackup executes one backup run: an init pass whose failure is
-// tolerated (restic init fails when the repository already exists — that
-// is the expected steady state, and there is no side-effect-free "does it
-// exist" op to ask first), a backup pass that must succeed, and — when
-// the plan declares any retention — a forget --prune pass that must
-// succeed too.
+// runBackup executes one backup run: a probe pass (`restic cat config`,
+// read-only) that tells an existing repository from a missing one, an
+// init pass only when it is missing, a backup pass, and — when the plan
+// declares any retention — a forget --prune pass. Every pass must exit 0.
 func (e *Engine) runBackup(ctx context.Context, r resource.Resource) error {
 	spec := r.BackupPlan
 	name := r.Metadata.Name
 	return e.withProvenance(ctx, r, runtimedb.BackupRunBackup,
 		fmt.Sprintf("backup run: %s (%d volume(s) -> %s)", name, len(spec.Volumes), spec.Repository),
 		func(ctx context.Context) error {
-			initSpec := e.resticSpec(spec, []string{"init"}, nil)
-			if err := e.Run.RunContainer(ctx, r.Metadata.Node, "backup-"+name+"-init", initSpec); err != nil {
-				e.log().Debug("backup: init pass failed (expected once the repository exists)", "plan", name, "err", err)
+			if err := e.ensureRepository(ctx, r); err != nil {
+				return err
 			}
 			backupSpec := e.resticSpec(spec, append([]string{"backup"}, sourceTargets(spec)...), spec.Volumes)
 			if err := e.Run.RunContainer(ctx, r.Metadata.Node, "backup-"+name, backupSpec); err != nil {
-				return fmt.Errorf("backup pass: %w", err)
+				return describe("backup pass", err)
 			}
 			forgetArgs := retentionArgs(spec.Retention)
 			if forgetArgs == nil {
@@ -179,10 +231,33 @@ func (e *Engine) runBackup(ctx context.Context, r resource.Resource) error {
 			}
 			forgetSpec := e.resticSpec(spec, append([]string{"forget", "--prune"}, forgetArgs...), nil)
 			if err := e.Run.RunContainer(ctx, r.Metadata.Node, "backup-"+name+"-forget", forgetSpec); err != nil {
-				return fmt.Errorf("forget pass: %w", err)
+				return describe("forget pass", err)
 			}
 			return nil
 		})
+}
+
+// ensureRepository initializes the plan's repository only when restic
+// says it does not exist (exit 10). Any other probe failure stops the run:
+// a wrong password (exit 12) must never be "fixed" by an init, and an
+// init that fails is a real failure, not the steady state.
+func (e *Engine) ensureRepository(ctx context.Context, r resource.Resource) error {
+	spec := r.BackupPlan
+	name := r.Metadata.Name
+	probe := e.resticSpec(spec, []string{"cat", "config"}, nil)
+	err := e.Run.RunContainer(ctx, r.Metadata.Node, "backup-"+name+"-probe", probe)
+	if err == nil {
+		return nil
+	}
+	if code, ok := exitCode(err); !ok || code != resticExitNoRepo {
+		return describe("repository check", err)
+	}
+	initSpec := e.resticSpec(spec, []string{"init"}, nil)
+	if err := e.Run.RunContainer(ctx, r.Metadata.Node, "backup-"+name+"-init", initSpec); err != nil {
+		return describe("repository init", err)
+	}
+	e.log().Info("backup: initialized a new repository", "plan", name, "repository", spec.Repository)
+	return nil
 }
 
 // runDrill executes the restore drill: latest snapshot restored alongside
@@ -248,7 +323,10 @@ func (e *Engine) restoreInto(ctx context.Context, r resource.Resource, targetVol
 	spec := *r.BackupPlan
 	cs := e.resticSpec(&spec, []string{"restore", "latest", "--target", "/restore"}, nil)
 	cs.Mounts = append(cs.Mounts, resource.Mount{Source: targetVolume, Target: "/restore"})
-	return e.Run.RunContainer(ctx, r.Metadata.Node, containerName, cs)
+	if err := e.Run.RunContainer(ctx, r.Metadata.Node, containerName, cs); err != nil {
+		return describe("restore pass", err)
+	}
+	return nil
 }
 
 // withProvenance wraps one run in its full record set: a plans-table
@@ -256,6 +334,11 @@ func (e *Engine) restoreInto(ctx context.Context, r resource.Resource, targetVol
 // — the standing approval carried by the committed BackupPlan itself),
 // the backup_runs ledger row, events, and the terminal transition.
 func (e *Engine) withProvenance(ctx context.Context, r resource.Resource, kind runtimedb.BackupRunKind, summary string, fn func(context.Context) error) error {
+	if _, busy := e.running.LoadOrStore(r.Metadata.Name, struct{}{}); busy {
+		return fmt.Errorf("backup: plan %q already has a run in progress", r.Metadata.Name)
+	}
+	defer e.running.Delete(r.Metadata.Name)
+
 	stored, err := json.Marshal(map[string]any{"summary": summary, "backupPlan": r.Metadata.Name, "kind": string(kind)})
 	if err != nil {
 		return err
