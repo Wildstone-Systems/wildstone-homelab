@@ -139,6 +139,7 @@ var dismissed = map[string]string{
 	"link_type":           "names a machine, service or artifact, not a person",
 	"media_type":          "an enum or classification, not a party",
 	"manifest_version":    "a serialized blob",
+	"measured_at":         "a timestamp",
 	"message":             "descriptive text, not a party",
 	"method":              "an enum or classification, not a party",
 	"mode":                "an enum or classification, not a party",
