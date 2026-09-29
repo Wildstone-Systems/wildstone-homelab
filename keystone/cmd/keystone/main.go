@@ -890,7 +890,9 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	agentApplier := &reconcile.GatewayApplier{Gateway: gw}
 	recoveryBuilder := &recovery.Builder{
 		State: state, DB: db, Vault: secretVault, Agents: agentApplier,
-		Dir: resource.WholeSiteRecoveryPath,
+		// Build on Keystone's own disk, then transfer the completed set to
+		// BackupPlan.metadata.node. The two services need not share a host.
+		Dir: filepath.Join(dataDir, "recovery-stage"),
 	}
 	bak := &backup.Engine{
 		State:           state,

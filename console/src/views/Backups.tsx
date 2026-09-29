@@ -179,13 +179,26 @@ export function BackupPlanCard({ ledger, targets = [], onRan }: { ledger: PlanLe
 
 function TargetManager({ targets, onChanged }: { targets: BackupTargetView[]; onChanged: () => void }) {
   const [adding, setAdding] = useState(false);
-  const [draft, setDraft] = useState({ name: "offsite", node: "", endpoint: "", bucket: "", prefix: "", region: "", accessName: "offsite-access", secretName: "offsite-secret", accessValue: "", secretValue: "", pathStyle: false, insecureHTTP: false, appendOnly: true });
+  // Credentials are written before the target proposal can be approved. Give
+  // every proposal fresh names so a rejected or failed proposal can leave only
+  // unused secrets behind, never replace credentials referenced by a live
+  // target.
+  const [draft, setDraft] = useState(() => {
+    const suffix = crypto.randomUUID().slice(0, 8);
+    return { name: "offsite", node: "", endpoint: "", bucket: "", prefix: "", region: "", accessName: `offsite-${suffix}-access`, secretName: `offsite-${suffix}-secret`, accessValue: "", secretValue: "", pathStyle: false, insecureHTTP: false, appendOnly: true };
+  });
   const save = useAction();
   const test = useAction();
   const submit = () => save.run(async () => {
+    const accessRef = `secret/${draft.accessName}`;
+    const secretRef = `secret/${draft.secretName}`;
+    const liveRefs = new Set(targets.flatMap((target) => [target.spec.accessKeySecret, target.spec.secretKeySecret]));
+    if (draft.accessValue && liveRefs.has(accessRef)) throw new Error("That access-key secret is used by a live target. Choose a new secret name before saving credentials.");
+    if (draft.secretValue && liveRefs.has(secretRef)) throw new Error("That secret-key secret is used by a live target. Choose a new secret name before saving credentials.");
+    if (draft.accessValue && draft.secretValue && accessRef === secretRef) throw new Error("Access-key and secret-key credentials need different secret names.");
     if (draft.accessValue) await api.setSecret(draft.node, draft.accessName, draft.accessValue);
     if (draft.secretValue) await api.setSecret(draft.node, draft.secretName, draft.secretValue);
-    const spec: BackupTargetSpec = { type: "s3", endpoint: draft.endpoint, bucket: draft.bucket, prefix: draft.prefix || undefined, region: draft.region || undefined, pathStyle: draft.pathStyle, insecureHTTP: draft.insecureHTTP, appendOnly: draft.appendOnly, accessKeySecret: `secret/${draft.accessName}`, secretKeySecret: `secret/${draft.secretName}` };
+    const spec: BackupTargetSpec = { type: "s3", endpoint: draft.endpoint, bucket: draft.bucket, prefix: draft.prefix || undefined, region: draft.region || undefined, pathStyle: draft.pathStyle, insecureHTTP: draft.insecureHTTP, appendOnly: draft.appendOnly, accessKeySecret: accessRef, secretKeySecret: secretRef };
     const plan = await api.proposeBackupTarget({ name: draft.name, node: draft.node, spec });
     onChanged(); setAdding(false); return plan;
   }, "target proposed — approve it on Plans, then test the connection");

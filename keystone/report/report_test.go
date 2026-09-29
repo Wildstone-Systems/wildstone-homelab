@@ -175,3 +175,39 @@ func TestMorningFlagsStaleOffsiteFailedVerificationAndSourceShrink(t *testing.T)
 		}
 	}
 }
+
+func TestMorningKeepsFailedUploadVisibleAfterSuccessfulCheck(t *testing.T) {
+	db := testDB(t)
+	finish := func(kind runtimedb.BackupRunKind, status runtimedb.BackupRunStatus) {
+		t.Helper()
+		seq, err := db.StartBackupRun("photos", kind, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := db.FinishBackupRun(seq, status, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	finish(runtimedb.BackupRunOffsite, runtimedb.BackupRunFailed)
+	finish(runtimedb.BackupRunOffsiteCheck, runtimedb.BackupRunSucceeded)
+	plan := resource.Resource{
+		Kind: resource.KindBackupPlan, Metadata: resource.Metadata{Name: "photos"},
+		BackupPlan: &resource.BackupPlanSpec{Offsite: &resource.BackupOffsite{Schedule: "daily"}},
+	}
+	rep, err := Morning(db, time.Now(), plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.BackupsOK {
+		t.Fatal("successful repository check hid the failed off-site upload")
+	}
+	found := false
+	for _, alert := range rep.BackupAlerts {
+		if alert.Kind == "failed-backup" && alert.RunKind == runtimedb.BackupRunOffsite {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("alerts = %+v; missing failed off-site backup", rep.BackupAlerts)
+	}
+}

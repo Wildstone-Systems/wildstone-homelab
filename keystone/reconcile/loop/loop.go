@@ -10,6 +10,7 @@ package loop
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -142,6 +143,19 @@ func (l *Loop) Tick(ctx context.Context) (TickOutcome, error) {
 	if !l.installed {
 		l.Rec.Approve = func(*plan.Plan) bool { return l.allowMediumHigh.Load() }
 		l.installed = true
+	}
+	// A restored control plane stays inert until the operator has rejoined
+	// every replacement node, imported its sealed secret bundle, reconciled
+	// the restore journal and explicitly released quarantine. In particular,
+	// do not let the Secret pre-pass create replacement values: Wardstone's
+	// recovery import deliberately refuses a non-empty store so it can never
+	// overwrite live credentials.
+	if err := l.DB.CheckQuarantine(); err != nil {
+		if errors.Is(err, runtimedb.ErrQuarantined) {
+			log.Info("reconcile paused by restore quarantine")
+			return TickOutcome{}, nil
+		}
+		return TickOutcome{}, fmt.Errorf("loop: checking restore quarantine: %w", err)
 	}
 
 	approved, err := l.DB.PlansInState(runtimedb.PlanApproved)

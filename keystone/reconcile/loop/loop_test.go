@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	wsv1 "github.com/chickenrat17/wildstone-homelab/proto/gen/wardstone/v1"
 
@@ -119,6 +120,26 @@ func TestQuietTickDoesNothing(t *testing.T) {
 	}
 	if types := eventTypes(t, db); len(types) != 0 {
 		t.Fatalf("quiet tick emitted events: %v (ADR-W008 A6: no heartbeats)", types)
+	}
+}
+
+func TestRestoreQuarantinePreventsSecretAndInfrastructureReconciliation(t *testing.T) {
+	l, state, db, app := harness(t)
+	if err := state.Put(volume("restored-data", "replacement-node")); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Commit("recovery", "restore", "restored desired state"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.EnterRestoreQuarantine("whole-site recovery", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	out, err := l.Tick(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if app.ops != 0 || out.Repaired || out.Failed != "" || len(out.PlanIDs) != 0 {
+		t.Fatalf("quarantined tick dispatched work: ops=%d outcome=%+v", app.ops, out)
 	}
 }
 

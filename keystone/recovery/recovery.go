@@ -9,7 +9,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
+	"sort"
 	"time"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/reconcile"
@@ -35,16 +37,19 @@ type Builder struct {
 }
 
 type Manifest struct {
-	Format      string            `json:"format"`
-	SnapshotAt  time.Time         `json:"snapshotAt"`
-	Nodes       []string          `json:"nodes"`
-	NodeBundles map[string]string `json:"nodeBundles"`
-	SHA256      map[string]string `json:"sha256"`
+	Format                  string            `json:"format"`
+	SnapshotAt              time.Time         `json:"snapshotAt"`
+	RecoveryPublicKeySHA256 string            `json:"recoveryPublicKeySHA256"`
+	Nodes                   []string          `json:"nodes"`
+	NodeBundles             map[string]string `json:"nodeBundles"`
+	SHA256                  map[string]string `json:"sha256"`
 }
 
-// Prepare writes a complete set into a sibling staging directory, then
-// promotes it atomically. The stable directory is the sole source path of
-// BackupPlan wildstone, so restic can never observe a half-written set.
+// Prepare writes a complete set into a local sibling staging directory,
+// promotes it atomically, then installs its files on the selected Wardstone
+// node with manifest.json last. The plan's source path is node-local; Keystone
+// may run on another host and must never assume the same absolute path names
+// the same filesystem there.
 func (b *Builder) Prepare(ctx context.Context, plan resource.Resource) error {
 	if plan.Metadata.Name != PlanName || plan.BackupPlan == nil {
 		return fmt.Errorf("recovery: only BackupPlan %q can build a whole-site set", PlanName)
@@ -62,9 +67,8 @@ func (b *Builder) Prepare(ctx context.Context, plan resource.Resource) error {
 	if len(plan.BackupPlan.Paths) != 1 {
 		return fmt.Errorf("recovery: BackupPlan %q must have exactly one path", PlanName)
 	}
-	absSource, err := filepath.Abs(plan.BackupPlan.Paths[0])
-	if err != nil || filepath.Clean(absSource) != filepath.Clean(absDir) {
-		return fmt.Errorf("recovery: BackupPlan %q source must be %s", PlanName, absDir)
+	if filepath.Clean(plan.BackupPlan.Paths[0]) != filepath.Clean(resource.WholeSiteRecoveryPath) {
+		return fmt.Errorf("recovery: BackupPlan %q source must be %s", PlanName, resource.WholeSiteRecoveryPath)
 	}
 	if err := os.MkdirAll(filepath.Dir(absDir), 0o700); err != nil {
 		return err
@@ -75,7 +79,12 @@ func (b *Builder) Prepare(ctx context.Context, plan resource.Resource) error {
 	}
 	defer os.RemoveAll(stage)
 
-	manifest := Manifest{Format: "wildstone-recovery-set-v1", SnapshotAt: b.now().UTC(), NodeBundles: map[string]string{}, SHA256: map[string]string{}}
+	keySum := sha256.Sum256([]byte(plan.BackupPlan.RecoveryPublicKey))
+	manifest := Manifest{
+		Format: "wildstone-recovery-set-v1", SnapshotAt: b.now().UTC(),
+		RecoveryPublicKeySHA256: hex.EncodeToString(keySum[:]),
+		NodeBundles:             map[string]string{}, SHA256: map[string]string{},
+	}
 	if err := b.State.Bundle(filepath.Join(stage, "statefile.bundle")); err != nil {
 		return err
 	}
@@ -90,33 +99,44 @@ func (b *Builder) Prepare(ctx context.Context, plan resource.Resource) error {
 		return fmt.Errorf("recovery: writing household bundle: %w", err)
 	}
 
-	nodes, err := b.DB.ListNodes()
+	desired, err := b.State.Load()
 	if err != nil {
 		return err
 	}
-	for _, node := range nodes {
-		if node.ProtocolMinor < RequiredProtocolMin {
-			return fmt.Errorf("recovery: node %s uses protocol minor %d; %d is required", node.NodeID, node.ProtocolMinor, RequiredProtocolMin)
+	active := map[string]bool{}
+	for _, r := range desired {
+		if r.Metadata.Node != "" {
+			active[r.Metadata.Node] = true
 		}
-		res, err := b.Agents.Apply(ctx, node.NodeID, &wsv1.Operation{Op: &wsv1.Operation_ExportSecretBundle{
-			ExportSecretBundle: &wsv1.ExportSecretBundle{RecoveryPublicKey: plan.BackupPlan.RecoveryPublicKey},
-		}})
-		if err != nil {
-			return fmt.Errorf("recovery: exporting node %s secrets: %w", node.NodeID, err)
+	}
+	activeNodes := make([]string, 0, len(active))
+	for node := range active {
+		activeNodes = append(activeNodes, node)
+	}
+	sort.Strings(activeNodes)
+	records, err := b.DB.ListNodes()
+	if err != nil {
+		return err
+	}
+	byID := make(map[string]runtimedb.Node, len(records))
+	for _, node := range records {
+		byID[node.NodeID] = node
+	}
+	previous := reusableNodeBundles(absDir, manifest.RecoveryPublicKeySHA256)
+	for _, nodeID := range activeNodes {
+		name := nodeBundleName(nodeID)
+		sealed, exportErr := b.exportNodeBundle(ctx, nodeID, byID[nodeID], plan.BackupPlan.RecoveryPublicKey)
+		if exportErr != nil {
+			sealed = previous[nodeID]
+			if len(sealed) == 0 {
+				return exportErr
+			}
 		}
-		if oerr := res.GetError(); oerr != nil {
-			return fmt.Errorf("recovery: exporting node %s secrets: %s", node.NodeID, oerr.GetMessage())
+		if err := os.WriteFile(filepath.Join(stage, name), sealed, 0o600); err != nil {
+			return fmt.Errorf("recovery: writing node %s bundle: %w", nodeID, err)
 		}
-		bundle := res.GetExportSecretBundle()
-		if bundle == nil {
-			return fmt.Errorf("recovery: node %s returned no sealed bundle", node.NodeID)
-		}
-		name := nodeBundleName(node.NodeID)
-		if err := os.WriteFile(filepath.Join(stage, name), bundle.GetSealedBundle(), 0o600); err != nil {
-			return fmt.Errorf("recovery: writing node %s bundle: %w", node.NodeID, err)
-		}
-		manifest.Nodes = append(manifest.Nodes, node.NodeID)
-		manifest.NodeBundles[node.NodeID] = name
+		manifest.Nodes = append(manifest.Nodes, nodeID)
+		manifest.NodeBundles[nodeID] = name
 	}
 	files := append([]string{"statefile.bundle", "keystone.db", "household-secrets.sealed"}, nodeBundleNames(manifest.Nodes)...)
 	for _, name := range files {
@@ -134,7 +154,75 @@ func (b *Builder) Prepare(ctx context.Context, plan resource.Resource) error {
 	if err := os.WriteFile(filepath.Join(stage, "manifest.json"), append(manifestBody, '\n'), 0o600); err != nil {
 		return err
 	}
-	return promote(stage, absDir)
+	if err := promote(stage, absDir); err != nil {
+		return err
+	}
+	return b.installOnNode(ctx, plan.Metadata.Node, plan.BackupPlan.Paths[0], absDir, append(files, "manifest.json"))
+}
+
+func (b *Builder) exportNodeBundle(ctx context.Context, nodeID string, node runtimedb.Node, publicKey string) ([]byte, error) {
+	if node.NodeID == "" {
+		return nil, fmt.Errorf("recovery: active node %s has no join record", nodeID)
+	}
+	if node.ProtocolMinor < RequiredProtocolMin {
+		return nil, fmt.Errorf("recovery: node %s uses protocol minor %d; %d is required", nodeID, node.ProtocolMinor, RequiredProtocolMin)
+	}
+	res, err := b.Agents.Apply(ctx, nodeID, &wsv1.Operation{Op: &wsv1.Operation_ExportSecretBundle{
+		ExportSecretBundle: &wsv1.ExportSecretBundle{RecoveryPublicKey: publicKey},
+	}})
+	if err != nil {
+		return nil, fmt.Errorf("recovery: exporting node %s secrets: %w", nodeID, err)
+	}
+	if oerr := res.GetError(); oerr != nil {
+		return nil, fmt.Errorf("recovery: exporting node %s secrets: %s", nodeID, oerr.GetMessage())
+	}
+	bundle := res.GetExportSecretBundle()
+	if bundle == nil {
+		return nil, fmt.Errorf("recovery: node %s returned no sealed bundle", nodeID)
+	}
+	return bundle.GetSealedBundle(), nil
+}
+
+// reusableNodeBundles returns sealed bundles only when the previous complete
+// set used the same recovery public key. Reusing a bundle encrypted to an old
+// key would create a backup that verifies but cannot be recovered.
+func reusableNodeBundles(dir, publicKeySHA256 string) map[string][]byte {
+	out := map[string][]byte{}
+	manifest, err := VerifySet(dir)
+	if err != nil || manifest.RecoveryPublicKeySHA256 != publicKeySHA256 {
+		return out
+	}
+	for _, node := range manifest.Nodes {
+		if body, err := os.ReadFile(filepath.Join(dir, manifest.NodeBundles[node])); err == nil {
+			out[node] = body
+		}
+	}
+	return out
+}
+
+// installOnNode copies the completed set through Wardstone. Every artifact is
+// an atomic managed-file write and the manifest is deliberately last, so the
+// reserved restic run that follows can only select a fully transferred set.
+func (b *Builder) installOnNode(ctx context.Context, node, destination, source string, files []string) error {
+	if node == "" {
+		return fmt.Errorf("recovery: BackupPlan %q requires metadata.node", PlanName)
+	}
+	for _, name := range files {
+		body, err := os.ReadFile(filepath.Join(source, name))
+		if err != nil {
+			return fmt.Errorf("recovery: reading staged artifact %s: %w", name, err)
+		}
+		res, err := b.Agents.Apply(ctx, node, &wsv1.Operation{Op: &wsv1.Operation_WriteManagedFile{
+			WriteManagedFile: &wsv1.WriteManagedFile{Path: path.Join(destination, name), Content: body, Mode: 0o600},
+		}})
+		if err != nil {
+			return fmt.Errorf("recovery: staging artifact %s on node %s: %w", name, node, err)
+		}
+		if oerr := res.GetError(); oerr != nil {
+			return fmt.Errorf("recovery: staging artifact %s on node %s: %s", name, node, oerr.GetMessage())
+		}
+	}
+	return nil
 }
 
 func (b *Builder) now() time.Time {

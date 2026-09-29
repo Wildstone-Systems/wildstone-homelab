@@ -15,9 +15,15 @@ import (
 	"github.com/chickenrat17/wildstone-homelab/proto/recoveryseal"
 )
 
-type recoveryAgent struct{}
+type recoveryAgent struct{ failExports bool }
 
-func (recoveryAgent) Apply(_ context.Context, node string, op *wsv1.Operation) (*wsv1.OpResult, error) {
+func (a recoveryAgent) Apply(_ context.Context, node string, op *wsv1.Operation) (*wsv1.OpResult, error) {
+	if op.GetWriteManagedFile() != nil {
+		return &wsv1.OpResult{Result: &wsv1.OpResult_WriteManagedFile{WriteManagedFile: &wsv1.WriteManagedFileResult{}}}, nil
+	}
+	if a.failExports {
+		return nil, context.DeadlineExceeded
+	}
 	sealed, err := recoveryseal.Seal(op.GetExportSecretBundle().GetRecoveryPublicKey(), []byte("sealed-node-store:"+node))
 	if err != nil {
 		return nil, err
@@ -65,12 +71,37 @@ func recoveryFixture(t *testing.T, protocol uint32) (*Builder, resource.Resource
 		ApiVersion: resource.ApiVersion, Kind: resource.KindBackupPlan,
 		Metadata: resource.Metadata{Name: PlanName, Owner: "system", Node: "node-a"},
 		BackupPlan: &resource.BackupPlanSpec{
-			Paths: []string{dir}, RecoveryPublicKey: publicKey,
+			Paths: []string{resource.WholeSiteRecoveryPath}, RecoveryPublicKey: publicKey,
 			Offsite: &resource.BackupOffsite{Route: resource.BackupRouteOffsiteOnly},
 		},
 	}
 	return &Builder{State: state, DB: db, Vault: vault, Agents: recoveryAgent{}, Dir: dir,
 		Now: func() time.Time { return time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC) }}, plan, dir
+}
+
+func TestPrepareUsesDesiredNodesAndRetainsBundleWhileActiveNodeIsOffline(t *testing.T) {
+	builder, plan, dir := recoveryFixture(t, RequiredProtocolMin)
+	if err := builder.DB.RecordNodeSeen("retired-node", "test", RequiredProtocolMin); err != nil {
+		t.Fatal(err)
+	}
+	if err := builder.Prepare(context.Background(), plan); err != nil {
+		t.Fatal(err)
+	}
+	builder.Agents = recoveryAgent{failExports: true}
+	if err := builder.Prepare(context.Background(), plan); err != nil {
+		t.Fatalf("offline active node did not reuse its prior sealed bundle: %v", err)
+	}
+	body, err := os.ReadFile(filepath.Join(dir, "manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest Manifest
+	if err := json.Unmarshal(body, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if len(manifest.Nodes) != 1 || manifest.Nodes[0] != "node-a" {
+		t.Fatalf("historical nodes leaked into recovery set: %+v", manifest.Nodes)
+	}
 }
 
 func TestPrepareBuildsCompleteAtomicRecoverySet(t *testing.T) {

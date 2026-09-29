@@ -171,6 +171,8 @@ func addBackupAlerts(r *Report, db *runtimedb.DB, desired []resource.Resource, n
 			kind  runtimedb.BackupRunKind
 			alert string
 		}{
+			{runtimedb.BackupRunBackup, "failed-backup"},
+			{runtimedb.BackupRunOffsite, "failed-backup"},
 			{runtimedb.BackupRunCheck, "failed-check"},
 			{runtimedb.BackupRunOffsiteCheck, "failed-check"},
 			{runtimedb.BackupRunDrill, "failed-drill"},
