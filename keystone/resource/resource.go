@@ -18,6 +18,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/chickenrat17/wildstone-homelab/proto/recoveryseal"
 )
 
 // Kind is the closed set of resource kinds Keystone understands. Adding a
@@ -65,6 +67,11 @@ const (
 	// runtime state, because it changes without anybody declaring it.
 	KindCommitment Kind = "Commitment"
 )
+
+// WholeSiteRecoveryPath is the stable host path Wardstone may bind into the
+// reserved restic run. It deliberately lives under the default managed data
+// prefix, not Keystone's private DataDir (which Wardstone must refuse to mount).
+const WholeSiteRecoveryPath = "/srv/wildstone/recovery"
 
 // ApiVersion is the only supported apiVersion for S2 resources.
 const ApiVersion = "wildstone.dev/v1"
@@ -232,6 +239,11 @@ type ContainerSpec struct {
 	// ShmSize is the container's /dev/shm size in Docker's own size-string
 	// syntax (e.g. "1g"); empty leaves Docker's default (64m).
 	ShmSize string `yaml:"shmSize,omitempty" json:"shmSize,omitempty"`
+	// RunNetwork is execution-only metadata for Keystone-created one-shot
+	// containers. It is deliberately absent from YAML and spec hashing: a
+	// package cannot choose a Docker network, while the backup engine can
+	// attach a fixed pg_dump helper to Wildstone's managed network.
+	RunNetwork string `yaml:"-" json:"-"`
 }
 
 // ContainerResources bounds what one container may consume (protocol
@@ -838,9 +850,9 @@ var backupSchedules = map[string]bool{
 // mean "no keep flag of that class"; all-zero means no forget/prune pass
 // runs at all.
 type BackupRetention struct {
-	KeepDaily   int `yaml:"keepDaily,omitempty"`
-	KeepWeekly  int `yaml:"keepWeekly,omitempty"`
-	KeepMonthly int `yaml:"keepMonthly,omitempty"`
+	KeepDaily   int `yaml:"keepDaily,omitempty" json:"keepDaily,omitempty"`
+	KeepWeekly  int `yaml:"keepWeekly,omitempty" json:"keepWeekly,omitempty"`
+	KeepMonthly int `yaml:"keepMonthly,omitempty" json:"keepMonthly,omitempty"`
 }
 
 // BackupPlanSpec is the spec for kind BackupPlan (ADR-W011 A4): a standing
@@ -852,39 +864,62 @@ type BackupRetention struct {
 type BackupPlanSpec struct {
 	// Volumes are the source volume names, mounted read-only into the
 	// restic run container.
-	Volumes []string `yaml:"volumes,omitempty"`
+	Volumes []string `yaml:"volumes,omitempty" json:"volumes,omitempty"`
 	// Paths are source folders on the node, such as a movie library on a
 	// NAS share (ADR-W045 A4): absolute paths under the node's managed
 	// prefix, mounted read-only. A plan needs at least one volume or path.
-	Paths []string `yaml:"paths,omitempty"`
+	Paths []string `yaml:"paths,omitempty" json:"paths,omitempty"`
 	// Repository holds the local restic repository: a volume name, or an
 	// absolute path on the node — a folder on a NAS share keeps the local
 	// copy off the host's own disk (ADR-W045 A3.2).
-	Repository string `yaml:"repository,omitempty"`
+	Repository string `yaml:"repository,omitempty" json:"repository,omitempty"`
 	// Reserve is the free space the local repository's disk must keep,
 	// as a size ("50GiB") or a share of the disk ("15%"). Empty uses the
 	// larger of 10% and 20 GiB; it cannot be zero (ADR-W045 A3.1).
-	Reserve string `yaml:"reserve,omitempty"`
+	Reserve string `yaml:"reserve,omitempty" json:"reserve,omitempty"`
 	// PasswordSecret is a reference of the form secret/<name> to the
 	// repository password (ADR-W005 A2) — never a literal value. Only
 	// Wardstone materializes it (E8).
-	PasswordSecret string `yaml:"passwordSecret,omitempty"`
+	PasswordSecret string `yaml:"passwordSecret,omitempty" json:"passwordSecret,omitempty"`
 	// Schedule is one of backupSchedules: daily, weekly, monthly.
-	Schedule  string          `yaml:"schedule,omitempty"`
-	Retention BackupRetention `yaml:"retention,omitempty"`
+	Schedule  string          `yaml:"schedule,omitempty" json:"schedule,omitempty"`
+	Retention BackupRetention `yaml:"retention,omitempty" json:"retention,omitempty"`
 	// Exclude are restic exclude patterns (ADR-W045 A4). A pattern with no
 	// leading "/" matches anywhere ("*.nfo", "**/Samples", "cache"); an
 	// absolute one must lie inside one of Paths and excludes that folder.
-	Exclude []string `yaml:"exclude,omitempty"`
+	Exclude []string `yaml:"exclude,omitempty" json:"exclude,omitempty"`
 	// Class says how much the data matters: critical (irreplaceable),
 	// important (painful to rebuild) or rebuildable. It groups plans for
 	// the owner choosing what goes off-site; it changes no behaviour.
-	Class string `yaml:"class,omitempty"`
+	Class string `yaml:"class,omitempty" json:"class,omitempty"`
+	// PreBackup is a closed set of consistent database exports performed
+	// before restic reads the plan sources. Hooks name declared resources;
+	// they cannot supply an image, command, environment variable or shell.
+	PreBackup []BackupHook `yaml:"preBackup,omitempty" json:"preBackup,omitempty"`
 	// Offsite, when set, also sends this plan's backups to a BackupTarget
 	// (ADR-W045 A3). With route offsite-only, Repository, PasswordSecret,
 	// Schedule and Retention are left empty: the off-site block carries
 	// them, and nothing is stored locally.
-	Offsite *BackupOffsite `yaml:"offsite,omitempty"`
+	Offsite *BackupOffsite `yaml:"offsite,omitempty" json:"offsite,omitempty"`
+	// RecoveryPublicKey turns the reserved plan named "wildstone" into the
+	// whole-site recovery set (ADR-W045 A5). It is the printable public half
+	// only; the private half must never be stored on a Wildstone host.
+	RecoveryPublicKey string `yaml:"recoveryPublicKey,omitempty" json:"recoveryPublicKey,omitempty"`
+}
+
+const (
+	BackupHookPostgres = "pg_dump"
+	BackupHookSQLite   = "sqlite"
+)
+
+// BackupHook describes one engine-built database export. Database is a
+// PostgreSQL database name for pg_dump and an absolute path inside Container
+// for sqlite. OutputVolume must also be one of the plan's source volumes.
+type BackupHook struct {
+	Kind         string `yaml:"kind" json:"kind"`
+	Container    string `yaml:"container" json:"container"`
+	Database     string `yaml:"database" json:"database"`
+	OutputVolume string `yaml:"outputVolume" json:"outputVolume"`
 }
 
 // backupClasses is the closed set of BackupPlanSpec.Class values.
@@ -913,15 +948,15 @@ var backupRoutes = map[string]bool{
 // opens both copies.
 type BackupOffsite struct {
 	// Target names a BackupTarget on the same node.
-	Target string `yaml:"target"`
+	Target string `yaml:"target" json:"target"`
 	// Route is one of backupRoutes.
-	Route string `yaml:"route"`
+	Route string `yaml:"route" json:"route"`
 	// PasswordSecret is the off-site repository password, a secret/<name>
 	// reference that must differ from the plan's local one.
-	PasswordSecret string `yaml:"passwordSecret"`
+	PasswordSecret string `yaml:"passwordSecret" json:"passwordSecret"`
 	// Schedule is one of daily, weekly, monthly.
-	Schedule  string          `yaml:"schedule"`
-	Retention BackupRetention `yaml:"retention,omitempty"`
+	Schedule  string          `yaml:"schedule" json:"schedule"`
+	Retention BackupRetention `yaml:"retention,omitempty" json:"retention,omitempty"`
 }
 
 // backupTargetTypes is the closed set of BackupTargetSpec.Type values.
@@ -954,32 +989,38 @@ var regionRegexp = regexp.MustCompile(`^[a-z0-9-]{1,32}$`)
 // that reason: the references resolve in that node's secret store.
 type BackupTargetSpec struct {
 	// Type is one of backupTargetTypes: "s3".
-	Type string `yaml:"type"`
+	Type string `yaml:"type" json:"type"`
 	// Endpoint is the provider's S3 API base URL, e.g.
 	// https://s3.us-east-1.amazonaws.com or
 	// https://<account-id>.r2.cloudflarestorage.com. Scheme and host
 	// (and optional port) only: no path, query or credentials.
-	Endpoint string `yaml:"endpoint"`
+	Endpoint string `yaml:"endpoint" json:"endpoint"`
 	// Bucket is the bucket name; it must already exist.
-	Bucket string `yaml:"bucket"`
+	Bucket string `yaml:"bucket" json:"bucket"`
 	// Prefix is an optional folder inside the bucket, so one bucket can
 	// hold several installs: "home" or "wildstone/home".
-	Prefix string `yaml:"prefix,omitempty"`
+	Prefix string `yaml:"prefix,omitempty" json:"prefix,omitempty"`
 	// Region is the provider region; optional for providers that ignore
 	// it. R2 uses "auto".
-	Region string `yaml:"region,omitempty"`
+	Region string `yaml:"region,omitempty" json:"region,omitempty"`
 	// PathStyle selects path-style bucket addressing
 	// (https://host/bucket) instead of virtual-host style
 	// (https://bucket.host). MinIO and most self-hosted stores need it.
-	PathStyle bool `yaml:"pathStyle,omitempty"`
+	PathStyle bool `yaml:"pathStyle,omitempty" json:"pathStyle,omitempty"`
 	// InsecureHTTP allows an http:// endpoint. Only for a store on the
 	// home network (a LAN MinIO); backups stay encrypted by restic, but
 	// requests and metadata cross the network in the clear.
-	InsecureHTTP bool `yaml:"insecureHTTP,omitempty"`
+	InsecureHTTP bool `yaml:"insecureHTTP,omitempty" json:"insecureHTTP,omitempty"`
+	// AppendOnly says the node credential cannot delete or overwrite
+	// repository history (normally enforced by bucket Object Lock and a
+	// least-privilege key). Wildstone then uses restic without repository
+	// locks and leaves forget/prune to a separate, protected maintenance
+	// credential. The provider policy is configured outside Wildstone.
+	AppendOnly bool `yaml:"appendOnly,omitempty" json:"appendOnly,omitempty"`
 	// AccessKeySecret and SecretKeySecret reference the access key ID and
 	// secret access key as secret/<name>, never literal values.
-	AccessKeySecret string `yaml:"accessKeySecret"`
-	SecretKeySecret string `yaml:"secretKeySecret"`
+	AccessKeySecret string `yaml:"accessKeySecret" json:"accessKeySecret"`
+	SecretKeySecret string `yaml:"secretKeySecret" json:"secretKeySecret"`
 }
 
 // networkMountTypes is the closed set of NetworkMountSpec.Type values.
@@ -1776,12 +1817,67 @@ func validateBackupPlan(r *Resource) error {
 	if p == nil {
 		return bad("spec", "backup plan spec missing")
 	}
+	if r.Metadata.Name == "wildstone" {
+		if r.Metadata.Owner != "system" {
+			return bad("metadata.owner", "must be system for the reserved whole-site recovery plan")
+		}
+		if p.RecoveryPublicKey == "" {
+			return bad("spec.recoveryPublicKey", "is required for the reserved whole-site recovery plan")
+		}
+		if err := recoveryseal.ValidatePublicKey(p.RecoveryPublicKey); err != nil {
+			return bad("spec.recoveryPublicKey", "must be a valid Wildstone recovery public key")
+		}
+		if p.Offsite == nil {
+			return bad("spec.offsite", "is required for the reserved whole-site recovery plan")
+		}
+		if p.Offsite.Route != BackupRouteOffsiteOnly {
+			return bad("spec.offsite.route", "must be offsite-only for the reserved whole-site recovery plan")
+		}
+		if len(p.Volumes) != 0 || len(p.Paths) != 1 {
+			return bad("spec.paths", "must contain exactly the recovery staging path and no volumes")
+		}
+		if p.Paths[0] != WholeSiteRecoveryPath {
+			return bad("spec.paths[0]", "must be "+WholeSiteRecoveryPath+" for the reserved whole-site recovery plan")
+		}
+	} else if p.RecoveryPublicKey != "" {
+		return bad("spec.recoveryPublicKey", "is only valid on the reserved BackupPlan named wildstone")
+	}
 	if len(p.Volumes) == 0 && len(p.Paths) == 0 {
 		return bad("spec.volumes", "must name at least one source volume or path")
 	}
 	for i, v := range p.Volumes {
 		if v == "" {
 			return bad(fmt.Sprintf("spec.volumes[%d]", i), "must not be empty")
+		}
+	}
+	if len(p.PreBackup) > 8 {
+		return bad("spec.preBackup", "must contain at most 8 hooks")
+	}
+	volumeSet := make(map[string]bool, len(p.Volumes))
+	for _, v := range p.Volumes {
+		volumeSet[v] = true
+	}
+	hookContainers := map[string]bool{}
+	for i, hook := range p.PreBackup {
+		field := fmt.Sprintf("spec.preBackup[%d]", i)
+		if hook.Kind != BackupHookPostgres && hook.Kind != BackupHookSQLite {
+			return bad(field+".kind", "must be pg_dump or sqlite")
+		}
+		if !nameRegexp.MatchString(hook.Container) {
+			return bad(field+".container", "must name a container")
+		}
+		if hookContainers[hook.Container] {
+			return bad(field+".container", "may have only one hook per container")
+		}
+		hookContainers[hook.Container] = true
+		if !nameRegexp.MatchString(hook.OutputVolume) || !volumeSet[hook.OutputVolume] {
+			return bad(field+".outputVolume", "must name a volume covered by this BackupPlan")
+		}
+		if hook.Database == "" || len(hook.Database) > 512 || strings.ContainsFunc(hook.Database, func(c rune) bool { return c < 0x20 || c == 0x7f }) {
+			return bad(field+".database", "must be non-empty, at most 512 characters, and contain no control characters")
+		}
+		if hook.Kind == BackupHookSQLite && (!strings.HasPrefix(hook.Database, "/") || path.Clean(hook.Database) != hook.Database || hook.Database == "/") {
+			return bad(field+".database", "must be a clean absolute path inside the container for a sqlite hook")
 		}
 	}
 	seen := map[string]bool{}

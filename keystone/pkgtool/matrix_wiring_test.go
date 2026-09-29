@@ -191,10 +191,17 @@ func TestMatrixPostgresSocketAndBackupAreComplete(t *testing.T) {
 		t.Error("PostgreSQL 18 live data is not persisted from /var/lib/postgresql")
 	}
 	backup := matrixResource(t, resource.KindBackupPlan, "matrix").BackupPlan
-	for _, volume := range []string{"matrix-data", "matrix-pgdata"} {
+	for _, volume := range []string{"matrix-data", "matrix-db-backup"} {
 		if !slices.Contains(backup.Volumes, volume) {
 			t.Errorf("Matrix backup omits durable volume %q", volume)
 		}
+	}
+	if slices.Contains(backup.Volumes, "matrix-pgdata") {
+		t.Error("Matrix backup copies live PostgreSQL data instead of its consistent dump")
+	}
+	if len(backup.PreBackup) != 1 || backup.PreBackup[0].Kind != resource.BackupHookPostgres ||
+		backup.PreBackup[0].Container != "matrix-postgres" || backup.PreBackup[0].OutputVolume != "matrix-db-backup" {
+		t.Errorf("Matrix consistent database hook = %+v", backup.PreBackup)
 	}
 	if backup.Schedule != "daily" {
 		t.Errorf("Matrix backup schedule is %q, want daily", backup.Schedule)

@@ -55,10 +55,32 @@ the test that pins it.
 ### Secrets
 
 - Write-only path (ADR-W012): values transit once, are stored
-  encrypted per-node, and the protocol has **no read-back arm** — the
-  exfiltration path does not exist to be exploited. Keystone logs,
-  API responses, and Butler transcripts are all behind the shared
-  redactor.
+  encrypted per-node, and the protocol has **no individual read-back arm**.
+  Keystone logs, API responses, and Butler transcripts are all behind the
+  shared redactor.
+- Whole-site recovery adds one closed export operation, not a reveal path.
+  Wardstone opens its store only in-process and encrypts the complete bundle
+  to an offline X25519 recovery public key; Keystone, the model provider and
+  the object-store provider receive ciphertext only. Import is accepted only
+  by an empty fresh-node store and immediately re-seals values under its new
+  node-local key. Recovery keys and bundle bytes are excluded from Wardstone's
+  audit allowlist.
+- Household recovery seals the vault key, not a second plaintext copy of each
+  value. The SQLite snapshot retains ciphertext, grants and audit history; the
+  offline private key restores the vault key before the database is opened.
+- The recovery private key is the new high-value offline asset. Compromise of
+  that key plus the bucket and repository passwords exposes the backed-up
+  secrets. It is never stored in the Statefile or on a running Wildstone host;
+  the runbook requires a password manager and paper/offline copy.
+- During an explicit node import the private key transits the authenticated
+  Keystone-to-Wardstone operation. A control plane compromised at that exact
+  recovery moment can copy it, so recovery must happen on a freshly rebuilt,
+  trusted host and the key must be removed immediately afterward.
+- A malicious or compromised running Keystone can request fresh sealed bundles
+  but cannot decrypt them without the offline private key. It can cause denial
+  of service or upload stale/invalid sets; the manifest hashes detect damaged
+  artifacts, while authenticity still relies on control of the restic
+  repository and its password.
 
 ### Household publishers and reply tokens (ADR-W024)
 

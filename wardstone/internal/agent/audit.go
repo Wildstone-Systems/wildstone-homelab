@@ -84,6 +84,13 @@ func auditFields(op *wsv1.Operation) (arm string, fields []slog.Attr) {
 		return "PutSecret", []slog.Attr{slog.String("name", o.PutSecret.GetName())}
 	case *wsv1.Operation_ListSecrets:
 		return "ListSecrets", nil
+	case *wsv1.Operation_ExportSecretBundle:
+		// The public key is not confidential, but omitting it keeps recovery
+		// material out of routine logs and makes this arm safe by construction.
+		return "ExportSecretBundle", nil
+	case *wsv1.Operation_ImportSecretBundle:
+		// Never log the private key or sealed bundle.
+		return "ImportSecretBundle", nil
 	case *wsv1.Operation_SeedVolumeFile:
 		// Volume and path only. A seed's content is package-rendered
 		// config that may carry a reference to something sensitive, and

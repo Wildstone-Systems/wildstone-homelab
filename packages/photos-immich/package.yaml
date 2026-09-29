@@ -17,7 +17,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: photos-immich
-  version: 1.0.2
+  version: 1.0.3
   capability: photos
   profile: immich
 requires:
@@ -77,6 +77,11 @@ templates:
     kind: Volume
     metadata: { name: immich-pgdata, node: "{{ .Params.node }}" }
     spec: { name: immich-pgdata }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: immich-db-backup, node: "{{ .Params.node }}" }
+    spec: { name: immich-db-backup }
   - |
     apiVersion: wildstone.dev/v1
     kind: Volume
@@ -227,14 +232,17 @@ templates:
       scopes: [openid, profile, email, groups]
       authPolicy: two_factor
       secretRef: "{{ .Resolved.OidcSecretRef }}"
-  # ---- Backup hook (ADR-W013 A4): uploads + DB, daily. redis is a
-  # rebuildable cache and deliberately not covered.
+  # ---- Backup hook (ADR-W013 A4): uploads + a transactionally consistent
+  # pg_dump, daily. The live pgdata directory and rebuildable Redis cache are
+  # deliberately not copied.
   - |
     apiVersion: wildstone.dev/v1
     kind: BackupPlan
     metadata: { name: photos, node: "{{ .Params.node }}" }
     spec:
-      volumes: [immich-upload, immich-pgdata]
+      volumes: [immich-upload, immich-db-backup]
+      preBackup:
+        - { kind: pg_dump, container: immich-postgres, database: immich, outputVolume: immich-db-backup }
       repository: photos-backup-repo
       passwordSecret: secret/restic-photos
       schedule: daily

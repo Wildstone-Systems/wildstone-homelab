@@ -1249,7 +1249,9 @@ check("a backup card offers both actions", backups.includes("Run now") && backup
 check("a backup card shows its run history", text(backups).includes("Last 2 runs") && text(backups).includes("Last run"), text(backups).slice(0, 400));
 check("a two-run history is actually drawn", backups.includes("last 2 recorded runs"), "");
 const noBackups = renderToString(h(BackupsView, { runs: [], onRan: () => {} }));
-check("no runs explains when a plan appears", noBackups.includes("after its first run"));
+check("no plans says configuration is empty", noBackups.includes("No BackupPlans are configured"));
+const neverRun = renderToString(h(BackupsView, { runs: [], plans: [{ name: "photos", node: "n1", owner: "system", spec: { volumes: ["photos"], repository: "repo", passwordSecret: "secret/restic", schedule: "daily" } }], onRan: () => {} }));
+check("a configured plan appears before its first run", neverRun.includes("photos") && neverRun.includes("never run"));
 
 // ------------------------------------------------------- Commitments
 // The distinction this screen exists to hold: a commitment nobody can

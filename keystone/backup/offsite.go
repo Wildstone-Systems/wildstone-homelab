@@ -28,6 +28,51 @@ import (
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 )
 
+// defaultS3ProbeImage is multi-architecture and digest-pinned like every
+// other image Keystone asks Wardstone to run.
+const defaultS3ProbeImage = "public.ecr.aws/aws-cli/aws-cli:2.31.21@sha256:40033dc921634b1073094712ea8237869bc857cd7ddc2571896ec9b14ef97ae8"
+
+// TestTarget checks credentials, endpoint reachability and bucket access
+// without writing an object. The target may be tested before any plan uses
+// it, which is why this uses S3 HeadBucket rather than a restic repository.
+func (e *Engine) TestTarget(ctx context.Context, name string) error {
+	desired, err := e.State.Load()
+	if err != nil {
+		return fmt.Errorf("loading desired state: %w", err)
+	}
+	var target resource.Resource
+	for _, r := range desired {
+		if r.Kind == resource.KindBackupTarget && r.Metadata.Name == name {
+			target = r
+			break
+		}
+	}
+	if target.BackupTarget == nil {
+		return fmt.Errorf("no BackupTarget %q in the Statefile", name)
+	}
+	t := target.BackupTarget
+	image := e.S3ProbeImage
+	if image == "" {
+		image = defaultS3ProbeImage
+	}
+	env := map[string]string{
+		"AWS_ACCESS_KEY_ID":     t.AccessKeySecret,
+		"AWS_SECRET_ACCESS_KEY": t.SecretKeySecret,
+	}
+	if t.Region != "" {
+		env["AWS_DEFAULT_REGION"] = t.Region
+	}
+	command := []string{"--no-cli-pager", "--endpoint-url", t.Endpoint, "s3api", "head-bucket", "--bucket", t.Bucket}
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	if err := e.Run.RunContainer(ctx, target.Metadata.Node, "test-target-"+name, resource.ContainerSpec{
+		Image: image, Env: env, Command: command, Restart: "no",
+	}); err != nil {
+		return fmt.Errorf("read-only S3 bucket check: %w", err)
+	}
+	return nil
+}
+
 // hasLocal reports whether a plan keeps a local repository: every plan
 // except an offsite-only one.
 func hasLocal(p *resource.BackupPlanSpec) bool {
@@ -92,6 +137,14 @@ func (e *Engine) offsiteSpec(plan *resource.BackupPlanSpec, t *resource.BackupTa
 		mounts = append(mounts, resource.Mount{Source: v, Target: sourceTarget(v), ReadOnly: true})
 	}
 	cmd := append([]string{}, command...)
+	// An append-only credential cannot remove restic's temporary lock
+	// object. Runs are serialized per plan, so disabling repository locks
+	// here is safe and avoids accumulating a stale lock that would stop the
+	// next backup. Destructive maintenance is deliberately not run with
+	// this credential (see runOffsite below).
+	if t.AppendOnly {
+		cmd = append(cmd, "--no-lock")
+	}
 	if t.PathStyle {
 		cmd = append(cmd, "-o", "s3.bucket-lookup=path")
 	}
@@ -125,6 +178,14 @@ func (e *Engine) runOffsite(ctx context.Context, r resource.Resource, desired []
 	return e.withProvenance(ctx, r, runtimedb.BackupRunOffsite,
 		fmt.Sprintf("off-site run: %s (%s -> BackupTarget %s)", name, route, o.Target),
 		func(ctx context.Context) error {
+			if name == "wildstone" {
+				if e.PrepareRecovery == nil {
+					return fmt.Errorf("whole-site recovery builder is not configured")
+				}
+				if err := e.PrepareRecovery(ctx, r); err != nil {
+					return fmt.Errorf("building whole-site recovery set: %w", err)
+				}
+			}
 			t, err := findTarget(desired, r)
 			if err != nil {
 				return err
@@ -133,11 +194,19 @@ func (e *Engine) runOffsite(ctx context.Context, r resource.Resource, desired []
 			// A copy reads only the local repository; a direct or
 			// offsite-only backup reads only the sources.
 			copying := local && !direct
+			ctx, cancel := context.WithTimeout(ctx, e.offsiteTimeout())
+			defer cancel()
 			if err := e.checkMounts(ctx, r, desired, !copying, copying); err != nil {
 				return err
 			}
-			ctx, cancel := context.WithTimeout(ctx, e.offsiteTimeout())
-			defer cancel()
+			if !local {
+				e.sampleSources(ctx, r)
+			}
+			if !copying {
+				if err := e.runPreBackup(ctx, r, desired); err != nil {
+					return err
+				}
+			}
 			node := r.Metadata.Node
 
 			probe := e.offsiteSpec(spec, t, name, []string{"cat", "config"}, nil, false)
@@ -175,6 +244,14 @@ func (e *Engine) runOffsite(ctx context.Context, r resource.Resource, desired []
 				return describe(pass, err)
 			}
 
+			// forget and prune require delete access. Running them with an
+			// append-only node key would either fail against Object Lock or,
+			// if the key were accidentally over-privileged, defeat the reason
+			// for append-only mode. Maintenance uses a separate offline key.
+			if t.AppendOnly {
+				e.log().Info("backup: off-site retention is append-only; skipping forget/prune", "plan", name, "target", o.Target)
+				return nil
+			}
 			forgetArgs := retentionArgs(o.Retention)
 			if forgetArgs == nil {
 				return nil
@@ -182,6 +259,64 @@ func (e *Engine) runOffsite(ctx context.Context, r resource.Resource, desired []
 			forget := e.offsiteSpec(spec, t, name, append([]string{"forget", "--prune"}, forgetArgs...), nil, false)
 			if err := e.Run.RunContainer(ctx, node, "offsite-"+name+"-forget", forget); err != nil {
 				return describe("off-site forget pass", err)
+			}
+			return nil
+		})
+}
+
+// runOffsiteCheck verifies repository structure and a bounded rotating
+// subset of pack data. One twentieth caps routine download cost while
+// repeated weekly checks eventually read the whole repository.
+func (e *Engine) runOffsiteCheck(ctx context.Context, r resource.Resource, desired []resource.Resource) error {
+	name := r.Metadata.Name
+	subset := e.offsiteCheckSubset()
+	return e.withProvenance(ctx, r, runtimedb.BackupRunOffsiteCheck,
+		fmt.Sprintf("repository integrity check: %s (off-site, data subset %s)", name, subset),
+		func(ctx context.Context) error {
+			t, err := findTarget(desired, r)
+			if err != nil {
+				return err
+			}
+			ctx, cancel := context.WithTimeout(ctx, e.offsiteTimeout())
+			defer cancel()
+			cs := e.offsiteSpec(r.BackupPlan, t, name, []string{"check", "--read-data-subset=" + subset}, nil, false)
+			if err := e.Run.RunContainer(ctx, r.Metadata.Node, "check-offsite-"+name, cs); err != nil {
+				return describe("off-site repository integrity check", err)
+			}
+			return nil
+		})
+}
+
+// offsiteCheckSubset rotates through twenty stable restic partitions. The
+// check reads at most about 5% each week and covers every partition over a
+// twenty-week cycle instead of repeatedly sampling the same packs.
+func (e *Engine) offsiteCheckSubset() string {
+	week := e.now().UTC().Unix() / int64((7 * 24 * time.Hour).Seconds())
+	part := week%20 + 1
+	if part < 1 {
+		part += 20
+	}
+	return fmt.Sprintf("%d/20", part)
+}
+
+// runOffsiteDrill proves the S3 copy can restore into a disposable volume.
+// It is scheduled independently from the local drill and from an operator's
+// off-site restore, so neither can accidentally reset the other's clock.
+func (e *Engine) runOffsiteDrill(ctx context.Context, r resource.Resource, desired []resource.Resource) error {
+	name := r.Metadata.Name
+	return e.withProvenance(ctx, r, runtimedb.BackupRunOffsiteDrill,
+		fmt.Sprintf("off-site restore drill: %s (latest -> volume %s-offsite-drill)", name, name),
+		func(ctx context.Context) error {
+			t, err := findTarget(desired, r)
+			if err != nil {
+				return err
+			}
+			ctx, cancel := context.WithTimeout(ctx, e.offsiteTimeout())
+			defer cancel()
+			cs := e.offsiteSpec(r.BackupPlan, t, name, []string{"restore", "latest", "--target", "/restore"}, nil, false)
+			cs.Mounts = append(cs.Mounts, resource.Mount{Source: name + "-offsite-drill", Target: "/restore"})
+			if err := e.Run.RunContainer(ctx, r.Metadata.Node, "drill-offsite-"+name, cs); err != nil {
+				return describe("off-site restore drill", err)
 			}
 			return nil
 		})

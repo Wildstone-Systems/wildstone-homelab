@@ -98,7 +98,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: mail-roundcube
-  version: 1.0.4
+  version: 1.0.5
   capability: mail
   profile: roundcube
 requires:
@@ -200,6 +200,11 @@ templates:
     kind: Volume
     metadata: { name: davis-data, node: "{{ .Params.node }}" }
     spec: { name: davis-data }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: mail-db-backup, node: "{{ .Params.node }}" }
+    spec: { name: mail-db-backup }
   - |
     apiVersion: wildstone.dev/v1
     kind: Volume
@@ -328,7 +333,8 @@ templates:
       upstream: "container/davis:9000"
       auth: none
       classification: family_private
-  # ---- Backups (ADR-W013 A4): the two sqlite databases, daily. Not
+  # ---- Backups (ADR-W013 A4): consistent exports of both sqlite databases,
+  # daily. The live database files are excluded. Not
   # roundcube-www or roundcube-config (the image rebuilds one and reads
   # the other; keeping des_key out of the snapshot that holds sessions
   # is the point — see the header) and not the mail itself, which lives
@@ -338,7 +344,11 @@ templates:
     kind: BackupPlan
     metadata: { name: mail, node: "{{ .Params.node }}" }
     spec:
-      volumes: [roundcube-db, davis-data]
+      volumes: [roundcube-db, davis-data, mail-db-backup]
+      exclude: [sqlite.db, sqlite.db-wal, sqlite.db-shm, davis.db, davis.db-wal, davis.db-shm]
+      preBackup:
+        - { kind: sqlite, container: roundcube, database: /var/roundcube/db/sqlite.db, outputVolume: mail-db-backup }
+        - { kind: sqlite, container: davis, database: /data/davis.db, outputVolume: mail-db-backup }
       repository: mail-backup-repo
       passwordSecret: secret/restic-mail
       schedule: daily

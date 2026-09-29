@@ -52,7 +52,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: matrix-synapse
-  version: 1.0.10
+  version: 1.0.11
   capability: matrix-homeserver
   profile: synapse
 requires:
@@ -97,6 +97,11 @@ templates:
     kind: Volume
     metadata: { name: matrix-pgdata, node: "{{ .Params.node }}" }
     spec: { name: matrix-pgdata }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: matrix-db-backup, node: "{{ .Params.node }}" }
+    spec: { name: matrix-db-backup }
   - |
     apiVersion: wildstone.dev/v1
     kind: Volume
@@ -413,7 +418,9 @@ templates:
     kind: BackupPlan
     metadata: { name: matrix, node: "{{ .Params.node }}" }
     spec:
-      volumes: [matrix-data, matrix-pgdata]
+      volumes: [matrix-data, matrix-db-backup]
+      preBackup:
+        - { kind: pg_dump, container: matrix-postgres, database: synapse, outputVolume: matrix-db-backup }
       repository: matrix-backup-repo
       passwordSecret: secret/restic-matrix
       schedule: daily

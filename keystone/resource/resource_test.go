@@ -567,6 +567,44 @@ func TestBackupPlanValidateAndRoundTrip(t *testing.T) {
 	}
 }
 
+func TestBackupPlanPreBackupValidationAndRoundTrip(t *testing.T) {
+	r := Resource{
+		ApiVersion: ApiVersion, Kind: KindBackupPlan,
+		Metadata: Metadata{Name: "photos", Owner: "capability/photos", Node: "n1"},
+		BackupPlan: &BackupPlanSpec{
+			Volumes: []string{"uploads", "db-export"}, Repository: "repo",
+			PasswordSecret: "secret/restic", Schedule: "daily",
+			PreBackup: []BackupHook{{Kind: BackupHookPostgres, Container: "immich-postgres", Database: "immich", OutputVolume: "db-export"}},
+		},
+	}
+	if err := r.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	body, err := Marshal(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := Unmarshal(body)
+	if err != nil || len(got.BackupPlan.PreBackup) != 1 || got.BackupPlan.PreBackup[0] != r.BackupPlan.PreBackup[0] {
+		t.Fatalf("round trip = %+v, %v", got.BackupPlan, err)
+	}
+
+	for name, mutate := range map[string]func(*BackupHook){
+		"unknown kind":       func(h *BackupHook) { h.Kind = "command" },
+		"uncovered output":   func(h *BackupHook) { h.OutputVolume = "not-backed-up" },
+		"relative sqlite db": func(h *BackupHook) { h.Kind, h.Database = BackupHookSQLite, "db.sqlite3" },
+	} {
+		bad := r
+		spec := *r.BackupPlan
+		spec.PreBackup = append([]BackupHook(nil), r.BackupPlan.PreBackup...)
+		bad.BackupPlan = &spec
+		mutate(&bad.BackupPlan.PreBackup[0])
+		if err := bad.Validate(); err == nil {
+			t.Errorf("%s was accepted", name)
+		}
+	}
+}
+
 // A public client is PKCE and nothing else: no secret, no secret-based
 // token auth method, and PKCE required — each refused on its own.
 func TestValidateOidcPublicClient(t *testing.T) {

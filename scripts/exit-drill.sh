@@ -88,7 +88,12 @@ start_keystone() { # start_keystone <data-dir> <join-token> <log>
 }
 
 start_wardstone() { # start_wardstone <data-dir> <join-token> <log>
-    "$BIN/wardstoned" -node-id "$NODE" -keystone 127.0.0.1:9440 \
+    # Wardstone is the host-privileged component: this drill exercises its
+    # real /etc/wildstone and Docker operations, so run it with the same
+    # authority the installed system service has. The runner intentionally
+    # owns the log redirection so a failed drill can upload it.
+    # shellcheck disable=SC2024
+    sudo -n "$BIN/wardstoned" -node-id "$NODE" -keystone 127.0.0.1:9440 \
         -data-dir "$1" -join-token "$2" >"$3" 2>&1 &
     WARDSTONE_PID=$!
 }
@@ -195,7 +200,8 @@ kill "$KEYSTONE_PID" "$WARDSTONE_PID"; wait "$KEYSTONE_PID" "$WARDSTONE_PID" 2>/
 KEYSTONE_PID=""; WARDSTONE_PID=""
 docker ps -aq --filter "label=dev.wildstone.owner" | xargs -r docker rm -f >/dev/null 2>&1 || true
 docker volume rm drill-data >/dev/null
-rm -rf "$K1" "$W1"
+rm -rf "$K1"
+sudo rm -rf "$W1"
 log "host is gone: data dirs deleted, data volume destroyed"
 
 # ---------------------------------------------------------------- phase 3

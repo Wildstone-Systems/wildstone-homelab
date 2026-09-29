@@ -603,3 +603,40 @@ func TestBackupVolumesDeclared(t *testing.T) {
 		}
 	}
 }
+
+func TestBackupHookContainerDeclaredInSameOwnershipBoundary(t *testing.T) {
+	e := NewEngine(nil)
+	vol := func(name string) resource.Resource {
+		return resource.Resource{ApiVersion: resource.ApiVersion, Kind: resource.KindVolume,
+			Metadata: resource.Metadata{Name: name, Owner: "capability/photos", Node: "n1"}, Volume: &resource.VolumeSpec{Name: name}}
+	}
+	plan := resource.Resource{ApiVersion: resource.ApiVersion, Kind: resource.KindBackupPlan,
+		Metadata: resource.Metadata{Name: "photos", Owner: "capability/photos", Node: "n1"},
+		BackupPlan: &resource.BackupPlanSpec{
+			Volumes: []string{"db-export"}, Repository: "repo", PasswordSecret: "secret/restic", Schedule: "daily",
+			PreBackup: []resource.BackupHook{{Kind: resource.BackupHookPostgres, Container: "postgres", Database: "photos", OutputVolume: "db-export"}},
+		}}
+	postgres := container("postgres", map[string]string{"POSTGRES_USER": "photos"})
+	postgres.Metadata.Owner = "capability/photos"
+	count := func(rs ...resource.Resource) int {
+		violations, _ := e.Validate(Change{Proposed: rs})
+		n := 0
+		for _, violation := range violations {
+			if violation.Rule == RuleBackupHookDeclared {
+				n++
+			}
+		}
+		return n
+	}
+	base := []resource.Resource{plan, vol("db-export"), vol("repo")}
+	if got := count(append(base, postgres)...); got != 0 {
+		t.Fatalf("valid hook produced %d violations", got)
+	}
+	if got := count(base...); got != 1 {
+		t.Fatalf("missing container produced %d violations, want 1", got)
+	}
+	postgres.Metadata.Owner = "capability/other"
+	if got := count(append(base, postgres)...); got != 1 {
+		t.Fatalf("foreign container produced %d violations, want 1", got)
+	}
+}

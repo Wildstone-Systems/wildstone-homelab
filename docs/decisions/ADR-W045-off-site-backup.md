@@ -237,11 +237,18 @@ copy is cryptographically gone — by design.
 - **Prerequisite:** a run whose restic exit code is non-zero is a failed
   run. The protocol already reports exit codes (`InspectContainerResult`,
   minor 11); the engine now reads them (#413).
-- `restic check` runs on both repos on a schedule; off-site uses
-  `--read-data-subset` to bound download cost.
-- There is a monthly off-site restore drill into a scratch volume.
+- `restic check` runs weekly on both repos. The local check reads the
+  complete repository. The off-site check uses a rotating
+  `--read-data-subset=N/20`: each run downloads at most about 5%, and a
+  twenty-week cycle covers every stable partition instead of repeatedly
+  sampling the same packs.
+- There is a monthly off-site restore drill into a separate
+  `<plan>-offsite-drill` scratch volume. Its ledger clock is independent
+  from the local drill and from an operator-requested restore.
 - The morning report flags a stale off-site copy, a failed check, and a
-  sudden shrink in source size (possible ransomware or accidental delete).
+  failed drill. Source-reading runs also record the total protected source
+  size; a drop of more than 25% between consecutive samples is flagged as a
+  sudden shrink (possible ransomware or accidental delete).
 
 ### A7. Risk and policy
 

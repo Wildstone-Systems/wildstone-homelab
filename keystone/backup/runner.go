@@ -208,6 +208,6 @@ func ensureOp(name string, spec resource.ContainerSpec) *wsv1.Operation {
 	}
 	return &wsv1.Operation{Op: &wsv1.Operation_EnsureContainer{EnsureContainer: &wsv1.EnsureContainer{
 		Name: name, Image: spec.Image, Env: spec.Env, Mounts: mounts,
-		RestartPolicy: spec.Restart, Command: spec.Command,
+		RestartPolicy: spec.Restart, Command: spec.Command, Network: spec.RunNetwork,
 	}}}
 }

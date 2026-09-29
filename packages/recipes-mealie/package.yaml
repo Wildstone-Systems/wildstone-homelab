@@ -17,7 +17,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: recipes-mealie
-  version: 1.0.2
+  version: 1.0.3
   capability: recipes
   profile: mealie
 requires:
@@ -42,6 +42,11 @@ templates:
     kind: Volume
     metadata: { name: mealie-data, node: "{{ .Params.node }}" }
     spec: { name: mealie-data }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: mealie-db-backup, node: "{{ .Params.node }}" }
+    spec: { name: mealie-db-backup }
   - |
     apiVersion: wildstone.dev/v1
     kind: Volume
@@ -101,7 +106,10 @@ templates:
     kind: BackupPlan
     metadata: { name: recipes, node: "{{ .Params.node }}" }
     spec:
-      volumes: [mealie-data]
+      volumes: [mealie-data, mealie-db-backup]
+      exclude: [mealie.db, mealie.db-wal, mealie.db-shm]
+      preBackup:
+        - { kind: sqlite, container: mealie, database: /app/data/mealie.db, outputVolume: mealie-db-backup }
       repository: recipes-backup-repo
       passwordSecret: secret/restic-recipes
       schedule: daily

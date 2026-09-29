@@ -163,6 +163,61 @@ func humanBytes(b uint64) string {
 	}
 }
 
+// Estimate reports the live source size and local-repository headroom used
+// by the authoring UI. It performs only DiskSpace/MeasureUsage operations;
+// the proposal pipeline still calls Preflight as the authoritative check.
+func (e *Engine) Estimate(ctx context.Context, r resource.Resource) (uint64, string, error) {
+	if r.BackupPlan == nil {
+		return 0, "", fmt.Errorf("BackupPlan spec missing")
+	}
+	desired, err := e.State.Load()
+	if err != nil {
+		return 0, "", err
+	}
+	if err := e.checkMounts(ctx, r, desired, true, hasLocal(r.BackupPlan)); err != nil {
+		return 0, "", err
+	}
+	var sourceBytes uint64
+	for _, source := range sources(r.BackupPlan) {
+		n, err := e.usage(ctx, r.Metadata.Node, source)
+		if errors.Is(err, errNotThere) {
+			continue
+		}
+		if err != nil {
+			return 0, "", fmt.Errorf("measuring source %s: %w", source, err)
+		}
+		sourceBytes += n
+	}
+	if !hasLocal(r.BackupPlan) {
+		return sourceBytes, fmt.Sprintf("%s of sources; offsite-only uses no local repository space", humanBytes(sourceBytes)), nil
+	}
+	disk, err := e.diskSpace(ctx, r.Metadata.Node, r.BackupPlan.Repository)
+	if errors.Is(err, errNotThere) {
+		return sourceBytes, fmt.Sprintf("%s of existing sources; local repository does not exist yet, so free space will be checked again when the proposal is filed", humanBytes(sourceBytes)), nil
+	}
+	if err != nil {
+		return 0, "", fmt.Errorf("checking local repository: %w", err)
+	}
+	reserve := reserveFor(r.BackupPlan, disk.total)
+	have := uint64(0)
+	if disk.exists {
+		if have, err = e.usage(ctx, r.Metadata.Node, r.BackupPlan.Repository); err != nil {
+			return 0, "", fmt.Errorf("measuring local repository: %w", err)
+		}
+	}
+	want := uint64(float64(sourceBytes) * estimateMargin)
+	need := uint64(0)
+	if want > have {
+		need = want - have
+	}
+	detail := fmt.Sprintf("%s of sources; local repository needs about %s more, with %s free and %s reserved",
+		humanBytes(sourceBytes), humanBytes(need), humanBytes(disk.free), humanBytes(reserve))
+	if disk.free < reserve || disk.free-reserve < need {
+		return sourceBytes, detail, &LowDiskError{Detail: detail}
+	}
+	return sourceBytes, detail, nil
+}
+
 // sources is every source a plan backs up: its volumes, then its paths.
 func sources(spec *resource.BackupPlanSpec) []string {
 	return append(append([]string{}, spec.Volumes...), spec.Paths...)

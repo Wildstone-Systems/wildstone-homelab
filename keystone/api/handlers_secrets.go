@@ -73,6 +73,8 @@ func opStatus(oe *wsv1.OpError) int {
 		return http.StatusBadRequest
 	case wsv1.ErrorCode_ERROR_CODE_NOT_FOUND:
 		return http.StatusNotFound
+	case wsv1.ErrorCode_ERROR_CODE_FORBIDDEN:
+		return http.StatusForbidden
 	default:
 		return http.StatusBadGateway
 	}

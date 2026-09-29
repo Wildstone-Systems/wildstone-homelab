@@ -286,6 +286,12 @@ type Server struct {
 	// BackupRestoreOffsite restores from a plan's off-site copy
 	// (ADR-W045 A3); POST .../restore?from=offsite.
 	BackupRestoreOffsite func(ctx context.Context, plan string) error
+	// BackupTargetTest performs a read-only bucket stat with the target's
+	// node-scoped credentials.
+	BackupTargetTest func(ctx context.Context, target string) error
+	// BackupEstimate performs read-only source/repository measurements for
+	// plan authoring. The string is a human-readable disk-check result.
+	BackupEstimate func(ctx context.Context, plan resource.Resource) (sourceBytes uint64, diskCheck string, err error)
 	// BackupPreflight checks a proposal's BackupPlans fit their node's
 	// disk before a plan is recorded (ADR-W045 A3.1); nil skips it.
 	BackupPreflight func(puts []resource.Resource) error
@@ -423,6 +429,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/nodes/{node}/directories", s.handle(principal.VerbRead, s.listDirectories))
 	mux.Handle("POST /api/v1/nodes/{node}/secrets/{name}", s.handle(principal.VerbManage, s.setSecret))
 	mux.Handle("POST /api/v1/nodes/{node}/secrets/{name}/rotate", s.handle(principal.VerbManage, s.consequential(s.rotateSecret)))
+	mux.Handle("POST /api/v1/nodes/{node}/recovery/secrets", s.handle(principal.VerbManage, s.consequential(s.importNodeRecovery)))
 
 	// Onboarding validation probes (ADR-W016 A2, E10-U2): dial-or-read
 	// only on the agent side, so the whole family carries read.
@@ -440,6 +447,11 @@ func (s *Server) Handler() http.Handler {
 	// restore are human-initiated executions — approve verb, so the
 	// Butler's propose-only role cannot trigger them.
 	mux.Handle("GET /api/v1/backups", s.handle(principal.VerbRead, s.listBackups))
+	mux.Handle("GET /api/v1/backups/targets", s.handle(principal.VerbRead, s.listBackupTargets))
+	mux.Handle("POST /api/v1/backups/targets", s.handle(principal.VerbPropose, s.proposeBackupTarget))
+	mux.Handle("POST /api/v1/backups/targets/{target}/test", s.handle(principal.VerbRead, s.testBackupTarget))
+	mux.Handle("PUT /api/v1/backups/plans/{plan}", s.handle(principal.VerbPropose, s.proposeBackupPlan))
+	mux.Handle("POST /api/v1/backups/plans/{plan}/estimate", s.handle(principal.VerbRead, s.estimateBackupPlan))
 	mux.Handle("POST /api/v1/backups/{plan}/run", s.handle(principal.VerbApprove, s.runBackup))
 	mux.Handle("POST /api/v1/backups/{plan}/restore", s.handle(principal.VerbApprove, s.consequential(s.restoreBackup)))
 

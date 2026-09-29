@@ -508,9 +508,22 @@ func backupPlanEqual(a, b *resource.BackupPlanSpec) bool {
 		stringSliceEqual(a.Volumes, b.Volumes) &&
 		stringSliceEqual(a.Paths, b.Paths) &&
 		stringSliceEqual(a.Exclude, b.Exclude) &&
+		backupHooksEqual(a.PreBackup, b.PreBackup) &&
 		a.Class == b.Class &&
 		a.Reserve == b.Reserve &&
 		offsiteEqual(a.Offsite, b.Offsite)
+}
+
+func backupHooksEqual(a, b []resource.BackupHook) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // subset reports whether every element of a is also in b.

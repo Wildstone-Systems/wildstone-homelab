@@ -38,16 +38,25 @@ only executable proof of it.
 
 ### A2. What must survive, verbatim (the recovery contract)
 
-The drill pins the recovery contract the docs teach:
+The local-repository drill and the S3-only total-loss drill pin the recovery
+contract the docs teach. In the total-loss case the host, NAS, Statefile
+replicas and local restic repositories may all be gone; the off-host recovery
+kit and S3 repositories are the root of recovery:
 
-1. **The restic repository** (per BackupPlan) — holds the data.
-2. **The Statefile git repo** — holds the desired state.
-3. **The operator's node secret values** (in their password manager) —
-   node secrets are deliberately NOT backed up by Wildstone (ADR-W012:
-   write-only path, values never leave the node), so recovery re-enters
-   them via `wild secret set`. Household/user secrets are a separate
-   store whose recovery follows ADR-W033 D1, not this rule.
-4. **The runtime DB**, as an encrypted off-host backup or replica — it
+1. **The off-site restic repositories** (per BackupPlan) — encrypted
+   application data. A local repository or NAS copy is useful but is not a
+   required survivor.
+2. **The reserved `wildstone` repository** — a Statefile Git bundle, a
+   consistent runtime-DB snapshot, the sealed household-vault key, and a
+   recovery-key-sealed secret bundle for each node (ADR-W045 A5).
+3. **The recovery kit, held outside Wildstone** — S3 endpoint and
+   bucket/prefix, a read-only recovery credential, all off-site repository
+   passwords, and the offline recovery private key. This replaces the old
+   assumption that a separate Statefile replica and manually re-entered node
+   secrets must survive, while retaining those as valid fallback inputs.
+4. **A deletion/revocation journal source newer than the snapshot** — restore
+   cannot infer changes that happened after its recovery point.
+5. **The runtime DB inside the whole-site set** — it is not rebuildable. It
    is not rebuildable. It holds Persons and their bindings, conversations
    and memory, task ledgers, Plans and approved routine versions,
    grants and denials, soft-deleted records awaiting Owner purge, and
@@ -58,7 +67,7 @@ The drill pins the recovery contract the docs teach:
    data loss, not proof of zero loss.
 
 Everything else — CA and op-signing keys, node identity, containers,
-volumes — is rebuilt from those four. A new CA on rebirth is correct
+volumes — is rebuilt from those inputs. A new CA on rebirth is correct
 behavior, not a defect: nodes re-join with fresh join tokens.
 
 **Restore never resurrects what was forgotten or revoked.** Forgetting
@@ -71,9 +80,14 @@ a restored trace cannot expose content whose source was later deleted
 or revoked. The drill proves this by restoring an older snapshot that
 predates a deletion and a revocation.
 
-_Changed by ADR-W033 §C10, §E5, §F6: the runtime DB now holds household state that cannot be rebuilt._
-The current drill and `docs/recovery.md` still exercise the three-input
-contract; code not yet conformant.
+_Changed by ADR-W033 §C10, §E5, §F6: the runtime DB now holds household state that cannot be rebuilt. Changed by ADR-W045 A5/A6: the sealed whole-site set and recovery kit make S3 sufficient after total local loss._
+
+`scripts/offsite-exit-drill.sh`, run by the weekly exit-drill workflow, is the
+executable proof: it destroys the Statefile, runtime DB, node identity, live
+volume and all local repositories; restores the control plane from the kit;
+keeps the runtime DB quarantined; imports sealed node secrets; approves the
+High-risk target drift; and verifies application canary bytes restored from
+S3 alone.
 
 ### A3. Docs are part of the deliverable, refreshed against as-built
 

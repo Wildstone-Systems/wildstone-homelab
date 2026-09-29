@@ -108,7 +108,8 @@ func seedPlan(t *testing.T, state *statefile.Store, r resource.Resource) {
 	}
 }
 
-// TestFirstTickRunsBackupAndDrill: a never-run plan is due for both.
+// TestFirstTickRunsBackupAndDrill: a never-run plan is due for its backup,
+// integrity check and restore drill.
 func TestFirstTickRunsBackupAndDrill(t *testing.T) {
 	run := &fakeRunner{}
 	e, db, state := newEngine(t, run)
@@ -118,12 +119,12 @@ func TestFirstTickRunsBackupAndDrill(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(reports) != 2 || reports[0].Err != "" || reports[1].Err != "" {
-		t.Fatalf("reports = %+v, want clean backup + drill", reports)
+	if len(reports) != 3 || reports[0].Err != "" || reports[1].Err != "" || reports[2].Err != "" {
+		t.Fatalf("reports = %+v, want clean backup + check + drill", reports)
 	}
 
 	names := run.names()
-	want := []string{"backup-photos-probe", "backup-photos", "backup-photos-forget", "drill-photos"}
+	want := []string{"backup-photos-probe", "backup-photos", "backup-photos-forget", "check-photos", "drill-photos"}
 	if strings.Join(names, ",") != strings.Join(want, ",") {
 		t.Fatalf("runs = %v, want %v", names, want)
 	}
@@ -162,7 +163,12 @@ func TestFirstTickRunsBackupAndDrill(t *testing.T) {
 	}
 
 	// Drill restores alongside: target volume photos-drill, never a source.
-	drill := run.runs[3].spec
+	check := run.runs[3].spec
+	if got := strings.Join(check.Command, " "); got != "check" {
+		t.Fatalf("check command = %q", got)
+	}
+
+	drill := run.runs[4].spec
 	if got := strings.Join(drill.Command, " "); got != "restore latest --target /restore" {
 		t.Fatalf("drill command = %q", got)
 	}
@@ -191,14 +197,17 @@ func TestFirstTickRunsBackupAndDrill(t *testing.T) {
 			applied++
 		}
 	}
-	if applied != 2 {
-		t.Fatalf("applied system/backup plan records = %d, want 2 (run + drill)", applied)
+	if applied != 3 {
+		t.Fatalf("applied system/backup plan records = %d, want 3 (run + check + drill)", applied)
 	}
 	if _, err := db.LastBackupRun("photos", runtimedb.BackupRunBackup, runtimedb.BackupRunSucceeded); err != nil {
 		t.Fatalf("no successful backup ledger row: %v", err)
 	}
 	if _, err := db.LastBackupRun("photos", runtimedb.BackupRunDrill, runtimedb.BackupRunSucceeded); err != nil {
 		t.Fatalf("no successful drill ledger row: %v", err)
+	}
+	if _, err := db.LastBackupRun("photos", runtimedb.BackupRunCheck, runtimedb.BackupRunSucceeded); err != nil {
+		t.Fatalf("no successful check ledger row: %v", err)
 	}
 	events, err := db.EventsAfter(0, 100)
 	if err != nil {
@@ -210,8 +219,8 @@ func TestFirstTickRunsBackupAndDrill(t *testing.T) {
 			completed++
 		}
 	}
-	if completed != 2 {
-		t.Fatalf("backup.completed events = %d, want 2", completed)
+	if completed != 3 {
+		t.Fatalf("backup.completed events = %d, want 3", completed)
 	}
 }
 
@@ -246,14 +255,64 @@ func TestScheduleGate(t *testing.T) {
 		t.Fatalf("25h reports = %+v, want exactly one backup run", reports)
 	}
 
-	// 31 days later: both due.
+	// 31 days later: backup, weekly check and monthly drill are due.
 	e.Now = func() time.Time { return time.Now().Add(31 * 24 * time.Hour) }
 	reports, err = e.Tick(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(reports) != 2 {
-		t.Fatalf("31d reports = %+v, want backup + drill", reports)
+	if len(reports) != 3 {
+		t.Fatalf("31d reports = %+v, want backup + check + drill", reports)
+	}
+}
+
+func TestCorruptedRepositoryIsReportedByCheck(t *testing.T) {
+	run := &fakeRunner{exit: map[string]int32{"check-photos": 1}}
+	e, db, state := newEngine(t, run)
+	seedPlan(t, state, backupPlanResource("photos"))
+
+	reports, err := e.Tick(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var failed *RunReport
+	for i := range reports {
+		if reports[i].Kind == runtimedb.BackupRunCheck {
+			failed = &reports[i]
+		}
+	}
+	if failed == nil || !strings.Contains(failed.Err, "restic exited 1") {
+		t.Fatalf("check report = %+v", failed)
+	}
+	last, err := db.LastBackupRunAny("photos", runtimedb.BackupRunCheck)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if last.Status != runtimedb.BackupRunFailed || !strings.Contains(last.Detail, "repository integrity check") {
+		t.Fatalf("check ledger = %+v", last)
+	}
+}
+
+func TestSourceSizeSamplesTrackBackupInputs(t *testing.T) {
+	run := &fakeRunner{}
+	e, db, state := newEngine(t, run)
+	agent := &fakeAgent{usage: map[string]uint64{"immich-library": 800, "immich-db": 200}}
+	e.Agent = agent
+	seedPlan(t, state, backupPlanResource("photos"))
+
+	if err := e.RunNow(context.Background(), "photos"); err != nil {
+		t.Fatal(err)
+	}
+	agent.usage["immich-library"] = 300
+	if err := e.RunNow(context.Background(), "photos"); err != nil {
+		t.Fatal(err)
+	}
+	samples, err := db.LatestBackupSourceSamples("photos", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(samples) != 2 || samples[0].Bytes != 500 || samples[1].Bytes != 1000 {
+		t.Fatalf("source samples = %+v", samples)
 	}
 }
 

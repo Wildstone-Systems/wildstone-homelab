@@ -10,7 +10,43 @@ import (
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 	"github.com/chickenrat17/wildstone-homelab/keystone/statefile"
 	wsv1 "github.com/chickenrat17/wildstone-homelab/proto/gen/wardstone/v1"
+	"github.com/chickenrat17/wildstone-homelab/proto/recoveryseal"
 )
+
+func TestReservedWildstonePlanPreparesRecoverySetBeforeUpload(t *testing.T) {
+	run := &fakeRunner{}
+	e, _, state := newEngine(t, run)
+	publicKey, _, err := recoveryseal.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := resource.Resource{
+		ApiVersion: resource.ApiVersion, Kind: resource.KindBackupPlan,
+		Metadata: resource.Metadata{Name: "wildstone", Owner: "system", Node: "n1"},
+		BackupPlan: &resource.BackupPlanSpec{
+			Paths: []string{resource.WholeSiteRecoveryPath}, Class: "critical", RecoveryPublicKey: publicKey,
+			Offsite: &resource.BackupOffsite{
+				Target: "offsite", Route: resource.BackupRouteOffsiteOnly,
+				PasswordSecret: "secret/restic-wildstone-offsite", Schedule: "daily",
+			},
+		},
+	}
+	seedAll(t, state, targetResource(false), plan)
+	prepared := false
+	e.PrepareRecovery = func(_ context.Context, got resource.Resource) error {
+		prepared = got.Metadata.Name == "wildstone"
+		return nil
+	}
+	if err := e.RunNow(context.Background(), "wildstone"); err != nil {
+		t.Fatal(err)
+	}
+	if !prepared {
+		t.Fatal("whole-site source set was not prepared")
+	}
+	if _, ok := run.run("offsite-wildstone"); !ok {
+		t.Fatal("whole-site off-site upload did not run")
+	}
+}
 
 func targetResource(pathStyle bool) resource.Resource {
 	return resource.Resource{
@@ -22,6 +58,34 @@ func targetResource(pathStyle bool) resource.Resource {
 			Prefix: "home", Region: "auto", PathStyle: pathStyle,
 			AccessKeySecret: "secret/offsite-access", SecretKeySecret: "secret/offsite-secret",
 		},
+	}
+}
+
+func TestTargetConnectionTestIsReadOnly(t *testing.T) {
+	run := &fakeRunner{}
+	e, _, state := newEngine(t, run)
+	seedAll(t, state, targetResource(true))
+	if err := e.TestTarget(context.Background(), "offsite"); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := run.run("test-target-offsite")
+	if !ok {
+		t.Fatal("target test did not run")
+	}
+	if got.node != "n1" || got.spec.Image != defaultS3ProbeImage {
+		t.Fatalf("probe placement/image = %s %s", got.node, got.spec.Image)
+	}
+	command := strings.Join(got.spec.Command, " ")
+	if !strings.Contains(command, "s3api head-bucket --bucket wildstone-backups") {
+		t.Fatalf("probe command = %q, want read-only HeadBucket", command)
+	}
+	for _, mutating := range []string{" put-", " cp ", " mb ", " create-bucket", " delete"} {
+		if strings.Contains(command, mutating) {
+			t.Fatalf("probe command mutates the target: %q", command)
+		}
+	}
+	if got.spec.Env["AWS_ACCESS_KEY_ID"] != "secret/offsite-access" || got.spec.Env["AWS_SECRET_ACCESS_KEY"] != "secret/offsite-secret" {
+		t.Fatalf("probe did not preserve secret references: %+v", got.spec.Env)
 	}
 }
 
@@ -81,7 +145,7 @@ func TestLocalAndOffsiteRun(t *testing.T) {
 			t.Fatalf("report %+v", rep)
 		}
 	}
-	want := "backup-photos-probe,backup-photos,backup-photos-forget,drill-photos,offsite-photos-probe,offsite-photos,offsite-photos-forget"
+	want := "backup-photos-probe,backup-photos,backup-photos-forget,check-photos,drill-photos,offsite-photos-probe,offsite-photos,offsite-photos-forget,check-offsite-photos,drill-offsite-photos"
 	if got := strings.Join(run.names(), ","); got != want {
 		t.Fatalf("runs = %s\nwant   %s", got, want)
 	}
@@ -116,6 +180,39 @@ func TestLocalAndOffsiteRun(t *testing.T) {
 	}
 }
 
+// TestAppendOnlyTargetNeverDeletes: the node key can add and read
+// repository data but cannot maintain it. Every restic pass avoids lock
+// deletion, and retention never turns into forget/prune with that key.
+func TestAppendOnlyTargetNeverDeletes(t *testing.T) {
+	run := &fakeRunner{}
+	e, _, state := newEngine(t, run)
+	target := targetResource(false)
+	target.BackupTarget.AppendOnly = true
+	seedAll(t, state, target, offsitePlan("photos", resource.BackupRouteLocalAndOffsite))
+
+	if err := e.RunNow(context.Background(), "photos"); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"offsite-photos-probe", "offsite-photos"} {
+		r, ok := run.run(name)
+		if !ok || !containsArg(r.spec.Command, "--no-lock") {
+			t.Fatalf("%s command = %v, want --no-lock", name, r.spec.Command)
+		}
+	}
+	if _, ok := run.run("offsite-photos-forget"); ok {
+		t.Fatalf("append-only target ran forget/prune: %v", run.names())
+	}
+}
+
+func containsArg(args []string, want string) bool {
+	for _, arg := range args {
+		if arg == want {
+			return true
+		}
+	}
+	return false
+}
+
 // TestOffsiteInitCopiesChunkerParams: a missing off-site repository is
 // created with the local repo's chunker parameters, so copies dedupe.
 func TestOffsiteInitCopiesChunkerParams(t *testing.T) {
@@ -142,17 +239,18 @@ func TestOffsiteInitCopiesChunkerParams(t *testing.T) {
 // nothing mounts a local repository.
 func TestOffsiteOnlyRun(t *testing.T) {
 	run := &fakeRunner{exit: map[string]int32{"offsite-movies-probe": 10}}
-	e, _, state := newEngine(t, run)
+	e, db, state := newEngine(t, run)
+	e.Now = func() time.Time { return time.Unix(0, 0) }
 	seedAll(t, state, targetResource(false), offsitePlan("movies", resource.BackupRouteOffsiteOnly))
 
 	reports, err := e.Tick(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(reports) != 1 || reports[0].Kind != runtimedb.BackupRunOffsite || reports[0].Err != "" {
-		t.Fatalf("reports = %+v, want one clean off-site run and no local backup or drill", reports)
+	if len(reports) != 3 {
+		t.Fatalf("reports = %+v, want off-site backup + check + drill and no local work", reports)
 	}
-	if got := strings.Join(run.names(), ","); got != "offsite-movies-probe,offsite-movies-init,offsite-movies,offsite-movies-forget" {
+	if got := strings.Join(run.names(), ","); got != "offsite-movies-probe,offsite-movies-init,offsite-movies,offsite-movies-forget,check-offsite-movies,drill-offsite-movies" {
 		t.Fatalf("runs = %s", got)
 	}
 	init, _ := run.run("offsite-movies-init")
@@ -173,6 +271,26 @@ func TestOffsiteOnlyRun(t *testing.T) {
 	}
 	if _, ok := b.spec.Env["RESTIC_FROM_REPOSITORY"]; ok {
 		t.Fatal("offsite-only backup carries a copy source")
+	}
+	check, ok := run.run("check-offsite-movies")
+	if !ok || strings.Join(check.spec.Command, " ") != "check --read-data-subset=1/20" {
+		t.Fatalf("off-site check = %+v", check)
+	}
+	drill, ok := run.run("drill-offsite-movies")
+	if !ok || strings.Join(drill.spec.Command, " ") != "restore latest --target /restore" {
+		t.Fatalf("off-site drill = %+v", drill)
+	}
+	foundScratch := false
+	for _, m := range drill.spec.Mounts {
+		foundScratch = foundScratch || (m.Source == "movies-offsite-drill" && m.Target == "/restore")
+	}
+	if !foundScratch {
+		t.Fatalf("off-site drill mounts = %+v", drill.spec.Mounts)
+	}
+	for _, kind := range []runtimedb.BackupRunKind{runtimedb.BackupRunOffsiteCheck, runtimedb.BackupRunOffsiteDrill} {
+		if _, err := db.LastBackupRun("movies", kind, runtimedb.BackupRunSucceeded); err != nil {
+			t.Fatalf("no successful %s ledger row: %v", kind, err)
+		}
 	}
 }
 

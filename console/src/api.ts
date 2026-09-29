@@ -4,7 +4,7 @@
 // pin them server-side). Resource specs come typed from the generated
 // schema (ADR-W007 A7).
 
-import type { AutomationSpec } from "./generated/resources";
+import type { AutomationSpec, BackupPlanSpec, BackupTargetSpec } from "./generated/resources";
 
 // ---------------------------------------------------------------- wire shapes
 
@@ -104,6 +104,29 @@ export interface BackupRun {
   finishedAt?: string;
   status: string;
   detail?: string;
+}
+
+export interface BackupPlanView {
+  name: string;
+  node: string;
+  owner: string;
+  spec: BackupPlanSpec;
+  sourceBytes?: number;
+  estimatedMonthlyCostUsd?: number;
+  costNote?: string;
+}
+
+export interface BackupTargetView {
+  name: string;
+  node: string;
+  owner: string;
+  spec: BackupTargetSpec;
+}
+
+export interface BackupsResponse {
+  plans: BackupPlanView[];
+  targets: BackupTargetView[];
+  runs: BackupRun[];
 }
 
 export interface SecretInfo {
@@ -2240,7 +2263,15 @@ export const api = {
     username: string,
     m: { displayName?: string; email?: string; groups: string[] },
   ) => call<PlanRecord>("PUT", `/api/v1/household/members/${encodeURIComponent(username)}`, m),
-  backups: () => call<{ runs: BackupRun[] }>("GET", "/api/v1/backups"),
+  backups: () => call<BackupsResponse>("GET", "/api/v1/backups"),
+  proposeBackupTarget: (target: { name: string; node: string; spec: BackupTargetSpec }) =>
+    call<PlanRecord>("POST", "/api/v1/backups/targets", target),
+  testBackupTarget: (target: string) =>
+    call<{ target: string; result: string }>("POST", `/api/v1/backups/targets/${encodeURIComponent(target)}/test`),
+  proposeBackupPlan: (plan: string, node: string, spec: BackupPlanSpec) =>
+    call<PlanRecord>("PUT", `/api/v1/backups/plans/${encodeURIComponent(plan)}`, { node, spec }),
+  estimateBackupPlan: (plan: string, node: string, spec: BackupPlanSpec) =>
+    call<{ sourceBytes: number; diskCheck: string; estimatedMonthlyCostUsd?: number; costNote?: string }>("POST", `/api/v1/backups/plans/${encodeURIComponent(plan)}/estimate`, { node, spec }),
   runBackup: (plan: string) =>
     call<unknown>("POST", `/api/v1/backups/${encodeURIComponent(plan)}/run`),
   restoreBackup: (plan: string) =>

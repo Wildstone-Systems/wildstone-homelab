@@ -22,7 +22,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: documents-paperless
-  version: 1.0.4
+  version: 1.0.5
   capability: documents
   profile: paperless
 requires:
@@ -113,6 +113,11 @@ templates:
     kind: Volume
     metadata: { name: paperless-pgdata, node: "{{ .Params.node }}" }
     spec: { name: paperless-pgdata }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: paperless-db-backup, node: "{{ .Params.node }}" }
+    spec: { name: paperless-db-backup }
   - |
     apiVersion: wildstone.dev/v1
     kind: Volume
@@ -231,13 +236,16 @@ templates:
     metadata: { name: docs-users, node: "{{ or .Params.identity_node .Params.node }}" }
     spec:
       name: docs_users
-  # Backup hook (ADR-W013 A4): data + media + DB, daily.
+  # Backup hook (ADR-W013 A4): data + media + a consistent pg_dump, daily.
+  # The live PostgreSQL data directory is not copied.
   - |
     apiVersion: wildstone.dev/v1
     kind: BackupPlan
     metadata: { name: documents, node: "{{ .Params.node }}" }
     spec:
-      volumes: [paperless-data, paperless-media, paperless-pgdata]
+      volumes: [paperless-data, paperless-media, paperless-db-backup]
+      preBackup:
+        - { kind: pg_dump, container: paperless-postgres, database: paperless, outputVolume: paperless-db-backup }
       repository: documents-backup-repo
       passwordSecret: secret/restic-documents
       schedule: daily

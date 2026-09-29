@@ -107,7 +107,10 @@ import (
 //	tell a mounted NAS share from the empty directory under it. An older
 //	agent answers DiskSpace as an unknown operation; Keystone treats that
 //	as "cannot check" and, for a NAS path, refuses to run.
-const ProtocolMinor = 19
+//
+// 20: adds recovery-key-sealed node secret export/import. Export never
+// returns plaintext; import is restricted to an empty fresh-node store.
+const ProtocolMinor = 20
 
 // maxUpdateMsgBytes is the gRPC message size cap on both ends of the
 // session/join connections (ADR-W003 W5). SelfUpdate ships the new binary
