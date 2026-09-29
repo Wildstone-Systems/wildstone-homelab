@@ -144,18 +144,12 @@ func (l *Loop) Tick(ctx context.Context) (TickOutcome, error) {
 		l.Rec.Approve = func(*plan.Plan) bool { return l.allowMediumHigh.Load() }
 		l.installed = true
 	}
-	// A restored control plane stays inert until the operator has rejoined
-	// every replacement node, imported its sealed secret bundle, reconciled
-	// the restore journal and explicitly released quarantine. In particular,
-	// do not let the Secret pre-pass create replacement values: Wardstone's
-	// recovery import deliberately refuses a non-empty store so it can never
-	// overwrite live credentials.
+	quarantined := false
 	if err := l.DB.CheckQuarantine(); err != nil {
-		if errors.Is(err, runtimedb.ErrQuarantined) {
-			log.Info("reconcile paused by restore quarantine")
-			return TickOutcome{}, nil
+		if !errors.Is(err, runtimedb.ErrQuarantined) {
+			return TickOutcome{}, fmt.Errorf("loop: checking restore quarantine: %w", err)
 		}
-		return TickOutcome{}, fmt.Errorf("loop: checking restore quarantine: %w", err)
+		quarantined = true
 	}
 
 	approved, err := l.DB.PlansInState(runtimedb.PlanApproved)
@@ -197,6 +191,29 @@ func (l *Loop) Tick(ctx context.Context) (TickOutcome, error) {
 	desired, err := l.State.Load()
 	if err != nil {
 		return TickOutcome{}, fmt.Errorf("loop: loading statefile: %w", err)
+	}
+	// A restored control plane stays inert until every replacement node has
+	// successfully imported its sealed secret bundle. Once that durable marker
+	// exists, reconciliation may propose and apply the infrastructure needed to
+	// restore applications; the broader restore quarantine remains in force
+	// until the journal replay and explicit release.
+	if quarantined {
+		nodes := map[string]bool{}
+		for _, r := range desired {
+			if r.Metadata.Node != "" {
+				nodes[r.Metadata.Node] = true
+			}
+		}
+		for node := range nodes {
+			imported, err := l.DB.RecoveryNodeSecretsImported(node)
+			if err != nil {
+				return TickOutcome{}, fmt.Errorf("loop: checking recovery import for node %s: %w", node, err)
+			}
+			if !imported {
+				log.Info("reconcile paused pending recovery secret import", "node", node)
+				return TickOutcome{}, nil
+			}
+		}
 	}
 	// Entitlements become directory memberships here, on a COPY of
 	// desired state, before anything is grouped or planned (§4, slice

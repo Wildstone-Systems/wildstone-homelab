@@ -8,6 +8,25 @@ import (
 	"time"
 )
 
+// RecoveryNodeSecretsImportedEvent is the durable handoff between the node
+// recovery endpoint and the quarantined reconcile loop.
+const RecoveryNodeSecretsImportedEvent = "recovery.node-secrets-imported"
+
+// RecoveryNodeSecretsImported reports whether this restored control plane has
+// recorded a successful sealed-secret import for node. RestoreBackup removes
+// historical markers, so only imports performed after the current restore can
+// satisfy the gate.
+func (db *DB) RecoveryNodeSecretsImported(node string) (bool, error) {
+	var imported bool
+	err := db.sql.QueryRow(`SELECT EXISTS(
+		SELECT 1 FROM events WHERE type = ? AND node = ?
+	)`, RecoveryNodeSecretsImportedEvent, node).Scan(&imported)
+	if err != nil {
+		return false, fmt.Errorf("runtimedb: checking recovery import for node %s: %w", node, err)
+	}
+	return imported, nil
+}
+
 // BackupTo creates a transactionally consistent SQLite snapshot while the
 // live WAL-mode database remains online. VACUUM INTO is SQLite's online
 // backup mechanism; unlike copying keystone.db, it includes committed WAL
@@ -84,6 +103,11 @@ func RestoreBackup(source, destination, reason string, snapshotAt time.Time) (*D
 		restored.Close()
 		_ = os.Remove(destination)
 		return nil, fmt.Errorf("runtimedb: clearing stale observations during restore: %w", err)
+	}
+	if _, err := restored.sql.Exec(`DELETE FROM events WHERE type = ?`, RecoveryNodeSecretsImportedEvent); err != nil {
+		restored.Close()
+		_ = os.Remove(destination)
+		return nil, fmt.Errorf("runtimedb: clearing stale recovery imports during restore: %w", err)
 	}
 	if err := restored.EnterRestoreQuarantine(reason, snapshotAt); err != nil {
 		restored.Close()

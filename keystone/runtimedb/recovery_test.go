@@ -15,6 +15,9 @@ func TestOnlineBackupAndRestoreStartsQuarantined(t *testing.T) {
 	if _, err := live.AppendEvent(Event{Type: "recovery-test", Message: "committed WAL content"}); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := live.AppendEvent(Event{Type: RecoveryNodeSecretsImportedEvent, Node: "lost-node"}); err != nil {
+		t.Fatal(err)
+	}
 	if err := live.UpsertObserved(Observed{Kind: "BackupTarget", Name: "offsite", Node: "lost-node", Healthy: true}); err != nil {
 		t.Fatal(err)
 	}
@@ -38,6 +41,9 @@ func TestOnlineBackupAndRestoreStartsQuarantined(t *testing.T) {
 	events, err := restored.EventsAfter(0, 10)
 	if err != nil || len(events) != 1 || events[0].Message != "committed WAL content" {
 		t.Fatalf("restored events = %+v, %v", events, err)
+	}
+	if imported, err := restored.RecoveryNodeSecretsImported("lost-node"); err != nil || imported {
+		t.Fatalf("stale recovery import survived restore: %v, %v", imported, err)
 	}
 	observed, err := restored.ListObserved()
 	if err != nil || len(observed) != 0 {

@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
+	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 	wsv1 "github.com/chickenrat17/wildstone-homelab/proto/gen/wardstone/v1"
 )
 
@@ -40,6 +41,6 @@ func (s *Server) importNodeRecovery(r *http.Request, id principal.Identity) (any
 		return nil, opStatus(oerr), fmt.Errorf("node %s: %s", node, oerr.GetMessage())
 	}
 	count := res.GetImportSecretBundle().GetSecretCount()
-	s.appendEvent("recovery.node-secrets-imported", node, "recovery", id.Name)
+	s.appendEvent(runtimedb.RecoveryNodeSecretsImportedEvent, node, "recovery", id.Name)
 	return map[string]any{"node": node, "secretCount": count}, http.StatusOK, nil
 }

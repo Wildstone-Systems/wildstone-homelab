@@ -47,4 +47,7 @@ func TestImportNodeRecoveryPassesOnlySealedMaterialToWardstone(t *testing.T) {
 	if out.(map[string]any)["secretCount"] != uint32(3) {
 		t.Fatalf("response = %+v", out)
 	}
+	if imported, err := db.RecoveryNodeSecretsImported("node-a"); err != nil || !imported {
+		t.Fatalf("recovery import marker = %v, %v", imported, err)
+	}
 }
