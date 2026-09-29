@@ -125,6 +125,13 @@ export interface BackupRetention {
   keepMonthly?: number;
 }
 
+export interface BackupHook {
+  kind: string;
+  container: string;
+  database: string;
+  outputVolume: string;
+}
+
 export interface BackupOffsite {
   target: string;
   route: string;
@@ -143,7 +150,9 @@ export interface BackupPlanSpec {
   retention?: BackupRetention;
   exclude?: string[];
   class?: string;
+  preBackup?: BackupHook[];
   offsite?: BackupOffsite;
+  recoveryPublicKey?: string;
 }
 
 export interface BackupTargetSpec {
