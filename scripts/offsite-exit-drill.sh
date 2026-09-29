@@ -60,7 +60,9 @@ start_keystone() {
   wait_for "Keystone API" 30 curl -sS -f "$API/api/v1/healthz"
 }
 start_wardstone() {
-  # Wardstone owns privileged host and Docker operations in production.
+  # Wardstone owns privileged host and Docker operations in production. The
+  # unprivileged runner intentionally owns the uploadable log redirection.
+  # shellcheck disable=SC2024
   sudo -n "$BIN/wardstoned" -node-id "$NODE" -keystone 127.0.0.1:9440 -data-dir "$1" -join-token "$2" >"$3" 2>&1 &
   WARDSTONE_PID=$!
 }
@@ -82,6 +84,11 @@ docker run -d --name "$S3_CONTAINER" -p 7070:7070 \
 wait_for "S3 gateway" 60 s3_ready
 BRIDGE_GATEWAY="$(docker network inspect bridge -f '{{(index .IPAM.Config 0).Gateway}}')"
 S3_ENDPOINT="http://$BRIDGE_GATEWAY:7070"
+AWS_IMAGE="$(sed -n 's/^const defaultS3ProbeImage = "\(.*\)"$/\1/p' "$REPO_ROOT/keystone/backup/offsite.go" | head -1)" || true
+[ -n "$AWS_IMAGE" ] || fail "could not extract the pinned AWS CLI image"
+docker run --rm \
+  -e "AWS_ACCESS_KEY_ID=$S3_ACCESS" -e "AWS_SECRET_ACCESS_KEY=$S3_SECRET" -e AWS_DEFAULT_REGION=us-east-1 \
+  "$AWS_IMAGE" --no-cli-pager --endpoint-url "$S3_ENDPOINT" s3api create-bucket --bucket "$S3_BUCKET" >/dev/null
 
 log "phase 1: protect application data and the whole control plane off-site"
 K1="$WORK/keystone1"; W1="$WORK/wardstone1"
@@ -154,14 +161,15 @@ if [ -z "$PLAN_ID" ] || [ "$PLAN_ID" = null ]; then
 fi
 WILD_TOKEN="$ADMIN" "$BIN/wild" plan approve "$PLAN_ID"
 wait_for "data volume" 60 docker volume inspect drill-data
+WILD_TOKEN="$ADMIN" "$BIN/wild" backup target test offsite
 
 docker run --rm -v drill-data:/data --entrypoint /bin/sh busybox:stable -c "printf '%s' '$CANARY' > /data/canary.txt"
-WILD_TOKEN="$ADMIN" "$BIN/wild" backup run drill
-WILD_TOKEN="$ADMIN" "$BIN/wild" backup run wildstone
+timeout 8m env WILD_TOKEN="$ADMIN" "$BIN/wild" backup run drill
+timeout 8m env WILD_TOKEN="$ADMIN" "$BIN/wild" backup run wildstone
 
 export WILD_RECOVERY_READ_KEY="$S3_SECRET"
 export WILD_RECOVERY_REPOSITORY_PASSWORDS='{"wildstone":"wildstone-password","drill":"drill-password"}'
-"$BIN/wild" recovery kit -out "$WORK/recovery-kit.json" -endpoint "$S3_ENDPOINT" -bucket "$S3_BUCKET" -path-style -access-key-id "$S3_ACCESS" -private-key "$WORK/recovery.key"
+timeout 8m "$BIN/wild" recovery kit -out "$WORK/recovery-kit.json" -endpoint "$S3_ENDPOINT" -bucket "$S3_BUCKET" -path-style -access-key-id "$S3_ACCESS" -private-key "$WORK/recovery.key"
 unset WILD_RECOVERY_READ_KEY WILD_RECOVERY_REPOSITORY_PASSWORDS
 rm -f "$WORK/recovery.key" "$WORK/recovery.key.pub"
 
@@ -205,7 +213,7 @@ WILD_TOKEN="$ADMIN" "$BIN/wild" plan approve "$DRIFT_ID"
 wait_for "recreated data volume" 60 docker volume inspect drill-data
 
 log "restoring the application from S3 only"
-WILD_TOKEN="$ADMIN" "$BIN/wild" backup restore drill -from offsite
+timeout 8m env WILD_TOKEN="$ADMIN" "$BIN/wild" backup restore drill -from offsite
 wait_for "restore volume" 120 docker volume inspect drill-restore
 RESTORED="$(docker run --rm -v drill-restore:/r --entrypoint /bin/sh busybox:stable -c 'cat "$(find /r -name canary.txt | head -1)"')"
 [ "$RESTORED" = "$CANARY" ] || fail "canary mismatch: wrote '$CANARY', restored '$RESTORED'"
