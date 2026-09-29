@@ -6,6 +6,7 @@ name: exit drill
 # plus on demand. A failure here is a release blocker: it means "you can
 # lose the host and keep your data" stopped being true.
 on:
+  pull_request:
   schedule:
     - cron: "0 6 * * 1" # Mondays 06:00 UTC
   workflow_dispatch:
@@ -17,7 +18,7 @@ jobs:
   total-host-loss:
     name: total-host-loss restore (ADR-W018)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -27,10 +28,16 @@ jobs:
         run: ./scripts/exit-drill.sh
         env:
           WILDSTONE_DRILL_WORK: ${{ runner.temp }}/exit-drill
+      - name: Run the S3-only total-loss drill
+        run: ./scripts/offsite-exit-drill.sh
+        env:
+          WILDSTONE_DRILL_WORK: ${{ runner.temp }}/offsite-exit-drill
       - name: Upload drill logs
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: exit-drill-logs
-          path: ${{ runner.temp }}/exit-drill/*.log
+          path: |
+            ${{ runner.temp }}/exit-drill/*.log
+            ${{ runner.temp }}/offsite-exit-drill/*.log
           if-no-files-found: ignore

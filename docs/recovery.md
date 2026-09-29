@@ -74,6 +74,37 @@ defeats the sealed-bundle boundary.
 
 ### Restore after total loss
 
+This path assumes the worst useful case: the Keystone host, every node,
+the NAS, every local restic repository, and every ordinary Statefile replica
+are gone. Do not recreate an empty Statefile by hand. The surviving recovery
+kit locates the encrypted `wildstone` repository in S3; that repository is
+the source of the Statefile, runtime database and sealed secrets.
+
+Before starting, provision a fresh Linux host with Docker and copy only the
+recovery kit onto it. Confirm the S3 endpoint in the kit is reachable from a
+Docker container (not merely from the host). Then:
+
+1. Run `keystone recover -kit ...` below. It downloads the latest whole-site
+   snapshot from S3, verifies its manifest byte-for-byte, restores the
+   Statefile and household vault key, and installs the runtime database in
+   restore quarantine. A failed verification leaves the destination unusable;
+   do not bypass it.
+2. While Keystone is stopped, mint a short-lived recovery credential with
+   `keystone claim-code -data-dir <dir> -name recovery -ttl 1h`, read it once,
+   and remove the claim-code file. Then start fresh Keystone and Wardstone
+   installations. Re-use the node IDs in the restored Statefile, but expect a
+   new CA and new node identities.
+3. Import each node's sealed bundle from `recovery-import`. This restores the
+   S3 keys and restic passwords without revealing them through Keystone.
+4. Approve the `system/drift` Plan for the restored `BackupTarget` and
+   off-site routes. It is High risk by design: recovery does not silently
+   authorize a fresh machine to send data to an external bucket.
+5. Restore every application plan with `-from offsite`, verify the restored
+   data alongside the empty live volumes, and only then move it into place.
+6. Bring the deletion/revocation journal current, replay it, and release
+   quarantine. Until that succeeds, Butler retrieval, dispatch, ingestion and
+   proactive delivery remain stopped.
+
 On a fresh host with Docker available, the kit is sufficient to download the
 latest `wildstone` snapshot with the pinned restic image, verify every
 artifact, and install the set before Keystone starts:
@@ -87,8 +118,8 @@ If the set was restored separately, use `-set <directory> -private-key
 <file>` instead. Neither path writes the recovery private key into the data
 directory.
 
-Start Keystone, create a recovery administrator, and re-join the rebuilt
-nodes. For each node, use the sealed artifact listed under its ID in
+Before starting Keystone, use `keystone claim-code` as described above; then
+start it and re-join the rebuilt nodes. For each node, use the sealed artifact listed under its ID in
 `/var/lib/wildstone/keystone/recovery-import/manifest.json`'s `nodeBundles`
 map. A kit-based restore preserves these encrypted artifacts in that directory
 before removing its temporary download:
@@ -110,6 +141,13 @@ wild backup restore <plan> -from offsite
 wild restore status
 wild restore reconcile --release
 ```
+
+The executable proof is `scripts/offsite-exit-drill.sh`. CI creates a real
+S3-compatible Versity gateway, writes a canary, backs up both the application
+and the reserved whole-site set, deletes all local state and repositories,
+and performs precisely the sequence above. The final comparison is on the
+canary bytes restored from S3; retaining a local repository cannot make that
+drill pass.
 
 ### The fourth recovery input before durable Butler ships
 
