@@ -84,11 +84,61 @@ docker run -d --name "$S3_CONTAINER" -p 7070:7070 \
 wait_for "S3 gateway" 60 s3_ready
 BRIDGE_GATEWAY="$(docker network inspect bridge -f '{{(index .IPAM.Config 0).Gateway}}')"
 S3_ENDPOINT="http://$BRIDGE_GATEWAY:7070"
-AWS_IMAGE="$(sed -n 's/^const defaultS3ProbeImage = "\(.*\)"$/\1/p' "$REPO_ROOT/keystone/backup/offsite.go" | head -1)" || true
-[ -n "$AWS_IMAGE" ] || fail "could not extract the pinned AWS CLI image"
-docker run --rm \
-  -e "AWS_ACCESS_KEY_ID=$S3_ACCESS" -e "AWS_SECRET_ACCESS_KEY=$S3_SECRET" -e AWS_DEFAULT_REGION=us-east-1 \
-  "$AWS_IMAGE" --no-cli-pager --endpoint-url "$S3_ENDPOINT" s3api create-bucket --bucket "$S3_BUCKET" >/dev/null
+python3 - "$S3_ENDPOINT" "$S3_BUCKET" "$S3_ACCESS" "$S3_SECRET" <<'PY'
+import datetime
+import hashlib
+import hmac
+import sys
+import urllib.parse
+import urllib.request
+
+endpoint, bucket, access_key, secret_key = sys.argv[1:]
+parsed = urllib.parse.urlsplit(endpoint)
+canonical_uri = "/" + urllib.parse.quote(bucket, safe="-_.~")
+url = endpoint.rstrip("/") + canonical_uri
+now = datetime.datetime.now(datetime.timezone.utc)
+amz_date = now.strftime("%Y%m%dT%H%M%SZ")
+date = now.strftime("%Y%m%d")
+payload_hash = hashlib.sha256(b"").hexdigest()
+canonical_headers = (
+    f"host:{parsed.netloc}\n"
+    f"x-amz-content-sha256:{payload_hash}\n"
+    f"x-amz-date:{amz_date}\n"
+)
+signed_headers = "host;x-amz-content-sha256;x-amz-date"
+canonical_request = "\n".join([
+    "PUT", canonical_uri, "", canonical_headers, signed_headers, payload_hash,
+])
+scope = f"{date}/us-east-1/s3/aws4_request"
+string_to_sign = "\n".join([
+    "AWS4-HMAC-SHA256",
+    amz_date,
+    scope,
+    hashlib.sha256(canonical_request.encode()).hexdigest(),
+])
+
+def sign(key, value):
+    return hmac.new(key, value.encode(), hashlib.sha256).digest()
+
+signing_key = sign(
+    sign(sign(sign(("AWS4" + secret_key).encode(), date), "us-east-1"), "s3"),
+    "aws4_request",
+)
+signature = hmac.new(signing_key, string_to_sign.encode(), hashlib.sha256).hexdigest()
+authorization = (
+    f"AWS4-HMAC-SHA256 Credential={access_key}/{scope}, "
+    f"SignedHeaders={signed_headers}, Signature={signature}"
+)
+request = urllib.request.Request(url, data=b"", method="PUT", headers={
+    "Authorization": authorization,
+    "Host": parsed.netloc,
+    "X-Amz-Content-Sha256": payload_hash,
+    "X-Amz-Date": amz_date,
+})
+with urllib.request.urlopen(request, timeout=30) as response:
+    if response.status not in (200, 204):
+        raise RuntimeError(f"create-bucket returned HTTP {response.status}")
+PY
 
 log "phase 1: protect application data and the whole control plane off-site"
 K1="$WORK/keystone1"; W1="$WORK/wardstone1"
