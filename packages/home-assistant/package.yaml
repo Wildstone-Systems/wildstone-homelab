@@ -66,7 +66,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: home-assistant
-  version: 1.1.1
+  version: 1.1.2
   capability: home-assistant
   profile: container
 requires:
@@ -238,4 +238,5 @@ templates:
       repository: home-assistant-backup-repo
       passwordSecret: secret/restic-home-assistant
       schedule: daily
+      class: important
       retention: { keepDaily: 7, keepWeekly: 4, keepMonthly: 6 }

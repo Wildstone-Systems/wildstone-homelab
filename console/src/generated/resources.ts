@@ -141,6 +141,8 @@ export interface BackupPlanSpec {
   passwordSecret?: string;
   schedule?: string;
   retention?: BackupRetention;
+  exclude?: string[];
+  class?: string;
   offsite?: BackupOffsite;
 }
 

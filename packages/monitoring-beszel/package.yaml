@@ -19,7 +19,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: monitoring-beszel
-  version: 1.0.1
+  version: 1.0.2
   capability: host-monitoring
   profile: beszel
 requires:
@@ -76,4 +76,5 @@ templates:
       repository: host-monitoring-backup-repo
       passwordSecret: secret/restic-host-monitoring
       schedule: weekly
+      class: rebuildable
       retention: { keepWeekly: 4 }

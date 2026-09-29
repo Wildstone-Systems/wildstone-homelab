@@ -17,7 +17,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: photos-immich
-  version: 1.0.1
+  version: 1.0.2
   capability: photos
   profile: immich
 requires:
@@ -238,4 +238,5 @@ templates:
       repository: photos-backup-repo
       passwordSecret: secret/restic-photos
       schedule: daily
+      class: critical
       retention: { keepDaily: 7, keepWeekly: 4, keepMonthly: 6 }

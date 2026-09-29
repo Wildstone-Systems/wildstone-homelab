@@ -21,7 +21,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: audiobooks-audiobookshelf
-  version: 1.0.2
+  version: 1.0.3
   capability: audiobooks
   profile: audiobookshelf
 requires:
@@ -94,4 +94,5 @@ templates:
       repository: audiobooks-backup-repo
       passwordSecret: secret/restic-audiobooks
       schedule: daily
+      class: important
       retention: { keepDaily: 7, keepWeekly: 4 }

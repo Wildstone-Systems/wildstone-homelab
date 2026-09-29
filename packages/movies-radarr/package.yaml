@@ -22,7 +22,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: movies-radarr
-  version: 1.0.2
+  version: 1.0.3
   capability: movie-automation
   profile: radarr
 requires:
@@ -87,4 +87,5 @@ templates:
       repository: movie-automation-backup-repo
       passwordSecret: secret/restic-movie-automation
       schedule: weekly
+      class: rebuildable
       retention: { keepWeekly: 4 }

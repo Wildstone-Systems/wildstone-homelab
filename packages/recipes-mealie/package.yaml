@@ -17,7 +17,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: recipes-mealie
-  version: 1.0.1
+  version: 1.0.2
   capability: recipes
   profile: mealie
 requires:
@@ -105,4 +105,5 @@ templates:
       repository: recipes-backup-repo
       passwordSecret: secret/restic-recipes
       schedule: daily
+      class: critical
       retention: { keepDaily: 7, keepWeekly: 4 }

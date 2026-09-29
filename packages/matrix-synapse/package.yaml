@@ -52,7 +52,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: matrix-synapse
-  version: 1.0.9
+  version: 1.0.10
   capability: matrix-homeserver
   profile: synapse
 requires:
@@ -417,4 +417,5 @@ templates:
       repository: matrix-backup-repo
       passwordSecret: secret/restic-matrix
       schedule: daily
+      class: critical
       retention: { keepDaily: 7, keepWeekly: 4, keepMonthly: 6 }

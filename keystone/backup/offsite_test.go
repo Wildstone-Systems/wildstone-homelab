@@ -87,7 +87,7 @@ func TestLocalAndOffsiteRun(t *testing.T) {
 	}
 
 	cp, _ := run.run("offsite-photos")
-	if got := strings.Join(cp.spec.Command, " "); got != "copy" {
+	if got := strings.Join(cp.spec.Command, " "); got != "copy --tag "+configTag(offsitePlan("photos", resource.BackupRouteLocalAndOffsite).BackupPlan) {
 		t.Fatalf("copy command = %q", got)
 	}
 	for k, v := range map[string]string{
@@ -160,7 +160,7 @@ func TestOffsiteOnlyRun(t *testing.T) {
 		t.Fatalf("offsite-only init = %q, want plain init (no local repo to copy parameters from)", got)
 	}
 	b, _ := run.run("offsite-movies")
-	if got := strings.Join(b.spec.Command, " "); got != "backup /backup/immich-db /backup/immich-library" {
+	if got := strings.Join(b.spec.Command, " "); got != "backup /backup/immich-db /backup/immich-library --tag "+configTag(offsitePlan("movies", resource.BackupRouteOffsiteOnly).BackupPlan) {
 		t.Fatalf("backup command = %q", got)
 	}
 	for _, m := range b.spec.Mounts {

@@ -26,6 +26,8 @@
 package backup
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -290,7 +292,7 @@ func (e *Engine) runBackup(ctx context.Context, r resource.Resource, desired []r
 			if err := e.ensureRepository(ctx, r); err != nil {
 				return err
 			}
-			backupSpec := e.resticSpec(spec, append([]string{"backup"}, sourceTargets(spec)...), sources(spec))
+			backupSpec := e.resticSpec(spec, backupCommand(spec), sources(spec))
 			if err := e.Run.RunContainer(withGuard(ctx, guard), r.Metadata.Node, "backup-"+name, backupSpec); err != nil {
 				var low *LowDiskError
 				if errors.As(err, &low) {
@@ -501,6 +503,37 @@ func (e *Engine) resticSpec(spec *resource.BackupPlanSpec, command []string, wit
 		Command: command,
 		Restart: "no",
 	}
+}
+
+// backupCommand is `restic backup` over the plan's sources, with its
+// excludes. An absolute exclude names a folder under one of the plan's
+// paths, which sits at /backup<path> in the container (see sourceTarget).
+// Every snapshot is tagged with configTag, so an off-site copy can take
+// only snapshots made under the plan's current sources and excludes.
+func backupCommand(spec *resource.BackupPlanSpec) []string {
+	cmd := append([]string{"backup"}, sourceTargets(spec)...)
+	for _, x := range spec.Exclude {
+		if strings.HasPrefix(x, "/") {
+			x = "/backup" + x
+		}
+		cmd = append(cmd, "--exclude", x)
+	}
+	return append(cmd, "--tag", configTag(spec))
+}
+
+// configTag names what a snapshot holds: a digest of the plan's sources
+// and excludes. `restic copy` copies whole snapshots, so without it an
+// exclude added later — or off-site turned on over an old local
+// repository — would still send the excluded data out in the snapshots
+// taken before it (ADR-W045 A4). A copy takes only snapshots carrying the
+// current tag; older ones stay home.
+func configTag(spec *resource.BackupPlanSpec) string {
+	src := append([]string{}, sources(spec)...)
+	ex := append([]string{}, spec.Exclude...)
+	sort.Strings(src)
+	sort.Strings(ex)
+	sum := sha256.Sum256([]byte(strings.Join(src, "\x00") + "\x01" + strings.Join(ex, "\x00")))
+	return "wscfg-" + hex.EncodeToString(sum[:6])
 }
 
 // sourceTarget is where a source appears inside the run container: a

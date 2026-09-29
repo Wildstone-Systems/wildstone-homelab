@@ -134,7 +134,7 @@ func TestFirstTickRunsBackupAndDrill(t *testing.T) {
 	if spec.Image != testResticImage {
 		t.Fatalf("image = %s", spec.Image)
 	}
-	if got := strings.Join(spec.Command, " "); got != "backup /backup/immich-db /backup/immich-library" {
+	if got := strings.Join(spec.Command, " "); got != "backup /backup/immich-db /backup/immich-library --tag "+configTag(backupPlanResource("photos").BackupPlan) {
 		t.Fatalf("backup command = %q", got)
 	}
 	if spec.Env["RESTIC_PASSWORD"] != "secret/restic-photos" {

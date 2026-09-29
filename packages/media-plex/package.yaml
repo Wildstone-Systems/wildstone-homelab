@@ -28,7 +28,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: media-plex
-  version: 1.0.2
+  version: 1.0.3
   capability: media
   profile: plex
 requires:
@@ -104,4 +104,5 @@ templates:
       repository: media-backup-repo
       passwordSecret: secret/restic-media
       schedule: weekly
+      class: important
       retention: { keepWeekly: 4 }

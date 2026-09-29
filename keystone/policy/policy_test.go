@@ -538,3 +538,68 @@ func TestOffsiteTargetDeclared(t *testing.T) {
 		}
 	}
 }
+
+// TestBackupVolumesDeclared: a plan's volumes and repository volume must
+// be declared on its node — a typo would back up an empty volume.
+func TestBackupVolumesDeclared(t *testing.T) {
+	e := NewEngine(nil)
+	vol := func(name, node string) resource.Resource {
+		return resource.Resource{ApiVersion: resource.ApiVersion, Kind: resource.KindVolume,
+			Metadata: resource.Metadata{Name: name, Owner: "capability/photos", Node: node}, Volume: &resource.VolumeSpec{Name: name}}
+	}
+	plan := func() resource.Resource {
+		return resource.Resource{ApiVersion: resource.ApiVersion, Kind: resource.KindBackupPlan,
+			Metadata: resource.Metadata{Name: "photos", Owner: "capability/photos", Node: "n1"},
+			BackupPlan: &resource.BackupPlanSpec{Volumes: []string{"immich-library"}, Repository: "backup-repo",
+				PasswordSecret: "secret/restic-photos", Schedule: "daily"}}
+	}
+	count := func(rs ...resource.Resource) int {
+		v, _ := e.Validate(Change{Proposed: rs})
+		n := 0
+		for _, x := range v {
+			if x.Rule == RuleBackupVolumesDeclared {
+				n++
+			}
+		}
+		return n
+	}
+	if n := count(plan(), vol("immich-library", "n1"), vol("backup-repo", "n1")); n != 0 {
+		t.Fatalf("declared volumes flagged %d times", n)
+	}
+	if n := count(plan(), vol("backup-repo", "n1")); n != 1 {
+		t.Fatalf("undeclared source: %d violations, want 1", n)
+	}
+	if n := count(plan(), vol("immich-library", "n2"), vol("backup-repo", "n1")); n != 1 {
+		t.Fatalf("source declared on another node: %d violations, want 1", n)
+	}
+	if n := count(plan(), vol("immich-library", "n1")); n != 1 {
+		t.Fatalf("undeclared repository volume: %d violations, want 1", n)
+	}
+	pathRepo := plan()
+	pathRepo.BackupPlan.Repository = "/srv/wildstone/nas/backups/photos"
+	if n := count(pathRepo, vol("immich-library", "n1")); n != 0 {
+		t.Fatalf("a path repository was treated as a volume: %d", n)
+	}
+
+	// An UNTOUCHED plan still counts when the change removes or moves a
+	// volume it uses; an unrelated volume change does not flag it.
+	current := []resource.Resource{plan(), vol("immich-library", "n1"), vol("backup-repo", "n1")}
+	for name, tc := range map[string]struct {
+		proposed []resource.Resource
+		want     bool
+	}{
+		"source volume deleted":  {[]resource.Resource{plan(), vol("backup-repo", "n1")}, true},
+		"source volume moved":    {[]resource.Resource{plan(), vol("immich-library", "n2"), vol("backup-repo", "n1")}, true},
+		"repo volume deleted":    {[]resource.Resource{plan(), vol("immich-library", "n1")}, true},
+		"unrelated volume added": {[]resource.Resource{plan(), vol("immich-library", "n1"), vol("backup-repo", "n1"), vol("other", "n1")}, false},
+	} {
+		v, _ := e.Validate(Change{Current: current, Proposed: tc.proposed})
+		got := false
+		for _, x := range v {
+			got = got || x.Rule == RuleBackupVolumesDeclared
+		}
+		if got != tc.want {
+			t.Errorf("%s: violation %v, want %v (%v)", name, got, tc.want, v)
+		}
+	}
+}

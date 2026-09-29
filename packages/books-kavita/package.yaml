@@ -19,7 +19,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: books-kavita
-  version: 1.0.2
+  version: 1.0.3
   capability: books
   profile: kavita
 requires:
@@ -80,4 +80,5 @@ templates:
       repository: books-backup-repo
       passwordSecret: secret/restic-books
       schedule: weekly
+      class: important
       retention: { keepWeekly: 4 }

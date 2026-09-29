@@ -112,7 +112,7 @@ func TestNASPathsAreSourcesAndRepository(t *testing.T) {
 		t.Fatal(err)
 	}
 	b, _ := run.run("backup-movies")
-	if got := strings.Join(b.spec.Command, " "); got != "backup /backup/srv/wildstone/nas/media/movies" {
+	if got := strings.Join(b.spec.Command, " "); got != "backup /backup/srv/wildstone/nas/media/movies --tag "+configTag(nasPlan("movies").BackupPlan) {
 		t.Fatalf("backup command = %q", got)
 	}
 	var repoOK, srcOK bool
@@ -234,7 +234,7 @@ func TestLowDiskFallsBackOffsite(t *testing.T) {
 		t.Fatalf("reports = %+v, want local skipped and a clean off-site run", reports)
 	}
 	send, _ := run.run("offsite-photos")
-	if got := strings.Join(send.spec.Command, " "); got != "backup /backup/immich-db /backup/immich-library" {
+	if got := strings.Join(send.spec.Command, " "); !strings.HasPrefix(got, "backup /backup/immich-db /backup/immich-library --tag wscfg-") {
 		t.Fatalf("fallback command = %q, want a direct backup, not a copy", got)
 	}
 	for _, m := range send.spec.Mounts {
@@ -435,5 +435,75 @@ func TestCopyRunsWhileNASSourceIsDown(t *testing.T) {
 	}
 	if !backupRefused || !copyOK {
 		t.Fatalf("reports = %+v, want the backup refused and the copy run", reports)
+	}
+}
+
+// TestExcludesReachRestic: excludes ride every backup command — local and
+// straight off-site — and an absolute one is moved to where the folder
+// sits inside the run container.
+func TestExcludesReachRestic(t *testing.T) {
+	spec := &resource.BackupPlanSpec{
+		Paths:   []string{nasTarget + "/movies"},
+		Exclude: []string{"*.nfo", "**/Samples", nasTarget + "/movies/Extras"},
+	}
+	got := strings.Join(backupCommand(spec), " ")
+	want := "backup /backup" + nasTarget + "/movies --exclude *.nfo --exclude **/Samples --exclude /backup" + nasTarget + "/movies/Extras --tag " + configTag(spec)
+	if got != want {
+		t.Fatalf("command = %q\nwant      %q", got, want)
+	}
+
+	run := &fakeRunner{exit: map[string]int32{"offsite-movies-probe": 10}}
+	e, _, state := newEngine(t, run)
+	p := offsitePlan("movies", resource.BackupRouteOffsiteOnly)
+	p.BackupPlan.Exclude = []string{"*.nfo"}
+	seedAll(t, state, targetResource(false), p)
+	if err := e.RunNow(context.Background(), "movies"); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := run.run("offsite-movies")
+	if !strings.Contains(strings.Join(b.spec.Command, " "), "--exclude *.nfo") {
+		t.Fatalf("off-site backup command lost the exclude: %v", b.spec.Command)
+	}
+}
+
+// TestConfigTag: the tag names exactly the sources and excludes — the
+// same set in any order is the same tag, and adding an exclude or a
+// source makes a new one — and the off-site copy asks for the tag the
+// local backup just wrote, so older snapshots (made before an exclude)
+// never leave.
+func TestConfigTag(t *testing.T) {
+	a := &resource.BackupPlanSpec{Volumes: []string{"v1", "v2"}, Exclude: []string{"*.iso", "cache"}}
+	b := &resource.BackupPlanSpec{Volumes: []string{"v2", "v1"}, Exclude: []string{"cache", "*.iso"}}
+	if configTag(a) != configTag(b) {
+		t.Fatal("the same sources and excludes in another order gave another tag")
+	}
+	for name, c := range map[string]*resource.BackupPlanSpec{
+		"exclude added":   {Volumes: []string{"v1", "v2"}, Exclude: []string{"*.iso", "cache", "*.tmp"}},
+		"exclude gone":    {Volumes: []string{"v1", "v2"}, Exclude: []string{"*.iso"}},
+		"source added":    {Volumes: []string{"v1", "v2", "v3"}, Exclude: []string{"*.iso", "cache"}},
+		"path not volume": {Volumes: []string{"v1"}, Paths: []string{"/v2"}, Exclude: []string{"*.iso", "cache"}},
+	} {
+		if configTag(c) == configTag(a) {
+			t.Errorf("%s: tag unchanged", name)
+		}
+	}
+	if !strings.HasPrefix(configTag(a), "wscfg-") || len(configTag(a)) != len("wscfg-")+12 {
+		t.Fatalf("tag shape = %q", configTag(a))
+	}
+
+	run := &fakeRunner{}
+	e, _, state := newEngine(t, run)
+	p := offsitePlan("photos", resource.BackupRouteLocalAndOffsite)
+	p.BackupPlan.Exclude = []string{"*.iso"}
+	seedAll(t, state, targetResource(false), p)
+	if err := e.RunNow(context.Background(), "photos"); err != nil {
+		t.Fatal(err)
+	}
+	local, _ := run.run("backup-photos")
+	cp, _ := run.run("offsite-photos")
+	want := configTag(p.BackupPlan)
+	if !strings.Contains(strings.Join(local.spec.Command, " "), "--tag "+want) ||
+		strings.Join(cp.spec.Command, " ") != "copy --tag "+want {
+		t.Fatalf("local %v / copy %v, want both on tag %s", local.spec.Command, cp.spec.Command, want)
 	}
 }

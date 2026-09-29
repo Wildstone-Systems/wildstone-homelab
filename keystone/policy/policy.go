@@ -27,6 +27,7 @@ const (
 	RuleAutomationActionTier     = "automation-action-tier"
 	RuleLdapUserEmailUnique      = "ldap-user-email-unique"
 	RuleBackupTargetDeclared     = "backup-target-declared"
+	RuleBackupVolumesDeclared    = "backup-volumes-declared"
 )
 
 // automationTiers is the closed set of action tiers a household rule may
@@ -127,9 +128,16 @@ func (e *Engine) Validate(ch Change) (violations, exempted []Violation) {
 	proposedRoutes := map[string]bool{}
 	emailOwners := ldapEmailOwners(ch.Proposed)
 	targets := map[string]resource.Resource{}
+	volumeNodes := map[string]map[string]bool{} // volume name -> nodes declaring it
 	for _, r := range ch.Proposed {
-		if r.Kind == resource.KindBackupTarget {
+		switch r.Kind {
+		case resource.KindBackupTarget:
 			targets[r.Metadata.Name] = r
+		case resource.KindVolume:
+			if volumeNodes[r.Metadata.Name] == nil {
+				volumeNodes[r.Metadata.Name] = map[string]bool{}
+			}
+			volumeNodes[r.Metadata.Name][r.Metadata.Node] = true
 		}
 	}
 
@@ -179,11 +187,50 @@ func (e *Engine) Validate(ch Change) (violations, exempted []Violation) {
 			}
 			all = append(all, backupTargetRules(r)...)
 		case resource.KindBackupPlan:
-			if r.BackupPlan == nil || r.BackupPlan.Offsite == nil {
+			if r.BackupPlan == nil {
+				continue
+			}
+			all = append(all, backupVolumesRule(r, volumeNodes)...)
+			if r.BackupPlan.Offsite == nil {
 				continue
 			}
 			if v, bad := offsiteTargetRule(r, targets); bad {
 				all = append(all, v)
+			}
+		}
+	}
+	// A Volume removed or moved under an UNTOUCHED plan that backs it up
+	// (or keeps its repository in it) would leave that plan backing up
+	// an empty volume Docker creates on the spot. Same reverse check as
+	// for targets below.
+	touchedVolume := func(name string) bool {
+		key := string(resource.KindVolume) + "/" + name
+		cur, was := currentByKey[key]
+		var now resource.Resource
+		is := false
+		for _, r := range ch.Proposed {
+			if r.Kind == resource.KindVolume && r.Metadata.Name == name {
+				now, is = r, true
+				break
+			}
+		}
+		return was != is || (was && !reflect.DeepEqual(cur, now))
+	}
+	for _, r := range ch.Proposed {
+		if r.Kind != resource.KindBackupPlan || r.BackupPlan == nil {
+			continue
+		}
+		if cur, ok := currentByKey[string(r.Kind)+"/"+r.Metadata.Name]; !ok || !reflect.DeepEqual(cur, r) {
+			continue // touched: the loop above already checked it
+		}
+		refs := append([]string{}, r.BackupPlan.Volumes...)
+		if repo := r.BackupPlan.Repository; repo != "" && !strings.HasPrefix(repo, "/") {
+			refs = append(refs, repo)
+		}
+		for _, v := range refs {
+			if touchedVolume(v) {
+				all = append(all, backupVolumesRule(r, volumeNodes)...)
+				break
 			}
 		}
 	}
@@ -429,6 +476,31 @@ func backupTargetRules(r resource.Resource) []Violation {
 				Msg: fmt.Sprintf("%s value is secret-shaped; credentials go in accessKeySecret/secretKeySecret as secret/<name> references (§9.2-3)", f.name),
 			})
 		}
+	}
+	return out
+}
+
+// backupVolumesRule refuses a plan naming a volume nothing declares on
+// its node (ADR-W045 A4). Docker would create a missing volume empty the
+// moment the run container mounts it, so a typo is a backup of nothing
+// that reports success, every day, until someone needs a restore.
+func backupVolumesRule(r resource.Resource, volumeNodes map[string]map[string]bool) []Violation {
+	var out []Violation
+	for _, v := range r.BackupPlan.Volumes {
+		if !volumeNodes[v][r.Metadata.Node] {
+			out = append(out, Violation{
+				Rule: RuleBackupVolumesDeclared, Kind: string(r.Kind), Name: r.Metadata.Name,
+				Msg: fmt.Sprintf("volume %q is not declared on node %q; a backup of an undeclared volume would back up an empty one", v, r.Metadata.Node),
+			})
+		}
+	}
+	// The repository too, when it is a volume: restic would init a
+	// fresh one inside an accidental empty volume.
+	if repo := r.BackupPlan.Repository; repo != "" && !strings.HasPrefix(repo, "/") && !volumeNodes[repo][r.Metadata.Node] {
+		out = append(out, Violation{
+			Rule: RuleBackupVolumesDeclared, Kind: string(r.Kind), Name: r.Metadata.Name,
+			Msg: fmt.Sprintf("repository volume %q is not declared on node %q", repo, r.Metadata.Node),
+		})
 	}
 	return out
 }

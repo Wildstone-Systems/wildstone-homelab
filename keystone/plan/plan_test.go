@@ -553,3 +553,18 @@ func TestDiffOffsiteSourcesAdded(t *testing.T) {
 		t.Fatal("removing a source graded High")
 	}
 }
+
+// TestDiffOffsiteExcludeRemoved: dropping an exclude from a plan that
+// goes off-site sends more data out, so it is High; adding one is not.
+func TestDiffOffsiteExcludeRemoved(t *testing.T) {
+	off := &resource.BackupOffsite{Target: "offsite", Route: resource.BackupRouteLocalAndOffsite, PasswordSecret: "secret/o", Schedule: "weekly"}
+	with := offsiteBP(off)
+	with.BackupPlan.Exclude = []string{"*.iso"}
+	without := offsiteBP(off)
+	if p := Diff([]resource.Resource{without}, []resource.Resource{with}); p.OverallRisk != RiskHigh {
+		t.Fatalf("exclude removed = %s, want High", p.OverallRisk)
+	}
+	if p := Diff([]resource.Resource{with}, []resource.Resource{without}); p.OverallRisk == RiskHigh {
+		t.Fatal("adding an exclude graded High")
+	}
+}

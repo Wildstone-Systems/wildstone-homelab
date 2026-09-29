@@ -45,7 +45,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: agent-hermes
-  version: 0.1.6
+  version: 0.1.7
   capability: agent-hermes
   profile: hermes
   instanced: true
@@ -472,6 +472,7 @@ templates:
       repository: "{{ .Capability }}-backup-repo"
       passwordSecret: "secret/restic-{{ .Capability }}"
       schedule: daily
+      class: important
       retention: { keepDaily: 7, keepWeekly: 4 }
 # No agentTools: this package OFFERS no household tool. The runtime is a
 # CLIENT of the Agent API, not a capability the Agent gains — the tools

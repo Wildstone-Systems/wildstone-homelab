@@ -22,7 +22,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: music-lidarr
-  version: 1.0.2
+  version: 1.0.3
   capability: music-automation
   profile: lidarr
 requires:
@@ -87,4 +87,5 @@ templates:
       repository: music-automation-backup-repo
       passwordSecret: secret/restic-music-automation
       schedule: weekly
+      class: rebuildable
       retention: { keepWeekly: 4 }

@@ -21,7 +21,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: files-filebrowser
-  version: 1.0.1
+  version: 1.0.2
   capability: files
   profile: filebrowser
 requires:
@@ -83,4 +83,5 @@ templates:
       repository: files-backup-repo
       passwordSecret: secret/restic-files
       schedule: weekly
+      class: important
       retention: { keepWeekly: 4 }
