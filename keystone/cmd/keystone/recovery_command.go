@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/recovery"
@@ -66,6 +68,19 @@ func downloadRecoverySet(kit recovery.Kit) (string, func(), error) {
 	args := []string{"run", "--rm",
 		"-e", "RESTIC_REPOSITORY", "-e", "RESTIC_PASSWORD",
 		"-e", "AWS_ACCESS_KEY_ID", "-e", "AWS_SECRET_ACCESS_KEY"}
+	// Restic preserves the source files' root ownership when its restore
+	// container runs as root. Recovery artifacts staged by Wardstone are
+	// intentionally mode 0600, so that would leave the invoking operator
+	// unable to verify or install the downloaded set. Restore as the caller;
+	// the temporary directory already belongs to that uid/gid.
+	if runtime.GOOS != "windows" {
+		current, err := user.Current()
+		if err != nil {
+			remove()
+			return "", nil, fmt.Errorf("identifying recovery operator: %w", err)
+		}
+		args = append(args, "--user", current.Uid+":"+current.Gid)
+	}
 	if kit.Region != "" {
 		args = append(args, "-e", "AWS_DEFAULT_REGION")
 	}
