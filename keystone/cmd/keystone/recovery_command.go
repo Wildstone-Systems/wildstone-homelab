@@ -85,7 +85,7 @@ func downloadRecoverySet(kit recovery.Kit) (string, func(), error) {
 		args = append(args, "-e", "AWS_DEFAULT_REGION")
 	}
 	args = append(args, "-v", target+":/restore", defaultResticImage,
-		"restore", "latest", "--target", "/restore")
+		"--no-cache", "restore", "latest", "--target", "/restore")
 	if kit.PathStyle {
 		args = append(args, "-o", "s3.bucket-lookup=path")
 	}
