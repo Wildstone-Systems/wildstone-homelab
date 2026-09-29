@@ -136,6 +136,9 @@ func (e *Engine) runOffsite(ctx context.Context, r resource.Resource, desired []
 			if err := e.checkMounts(ctx, r, desired, !copying, copying); err != nil {
 				return err
 			}
+			if !local {
+				e.sampleSources(ctx, r)
+			}
 			ctx, cancel := context.WithTimeout(ctx, e.offsiteTimeout())
 			defer cancel()
 			node := r.Metadata.Node
@@ -182,6 +185,64 @@ func (e *Engine) runOffsite(ctx context.Context, r resource.Resource, desired []
 			forget := e.offsiteSpec(spec, t, name, append([]string{"forget", "--prune"}, forgetArgs...), nil, false)
 			if err := e.Run.RunContainer(ctx, node, "offsite-"+name+"-forget", forget); err != nil {
 				return describe("off-site forget pass", err)
+			}
+			return nil
+		})
+}
+
+// runOffsiteCheck verifies repository structure and a bounded rotating
+// subset of pack data. One twentieth caps routine download cost while
+// repeated weekly checks eventually read the whole repository.
+func (e *Engine) runOffsiteCheck(ctx context.Context, r resource.Resource, desired []resource.Resource) error {
+	name := r.Metadata.Name
+	subset := e.offsiteCheckSubset()
+	return e.withProvenance(ctx, r, runtimedb.BackupRunOffsiteCheck,
+		fmt.Sprintf("repository integrity check: %s (off-site, data subset %s)", name, subset),
+		func(ctx context.Context) error {
+			t, err := findTarget(desired, r)
+			if err != nil {
+				return err
+			}
+			ctx, cancel := context.WithTimeout(ctx, e.offsiteTimeout())
+			defer cancel()
+			cs := e.offsiteSpec(r.BackupPlan, t, name, []string{"check", "--read-data-subset=" + subset}, nil, false)
+			if err := e.Run.RunContainer(ctx, r.Metadata.Node, "check-offsite-"+name, cs); err != nil {
+				return describe("off-site repository integrity check", err)
+			}
+			return nil
+		})
+}
+
+// offsiteCheckSubset rotates through twenty stable restic partitions. The
+// check reads at most about 5% each week and covers every partition over a
+// twenty-week cycle instead of repeatedly sampling the same packs.
+func (e *Engine) offsiteCheckSubset() string {
+	week := e.now().UTC().Unix() / int64((7 * 24 * time.Hour).Seconds())
+	part := week%20 + 1
+	if part < 1 {
+		part += 20
+	}
+	return fmt.Sprintf("%d/20", part)
+}
+
+// runOffsiteDrill proves the S3 copy can restore into a disposable volume.
+// It is scheduled independently from the local drill and from an operator's
+// off-site restore, so neither can accidentally reset the other's clock.
+func (e *Engine) runOffsiteDrill(ctx context.Context, r resource.Resource, desired []resource.Resource) error {
+	name := r.Metadata.Name
+	return e.withProvenance(ctx, r, runtimedb.BackupRunOffsiteDrill,
+		fmt.Sprintf("off-site restore drill: %s (latest -> volume %s-offsite-drill)", name, name),
+		func(ctx context.Context) error {
+			t, err := findTarget(desired, r)
+			if err != nil {
+				return err
+			}
+			ctx, cancel := context.WithTimeout(ctx, e.offsiteTimeout())
+			defer cancel()
+			cs := e.offsiteSpec(r.BackupPlan, t, name, []string{"restore", "latest", "--target", "/restore"}, nil, false)
+			cs.Mounts = append(cs.Mounts, resource.Mount{Source: name + "-offsite-drill", Target: "/restore"})
+			if err := e.Run.RunContainer(ctx, r.Metadata.Node, "drill-offsite-"+name, cs); err != nil {
+				return describe("off-site restore drill", err)
 			}
 			return nil
 		})

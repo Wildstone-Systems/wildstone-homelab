@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"math"
 	"time"
 )
 
@@ -27,6 +28,15 @@ const (
 	// repository — the path after a total loss, when no local copy
 	// survived.
 	BackupRunOffsiteRestore BackupRunKind = "offsite-restore"
+	// BackupRunCheck and BackupRunOffsiteCheck prove repository integrity.
+	// The off-site variant is separate because its bounded data read has a
+	// different cost and failure domain from a full local check.
+	BackupRunCheck        BackupRunKind = "check"
+	BackupRunOffsiteCheck BackupRunKind = "offsite-check"
+	// BackupRunOffsiteDrill is the monthly restore into an isolated scratch
+	// volume from the S3 repository, distinct from both a local drill and an
+	// operator-requested off-site restore.
+	BackupRunOffsiteDrill BackupRunKind = "offsite-drill"
 )
 
 // BackupRunStatus is the lifecycle of one ledger row.
@@ -101,6 +111,77 @@ func (db *DB) LastBackupRun(planName string, kind BackupRunKind, status BackupRu
 		 ORDER BY seq DESC LIMIT 1`,
 		planName, string(kind), string(status))
 	return scanBackupRun(row)
+}
+
+// LastBackupRunAny returns the newest finished row for one plan and kind,
+// regardless of outcome. Health reporting uses it because a recent failed
+// verification must not be hidden by an older success.
+func (db *DB) LastBackupRunAny(planName string, kind BackupRunKind) (BackupRun, error) {
+	row := db.sql.QueryRow(
+		`SELECT seq, plan_name, run_kind, plan_id, started_at, finished_at, status, detail
+		 FROM backup_runs WHERE plan_name = ? AND run_kind = ? AND finished_at != ''
+		 ORDER BY seq DESC LIMIT 1`, planName, string(kind))
+	return scanBackupRun(row)
+}
+
+// BackupSourceSample is one best-effort measurement of all protected
+// sources immediately before a source-reading backup pass.
+type BackupSourceSample struct {
+	Seq        int64     `json:"seq"`
+	PlanName   string    `json:"planName"`
+	MeasuredAt time.Time `json:"measuredAt"`
+	Bytes      uint64    `json:"bytes"`
+}
+
+// RecordBackupSourceSample appends a source-size observation. SQLite's
+// INTEGER is signed, so impossible-to-store values are rejected explicitly.
+func (db *DB) RecordBackupSourceSample(planName string, bytes uint64, at time.Time) error {
+	if planName == "" {
+		return errors.New("runtimedb: backup source sample: plan name required")
+	}
+	if bytes > math.MaxInt64 {
+		return errors.New("runtimedb: backup source sample: byte count is too large")
+	}
+	if at.IsZero() {
+		at = time.Now()
+	}
+	_, err := db.sql.Exec(
+		`INSERT INTO backup_source_samples (plan_name, measured_at, source_bytes) VALUES (?, ?, ?)`,
+		planName, at.UTC().Format(time.RFC3339Nano), int64(bytes))
+	if err != nil {
+		return fmt.Errorf("runtimedb: recording backup source sample: %w", err)
+	}
+	return nil
+}
+
+// LatestBackupSourceSamples returns up to limit newest samples for a plan.
+func (db *DB) LatestBackupSourceSamples(planName string, limit int) ([]BackupSourceSample, error) {
+	if limit <= 0 {
+		limit = 2
+	}
+	rows, err := db.sql.Query(
+		`SELECT seq, plan_name, measured_at, source_bytes
+		 FROM backup_source_samples WHERE plan_name = ? ORDER BY seq DESC LIMIT ?`,
+		planName, limit)
+	if err != nil {
+		return nil, fmt.Errorf("runtimedb: listing backup source samples: %w", err)
+	}
+	defer rows.Close()
+	var out []BackupSourceSample
+	for rows.Next() {
+		var s BackupSourceSample
+		var measured string
+		var bytes int64
+		if err := rows.Scan(&s.Seq, &s.PlanName, &measured, &bytes); err != nil {
+			return nil, fmt.Errorf("runtimedb: scanning backup source sample: %w", err)
+		}
+		if s.MeasuredAt, err = time.Parse(time.RFC3339Nano, measured); err != nil {
+			return nil, fmt.Errorf("runtimedb: parsing backup source sample time: %w", err)
+		}
+		s.Bytes = uint64(bytes)
+		out = append(out, s)
+	}
+	return out, rows.Err()
 }
 
 // ListBackupRuns returns the newest limit ledger rows across all plans,

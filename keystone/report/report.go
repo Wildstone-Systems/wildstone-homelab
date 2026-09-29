@@ -7,10 +7,13 @@
 package report
 
 import (
+	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
+	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 )
 
@@ -25,6 +28,16 @@ type BackupVerdict struct {
 	RunKind  runtimedb.BackupRunKind   `json:"runKind"`
 	At       time.Time                 `json:"at"`
 	Detail   string                    `json:"detail,omitempty"`
+}
+
+// BackupAlert is a verification failure that needs household attention.
+// Kind is stable API data; Detail is the plain-language rendering.
+type BackupAlert struct {
+	PlanName string                  `json:"planName"`
+	Kind     string                  `json:"kind"`
+	RunKind  runtimedb.BackupRunKind `json:"runKind,omitempty"`
+	At       time.Time               `json:"at,omitzero"`
+	Detail   string                  `json:"detail"`
 }
 
 // Report is one morning report. Every field is derived from runtime-DB
@@ -46,6 +59,9 @@ type Report struct {
 	// ordered. BackupsOK is false if any plan's latest run failed.
 	Backups   []BackupVerdict `json:"backups"`
 	BackupsOK bool            `json:"backupsOk"`
+	// BackupAlerts covers facts a single latest-row verdict cannot: stale
+	// off-site copies, failed checks/drills, and abrupt source shrinkage.
+	BackupAlerts []BackupAlert `json:"backupAlerts,omitempty"`
 
 	// Summary is the one-paragraph deterministic rendering — what the
 	// daily timer appends to the event stream.
@@ -53,7 +69,7 @@ type Report struct {
 }
 
 // Morning builds the report as of now.
-func Morning(db *runtimedb.DB, now time.Time) (*Report, error) {
+func Morning(db *runtimedb.DB, now time.Time, desired ...resource.Resource) (*Report, error) {
 	r := &Report{GeneratedAt: now.UTC(), EventCounts24h: map[string]int{}, BackupsOK: true}
 
 	observed, err := db.ListObserved()
@@ -117,8 +133,84 @@ func Morning(db *runtimedb.DB, now time.Time) (*Report, error) {
 		}
 	}
 
+	if err := addBackupAlerts(r, db, desired, now); err != nil {
+		return nil, err
+	}
+	if len(r.BackupAlerts) > 0 {
+		r.BackupsOK = false
+	}
+
 	r.Summary = summarize(r)
 	return r, nil
+}
+
+var backupScheduleIntervals = map[string]time.Duration{
+	"daily": 24 * time.Hour, "weekly": 7 * 24 * time.Hour, "monthly": 30 * 24 * time.Hour,
+}
+
+const sourceShrinkKind = "source-shrink"
+
+func addBackupAlerts(r *Report, db *runtimedb.DB, desired []resource.Resource, now time.Time) error {
+	for _, plan := range desired {
+		if plan.Kind != resource.KindBackupPlan || plan.BackupPlan == nil {
+			continue
+		}
+		name := plan.Metadata.Name
+		if offsite := plan.BackupPlan.Offsite; offsite != nil {
+			last, err := db.LastBackupRun(name, runtimedb.BackupRunOffsite, runtimedb.BackupRunSucceeded)
+			if errors.Is(err, runtimedb.ErrNotFound) {
+				r.BackupAlerts = append(r.BackupAlerts, BackupAlert{PlanName: name, Kind: "stale-offsite", Detail: "the off-site copy has never completed"})
+			} else if err != nil {
+				return fmt.Errorf("report: reading %s off-site freshness: %w", name, err)
+			} else if interval := backupScheduleIntervals[offsite.Schedule]; interval > 0 && now.Sub(last.FinishedAt) > interval {
+				r.BackupAlerts = append(r.BackupAlerts, BackupAlert{PlanName: name, Kind: "stale-offsite", At: last.FinishedAt, Detail: fmt.Sprintf("the last off-site copy is older than its %s schedule", offsite.Schedule)})
+			}
+		}
+
+		for _, check := range []struct {
+			kind  runtimedb.BackupRunKind
+			alert string
+		}{
+			{runtimedb.BackupRunCheck, "failed-check"},
+			{runtimedb.BackupRunOffsiteCheck, "failed-check"},
+			{runtimedb.BackupRunDrill, "failed-drill"},
+			{runtimedb.BackupRunOffsiteDrill, "failed-drill"},
+		} {
+			last, err := db.LastBackupRunAny(name, check.kind)
+			if errors.Is(err, runtimedb.ErrNotFound) {
+				continue
+			}
+			if err != nil {
+				return fmt.Errorf("report: reading %s %s verdict: %w", name, check.kind, err)
+			}
+			if last.Status == runtimedb.BackupRunFailed {
+				detail := last.Detail
+				if detail == "" {
+					detail = fmt.Sprintf("the latest %s failed", check.kind)
+				}
+				r.BackupAlerts = append(r.BackupAlerts, BackupAlert{PlanName: name, Kind: check.alert, RunKind: check.kind, At: last.FinishedAt, Detail: detail})
+			}
+		}
+
+		samples, err := db.LatestBackupSourceSamples(name, 2)
+		if err != nil {
+			return fmt.Errorf("report: reading %s source sizes: %w", name, err)
+		}
+		if len(samples) == 2 && samples[1].Bytes > 0 && samples[0].Bytes < samples[1].Bytes-samples[1].Bytes/4 {
+			drop := 100 * float64(samples[1].Bytes-samples[0].Bytes) / float64(samples[1].Bytes)
+			r.BackupAlerts = append(r.BackupAlerts, BackupAlert{
+				PlanName: name, Kind: sourceShrinkKind, At: samples[0].MeasuredAt,
+				Detail: fmt.Sprintf("protected source size dropped %.0f%% (%d to %d bytes)", drop, samples[1].Bytes, samples[0].Bytes),
+			})
+		}
+	}
+	sort.SliceStable(r.BackupAlerts, func(i, j int) bool {
+		if r.BackupAlerts[i].PlanName != r.BackupAlerts[j].PlanName {
+			return r.BackupAlerts[i].PlanName < r.BackupAlerts[j].PlanName
+		}
+		return r.BackupAlerts[i].Kind < r.BackupAlerts[j].Kind
+	})
+	return nil
 }
 
 func summarize(r *Report) string {
@@ -147,6 +239,13 @@ func summarize(r *Report) string {
 			}
 		}
 		parts = append(parts, "backups: FAILING for "+strings.Join(failed, ", "))
+	}
+	if len(r.BackupAlerts) > 0 {
+		alerts := make([]string, 0, len(r.BackupAlerts))
+		for _, a := range r.BackupAlerts {
+			alerts = append(alerts, a.PlanName+"/"+a.Kind)
+		}
+		parts = append(parts, "backup alerts: "+strings.Join(alerts, ", "))
 	}
 	return "morning report: " + strings.Join(parts, "; ")
 }

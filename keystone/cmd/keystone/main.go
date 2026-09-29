@@ -2139,7 +2139,12 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	go func() {
 		for {
 			time.Sleep(time.Until(nextMorning(time.Now())))
-			rep, err := report.Morning(db, time.Now())
+			desired, err := state.Load()
+			if err != nil {
+				log.Error("morning report statefile", "err", err)
+				continue
+			}
+			rep, err := report.Morning(db, time.Now(), desired...)
 			if err != nil {
 				log.Error("morning report", "err", err)
 				continue

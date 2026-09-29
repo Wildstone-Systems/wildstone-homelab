@@ -77,6 +77,10 @@ type Engine struct {
 	// DrillEvery is the restore-drill cadence. <= 0 uses 30 days
 	// (ADR-W011 A4: "monthly restore-drill").
 	DrillEvery time.Duration
+	// CheckEvery is the repository-integrity cadence. <= 0 uses 7 days.
+	// Local checks read the whole repository; off-site checks bound data
+	// download separately in offsite.go.
+	CheckEvery time.Duration
 	// RetryAfter is how long a failed scheduled run waits before the
 	// schedule tries it again. <= 0 uses 1 hour. Without it a plan that
 	// fails every time (a wrong password, a full disk) would re-run on
@@ -201,12 +205,23 @@ func (e *Engine) planWork(ctx context.Context, r resource.Resource, desired []re
 			var low *LowDiskError
 			direct = errors.As(err, &low) && spec.Offsite != nil
 		}
+		if e.due(name, runtimedb.BackupRunCheck, e.checkEvery()) {
+			reports = append(reports, report(name, runtimedb.BackupRunCheck, e.runCheck(ctx, r, desired)))
+		}
 		if e.due(name, runtimedb.BackupRunDrill, e.drillEvery()) {
 			reports = append(reports, report(name, runtimedb.BackupRunDrill, e.runDrill(ctx, r)))
 		}
 	}
 	if o := spec.Offsite; o != nil && (direct || e.due(name, runtimedb.BackupRunOffsite, scheduleIntervals[o.Schedule])) {
 		reports = append(reports, report(name, runtimedb.BackupRunOffsite, e.runOffsite(ctx, r, desired, direct)))
+	}
+	if spec.Offsite != nil {
+		if e.due(name, runtimedb.BackupRunOffsiteCheck, e.checkEvery()) {
+			reports = append(reports, report(name, runtimedb.BackupRunOffsiteCheck, e.runOffsiteCheck(ctx, r, desired)))
+		}
+		if e.due(name, runtimedb.BackupRunOffsiteDrill, e.drillEvery()) {
+			reports = append(reports, report(name, runtimedb.BackupRunOffsiteDrill, e.runOffsiteDrill(ctx, r, desired)))
+		}
 	}
 	return reports
 }
@@ -224,6 +239,13 @@ func (e *Engine) drillEvery() time.Duration {
 		return e.DrillEvery
 	}
 	return 30 * 24 * time.Hour
+}
+
+func (e *Engine) checkEvery() time.Duration {
+	if e.CheckEvery > 0 {
+		return e.CheckEvery
+	}
+	return 7 * 24 * time.Hour
 }
 
 func (e *Engine) retryAfter() time.Duration {
@@ -285,6 +307,7 @@ func (e *Engine) runBackup(ctx context.Context, r resource.Resource, desired []r
 			if err := e.checkMounts(ctx, r, desired, true, true); err != nil {
 				return err
 			}
+			e.sampleSources(ctx, r)
 			guard, err := e.checkSpace(ctx, r)
 			if err != nil {
 				return err
@@ -310,6 +333,49 @@ func (e *Engine) runBackup(ctx context.Context, r resource.Resource, desired []r
 			}
 			return nil
 		})
+}
+
+// runCheck asks restic to verify the complete local repository. Its exit
+// code is the verdict; corrupted packs therefore become a failed check row
+// even when the most recent backup itself completed successfully.
+func (e *Engine) runCheck(ctx context.Context, r resource.Resource, desired []resource.Resource) error {
+	name := r.Metadata.Name
+	return e.withProvenance(ctx, r, runtimedb.BackupRunCheck,
+		fmt.Sprintf("repository integrity check: %s (local)", name),
+		func(ctx context.Context) error {
+			if err := e.checkMounts(ctx, r, desired, false, true); err != nil {
+				return err
+			}
+			if err := e.Run.RunContainer(ctx, r.Metadata.Node, "check-"+name, e.resticSpec(r.BackupPlan, []string{"check"}, nil)); err != nil {
+				return describe("repository integrity check", err)
+			}
+			return nil
+		})
+}
+
+// sampleSources records a best-effort total immediately before a pass that
+// reads live sources. Verification telemetry must never become a reason not
+// to back data up, so an old agent or failed measurement is logged and the
+// run continues.
+func (e *Engine) sampleSources(ctx context.Context, r resource.Resource) {
+	var total uint64
+	for _, source := range sources(r.BackupPlan) {
+		n, err := e.usage(ctx, r.Metadata.Node, source)
+		if err != nil {
+			if !errors.Is(err, errCannotCheck) {
+				e.log().Warn("backup: source size could not be measured", "plan", r.Metadata.Name, "source", source, "err", err)
+			}
+			return
+		}
+		if ^uint64(0)-total < n {
+			e.log().Warn("backup: source size overflow", "plan", r.Metadata.Name)
+			return
+		}
+		total += n
+	}
+	if err := e.DB.RecordBackupSourceSample(r.Metadata.Name, total, e.now()); err != nil {
+		e.log().Warn("backup: source size sample was not recorded", "plan", r.Metadata.Name, "err", err)
+	}
 }
 
 // ensureRepository initializes the plan's repository only when restic

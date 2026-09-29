@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/internal/dbtemplate"
+	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 )
 
@@ -121,6 +122,56 @@ func TestMorningCollectsFindings(t *testing.T) {
 	for _, want := range []string{"1 unhealthy", "Container immich-postgres", "1 plans awaiting approval", "backups: FAILING for photos-backup"} {
 		if !strings.Contains(rep.Summary, want) {
 			t.Fatalf("summary %q missing %q", rep.Summary, want)
+		}
+	}
+}
+
+func TestMorningFlagsStaleOffsiteFailedVerificationAndSourceShrink(t *testing.T) {
+	db := testDB(t)
+	started := time.Now().UTC()
+	finish := func(kind runtimedb.BackupRunKind, status runtimedb.BackupRunStatus, detail string) {
+		t.Helper()
+		seq, err := db.StartBackupRun("photos", kind, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := db.FinishBackupRun(seq, status, detail); err != nil {
+			t.Fatal(err)
+		}
+	}
+	finish(runtimedb.BackupRunOffsite, runtimedb.BackupRunSucceeded, "")
+	finish(runtimedb.BackupRunOffsiteCheck, runtimedb.BackupRunFailed, "repository damaged")
+	finish(runtimedb.BackupRunOffsiteDrill, runtimedb.BackupRunFailed, "restore failed")
+	if err := db.RecordBackupSourceSample("photos", 1000, started); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.RecordBackupSourceSample("photos", 500, started.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	plan := resource.Resource{
+		Kind: resource.KindBackupPlan, Metadata: resource.Metadata{Name: "photos"},
+		BackupPlan: &resource.BackupPlanSpec{Offsite: &resource.BackupOffsite{Schedule: "daily"}},
+	}
+
+	rep, err := Morning(db, started.Add(48*time.Hour), plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.BackupsOK || len(rep.BackupAlerts) != 4 {
+		t.Fatalf("backup health = %v alerts = %+v", rep.BackupsOK, rep.BackupAlerts)
+	}
+	kinds := map[string]bool{}
+	for _, alert := range rep.BackupAlerts {
+		kinds[alert.Kind] = true
+	}
+	for _, want := range []string{"stale-offsite", "failed-check", "failed-drill", "source-shrink"} {
+		if !kinds[want] {
+			t.Errorf("alerts %+v missing %s", rep.BackupAlerts, want)
+		}
+	}
+	for _, want := range []string{"photos/stale-offsite", "photos/failed-check", "photos/failed-drill", "photos/source-shrink"} {
+		if !strings.Contains(rep.Summary, want) {
+			t.Errorf("summary %q missing %q", rep.Summary, want)
 		}
 	}
 }

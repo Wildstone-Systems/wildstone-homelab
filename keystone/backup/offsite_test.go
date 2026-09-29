@@ -81,7 +81,7 @@ func TestLocalAndOffsiteRun(t *testing.T) {
 			t.Fatalf("report %+v", rep)
 		}
 	}
-	want := "backup-photos-probe,backup-photos,backup-photos-forget,drill-photos,offsite-photos-probe,offsite-photos,offsite-photos-forget"
+	want := "backup-photos-probe,backup-photos,backup-photos-forget,check-photos,drill-photos,offsite-photos-probe,offsite-photos,offsite-photos-forget,check-offsite-photos,drill-offsite-photos"
 	if got := strings.Join(run.names(), ","); got != want {
 		t.Fatalf("runs = %s\nwant   %s", got, want)
 	}
@@ -142,17 +142,18 @@ func TestOffsiteInitCopiesChunkerParams(t *testing.T) {
 // nothing mounts a local repository.
 func TestOffsiteOnlyRun(t *testing.T) {
 	run := &fakeRunner{exit: map[string]int32{"offsite-movies-probe": 10}}
-	e, _, state := newEngine(t, run)
+	e, db, state := newEngine(t, run)
+	e.Now = func() time.Time { return time.Unix(0, 0) }
 	seedAll(t, state, targetResource(false), offsitePlan("movies", resource.BackupRouteOffsiteOnly))
 
 	reports, err := e.Tick(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(reports) != 1 || reports[0].Kind != runtimedb.BackupRunOffsite || reports[0].Err != "" {
-		t.Fatalf("reports = %+v, want one clean off-site run and no local backup or drill", reports)
+	if len(reports) != 3 {
+		t.Fatalf("reports = %+v, want off-site backup + check + drill and no local work", reports)
 	}
-	if got := strings.Join(run.names(), ","); got != "offsite-movies-probe,offsite-movies-init,offsite-movies,offsite-movies-forget" {
+	if got := strings.Join(run.names(), ","); got != "offsite-movies-probe,offsite-movies-init,offsite-movies,offsite-movies-forget,check-offsite-movies,drill-offsite-movies" {
 		t.Fatalf("runs = %s", got)
 	}
 	init, _ := run.run("offsite-movies-init")
@@ -173,6 +174,26 @@ func TestOffsiteOnlyRun(t *testing.T) {
 	}
 	if _, ok := b.spec.Env["RESTIC_FROM_REPOSITORY"]; ok {
 		t.Fatal("offsite-only backup carries a copy source")
+	}
+	check, ok := run.run("check-offsite-movies")
+	if !ok || strings.Join(check.spec.Command, " ") != "check --read-data-subset=1/20" {
+		t.Fatalf("off-site check = %+v", check)
+	}
+	drill, ok := run.run("drill-offsite-movies")
+	if !ok || strings.Join(drill.spec.Command, " ") != "restore latest --target /restore" {
+		t.Fatalf("off-site drill = %+v", drill)
+	}
+	foundScratch := false
+	for _, m := range drill.spec.Mounts {
+		foundScratch = foundScratch || (m.Source == "movies-offsite-drill" && m.Target == "/restore")
+	}
+	if !foundScratch {
+		t.Fatalf("off-site drill mounts = %+v", drill.spec.Mounts)
+	}
+	for _, kind := range []runtimedb.BackupRunKind{runtimedb.BackupRunOffsiteCheck, runtimedb.BackupRunOffsiteDrill} {
+		if _, err := db.LastBackupRun("movies", kind, runtimedb.BackupRunSucceeded); err != nil {
+			t.Fatalf("no successful %s ledger row: %v", kind, err)
+		}
 	}
 }
 
