@@ -211,7 +211,15 @@ if [ -z "$PLAN_ID" ] || [ "$PLAN_ID" = null ]; then
 fi
 WILD_TOKEN="$ADMIN" "$BIN/wild" plan approve "$PLAN_ID"
 wait_for "data volume" 60 docker volume inspect drill-data
-WILD_TOKEN="$ADMIN" "$BIN/wild" backup target test offsite
+TARGET_TEST_LOG="$WORK/target-test.log"
+if ! WILD_TOKEN="$ADMIN" "$BIN/wild" backup target test offsite >"$TARGET_TEST_LOG" 2>&1; then
+  if grep -Eqi 'toomanyrequests|rate exceeded|data limit exceeded' "$TARGET_TEST_LOG"; then
+    echo "S3 target probe image pull was registry-throttled; continuing with the real backup/restore drill" >&2
+  else
+    cat "$TARGET_TEST_LOG" >&2
+    fail "read-only S3 target probe failed"
+  fi
+fi
 
 docker run --rm -v drill-data:/data --entrypoint /bin/sh busybox:stable -c "printf '%s' '$CANARY' > /data/canary.txt"
 timeout 8m env WILD_TOKEN="$ADMIN" "$BIN/wild" backup run drill
