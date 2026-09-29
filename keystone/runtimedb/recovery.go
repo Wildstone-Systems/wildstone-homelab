@@ -76,6 +76,15 @@ func RestoreBackup(source, destination, reason string, snapshotAt time.Time) (*D
 		_ = os.Remove(destination)
 		return nil, err
 	}
+	// Observed rows describe the machine that was lost, not durable household
+	// intent. Keeping them would make the fresh reconciler believe volumes,
+	// containers and external backup routes still exist on the replacement
+	// host, bypassing both reconstruction and the required drift approval.
+	if _, err := restored.sql.Exec(`DELETE FROM observed`); err != nil {
+		restored.Close()
+		_ = os.Remove(destination)
+		return nil, fmt.Errorf("runtimedb: clearing stale observations during restore: %w", err)
+	}
 	if err := restored.EnterRestoreQuarantine(reason, snapshotAt); err != nil {
 		restored.Close()
 		_ = os.Remove(destination)
