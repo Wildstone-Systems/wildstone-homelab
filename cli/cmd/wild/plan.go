@@ -4,6 +4,7 @@ package main
 // the public API, sharing the WILD_TOKEN/-api client conventions.
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"net/http"
@@ -132,10 +133,16 @@ func runLogs(args []string) int {
 
 func runBackup(args []string) int {
 	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "usage: wild backup list|run <plan>|restore <plan> [-from local|offsite] [-api URL]")
+		backupUsage()
 		return 2
 	}
 	sub, rest := args[0], args[1:]
+	if sub == "target" {
+		return runBackupTarget(rest)
+	}
+	if sub == "plan" {
+		return runBackupPlanAuthor(rest)
+	}
 	var plan string
 	if sub == "run" || sub == "restore" {
 		plan, rest = splitLeadingArg(rest)
@@ -153,7 +160,7 @@ func runBackup(args []string) int {
 		return 2
 	}
 	switch sub {
-	case "list":
+	case "list", "plans":
 		return simpleCall("backup", *apiBase, token, http.MethodGet, "/api/v1/backups", nil)
 	case "run":
 		return simpleCall("backup", *apiBase, token, http.MethodPost, "/api/v1/backups/"+url.PathEscape(plan)+"/run", nil)
@@ -164,9 +171,108 @@ func runBackup(args []string) int {
 		}
 		return simpleCall("backup", *apiBase, token, http.MethodPost, path, nil)
 	default:
-		fmt.Fprintln(os.Stderr, "usage: wild backup list|run <plan>|restore <plan> [-from local|offsite] [-api URL]")
+		backupUsage()
 		return 2
 	}
+}
+
+func runBackupTarget(args []string) int {
+	if len(args) < 1 {
+		backupUsage()
+		return 2
+	}
+	sub, rest := args[0], args[1:]
+	var name string
+	if sub == "test" || sub == "propose" {
+		name, rest = splitLeadingArg(rest)
+		if name == "" {
+			fmt.Fprintf(os.Stderr, "wild backup target %s: target name required\n", sub)
+			return 2
+		}
+	}
+	fs := flag.NewFlagSet("wild backup target "+sub, flag.ExitOnError)
+	apiBase := fs.String("api", "http://127.0.0.1:9441", "Keystone public API base URL")
+	node := fs.String("node", "", "node holding the target credentials")
+	endpoint := fs.String("endpoint", "", "S3-compatible API endpoint")
+	bucket := fs.String("bucket", "", "existing bucket name")
+	prefix := fs.String("prefix", "", "optional bucket prefix")
+	region := fs.String("region", "", "provider region")
+	access := fs.String("access-secret", "", "access key reference, secret/<name>")
+	secret := fs.String("secret-key-secret", "", "secret key reference, secret/<name>")
+	pathStyle := fs.Bool("path-style", false, "use path-style bucket addressing")
+	insecure := fs.Bool("insecure-http", false, "allow an http endpoint")
+	appendOnly := fs.Bool("append-only", false, "credential cannot overwrite or delete history")
+	fs.Parse(rest) //nolint:errcheck // ExitOnError
+	token, ok := requireToken("backup target")
+	if !ok {
+		return 2
+	}
+	switch sub {
+	case "list":
+		return simpleCall("backup target", *apiBase, token, http.MethodGet, "/api/v1/backups/targets", nil)
+	case "test":
+		return simpleCall("backup target", *apiBase, token, http.MethodPost, "/api/v1/backups/targets/"+url.PathEscape(name)+"/test", nil)
+	case "propose":
+		body := map[string]any{"name": name, "node": *node, "spec": map[string]any{
+			"type": "s3", "endpoint": *endpoint, "bucket": *bucket, "prefix": *prefix,
+			"region": *region, "pathStyle": *pathStyle, "insecureHTTP": *insecure,
+			"appendOnly": *appendOnly, "accessKeySecret": *access, "secretKeySecret": *secret,
+		}}
+		return simpleCall("backup target", *apiBase, token, http.MethodPost, "/api/v1/backups/targets", body)
+	default:
+		backupUsage()
+		return 2
+	}
+}
+
+// runBackupPlanAuthor submits a complete BackupPlan spec from JSON. Keeping
+// the helper lossless matters: it can author paths/excludes, local NAS
+// repositories and every off-site route without an ever-growing flag DSL.
+func runBackupPlanAuthor(args []string) int {
+	if len(args) < 1 || args[0] != "propose" {
+		backupUsage()
+		return 2
+	}
+	name, rest := splitLeadingArg(args[1:])
+	if name == "" {
+		fmt.Fprintln(os.Stderr, "wild backup plan propose: plan name required")
+		return 2
+	}
+	fs := flag.NewFlagSet("wild backup plan propose", flag.ExitOnError)
+	apiBase := fs.String("api", "http://127.0.0.1:9441", "Keystone public API base URL")
+	node := fs.String("node", "", "node that runs the backup")
+	specPath := fs.String("spec", "", "JSON file containing the BackupPlan spec")
+	fs.Parse(rest) //nolint:errcheck // ExitOnError
+	if *specPath == "" {
+		fmt.Fprintln(os.Stderr, "wild backup plan propose: -spec is required")
+		return 2
+	}
+	data, err := os.ReadFile(*specPath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "wild backup plan propose:", err)
+		return 1
+	}
+	var spec map[string]any
+	if err := json.Unmarshal(data, &spec); err != nil {
+		fmt.Fprintln(os.Stderr, "wild backup plan propose: invalid JSON:", err)
+		return 1
+	}
+	token, ok := requireToken("backup plan")
+	if !ok {
+		return 2
+	}
+	return simpleCall("backup plan", *apiBase, token, http.MethodPut, "/api/v1/backups/plans/"+url.PathEscape(name), map[string]any{"node": *node, "spec": spec})
+}
+
+func backupUsage() {
+	fmt.Fprintln(os.Stderr, `usage:
+  wild backup plans|list [-api URL]
+  wild backup run <plan> [-api URL]
+  wild backup restore <plan> [-from local|offsite] [-api URL]
+  wild backup target list [-api URL]
+  wild backup target test <name> [-api URL]
+  wild backup target propose <name> -node ID -endpoint URL -bucket NAME -access-secret secret/NAME -secret-key-secret secret/NAME [options]
+  wild backup plan propose <name> -node ID -spec plan.json [-api URL]`)
 }
 
 func planUsage() {

@@ -72,6 +72,9 @@ type Engine struct {
 	// engine-level configuration, not per-plan, so one upgrade covers the
 	// fleet and a plan cannot smuggle in an arbitrary image.
 	ResticImage string
+	// S3ProbeImage is the pinned AWS CLI used for a read-only HeadBucket
+	// when an operator tests a BackupTarget. Empty uses the release pin.
+	S3ProbeImage string
 	// SQLiteImage is the digest-pinned sqlite3 helper used only by the
 	// closed sqlite pre-backup hook. Packages cannot override it.
 	SQLiteImage string

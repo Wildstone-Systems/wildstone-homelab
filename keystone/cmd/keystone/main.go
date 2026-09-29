@@ -1538,6 +1538,8 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	apiSrv.BackupRun = bak.RunNow // on-demand backup endpoints (ADR-W015 A3)
 	apiSrv.BackupRestore = bak.RestoreAlongside
 	apiSrv.BackupRestoreOffsite = bak.RestoreOffsite
+	apiSrv.BackupTargetTest = bak.TestTarget
+	apiSrv.BackupEstimate = bak.Estimate
 	apiSrv.BackupPreflight = bak.Preflight
 
 	// Butler host (ADR-W017 A4): build the configured provider, run the

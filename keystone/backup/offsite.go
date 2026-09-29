@@ -28,6 +28,51 @@ import (
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 )
 
+// defaultS3ProbeImage is multi-architecture and digest-pinned like every
+// other image Keystone asks Wardstone to run.
+const defaultS3ProbeImage = "public.ecr.aws/aws-cli/aws-cli:2.31.21@sha256:40033dc921634b1073094712ea8237869bc857cd7ddc2571896ec9b14ef97ae8"
+
+// TestTarget checks credentials, endpoint reachability and bucket access
+// without writing an object. The target may be tested before any plan uses
+// it, which is why this uses S3 HeadBucket rather than a restic repository.
+func (e *Engine) TestTarget(ctx context.Context, name string) error {
+	desired, err := e.State.Load()
+	if err != nil {
+		return fmt.Errorf("loading desired state: %w", err)
+	}
+	var target resource.Resource
+	for _, r := range desired {
+		if r.Kind == resource.KindBackupTarget && r.Metadata.Name == name {
+			target = r
+			break
+		}
+	}
+	if target.BackupTarget == nil {
+		return fmt.Errorf("no BackupTarget %q in the Statefile", name)
+	}
+	t := target.BackupTarget
+	image := e.S3ProbeImage
+	if image == "" {
+		image = defaultS3ProbeImage
+	}
+	env := map[string]string{
+		"AWS_ACCESS_KEY_ID":     t.AccessKeySecret,
+		"AWS_SECRET_ACCESS_KEY": t.SecretKeySecret,
+	}
+	if t.Region != "" {
+		env["AWS_DEFAULT_REGION"] = t.Region
+	}
+	command := []string{"--no-cli-pager", "--endpoint-url", t.Endpoint, "s3api", "head-bucket", "--bucket", t.Bucket}
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	if err := e.Run.RunContainer(ctx, target.Metadata.Node, "test-target-"+name, resource.ContainerSpec{
+		Image: image, Env: env, Command: command, Restart: "no",
+	}); err != nil {
+		return fmt.Errorf("read-only S3 bucket check: %w", err)
+	}
+	return nil
+}
+
 // hasLocal reports whether a plan keeps a local repository: every plan
 // except an offsite-only one.
 func hasLocal(p *resource.BackupPlanSpec) bool {

@@ -61,6 +61,34 @@ func targetResource(pathStyle bool) resource.Resource {
 	}
 }
 
+func TestTargetConnectionTestIsReadOnly(t *testing.T) {
+	run := &fakeRunner{}
+	e, _, state := newEngine(t, run)
+	seedAll(t, state, targetResource(true))
+	if err := e.TestTarget(context.Background(), "offsite"); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := run.run("test-target-offsite")
+	if !ok {
+		t.Fatal("target test did not run")
+	}
+	if got.node != "n1" || got.spec.Image != defaultS3ProbeImage {
+		t.Fatalf("probe placement/image = %s %s", got.node, got.spec.Image)
+	}
+	command := strings.Join(got.spec.Command, " ")
+	if !strings.Contains(command, "s3api head-bucket --bucket wildstone-backups") {
+		t.Fatalf("probe command = %q, want read-only HeadBucket", command)
+	}
+	for _, mutating := range []string{" put-", " cp ", " mb ", " create-bucket", " delete"} {
+		if strings.Contains(command, mutating) {
+			t.Fatalf("probe command mutates the target: %q", command)
+		}
+	}
+	if got.spec.Env["AWS_ACCESS_KEY_ID"] != "secret/offsite-access" || got.spec.Env["AWS_SECRET_ACCESS_KEY"] != "secret/offsite-secret" {
+		t.Fatalf("probe did not preserve secret references: %+v", got.spec.Env)
+	}
+}
+
 func offsitePlan(name, route string) resource.Resource {
 	r := backupPlanResource(name)
 	r.BackupPlan.Offsite = &resource.BackupOffsite{

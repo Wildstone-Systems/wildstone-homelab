@@ -107,6 +107,71 @@ func TestBackupRestoreFrom(t *testing.T) {
 	}
 }
 
+func TestBackupConfigurationEndpoints(t *testing.T) {
+	h := newHarness(t)
+	target := resource.Resource{ApiVersion: resource.ApiVersion, Kind: resource.KindBackupTarget,
+		Metadata:     resource.Metadata{Name: "offsite", Owner: "system", Node: "n1"},
+		BackupTarget: &resource.BackupTargetSpec{Type: "s3", Endpoint: "https://s3.example.com", Bucket: "wildstone-backups", AccessKeySecret: "secret/access", SecretKeySecret: "secret/key"}}
+	plan := resource.Resource{ApiVersion: resource.ApiVersion, Kind: resource.KindBackupPlan,
+		Metadata:   resource.Metadata{Name: "photos", Owner: "capability/photos", Node: "n1"},
+		BackupPlan: &resource.BackupPlanSpec{Volumes: []string{"photos"}, Repository: "repo", PasswordSecret: "secret/restic", Schedule: "daily", Class: "critical"}}
+	for _, r := range []resource.Resource{target, plan} {
+		if err := h.s.State.Put(r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var listed struct {
+		Plans   []backupPlanView      `json:"plans"`
+		Targets []backupTargetView    `json:"targets"`
+		Runs    []runtimedb.BackupRun `json:"runs"`
+	}
+	if resp := h.do(runtimedb.RoleButler, http.MethodGet, "/api/v1/backups", nil, &listed); resp.StatusCode != http.StatusOK {
+		t.Fatalf("list = %d", resp.StatusCode)
+	}
+	if len(listed.Plans) != 1 || listed.Plans[0].Name != "photos" || len(listed.Runs) != 0 {
+		t.Fatalf("never-run plans missing from list: %+v", listed)
+	}
+	if len(listed.Targets) != 1 || listed.Targets[0].Spec.Bucket != "wildstone-backups" {
+		t.Fatalf("targets = %+v", listed.Targets)
+	}
+
+	tested := ""
+	h.s.BackupTargetTest = func(_ context.Context, name string) error { tested = name; return nil }
+	if resp := h.do(runtimedb.RoleButler, http.MethodPost, "/api/v1/backups/targets/offsite/test", nil, nil); resp.StatusCode != http.StatusOK {
+		t.Fatalf("read-only target test = %d", resp.StatusCode)
+	}
+	if tested != "offsite" {
+		t.Fatalf("tested %q", tested)
+	}
+	h.s.BackupEstimate = func(_ context.Context, got resource.Resource) (uint64, string, error) {
+		if got.Metadata.Name != "photos" || got.BackupPlan.Repository != "repo" {
+			t.Fatalf("estimate received %+v", got)
+		}
+		return 42 << 30, "42.0 GiB of sources; enough local space", nil
+	}
+	var estimate struct {
+		SourceBytes uint64 `json:"sourceBytes"`
+		DiskCheck   string `json:"diskCheck"`
+	}
+	if resp := h.do(runtimedb.RoleButler, http.MethodPost, "/api/v1/backups/plans/photos/estimate",
+		backupPlanRequest{Node: "n1", Spec: *plan.BackupPlan}, &estimate); resp.StatusCode != http.StatusOK {
+		t.Fatalf("estimate = %d", resp.StatusCode)
+	}
+	if estimate.SourceBytes != 42<<30 || estimate.DiskCheck == "" {
+		t.Fatalf("estimate body = %+v", estimate)
+	}
+
+	req := backupTargetRequest{Name: "archive", Node: "n1", Spec: resource.BackupTargetSpec{
+		Type: "s3", Endpoint: "https://s3.example.com", Bucket: "archive-bucket", AccessKeySecret: "secret/archive-access", SecretKeySecret: "secret/archive-key"}}
+	if resp := h.do(runtimedb.RoleOperator, http.MethodPost, "/api/v1/backups/targets", req, nil); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("target proposal = %d", resp.StatusCode)
+	}
+	proposed, err := h.s.DB.PlansInState(runtimedb.PlanProposed)
+	if err != nil || len(proposed) != 1 {
+		t.Fatalf("proposal records = %+v, %v", proposed, err)
+	}
+}
+
 func TestContainerLogsEndpointDemuxes(t *testing.T) {
 	h := newHarness(t)
 	// Framed docker stream: stdout "hello\n", stderr "oops\n".

@@ -850,9 +850,9 @@ var backupSchedules = map[string]bool{
 // mean "no keep flag of that class"; all-zero means no forget/prune pass
 // runs at all.
 type BackupRetention struct {
-	KeepDaily   int `yaml:"keepDaily,omitempty"`
-	KeepWeekly  int `yaml:"keepWeekly,omitempty"`
-	KeepMonthly int `yaml:"keepMonthly,omitempty"`
+	KeepDaily   int `yaml:"keepDaily,omitempty" json:"keepDaily,omitempty"`
+	KeepWeekly  int `yaml:"keepWeekly,omitempty" json:"keepWeekly,omitempty"`
+	KeepMonthly int `yaml:"keepMonthly,omitempty" json:"keepMonthly,omitempty"`
 }
 
 // BackupPlanSpec is the spec for kind BackupPlan (ADR-W011 A4): a standing
@@ -864,34 +864,34 @@ type BackupRetention struct {
 type BackupPlanSpec struct {
 	// Volumes are the source volume names, mounted read-only into the
 	// restic run container.
-	Volumes []string `yaml:"volumes,omitempty"`
+	Volumes []string `yaml:"volumes,omitempty" json:"volumes,omitempty"`
 	// Paths are source folders on the node, such as a movie library on a
 	// NAS share (ADR-W045 A4): absolute paths under the node's managed
 	// prefix, mounted read-only. A plan needs at least one volume or path.
-	Paths []string `yaml:"paths,omitempty"`
+	Paths []string `yaml:"paths,omitempty" json:"paths,omitempty"`
 	// Repository holds the local restic repository: a volume name, or an
 	// absolute path on the node — a folder on a NAS share keeps the local
 	// copy off the host's own disk (ADR-W045 A3.2).
-	Repository string `yaml:"repository,omitempty"`
+	Repository string `yaml:"repository,omitempty" json:"repository,omitempty"`
 	// Reserve is the free space the local repository's disk must keep,
 	// as a size ("50GiB") or a share of the disk ("15%"). Empty uses the
 	// larger of 10% and 20 GiB; it cannot be zero (ADR-W045 A3.1).
-	Reserve string `yaml:"reserve,omitempty"`
+	Reserve string `yaml:"reserve,omitempty" json:"reserve,omitempty"`
 	// PasswordSecret is a reference of the form secret/<name> to the
 	// repository password (ADR-W005 A2) — never a literal value. Only
 	// Wardstone materializes it (E8).
-	PasswordSecret string `yaml:"passwordSecret,omitempty"`
+	PasswordSecret string `yaml:"passwordSecret,omitempty" json:"passwordSecret,omitempty"`
 	// Schedule is one of backupSchedules: daily, weekly, monthly.
-	Schedule  string          `yaml:"schedule,omitempty"`
-	Retention BackupRetention `yaml:"retention,omitempty"`
+	Schedule  string          `yaml:"schedule,omitempty" json:"schedule,omitempty"`
+	Retention BackupRetention `yaml:"retention,omitempty" json:"retention,omitempty"`
 	// Exclude are restic exclude patterns (ADR-W045 A4). A pattern with no
 	// leading "/" matches anywhere ("*.nfo", "**/Samples", "cache"); an
 	// absolute one must lie inside one of Paths and excludes that folder.
-	Exclude []string `yaml:"exclude,omitempty"`
+	Exclude []string `yaml:"exclude,omitempty" json:"exclude,omitempty"`
 	// Class says how much the data matters: critical (irreplaceable),
 	// important (painful to rebuild) or rebuildable. It groups plans for
 	// the owner choosing what goes off-site; it changes no behaviour.
-	Class string `yaml:"class,omitempty"`
+	Class string `yaml:"class,omitempty" json:"class,omitempty"`
 	// PreBackup is a closed set of consistent database exports performed
 	// before restic reads the plan sources. Hooks name declared resources;
 	// they cannot supply an image, command, environment variable or shell.
@@ -900,11 +900,11 @@ type BackupPlanSpec struct {
 	// (ADR-W045 A3). With route offsite-only, Repository, PasswordSecret,
 	// Schedule and Retention are left empty: the off-site block carries
 	// them, and nothing is stored locally.
-	Offsite *BackupOffsite `yaml:"offsite,omitempty"`
+	Offsite *BackupOffsite `yaml:"offsite,omitempty" json:"offsite,omitempty"`
 	// RecoveryPublicKey turns the reserved plan named "wildstone" into the
 	// whole-site recovery set (ADR-W045 A5). It is the printable public half
 	// only; the private half must never be stored on a Wildstone host.
-	RecoveryPublicKey string `yaml:"recoveryPublicKey,omitempty"`
+	RecoveryPublicKey string `yaml:"recoveryPublicKey,omitempty" json:"recoveryPublicKey,omitempty"`
 }
 
 const (
@@ -948,15 +948,15 @@ var backupRoutes = map[string]bool{
 // opens both copies.
 type BackupOffsite struct {
 	// Target names a BackupTarget on the same node.
-	Target string `yaml:"target"`
+	Target string `yaml:"target" json:"target"`
 	// Route is one of backupRoutes.
-	Route string `yaml:"route"`
+	Route string `yaml:"route" json:"route"`
 	// PasswordSecret is the off-site repository password, a secret/<name>
 	// reference that must differ from the plan's local one.
-	PasswordSecret string `yaml:"passwordSecret"`
+	PasswordSecret string `yaml:"passwordSecret" json:"passwordSecret"`
 	// Schedule is one of daily, weekly, monthly.
-	Schedule  string          `yaml:"schedule"`
-	Retention BackupRetention `yaml:"retention,omitempty"`
+	Schedule  string          `yaml:"schedule" json:"schedule"`
+	Retention BackupRetention `yaml:"retention,omitempty" json:"retention,omitempty"`
 }
 
 // backupTargetTypes is the closed set of BackupTargetSpec.Type values.
@@ -989,38 +989,38 @@ var regionRegexp = regexp.MustCompile(`^[a-z0-9-]{1,32}$`)
 // that reason: the references resolve in that node's secret store.
 type BackupTargetSpec struct {
 	// Type is one of backupTargetTypes: "s3".
-	Type string `yaml:"type"`
+	Type string `yaml:"type" json:"type"`
 	// Endpoint is the provider's S3 API base URL, e.g.
 	// https://s3.us-east-1.amazonaws.com or
 	// https://<account-id>.r2.cloudflarestorage.com. Scheme and host
 	// (and optional port) only: no path, query or credentials.
-	Endpoint string `yaml:"endpoint"`
+	Endpoint string `yaml:"endpoint" json:"endpoint"`
 	// Bucket is the bucket name; it must already exist.
-	Bucket string `yaml:"bucket"`
+	Bucket string `yaml:"bucket" json:"bucket"`
 	// Prefix is an optional folder inside the bucket, so one bucket can
 	// hold several installs: "home" or "wildstone/home".
-	Prefix string `yaml:"prefix,omitempty"`
+	Prefix string `yaml:"prefix,omitempty" json:"prefix,omitempty"`
 	// Region is the provider region; optional for providers that ignore
 	// it. R2 uses "auto".
-	Region string `yaml:"region,omitempty"`
+	Region string `yaml:"region,omitempty" json:"region,omitempty"`
 	// PathStyle selects path-style bucket addressing
 	// (https://host/bucket) instead of virtual-host style
 	// (https://bucket.host). MinIO and most self-hosted stores need it.
-	PathStyle bool `yaml:"pathStyle,omitempty"`
+	PathStyle bool `yaml:"pathStyle,omitempty" json:"pathStyle,omitempty"`
 	// InsecureHTTP allows an http:// endpoint. Only for a store on the
 	// home network (a LAN MinIO); backups stay encrypted by restic, but
 	// requests and metadata cross the network in the clear.
-	InsecureHTTP bool `yaml:"insecureHTTP,omitempty"`
+	InsecureHTTP bool `yaml:"insecureHTTP,omitempty" json:"insecureHTTP,omitempty"`
 	// AppendOnly says the node credential cannot delete or overwrite
 	// repository history (normally enforced by bucket Object Lock and a
 	// least-privilege key). Wildstone then uses restic without repository
 	// locks and leaves forget/prune to a separate, protected maintenance
 	// credential. The provider policy is configured outside Wildstone.
-	AppendOnly bool `yaml:"appendOnly,omitempty"`
+	AppendOnly bool `yaml:"appendOnly,omitempty" json:"appendOnly,omitempty"`
 	// AccessKeySecret and SecretKeySecret reference the access key ID and
 	// secret access key as secret/<name>, never literal values.
-	AccessKeySecret string `yaml:"accessKeySecret"`
-	SecretKeySecret string `yaml:"secretKeySecret"`
+	AccessKeySecret string `yaml:"accessKeySecret" json:"accessKeySecret"`
+	SecretKeySecret string `yaml:"secretKeySecret" json:"secretKeySecret"`
 }
 
 // networkMountTypes is the closed set of NetworkMountSpec.Type values.
