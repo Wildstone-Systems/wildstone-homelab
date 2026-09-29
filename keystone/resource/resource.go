@@ -1011,6 +1011,12 @@ type BackupTargetSpec struct {
 	// home network (a LAN MinIO); backups stay encrypted by restic, but
 	// requests and metadata cross the network in the clear.
 	InsecureHTTP bool `yaml:"insecureHTTP,omitempty"`
+	// AppendOnly says the node credential cannot delete or overwrite
+	// repository history (normally enforced by bucket Object Lock and a
+	// least-privilege key). Wildstone then uses restic without repository
+	// locks and leaves forget/prune to a separate, protected maintenance
+	// credential. The provider policy is configured outside Wildstone.
+	AppendOnly bool `yaml:"appendOnly,omitempty"`
 	// AccessKeySecret and SecretKeySecret reference the access key ID and
 	// secret access key as secret/<name>, never literal values.
 	AccessKeySecret string `yaml:"accessKeySecret"`

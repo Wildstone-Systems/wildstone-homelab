@@ -163,6 +163,7 @@ spec:
   prefix: home
   region: auto
   pathStyle: true
+  appendOnly: true
   accessKeySecret: secret/offsite-s3-access-key
   secretKeySecret: secret/offsite-s3-secret-key
 `

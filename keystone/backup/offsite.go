@@ -92,6 +92,14 @@ func (e *Engine) offsiteSpec(plan *resource.BackupPlanSpec, t *resource.BackupTa
 		mounts = append(mounts, resource.Mount{Source: v, Target: sourceTarget(v), ReadOnly: true})
 	}
 	cmd := append([]string{}, command...)
+	// An append-only credential cannot remove restic's temporary lock
+	// object. Runs are serialized per plan, so disabling repository locks
+	// here is safe and avoids accumulating a stale lock that would stop the
+	// next backup. Destructive maintenance is deliberately not run with
+	// this credential (see runOffsite below).
+	if t.AppendOnly {
+		cmd = append(cmd, "--no-lock")
+	}
 	if t.PathStyle {
 		cmd = append(cmd, "-o", "s3.bucket-lookup=path")
 	}
@@ -191,6 +199,14 @@ func (e *Engine) runOffsite(ctx context.Context, r resource.Resource, desired []
 				return describe(pass, err)
 			}
 
+			// forget and prune require delete access. Running them with an
+			// append-only node key would either fail against Object Lock or,
+			// if the key were accidentally over-privileged, defeat the reason
+			// for append-only mode. Maintenance uses a separate offline key.
+			if t.AppendOnly {
+				e.log().Info("backup: off-site retention is append-only; skipping forget/prune", "plan", name, "target", o.Target)
+				return nil
+			}
 			forgetArgs := retentionArgs(o.Retention)
 			if forgetArgs == nil {
 				return nil

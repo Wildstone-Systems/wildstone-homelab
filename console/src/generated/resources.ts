@@ -154,6 +154,7 @@ export interface BackupTargetSpec {
   region?: string;
   pathStyle?: boolean;
   insecureHTTP?: boolean;
+  appendOnly?: boolean;
   accessKeySecret: string;
   secretKeySecret: string;
 }

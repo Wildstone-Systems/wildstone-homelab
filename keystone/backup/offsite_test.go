@@ -152,6 +152,39 @@ func TestLocalAndOffsiteRun(t *testing.T) {
 	}
 }
 
+// TestAppendOnlyTargetNeverDeletes: the node key can add and read
+// repository data but cannot maintain it. Every restic pass avoids lock
+// deletion, and retention never turns into forget/prune with that key.
+func TestAppendOnlyTargetNeverDeletes(t *testing.T) {
+	run := &fakeRunner{}
+	e, _, state := newEngine(t, run)
+	target := targetResource(false)
+	target.BackupTarget.AppendOnly = true
+	seedAll(t, state, target, offsitePlan("photos", resource.BackupRouteLocalAndOffsite))
+
+	if err := e.RunNow(context.Background(), "photos"); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"offsite-photos-probe", "offsite-photos"} {
+		r, ok := run.run(name)
+		if !ok || !containsArg(r.spec.Command, "--no-lock") {
+			t.Fatalf("%s command = %v, want --no-lock", name, r.spec.Command)
+		}
+	}
+	if _, ok := run.run("offsite-photos-forget"); ok {
+		t.Fatalf("append-only target ran forget/prune: %v", run.names())
+	}
+}
+
+func containsArg(args []string, want string) bool {
+	for _, arg := range args {
+		if arg == want {
+			return true
+		}
+	}
+	return false
+}
+
 // TestOffsiteInitCopiesChunkerParams: a missing off-site repository is
 // created with the local repo's chunker parameters, so copies dedupe.
 func TestOffsiteInitCopiesChunkerParams(t *testing.T) {

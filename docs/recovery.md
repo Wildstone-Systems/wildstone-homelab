@@ -272,6 +272,10 @@ Each plan picks a **route**:
 
 The off-site copy has its **own password**, separate from the local one.
 
+For provider-specific least-privilege policies, Object Lock, credential
+rotation and current cost examples, see
+[Off-site backup provider hardening](backup-provider-hardening.md).
+
 ```sh
 # The bucket's key (limit it to this one bucket), and one password per plan.
 printf '%s' '<access-key-id>'     | wild secret set offsite-s3-access-key -node node1

@@ -191,6 +191,30 @@ func TestSecretOpsAndMaterialization(t *testing.T) {
 	if containsString(fake.envOf("cloudflared2"), "TUNNEL_TOKEN="+tokenValue) {
 		t.Fatal("rotated secret still materializes the old value")
 	}
+
+	// An operator-provided credential follows the same path used by
+	// `wild secret set`: replacing the value under the stable reference is
+	// enough. The next one-shot container materializes the new value; no
+	// Statefile edit or Keystone restart is involved.
+	const replacement = "eyJhIjoi-KNOWN-FAKE-tunnel-token-2"
+	res = dispatch(t, h, "node-a", &wsv1.Operation{Op: &wsv1.Operation_PutSecret{
+		PutSecret: &wsv1.PutSecret{Name: "cloudflared-tunnel-token", Value: replacement},
+	}})
+	if res.GetError() != nil || res.GetPutSecret().GetVersion() != 3 {
+		t.Fatalf("replacement put = %+v, want version 3", res)
+	}
+	res = dispatch(t, h, "node-a", &wsv1.Operation{Op: &wsv1.Operation_EnsureContainer{
+		EnsureContainer: &wsv1.EnsureContainer{
+			Name: "cloudflared3", Image: testDigestImage,
+			Env: map[string]string{"TUNNEL_TOKEN": "secret/cloudflared-tunnel-token"},
+		},
+	}})
+	if res.GetError() != nil {
+		t.Fatalf("ensure after replacement: %s", res.GetError().GetMessage())
+	}
+	if !containsString(fake.envOf("cloudflared3"), "TUNNEL_TOKEN="+replacement) {
+		t.Fatalf("next container did not materialize the replacement: %v", fake.envOf("cloudflared3"))
+	}
 }
 
 // TestPutSecretNeverAudited pins the audit allowlist: PutSecret's value
