@@ -60,7 +60,8 @@ start_keystone() {
   wait_for "Keystone API" 30 curl -sS -f "$API/api/v1/healthz"
 }
 start_wardstone() {
-  "$BIN/wardstoned" -node-id "$NODE" -keystone 127.0.0.1:9440 -data-dir "$1" -join-token "$2" >"$3" 2>&1 &
+  # Wardstone owns privileged host and Docker operations in production.
+  sudo -n "$BIN/wardstoned" -node-id "$NODE" -keystone 127.0.0.1:9440 -data-dir "$1" -join-token "$2" >"$3" 2>&1 &
   WARDSTONE_PID=$!
 }
 s3_ready() { [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:7070/)" != "000" ]; }
@@ -170,7 +171,8 @@ KEYSTONE_PID=""; WARDSTONE_PID=""
 sed -i 's/wst_[0-9a-f]*/[destroyed-bootstrap-token]/g' "$WORK/keystone1.log"
 docker ps -aq --filter "label=dev.wildstone.owner" | xargs -r docker rm -f >/dev/null 2>&1 || true
 docker volume rm drill-data >/dev/null
-rm -rf "$K1" "$W1"
+rm -rf "$K1"
+sudo rm -rf "$W1"
 sudo rm -rf /srv/wildstone/recovery /srv/wildstone/recovery.previous
 if [ -e "$K1/statefile" ] || [ -e "$K1/keystone.db" ]; then
   fail "control-plane files survived the loss"
