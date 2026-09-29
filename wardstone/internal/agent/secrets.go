@@ -29,10 +29,12 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
 	wsv1 "github.com/chickenrat17/wildstone-homelab/proto/gen/wardstone/v1"
+	"github.com/chickenrat17/wildstone-homelab/proto/recoveryseal"
 )
 
 // secretRefPrefix marks a container env VALUE as a reference into the
@@ -49,11 +51,29 @@ var secretNameRegexp = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 // leaves length_bytes at 0.
 const defaultSecretBytes = 32
 
+const (
+	recoverySecretBundleFormat = "wildstone-node-secrets-v1"
+	maxRecoverySecrets         = 4096
+	maxRecoveryPlaintextBytes  = 16 << 20
+)
+
 // secretMeta is the plaintext sidecar: name-level metadata only.
 type secretMeta struct {
 	Version     uint32 `json:"version"`
 	CreatedUnix int64  `json:"createdUnix"`
 	UpdatedUnix int64  `json:"updatedUnix"`
+}
+
+type recoverySecretBundle struct {
+	Format       string           `json:"format"`
+	ExportedUnix int64            `json:"exportedUnix"`
+	Secrets      []recoverySecret `json:"secrets"`
+}
+
+type recoverySecret struct {
+	Name  string     `json:"name"`
+	Value []byte     `json:"value"`
+	Meta  secretMeta `json:"meta"`
 }
 
 func (a *Agent) secretsDir() string    { return filepath.Join(a.cfg.DataDir, "secrets") }
@@ -137,20 +157,9 @@ func (a *Agent) sealSecret(name, value string) (uint32, error) {
 // a ciphertext file renamed to another secret's name fails to open
 // instead of silently materializing the wrong value.
 func (a *Agent) openSecret(name string) (string, error) {
-	sealed, err := os.ReadFile(filepath.Join(a.secretsDir(), name))
+	value, err := a.openSecretBytes(name)
 	if err != nil {
 		return "", err
-	}
-	aead, err := a.secretAEAD()
-	if err != nil {
-		return "", err
-	}
-	if len(sealed) < aead.NonceSize() {
-		return "", fmt.Errorf("secret %q: sealed file too short", name)
-	}
-	value, err := aead.Open(nil, sealed[:aead.NonceSize()], sealed[aead.NonceSize():], []byte(name))
-	if err != nil {
-		return "", fmt.Errorf("secret %q: %w", name, err)
 	}
 	return string(value), nil
 }
@@ -247,6 +256,180 @@ func (a *Agent) listSecrets() (*wsv1.OpResult_ListSecrets, *wsv1.OpError) {
 		res.Secrets = append(res.Secrets, info)
 	}
 	return &wsv1.OpResult_ListSecrets{ListSecrets: res}, nil
+}
+
+// exportSecretBundle is the only recovery value-read surface. Values are
+// opened and sealed entirely inside Wardstone; only the public recovery key
+// enters the node and only authenticated ciphertext leaves it.
+func (a *Agent) exportSecretBundle(op *wsv1.ExportSecretBundle) (*wsv1.OpResult_ExportSecretBundle, *wsv1.OpError) {
+	entries, err := os.ReadDir(a.secretsDir())
+	if os.IsNotExist(err) {
+		entries = nil
+	} else if err != nil {
+		return nil, opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "listing recovery secrets: %v", err)
+	}
+
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || strings.HasSuffix(name, ".meta.json") {
+			continue
+		}
+		if oerr := validSecretName(name); oerr != nil {
+			return nil, opErr(wsv1.ErrorCode_ERROR_CODE_INVALID, "secret store contains an invalid name")
+		}
+		names = append(names, name)
+	}
+	if len(names) > maxRecoverySecrets {
+		return nil, opErr(wsv1.ErrorCode_ERROR_CODE_INVALID, "secret store exceeds recovery entry limit")
+	}
+	sort.Strings(names)
+
+	bundle := recoverySecretBundle{Format: recoverySecretBundleFormat, ExportedUnix: time.Now().Unix()}
+	defer clearRecoverySecrets(bundle.Secrets)
+	for _, name := range names {
+		value, err := a.openSecretBytes(name)
+		if err != nil {
+			return nil, opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "opening a recovery secret: %v", err)
+		}
+		meta, err := a.readSecretMeta(name)
+		if err != nil {
+			clear(value)
+			return nil, opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "reading recovery secret metadata: %v", err)
+		}
+		bundle.Secrets = append(bundle.Secrets, recoverySecret{Name: name, Value: value, Meta: meta})
+	}
+	plaintext, err := json.Marshal(bundle)
+	if err != nil {
+		return nil, opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "encoding recovery bundle: %v", err)
+	}
+	defer clear(plaintext)
+	if len(plaintext) > maxRecoveryPlaintextBytes {
+		return nil, opErr(wsv1.ErrorCode_ERROR_CODE_INVALID, "recovery bundle exceeds size limit")
+	}
+	sealed, err := recoveryseal.Seal(op.GetRecoveryPublicKey(), plaintext)
+	if err != nil {
+		return nil, opErr(wsv1.ErrorCode_ERROR_CODE_INVALID, "invalid recovery public key")
+	}
+	return &wsv1.OpResult_ExportSecretBundle{ExportSecretBundle: &wsv1.ExportSecretBundleResult{
+		SealedBundle: sealed,
+		SecretCount:  uint32(len(bundle.Secrets)),
+	}}, nil
+}
+
+// importSecretBundle restores only into an empty fresh-node store. It opens
+// the recovery ciphertext in Wardstone and immediately re-seals every value
+// with the new node-local key before atomically installing the directory.
+func (a *Agent) importSecretBundle(op *wsv1.ImportSecretBundle) (*wsv1.OpResult_ImportSecretBundle, *wsv1.OpError) {
+	empty, err := dirEmptyOrMissing(a.secretsDir())
+	if err != nil {
+		return nil, opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "checking secret store: %v", err)
+	}
+	if !empty {
+		return nil, opErr(wsv1.ErrorCode_ERROR_CODE_FORBIDDEN, "recovery import requires an empty secret store")
+	}
+	if len(op.GetSealedBundle()) > maxRecoveryPlaintextBytes+(1<<20) {
+		return nil, opErr(wsv1.ErrorCode_ERROR_CODE_INVALID, "recovery bundle exceeds size limit")
+	}
+	plaintext, err := recoveryseal.Open(op.GetRecoveryPrivateKey(), op.GetSealedBundle())
+	if err != nil {
+		return nil, opErr(wsv1.ErrorCode_ERROR_CODE_INVALID, "recovery bundle could not be opened")
+	}
+	defer clear(plaintext)
+	var bundle recoverySecretBundle
+	if err := json.Unmarshal(plaintext, &bundle); err != nil {
+		return nil, opErr(wsv1.ErrorCode_ERROR_CODE_INVALID, "recovery bundle is invalid")
+	}
+	defer clearRecoverySecrets(bundle.Secrets)
+	if bundle.Format != recoverySecretBundleFormat || len(bundle.Secrets) > maxRecoverySecrets {
+		return nil, opErr(wsv1.ErrorCode_ERROR_CODE_INVALID, "recovery bundle has an unsupported format")
+	}
+	seen := make(map[string]struct{}, len(bundle.Secrets))
+	for _, secret := range bundle.Secrets {
+		if oerr := validSecretName(secret.Name); oerr != nil || secret.Meta.Version == 0 {
+			return nil, opErr(wsv1.ErrorCode_ERROR_CODE_INVALID, "recovery bundle contains invalid secret metadata")
+		}
+		if _, exists := seen[secret.Name]; exists {
+			return nil, opErr(wsv1.ErrorCode_ERROR_CODE_INVALID, "recovery bundle contains duplicate secret names")
+		}
+		seen[secret.Name] = struct{}{}
+	}
+
+	aead, err := a.secretAEAD()
+	if err != nil {
+		return nil, opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "initializing fresh secret store: %v", err)
+	}
+	if err := os.MkdirAll(a.cfg.DataDir, 0o700); err != nil {
+		return nil, opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "creating secret store: %v", err)
+	}
+	stage, err := os.MkdirTemp(a.cfg.DataDir, ".secrets-recovery-")
+	if err != nil {
+		return nil, opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "staging secret recovery: %v", err)
+	}
+	defer os.RemoveAll(stage)
+	for _, secret := range bundle.Secrets {
+		if err := writeRecoveredSecret(stage, aead, secret); err != nil {
+			return nil, opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "staging recovered secret: %v", err)
+		}
+	}
+	if err := os.Remove(a.secretsDir()); err != nil && !os.IsNotExist(err) {
+		return nil, opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "preparing empty secret store: %v", err)
+	}
+	if err := os.Rename(stage, a.secretsDir()); err != nil {
+		return nil, opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "installing recovered secret store: %v", err)
+	}
+	return &wsv1.OpResult_ImportSecretBundle{ImportSecretBundle: &wsv1.ImportSecretBundleResult{
+		SecretCount: uint32(len(bundle.Secrets)),
+	}}, nil
+}
+
+func (a *Agent) openSecretBytes(name string) ([]byte, error) {
+	sealed, err := os.ReadFile(filepath.Join(a.secretsDir(), name))
+	if err != nil {
+		return nil, err
+	}
+	aead, err := a.secretAEAD()
+	if err != nil {
+		return nil, err
+	}
+	if len(sealed) < aead.NonceSize() {
+		return nil, fmt.Errorf("secret %q: sealed file too short", name)
+	}
+	value, err := aead.Open(nil, sealed[:aead.NonceSize()], sealed[aead.NonceSize():], []byte(name))
+	if err != nil {
+		return nil, fmt.Errorf("secret %q: %w", name, err)
+	}
+	return value, nil
+}
+
+func dirEmptyOrMissing(path string) (bool, error) {
+	entries, err := os.ReadDir(path)
+	if os.IsNotExist(err) {
+		return true, nil
+	}
+	return len(entries) == 0, err
+}
+
+func writeRecoveredSecret(dir string, aead cipher.AEAD, secret recoverySecret) error {
+	nonce := make([]byte, aead.NonceSize())
+	if _, err := rand.Read(nonce); err != nil {
+		return err
+	}
+	sealed := append(nonce, aead.Seal(nil, nonce, secret.Value, []byte(secret.Name))...)
+	if err := os.WriteFile(filepath.Join(dir, secret.Name), sealed, 0o600); err != nil {
+		return err
+	}
+	meta, err := json.Marshal(secret.Meta)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, secret.Name+".meta.json"), meta, 0o600)
+}
+
+func clearRecoverySecrets(secrets []recoverySecret) {
+	for i := range secrets {
+		clear(secrets[i].Value)
+	}
 }
 
 // generateSecretValue produces the material for one EnsureSecret. The

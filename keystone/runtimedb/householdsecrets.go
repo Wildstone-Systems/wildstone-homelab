@@ -22,8 +22,9 @@ var ErrSecretDenied = errors.New("secret unavailable or permission denied")
 var secretLabel = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9 ._-]{0,63}$`)
 
 type SecretVault struct {
-	db   *DB
-	aead cipher.AEAD
+	db      *DB
+	aead    cipher.AEAD
+	keyPath string
 }
 type SecretInput struct {
 	OriginConnection int64  `json:"-"`
@@ -93,7 +94,7 @@ func (db *DB) OpenSecretVault(keyPath string) (*SecretVault, error) {
 	if err != nil {
 		return nil, err
 	}
-	v := &SecretVault{db: db, aead: a}
+	v := &SecretVault{db: db, aead: a, keyPath: keyPath}
 	rows, err := db.sql.Query(`SELECT id,scope,owner_person_id,label,state,version,ciphertext FROM household_secrets WHERE length(ciphertext)>0`)
 	if err != nil {
 		return nil, err

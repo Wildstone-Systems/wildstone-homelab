@@ -4,24 +4,112 @@ This is the operator's copy of the recovery contract the weekly exit
 drill executes (`scripts/exit-drill.sh`, ADR-W018). If the drill is
 green, this document is known to work end-to-end.
 
-## The current contract: three things must survive the host
+## The whole-site contract
 
-Keep these off the host, always:
+Keep these off the host, always. The reserved `BackupPlan/wildstone`
+packages the control-plane artifacts described in item 2; the recovery kit
+in item 4 contains what a fresh install needs to unlock and locate them:
 
 1. **The restic repository** for every BackupPlan — the data. Put the
    repository volume on storage that outlives the host (NAS export,
    separate disk, synced elsewhere).
-2. **A replica of the Statefile git repo** — the desired state. It is
-   a plain git repository at `<data-dir>/statefile`; add a remote and
-   push it on a schedule, or back the directory up.
-3. **Your secret values, in your password manager.** Wildstone
-   deliberately never stores a readable copy (ADR-W012: write-only
-   path). If a value exists only on the node, it dies with the node.
+2. **The `wildstone` recovery repository** — a Git bundle of the Statefile,
+   a consistent SQLite online snapshot, a sealed household-vault key, and a
+   recovery-key-sealed secret bundle for every node.
+3. **A current deletion/revocation journal source** newer than the snapshot,
+   so restore quarantine can be reconciled truthfully.
+4. **The recovery kit** — endpoint, bucket/prefix, read-only bucket key,
+   every off-site restic password, and the offline recovery private key.
 
-In the current release, everything else — including the runtime DB, the CA and
-op-signing keys, node identities, containers, and data volumes — is rebuilt.
-Durable Butler features from ADR-W030 must not ship under that three-input
-contract.
+The CA, operation-signing key and node identities are deliberately rebuilt.
+Nodes re-join; their restored values are immediately sealed under each fresh
+node's new local store key.
+
+### Create the recovery key, plan and kit
+
+Generate the key pair once. Put only the `.pub` value in the reserved plan;
+move the private file off every Wildstone host.
+
+```sh
+wild recovery keygen ./wildstone-recovery.key
+```
+
+The reserved plan must be named `wildstone`, use `offsite-only`, and have the
+single source `/srv/wildstone/recovery`. Its `recoveryPublicKey` is the
+contents of `wildstone-recovery.key.pub`. The engine rebuilds that source
+atomically immediately before each run; do not put files there by hand.
+
+```yaml
+apiVersion: wildstone.dev/v1
+kind: BackupPlan
+metadata: { name: wildstone, owner: system, node: node1 }
+spec:
+  paths: [/srv/wildstone/recovery]
+  class: critical
+  recoveryPublicKey: WSR-PUBLIC-1-...
+  offsite:
+    target: offsite
+    route: offsite-only
+    passwordSecret: secret/restic-wildstone-offsite
+    schedule: daily
+    retention: { keepDaily: 7, keepWeekly: 8, keepMonthly: 12 }
+```
+
+Create the password-manager-friendly kit without placing secret values in
+the process argument list:
+
+```sh
+export WILD_RECOVERY_READ_KEY='<read-only-secret-access-key>'
+export WILD_RECOVERY_REPOSITORY_PASSWORDS='{"wildstone":"...","photos":"..."}'
+wild recovery kit -out recovery-kit.json \
+  -endpoint https://s3.example -bucket household-backups \
+  -access-key-id '<read-only-access-key-id>' \
+  -private-key ./wildstone-recovery.key
+unset WILD_RECOVERY_READ_KEY WILD_RECOVERY_REPOSITORY_PASSWORDS
+```
+
+Import that JSON into a password manager, make a paper copy, then remove the
+local private-key and kit files. A recovery key that remains on the host
+defeats the sealed-bundle boundary.
+
+### Restore after total loss
+
+On a fresh host with Docker available, the kit is sufficient to download the
+latest `wildstone` snapshot with the pinned restic image, verify every
+artifact, and install the set before Keystone starts:
+
+```sh
+keystone recover -kit ./recovery-kit.json \
+  -data-dir /var/lib/wildstone/keystone
+```
+
+If the set was restored separately, use `-set <directory> -private-key
+<file>` instead. Neither path writes the recovery private key into the data
+directory.
+
+Start Keystone, create a recovery administrator, and re-join the rebuilt
+nodes. For each node, use the sealed artifact listed under its ID in
+`/var/lib/wildstone/keystone/recovery-import/manifest.json`'s `nodeBundles`
+map. A kit-based restore preserves these encrypted artifacts in that directory
+before removing its temporary download:
+
+```sh
+wild recovery import-node <node-id> \
+  -bundle /var/lib/wildstone/keystone/recovery-import/node-....sealed \
+  -kit ./recovery-kit.json
+```
+
+For a separately restored set, `-private-key <file>` may be used instead of
+`-kit`. The two options are mutually exclusive.
+
+Restore each application plan from off-site, confirm the deletion journal is
+current, then replay and release quarantine:
+
+```sh
+wild backup restore <plan> -from offsite
+wild restore status
+wild restore reconcile --release
+```
 
 ### The fourth recovery input before durable Butler ships
 
@@ -74,9 +162,6 @@ already have happened.
 
     wild restore status                 # is this database quarantined
     wild restore reconcile --release    # assert, replay, and release
-
-Until that drill passes, the steps below describe only the current three-input
-release contract.
 
 V1 has one active coordinator. A standby restore may be prepared, but promotion
 is an explicit fenced recovery action: verify the previous Keystone cannot

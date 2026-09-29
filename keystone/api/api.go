@@ -423,6 +423,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/nodes/{node}/directories", s.handle(principal.VerbRead, s.listDirectories))
 	mux.Handle("POST /api/v1/nodes/{node}/secrets/{name}", s.handle(principal.VerbManage, s.setSecret))
 	mux.Handle("POST /api/v1/nodes/{node}/secrets/{name}/rotate", s.handle(principal.VerbManage, s.consequential(s.rotateSecret)))
+	mux.Handle("POST /api/v1/nodes/{node}/recovery/secrets", s.handle(principal.VerbManage, s.consequential(s.importNodeRecovery)))
 
 	// Onboarding validation probes (ADR-W016 A2, E10-U2): dial-or-read
 	// only on the agent side, so the whole family carries read.

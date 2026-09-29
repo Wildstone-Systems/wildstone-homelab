@@ -42,6 +42,10 @@ func main() {
 		os.Exit(runAudit(os.Args[2:]))
 	case "backup":
 		os.Exit(runBackup(os.Args[2:]))
+	case "recovery":
+		os.Exit(runRecovery(os.Args[2:]))
+	case "restore":
+		os.Exit(runRestore(os.Args[2:]))
 	case "household":
 		os.Exit(runHousehold(os.Args[2:]))
 	case "automation":
@@ -73,6 +77,8 @@ func usage() {
   wild secret list|generate|set|rotate ...   (see wild secret)
   wild node list | mint-join ...             (see wild node)
   wild status | plan | capability | logs | audit | backup ...  (API client, ADR-W015)
+  wild recovery keygen|import-node ...       (whole-site recovery key and node import)
+  wild restore status|reconcile ...          (restore quarantine)
   wild household events|emit|publisher ...   (see wild household)
   wild automation list|replay ...            (see wild automation)
   wild meter read|list|history ...           (see wild meter)

@@ -90,7 +90,10 @@ type Engine struct {
 	// hours: a first upload of a large library over a home connection
 	// can take days, and restic resumes from what it already uploaded.
 	OffsiteTimeout time.Duration
-	Log            *slog.Logger
+	// PrepareRecovery creates the sealed whole-site source set immediately
+	// before the reserved offsite-only plan named "wildstone" runs.
+	PrepareRecovery func(context.Context, resource.Resource) error
+	Log             *slog.Logger
 
 	// running holds one entry per plan with a run in progress, so a
 	// scheduled run and an on-demand one never share a container name.

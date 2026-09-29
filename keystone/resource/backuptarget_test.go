@@ -3,7 +3,49 @@ package resource
 import (
 	"strings"
 	"testing"
+
+	"github.com/chickenrat17/wildstone-homelab/proto/recoveryseal"
 )
+
+func TestReservedWholeSiteBackupPlan(t *testing.T) {
+	publicKey, _, err := recoveryseal.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := Resource{
+		ApiVersion: ApiVersion, Kind: KindBackupPlan,
+		Metadata: Metadata{Name: "wildstone", Owner: "system", Node: "n1"},
+		BackupPlan: &BackupPlanSpec{
+			Paths: []string{WholeSiteRecoveryPath}, Class: "critical", RecoveryPublicKey: publicKey,
+			Offsite: &BackupOffsite{
+				Target: "offsite", Route: BackupRouteOffsiteOnly,
+				PasswordSecret: "secret/restic-wildstone-offsite", Schedule: "daily",
+				Retention: BackupRetention{KeepDaily: 7},
+			},
+		},
+	}
+	if err := plan.Validate(); err != nil {
+		t.Fatalf("valid reserved plan: %v", err)
+	}
+	for name, mutate := range map[string]func(*Resource){
+		"missing key": func(r *Resource) { r.BackupPlan.RecoveryPublicKey = "" },
+		"wrong name":  func(r *Resource) { r.Metadata.Name = "not-wildstone" },
+		"wrong owner": func(r *Resource) { r.Metadata.Owner = "owner" },
+		"local route": func(r *Resource) { r.BackupPlan.Offsite.Route = BackupRouteLocalAndOffsite },
+		"wrong path":  func(r *Resource) { r.BackupPlan.Paths[0] = "/srv/wildstone/other" },
+	} {
+		copy := plan
+		spec := *plan.BackupPlan
+		offsite := *plan.BackupPlan.Offsite
+		spec.Paths = append([]string(nil), plan.BackupPlan.Paths...)
+		spec.Offsite = &offsite
+		copy.BackupPlan = &spec
+		mutate(&copy)
+		if err := copy.Validate(); err == nil {
+			t.Errorf("%s was accepted", name)
+		}
+	}
+}
 
 func backupTarget() Resource {
 	return Resource{

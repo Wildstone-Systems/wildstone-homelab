@@ -118,6 +118,16 @@ func (a *Agent) dispatchOp(ctx context.Context, opID string, op *wsv1.Operation)
 		if r, oerr = a.listSecrets(); oerr == nil {
 			res.Result = r
 		}
+	case *wsv1.Operation_ExportSecretBundle:
+		var r *wsv1.OpResult_ExportSecretBundle
+		if r, oerr = a.exportSecretBundle(o.ExportSecretBundle); oerr == nil {
+			res.Result = r
+		}
+	case *wsv1.Operation_ImportSecretBundle:
+		var r *wsv1.OpResult_ImportSecretBundle
+		if r, oerr = a.importSecretBundle(o.ImportSecretBundle); oerr == nil {
+			res.Result = r
+		}
 	case *wsv1.Operation_SeedVolumeFile:
 		var r *wsv1.OpResult_SeedVolumeFile
 		if r, oerr = a.seedVolumeFile(ctx, o.SeedVolumeFile); oerr == nil {

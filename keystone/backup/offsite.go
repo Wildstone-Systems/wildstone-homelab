@@ -125,6 +125,14 @@ func (e *Engine) runOffsite(ctx context.Context, r resource.Resource, desired []
 	return e.withProvenance(ctx, r, runtimedb.BackupRunOffsite,
 		fmt.Sprintf("off-site run: %s (%s -> BackupTarget %s)", name, route, o.Target),
 		func(ctx context.Context) error {
+			if name == "wildstone" {
+				if e.PrepareRecovery == nil {
+					return fmt.Errorf("whole-site recovery builder is not configured")
+				}
+				if err := e.PrepareRecovery(ctx, r); err != nil {
+					return fmt.Errorf("building whole-site recovery set: %w", err)
+				}
+			}
 			t, err := findTarget(desired, r)
 			if err != nil {
 				return err

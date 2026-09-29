@@ -10,7 +10,43 @@ import (
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 	"github.com/chickenrat17/wildstone-homelab/keystone/statefile"
 	wsv1 "github.com/chickenrat17/wildstone-homelab/proto/gen/wardstone/v1"
+	"github.com/chickenrat17/wildstone-homelab/proto/recoveryseal"
 )
+
+func TestReservedWildstonePlanPreparesRecoverySetBeforeUpload(t *testing.T) {
+	run := &fakeRunner{}
+	e, _, state := newEngine(t, run)
+	publicKey, _, err := recoveryseal.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := resource.Resource{
+		ApiVersion: resource.ApiVersion, Kind: resource.KindBackupPlan,
+		Metadata: resource.Metadata{Name: "wildstone", Owner: "system", Node: "n1"},
+		BackupPlan: &resource.BackupPlanSpec{
+			Paths: []string{resource.WholeSiteRecoveryPath}, Class: "critical", RecoveryPublicKey: publicKey,
+			Offsite: &resource.BackupOffsite{
+				Target: "offsite", Route: resource.BackupRouteOffsiteOnly,
+				PasswordSecret: "secret/restic-wildstone-offsite", Schedule: "daily",
+			},
+		},
+	}
+	seedAll(t, state, targetResource(false), plan)
+	prepared := false
+	e.PrepareRecovery = func(_ context.Context, got resource.Resource) error {
+		prepared = got.Metadata.Name == "wildstone"
+		return nil
+	}
+	if err := e.RunNow(context.Background(), "wildstone"); err != nil {
+		t.Fatal(err)
+	}
+	if !prepared {
+		t.Fatal("whole-site source set was not prepared")
+	}
+	if _, ok := run.run("offsite-wildstone"); !ok {
+		t.Fatal("whole-site off-site upload did not run")
+	}
+}
 
 func targetResource(pathStyle bool) resource.Resource {
 	return resource.Resource{

@@ -18,6 +18,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/chickenrat17/wildstone-homelab/proto/recoveryseal"
 )
 
 // Kind is the closed set of resource kinds Keystone understands. Adding a
@@ -65,6 +67,11 @@ const (
 	// runtime state, because it changes without anybody declaring it.
 	KindCommitment Kind = "Commitment"
 )
+
+// WholeSiteRecoveryPath is the stable host path Wardstone may bind into the
+// reserved restic run. It deliberately lives under the default managed data
+// prefix, not Keystone's private DataDir (which Wardstone must refuse to mount).
+const WholeSiteRecoveryPath = "/srv/wildstone/recovery"
 
 // ApiVersion is the only supported apiVersion for S2 resources.
 const ApiVersion = "wildstone.dev/v1"
@@ -885,6 +892,10 @@ type BackupPlanSpec struct {
 	// Schedule and Retention are left empty: the off-site block carries
 	// them, and nothing is stored locally.
 	Offsite *BackupOffsite `yaml:"offsite,omitempty"`
+	// RecoveryPublicKey turns the reserved plan named "wildstone" into the
+	// whole-site recovery set (ADR-W045 A5). It is the printable public half
+	// only; the private half must never be stored on a Wildstone host.
+	RecoveryPublicKey string `yaml:"recoveryPublicKey,omitempty"`
 }
 
 // backupClasses is the closed set of BackupPlanSpec.Class values.
@@ -1775,6 +1786,31 @@ func validateBackupPlan(r *Resource) error {
 	p := r.BackupPlan
 	if p == nil {
 		return bad("spec", "backup plan spec missing")
+	}
+	if r.Metadata.Name == "wildstone" {
+		if r.Metadata.Owner != "system" {
+			return bad("metadata.owner", "must be system for the reserved whole-site recovery plan")
+		}
+		if p.RecoveryPublicKey == "" {
+			return bad("spec.recoveryPublicKey", "is required for the reserved whole-site recovery plan")
+		}
+		if err := recoveryseal.ValidatePublicKey(p.RecoveryPublicKey); err != nil {
+			return bad("spec.recoveryPublicKey", "must be a valid Wildstone recovery public key")
+		}
+		if p.Offsite == nil {
+			return bad("spec.offsite", "is required for the reserved whole-site recovery plan")
+		}
+		if p.Offsite.Route != BackupRouteOffsiteOnly {
+			return bad("spec.offsite.route", "must be offsite-only for the reserved whole-site recovery plan")
+		}
+		if len(p.Volumes) != 0 || len(p.Paths) != 1 {
+			return bad("spec.paths", "must contain exactly the recovery staging path and no volumes")
+		}
+		if p.Paths[0] != WholeSiteRecoveryPath {
+			return bad("spec.paths[0]", "must be "+WholeSiteRecoveryPath+" for the reserved whole-site recovery plan")
+		}
+	} else if p.RecoveryPublicKey != "" {
+		return bad("spec.recoveryPublicKey", "is only valid on the reserved BackupPlan named wildstone")
 	}
 	if len(p.Volumes) == 0 && len(p.Paths) == 0 {
 		return bad("spec.volumes", "must name at least one source volume or path")

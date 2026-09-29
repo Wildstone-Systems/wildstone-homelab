@@ -47,6 +47,7 @@ import (
 	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
 	"github.com/chickenrat17/wildstone-homelab/keystone/reconcile"
 	"github.com/chickenrat17/wildstone-homelab/keystone/reconcile/loop"
+	"github.com/chickenrat17/wildstone-homelab/keystone/recovery"
 	"github.com/chickenrat17/wildstone-homelab/keystone/redact"
 	"github.com/chickenrat17/wildstone-homelab/keystone/report"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
@@ -70,6 +71,13 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "person-refs" {
 		if err := personRefs(os.Args[2:]); err != nil {
 			fmt.Fprintln(os.Stderr, "keystone person-refs:", err)
+			os.Exit(1)
+		}
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "recover" {
+		if err := recoverCommand(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "keystone recover:", err)
 			os.Exit(1)
 		}
 		return
@@ -875,13 +883,23 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	// Backup engine (ADR-W011 A4): the timer duty that turns BackupPlan
 	// declarations into restic container runs with provenance. Shares the
 	// gateway applier — a run is an ordinary owner-labeled container.
+	secretVault, err := db.OpenSecretVault(filepath.Join(dataDir, "household-secrets.key"))
+	if err != nil {
+		return fmt.Errorf("household secrets: %w", err)
+	}
+	agentApplier := &reconcile.GatewayApplier{Gateway: gw}
+	recoveryBuilder := &recovery.Builder{
+		State: state, DB: db, Vault: secretVault, Agents: agentApplier,
+		Dir: resource.WholeSiteRecoveryPath,
+	}
 	bak := &backup.Engine{
-		State:       state,
-		DB:          db,
-		Run:         &backup.ApplierRunner{Applier: &reconcile.GatewayApplier{Gateway: gw}},
-		Agent:       &reconcile.GatewayApplier{Gateway: gw},
-		ResticImage: resticImage,
-		Log:         log,
+		State:           state,
+		DB:              db,
+		Run:             &backup.ApplierRunner{Applier: agentApplier},
+		Agent:           agentApplier,
+		ResticImage:     resticImage,
+		PrepareRecovery: recoveryBuilder.Prepare,
+		Log:             log,
 	}
 	go bak.RunLoop(context.Background(), backupEvery)
 
@@ -1177,10 +1195,6 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	// Public plane. Plan approval pokes the reconcile service (R2a); a
 	// new household event pokes the automation engine.
 	apiSrv := api.New(principals, db, state, log)
-	secretVault, err := db.OpenSecretVault(filepath.Join(dataDir, "household-secrets.key"))
-	if err != nil {
-		return fmt.Errorf("household secrets: %w", err)
-	}
 	apiSrv.SecretVault = secretVault
 	if calendarActions != nil {
 		calendarActions.SecretUse = calendarSecretUse(db, secretVault)

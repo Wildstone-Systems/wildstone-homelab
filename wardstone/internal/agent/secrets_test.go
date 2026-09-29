@@ -10,6 +10,7 @@ import (
 	"time"
 
 	wsv1 "github.com/chickenrat17/wildstone-homelab/proto/gen/wardstone/v1"
+	"github.com/chickenrat17/wildstone-homelab/proto/recoveryseal"
 )
 
 func (f *fakeDocker) envOf(name string) []string {
@@ -205,6 +206,118 @@ func TestPutSecretNeverAudited(t *testing.T) {
 	for _, f := range fields {
 		if strings.Contains(fmt.Sprint(f.Value.Any()), "the-secret-value") {
 			t.Fatalf("audit attr leaked the value: %v", f)
+		}
+	}
+}
+
+func TestRecoverySecretBundleRoundTrip(t *testing.T) {
+	source := storeOnlyAgent(t)
+	if _, err := source.sealSecret("alpha", "first-secret-value"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := source.sealSecret("alpha", "rotated-secret-value"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := source.sealSecret("beta", "second-secret-value"); err != nil {
+		t.Fatal(err)
+	}
+	publicKey, privateKey, err := recoveryseal.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	exported, oerr := source.exportSecretBundle(&wsv1.ExportSecretBundle{RecoveryPublicKey: publicKey})
+	if oerr != nil {
+		t.Fatalf("export: %s", oerr.GetMessage())
+	}
+	sealed := exported.ExportSecretBundle.GetSealedBundle()
+	if exported.ExportSecretBundle.GetSecretCount() != 2 {
+		t.Fatalf("exported count = %d, want 2", exported.ExportSecretBundle.GetSecretCount())
+	}
+	for _, plaintext := range []string{"rotated-secret-value", "second-secret-value"} {
+		if bytes.Contains(sealed, []byte(plaintext)) {
+			t.Fatalf("sealed recovery bundle contains %q", plaintext)
+		}
+	}
+
+	target := storeOnlyAgent(t)
+	imported, oerr := target.importSecretBundle(&wsv1.ImportSecretBundle{
+		RecoveryPrivateKey: privateKey,
+		SealedBundle:       sealed,
+	})
+	if oerr != nil {
+		t.Fatalf("import: %s", oerr.GetMessage())
+	}
+	if imported.ImportSecretBundle.GetSecretCount() != 2 {
+		t.Fatalf("imported count = %d, want 2", imported.ImportSecretBundle.GetSecretCount())
+	}
+	for name, want := range map[string]string{"alpha": "rotated-secret-value", "beta": "second-secret-value"} {
+		got, err := target.openSecret(name)
+		if err != nil || got != want {
+			t.Fatalf("open %s = %q, %v; want %q", name, got, err, want)
+		}
+	}
+	meta, err := target.readSecretMeta("alpha")
+	if err != nil || meta.Version != 2 {
+		t.Fatalf("alpha metadata = %+v, %v; want version 2", meta, err)
+	}
+}
+
+func TestRecoverySecretImportRejectsWrongKeyAndNonEmptyStore(t *testing.T) {
+	source := storeOnlyAgent(t)
+	if _, err := source.sealSecret("alpha", "source-value"); err != nil {
+		t.Fatal(err)
+	}
+	publicKey, privateKey, err := recoveryseal.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	exported, oerr := source.exportSecretBundle(&wsv1.ExportSecretBundle{RecoveryPublicKey: publicKey})
+	if oerr != nil {
+		t.Fatal(oerr.GetMessage())
+	}
+	_, wrongPrivateKey, err := recoveryseal.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := storeOnlyAgent(t)
+	if _, oerr := target.importSecretBundle(&wsv1.ImportSecretBundle{
+		RecoveryPrivateKey: wrongPrivateKey,
+		SealedBundle:       exported.ExportSecretBundle.GetSealedBundle(),
+	}); oerr == nil {
+		t.Fatal("wrong recovery key was accepted")
+	}
+	if _, err := target.sealSecret("existing", "must-survive"); err != nil {
+		t.Fatal(err)
+	}
+	if _, oerr := target.importSecretBundle(&wsv1.ImportSecretBundle{
+		RecoveryPrivateKey: privateKey,
+		SealedBundle:       exported.ExportSecretBundle.GetSealedBundle(),
+	}); oerr == nil || oerr.GetCode() != wsv1.ErrorCode_ERROR_CODE_FORBIDDEN {
+		t.Fatalf("non-empty import error = %+v, want FORBIDDEN", oerr)
+	}
+	got, err := target.openSecret("existing")
+	if err != nil || got != "must-survive" {
+		t.Fatalf("existing secret changed: %q, %v", got, err)
+	}
+}
+
+func TestRecoveryOpsNeverAuditKeysOrBundles(t *testing.T) {
+	for _, tc := range []struct {
+		op   *wsv1.Operation
+		arm  string
+		leak string
+	}{
+		{&wsv1.Operation{Op: &wsv1.Operation_ExportSecretBundle{ExportSecretBundle: &wsv1.ExportSecretBundle{RecoveryPublicKey: "public-key-material"}}}, "ExportSecretBundle", "public-key-material"},
+		{&wsv1.Operation{Op: &wsv1.Operation_ImportSecretBundle{ImportSecretBundle: &wsv1.ImportSecretBundle{RecoveryPrivateKey: "private-key-material", SealedBundle: []byte("sealed-material")}}}, "ImportSecretBundle", "private-key-material"},
+	} {
+		arm, fields := auditFields(tc.op)
+		if arm != tc.arm {
+			t.Fatalf("arm = %q, want %q", arm, tc.arm)
+		}
+		for _, field := range fields {
+			if strings.Contains(fmt.Sprint(field.Value.Any()), tc.leak) {
+				t.Fatalf("audit attr leaked recovery material: %v", field)
+			}
 		}
 	}
 }

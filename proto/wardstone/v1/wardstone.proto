@@ -136,6 +136,8 @@ message Operation {
     StatVolumeFile stat_volume_file = 31;
     ListDirectory list_directory = 32;
     DiskSpace disk_space = 33;
+    ExportSecretBundle export_secret_bundle = 34;
+    ImportSecretBundle import_secret_bundle = 35;
   }
 }
 
@@ -176,6 +178,8 @@ message OpResult {
     StatVolumeFileResult stat_volume_file = 33;
     ListDirectoryResult list_directory = 34;
     DiskSpaceResult disk_space = 35;
+    ExportSecretBundleResult export_secret_bundle = 36;
+    ImportSecretBundleResult import_secret_bundle = 37;
   }
 }
 
@@ -993,4 +997,27 @@ message SecretInfo {
 
 message ListSecretsResult {
   repeated SecretInfo secrets = 1;
+}
+
+// Recovery-only sealed movement (protocol minor 20, ADR-W045 A5). Export
+// returns ciphertext encrypted to an offline recovery public key; there is
+// still no operation that returns an individual plaintext secret. Import is
+// accepted only by an empty fresh-node store and re-seals values under that
+// node's newly generated local store key.
+message ExportSecretBundle {
+  string recovery_public_key = 1;
+}
+
+message ExportSecretBundleResult {
+  bytes sealed_bundle = 1;
+  uint32 secret_count = 2;
+}
+
+message ImportSecretBundle {
+  string recovery_private_key = 1;
+  bytes sealed_bundle = 2;
+}
+
+message ImportSecretBundleResult {
+  uint32 secret_count = 1;
 }
