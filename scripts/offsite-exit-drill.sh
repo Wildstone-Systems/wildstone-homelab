@@ -148,7 +148,9 @@ spec:
 EOF
 )" '{summary:"off-site total-loss drill",put:[$volume,$target,$app,$recovery]}')"
 PLAN_ID="$(curl_api "$ADMIN" POST /api/v1/plans "$PROPOSAL" | jq -r .id)"
-[ -n "$PLAN_ID" ] && [ "$PLAN_ID" != null ] || fail "proposal did not return an id"
+if [ -z "$PLAN_ID" ] || [ "$PLAN_ID" = null ]; then
+  fail "proposal did not return an id"
+fi
 WILD_TOKEN="$ADMIN" "$BIN/wild" plan approve "$PLAN_ID"
 wait_for "data volume" 60 docker volume inspect drill-data
 
@@ -170,7 +172,9 @@ docker ps -aq --filter "label=dev.wildstone.owner" | xargs -r docker rm -f >/dev
 docker volume rm drill-data >/dev/null
 rm -rf "$K1" "$W1"
 sudo rm -rf /srv/wildstone/recovery /srv/wildstone/recovery.previous
-[ ! -e "$K1/statefile" ] && [ ! -e "$K1/keystone.db" ] || fail "control-plane files survived the loss"
+if [ -e "$K1/statefile" ] || [ -e "$K1/keystone.db" ]; then
+  fail "control-plane files survived the loss"
+fi
 ADMIN=""
 
 log "phase 3: recover the control plane from the kit and S3"

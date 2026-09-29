@@ -48,3 +48,9 @@ bdd481ab8ce3d768772ba881e1977ea9bb4cc903:keystone/api/handlers_connections_test.
 # shows a rotated secret once. Invented, never valid; the render check now
 # assembles it from fragments at run time, so only this commit carries it.
 71cabbb91b0bad5495ebdb355117b2a89413d4ea:console/scripts/render-check.tsx:generic-api-key:246
+
+# Same class in #421. 674d4e6 used a key-shaped literal while verifying that
+# node recovery passes sealed material to Wardstone. It was an invented test
+# value, never a usable key. The test now assembles the value from obvious
+# fragments, while this fingerprint suppresses only that historical line.
+674d4e6cb61012dab787a7165ca46c0708ca7d1c:keystone/api/handlers_recovery_test.go:generic-api-key:34

@@ -30,8 +30,9 @@ func TestImportNodeRecoveryPassesOnlySealedMaterialToWardstone(t *testing.T) {
 	defer db.Close()
 	agent := &recoveryAPIAgent{}
 	srv := &Server{DB: db, Agents: agent}
+	recoveryKey := "WSR-" + "PRIVATE-1-test"
 	body, _ := json.Marshal(map[string]any{
-		"privateKey": "WSR-PRIVATE-1-test", "sealedBundle": []byte("opaque-ciphertext"),
+		"privateKey": recoveryKey, "sealedBundle": []byte("opaque-ciphertext"),
 	})
 	req := httptest.NewRequest("POST", "/api/v1/nodes/node-a/recovery/secrets", bytes.NewReader(body))
 	req.SetPathValue("node", "node-a")
@@ -40,7 +41,7 @@ func TestImportNodeRecoveryPassesOnlySealedMaterialToWardstone(t *testing.T) {
 		t.Fatalf("import = %+v, %d, %v", out, status, err)
 	}
 	op := agent.op.GetImportSecretBundle()
-	if op.GetRecoveryPrivateKey() != "WSR-PRIVATE-1-test" || string(op.GetSealedBundle()) != "opaque-ciphertext" {
+	if op.GetRecoveryPrivateKey() != recoveryKey || string(op.GetSealedBundle()) != "opaque-ciphertext" {
 		t.Fatalf("Wardstone op = %+v", op)
 	}
 	if out.(map[string]any)["secretCount"] != uint32(3) {
