@@ -263,12 +263,15 @@ func TestShippedBackupPlansAreCoherent(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			volumes := map[string]bool{}
 			secrets := map[string]bool{}
+			containers := map[string]bool{}
 			for _, r := range rendered {
 				switch {
 				case r.Kind == resource.KindVolume && r.Volume != nil:
 					volumes[r.Volume.Name] = true
 				case r.Kind == resource.KindSecret && r.Secret != nil:
 					secrets[r.Secret.Name] = true
+				case r.Kind == resource.KindContainer && r.Container != nil:
+					containers[r.Metadata.Name] = true
 				}
 			}
 			for _, r := range rendered {
@@ -290,6 +293,14 @@ func TestShippedBackupPlansAreCoherent(t *testing.T) {
 				}
 				if s, ok := strings.CutPrefix(bp.PasswordSecret, "secret/"); !ok || !secrets[s] {
 					t.Errorf("BackupPlan %q password %q is not a secret this package declares", r.Metadata.Name, bp.PasswordSecret)
+				}
+				for _, hook := range bp.PreBackup {
+					if !containers[hook.Container] {
+						t.Errorf("BackupPlan %q preBackup names undeclared container %q", r.Metadata.Name, hook.Container)
+					}
+					if !volumes[hook.OutputVolume] {
+						t.Errorf("BackupPlan %q preBackup writes to undeclared volume %q", r.Metadata.Name, hook.OutputVolume)
+					}
 				}
 			}
 		})

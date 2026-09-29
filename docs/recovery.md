@@ -230,6 +230,29 @@ Get a field wrong and the API says which one, indexed to the document
 that carried it — `put[1]: ... line 3: field repositoryVolume not found
 in type resource.BackupPlanSpec`.
 
+### Consistent database hooks
+
+Never put a live PostgreSQL data directory or SQLite file in a snapshot and
+call it a database backup. A plan may declare typed `preBackup` hooks. The
+engine constructs the one-shot container itself; the plan cannot provide an
+image, environment variable, command, or shell.
+
+```yaml
+spec:
+  volumes: [photos, photos-db-backup]
+  preBackup:
+    - kind: pg_dump
+      container: photos-postgres
+      database: photos
+      outputVolume: photos-db-backup
+```
+
+`pg_dump` reuses the declared PostgreSQL container's pinned image, username,
+password reference, managed network or Unix socket. `sqlite` uses Wildstone's
+pinned sqlite3 image and names the absolute database path inside the declared
+container. Every output volume must also be covered by the plan. A failed hook
+fails the run before restic reads any source.
+
 ## Off-site copies (S3-compatible storage)
 
 A BackupPlan can also send its data to an S3-compatible bucket — AWS S3,
@@ -502,6 +525,25 @@ Restore-alongside is deliberate (ADR-W011): nothing overwrites live
 data unattended. Verify the restored tree (the snapshot's paths appear
 under `backup/<volume>/...`), stop the consuming containers, move the
 data into the live volume, start them again. Repeat per plan.
+
+#### Restoring package databases
+
+Database dumps are ordinary files inside the restore volume. Restore them
+only after the package has recreated a fresh database service, and keep the
+application container stopped until the import finishes:
+
+| Package / plan | Restored dump | Import |
+|---|---|---|
+| Immich / `photos` | `backup/immich-db-backup/immich-postgres.dump` | Recreate database `immich`; run `pg_restore --clean --if-exists --no-owner --dbname=immich` with the matching Immich PostgreSQL image. |
+| Paperless / `documents` | `backup/paperless-db-backup/paperless-postgres.dump` | Recreate database `paperless`; run `pg_restore --clean --if-exists --no-owner --dbname=paperless` with the package PostgreSQL image. |
+| Synapse / `matrix` | `backup/matrix-db-backup/matrix-postgres.dump` | With the private PostgreSQL socket mounted, recreate `synapse` and run `pg_restore --clean --if-exists --no-owner --dbname=synapse`. |
+| Gitea / `code` | `backup/gitea-db-backup/gitea.sqlite3` | Stop Gitea, replace `/data/gitea/gitea.db` with the dump, remove stale `-wal`/`-shm` files, preserve ownership, then start Gitea. |
+| Mealie / `recipes` | `backup/mealie-db-backup/mealie.sqlite3` | Stop Mealie, replace `/app/data/mealie.db`, remove stale `-wal`/`-shm` files, preserve ownership, then start Mealie. |
+| Roundcube + Davis / `mail` | `backup/mail-db-backup/{roundcube,davis}.sqlite3` | Stop both apps; replace `/var/roundcube/db/sqlite.db` and `/data/davis.db` respectively, remove stale sidecars, preserve ownership, then restart. |
+
+For PostgreSQL, feed the dump file to `pg_restore` as a single file—not to
+`psql`, because the hook writes PostgreSQL custom format. Run the package's
+normal health check and sign in before deleting the alongside restore volume.
 
 ### 6. Verify
 

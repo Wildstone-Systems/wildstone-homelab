@@ -72,6 +72,9 @@ type Engine struct {
 	// engine-level configuration, not per-plan, so one upgrade covers the
 	// fleet and a plan cannot smuggle in an arbitrary image.
 	ResticImage string
+	// SQLiteImage is the digest-pinned sqlite3 helper used only by the
+	// closed sqlite pre-backup hook. Packages cannot override it.
+	SQLiteImage string
 	// Now is the clock seam for tests. nil = time.Now.
 	Now func() time.Time
 	// DrillEvery is the restore-drill cadence. <= 0 uses 30 days
@@ -316,6 +319,9 @@ func (e *Engine) runBackup(ctx context.Context, r resource.Resource, desired []r
 				return err
 			}
 			if err := e.ensureRepository(ctx, r); err != nil {
+				return err
+			}
+			if err := e.runPreBackup(ctx, r, desired); err != nil {
 				return err
 			}
 			backupSpec := e.resticSpec(spec, backupCommand(spec), sources(spec))
@@ -601,7 +607,8 @@ func configTag(spec *resource.BackupPlanSpec) string {
 	ex := append([]string{}, spec.Exclude...)
 	sort.Strings(src)
 	sort.Strings(ex)
-	sum := sha256.Sum256([]byte(strings.Join(src, "\x00") + "\x01" + strings.Join(ex, "\x00")))
+	hooks, _ := json.Marshal(spec.PreBackup) // closed structs: cannot fail
+	sum := sha256.Sum256([]byte(strings.Join(src, "\x00") + "\x01" + strings.Join(ex, "\x00") + "\x02" + string(hooks)))
 	return "wscfg-" + hex.EncodeToString(sum[:6])
 }
 

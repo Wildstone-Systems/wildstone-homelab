@@ -29,7 +29,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: code-gitea
-  version: 1.0.2
+  version: 1.0.3
   capability: code
   profile: gitea
 requires:
@@ -53,6 +53,11 @@ templates:
     kind: Volume
     metadata: { name: gitea-data, node: "{{ .Params.node }}" }
     spec: { name: gitea-data }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: gitea-db-backup, node: "{{ .Params.node }}" }
+    spec: { name: gitea-db-backup }
   - |
     apiVersion: wildstone.dev/v1
     kind: Volume
@@ -93,7 +98,10 @@ templates:
     kind: BackupPlan
     metadata: { name: code, node: "{{ .Params.node }}" }
     spec:
-      volumes: [gitea-data]
+      volumes: [gitea-data, gitea-db-backup]
+      exclude: [gitea.db, gitea.db-wal, gitea.db-shm]
+      preBackup:
+        - { kind: sqlite, container: gitea, database: /data/gitea/gitea.db, outputVolume: gitea-db-backup }
       repository: code-backup-repo
       passwordSecret: secret/restic-code
       schedule: daily

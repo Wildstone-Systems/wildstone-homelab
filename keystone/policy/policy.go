@@ -28,6 +28,7 @@ const (
 	RuleLdapUserEmailUnique      = "ldap-user-email-unique"
 	RuleBackupTargetDeclared     = "backup-target-declared"
 	RuleBackupVolumesDeclared    = "backup-volumes-declared"
+	RuleBackupHookDeclared       = "backup-hook-declared"
 )
 
 // automationTiers is the closed set of action tiers a household rule may
@@ -128,6 +129,7 @@ func (e *Engine) Validate(ch Change) (violations, exempted []Violation) {
 	proposedRoutes := map[string]bool{}
 	emailOwners := ldapEmailOwners(ch.Proposed)
 	targets := map[string]resource.Resource{}
+	containers := map[string]resource.Resource{}
 	volumeNodes := map[string]map[string]bool{} // volume name -> nodes declaring it
 	for _, r := range ch.Proposed {
 		switch r.Kind {
@@ -138,6 +140,8 @@ func (e *Engine) Validate(ch Change) (violations, exempted []Violation) {
 				volumeNodes[r.Metadata.Name] = map[string]bool{}
 			}
 			volumeNodes[r.Metadata.Name][r.Metadata.Node] = true
+		case resource.KindContainer:
+			containers[r.Metadata.Name] = r
 		}
 	}
 
@@ -191,6 +195,7 @@ func (e *Engine) Validate(ch Change) (violations, exempted []Violation) {
 				continue
 			}
 			all = append(all, backupVolumesRule(r, volumeNodes)...)
+			all = append(all, backupHookRules(r, containers)...)
 			if r.BackupPlan.Offsite == nil {
 				continue
 			}
@@ -290,6 +295,27 @@ func (e *Engine) Validate(ch Change) (violations, exempted []Violation) {
 		}
 	}
 	return violations, exempted
+}
+
+// backupHookRules keeps a hook inside its package and node. Runtime repeats
+// this check because a Statefile may be edited around policy, but refusing the
+// proposal is where an owner gets an actionable error rather than a failed
+// scheduled backup.
+func backupHookRules(r resource.Resource, containers map[string]resource.Resource) []Violation {
+	var out []Violation
+	for _, hook := range r.BackupPlan.PreBackup {
+		container, ok := containers[hook.Container]
+		if !ok || container.Container == nil {
+			out = append(out, Violation{Rule: RuleBackupHookDeclared, Kind: string(r.Kind), Name: r.Metadata.Name,
+				Msg: fmt.Sprintf("preBackup container %q is not declared", hook.Container)})
+			continue
+		}
+		if container.Metadata.Node != r.Metadata.Node || container.Metadata.Owner != r.Metadata.Owner {
+			out = append(out, Violation{Rule: RuleBackupHookDeclared, Kind: string(r.Kind), Name: r.Metadata.Name,
+				Msg: fmt.Sprintf("preBackup container %q must be owned by %q on node %q", hook.Container, r.Metadata.Owner, r.Metadata.Node)})
+		}
+	}
+	return out
 }
 
 // ldapEmailKey is how the directory compares addresses: LLDAP keeps a

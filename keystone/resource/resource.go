@@ -239,6 +239,11 @@ type ContainerSpec struct {
 	// ShmSize is the container's /dev/shm size in Docker's own size-string
 	// syntax (e.g. "1g"); empty leaves Docker's default (64m).
 	ShmSize string `yaml:"shmSize,omitempty" json:"shmSize,omitempty"`
+	// RunNetwork is execution-only metadata for Keystone-created one-shot
+	// containers. It is deliberately absent from YAML and spec hashing: a
+	// package cannot choose a Docker network, while the backup engine can
+	// attach a fixed pg_dump helper to Wildstone's managed network.
+	RunNetwork string `yaml:"-" json:"-"`
 }
 
 // ContainerResources bounds what one container may consume (protocol
@@ -887,6 +892,10 @@ type BackupPlanSpec struct {
 	// important (painful to rebuild) or rebuildable. It groups plans for
 	// the owner choosing what goes off-site; it changes no behaviour.
 	Class string `yaml:"class,omitempty"`
+	// PreBackup is a closed set of consistent database exports performed
+	// before restic reads the plan sources. Hooks name declared resources;
+	// they cannot supply an image, command, environment variable or shell.
+	PreBackup []BackupHook `yaml:"preBackup,omitempty" json:"preBackup,omitempty"`
 	// Offsite, when set, also sends this plan's backups to a BackupTarget
 	// (ADR-W045 A3). With route offsite-only, Repository, PasswordSecret,
 	// Schedule and Retention are left empty: the off-site block carries
@@ -896,6 +905,21 @@ type BackupPlanSpec struct {
 	// whole-site recovery set (ADR-W045 A5). It is the printable public half
 	// only; the private half must never be stored on a Wildstone host.
 	RecoveryPublicKey string `yaml:"recoveryPublicKey,omitempty"`
+}
+
+const (
+	BackupHookPostgres = "pg_dump"
+	BackupHookSQLite   = "sqlite"
+)
+
+// BackupHook describes one engine-built database export. Database is a
+// PostgreSQL database name for pg_dump and an absolute path inside Container
+// for sqlite. OutputVolume must also be one of the plan's source volumes.
+type BackupHook struct {
+	Kind         string `yaml:"kind" json:"kind"`
+	Container    string `yaml:"container" json:"container"`
+	Database     string `yaml:"database" json:"database"`
+	OutputVolume string `yaml:"outputVolume" json:"outputVolume"`
 }
 
 // backupClasses is the closed set of BackupPlanSpec.Class values.
@@ -1818,6 +1842,36 @@ func validateBackupPlan(r *Resource) error {
 	for i, v := range p.Volumes {
 		if v == "" {
 			return bad(fmt.Sprintf("spec.volumes[%d]", i), "must not be empty")
+		}
+	}
+	if len(p.PreBackup) > 8 {
+		return bad("spec.preBackup", "must contain at most 8 hooks")
+	}
+	volumeSet := make(map[string]bool, len(p.Volumes))
+	for _, v := range p.Volumes {
+		volumeSet[v] = true
+	}
+	hookContainers := map[string]bool{}
+	for i, hook := range p.PreBackup {
+		field := fmt.Sprintf("spec.preBackup[%d]", i)
+		if hook.Kind != BackupHookPostgres && hook.Kind != BackupHookSQLite {
+			return bad(field+".kind", "must be pg_dump or sqlite")
+		}
+		if !nameRegexp.MatchString(hook.Container) {
+			return bad(field+".container", "must name a container")
+		}
+		if hookContainers[hook.Container] {
+			return bad(field+".container", "may have only one hook per container")
+		}
+		hookContainers[hook.Container] = true
+		if !nameRegexp.MatchString(hook.OutputVolume) || !volumeSet[hook.OutputVolume] {
+			return bad(field+".outputVolume", "must name a volume covered by this BackupPlan")
+		}
+		if hook.Database == "" || len(hook.Database) > 512 || strings.ContainsFunc(hook.Database, func(c rune) bool { return c < 0x20 || c == 0x7f }) {
+			return bad(field+".database", "must be non-empty, at most 512 characters, and contain no control characters")
+		}
+		if hook.Kind == BackupHookSQLite && (!strings.HasPrefix(hook.Database, "/") || path.Clean(hook.Database) != hook.Database || hook.Database == "/") {
+			return bad(field+".database", "must be a clean absolute path inside the container for a sqlite hook")
 		}
 	}
 	seen := map[string]bool{}

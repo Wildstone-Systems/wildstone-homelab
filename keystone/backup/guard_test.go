@@ -466,7 +466,8 @@ func TestExcludesReachRestic(t *testing.T) {
 	}
 }
 
-// TestConfigTag: the tag names exactly the sources and excludes — the
+// TestConfigTag: the tag names exactly the sources, excludes and consistency
+// hooks — the
 // same set in any order is the same tag, and adding an exclude or a
 // source makes a new one — and the off-site copy asks for the tag the
 // local backup just wrote, so older snapshots (made before an exclude)
@@ -482,6 +483,9 @@ func TestConfigTag(t *testing.T) {
 		"exclude gone":    {Volumes: []string{"v1", "v2"}, Exclude: []string{"*.iso"}},
 		"source added":    {Volumes: []string{"v1", "v2", "v3"}, Exclude: []string{"*.iso", "cache"}},
 		"path not volume": {Volumes: []string{"v1"}, Paths: []string{"/v2"}, Exclude: []string{"*.iso", "cache"}},
+		"hook added": {Volumes: []string{"v1", "v2"}, Exclude: []string{"*.iso", "cache"}, PreBackup: []resource.BackupHook{{
+			Kind: resource.BackupHookPostgres, Container: "postgres", Database: "app", OutputVolume: "v2",
+		}}},
 	} {
 		if configTag(c) == configTag(a) {
 			t.Errorf("%s: tag unchanged", name)
