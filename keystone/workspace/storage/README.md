@@ -55,3 +55,14 @@ source/parent substitutions, actual nested mount refusal, concurrent collisions,
 restart, tampering, execution fences, I/O faults and uncertain durability.
 Existing `workspace` tests inject kernel mount snapshots for loss/replacement
 without mount privileges. Portal tests retain the original W037 contract.
+
+S05 storage support adds `StageObject`: the trusted coordinator chooses and
+journals the complete object tuple and reservation before writing bytes. It
+checks a mandatory fence before work and immediately before the exclusive
+stage link. An exact retry uses the same tuple; collisions never replace bytes.
+`SyncStage` and `SyncPublished` reconcile journaled objects by verifying their
+hash/size, pinning and comparing inode identity, syncing file and directory,
+and rechecking current storage. An ordinary successful read is not evidence
+that a previously uncertain directory entry is durable. These helpers alone
+neither commit metadata nor return artifact receipts; session/coordinator and
+startup-recovery wiring remain pending in #478.

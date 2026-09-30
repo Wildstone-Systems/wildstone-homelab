@@ -540,3 +540,114 @@ func TestNamespaceChangesInsideLinkRequireRecovery(t *testing.T) {
 		}
 	}
 }
+
+func TestJournaledStageIdentityAndReconciliation(t *testing.T) {
+	s := testStore(t)
+	obj := Object{ID: strings.Repeat("1", 32), SHA256: digest([]byte("complete")), Size: 8}
+	if err := s.StageObject("report.md", obj, strings.NewReader("partial"), allow); !errors.Is(err, ErrIntegrity) {
+		t.Fatalf("mismatched journal accepted: %v", err)
+	}
+	if err := s.StageObject("report.md", obj, strings.NewReader("complete"), nil); !errors.Is(err, ErrFence) {
+		t.Fatalf("missing fence accepted: %v", err)
+	}
+	calls := 0
+	denied := errors.New("revoked")
+	if err := s.StageObject("report.md", obj, strings.NewReader("complete"), func() error {
+		calls++
+		if calls == 2 {
+			return denied
+		}
+		return nil
+	}); !errors.Is(err, denied) {
+		t.Fatalf("late fence: %v", err)
+	}
+	if _, err := os.Stat(filePath(s, "staging", obj.ID)); !os.IsNotExist(err) {
+		t.Fatalf("fenced stage exists: %v", err)
+	}
+	linked := false
+	s.hooks.link = func(a int, b string, c int, d string, flags int) error {
+		err := unix.Linkat(a, b, c, d, flags)
+		linked = err == nil
+		return err
+	}
+	s.hooks.sync = func(f *os.File) error {
+		if linked {
+			return unix.EIO
+		}
+		return f.Sync()
+	}
+	if err := s.StageObject("report.md", obj, strings.NewReader("complete"), allow); !errors.Is(err, ErrUncertain) {
+		t.Fatalf("uncertain stage: %v", err)
+	}
+	fresh, err := New(s.settings, "person-one", "agent-one")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fresh.StageObject("report.md", obj, strings.NewReader("complete"), allow); !errors.Is(err, ErrConflict) {
+		t.Fatalf("retry must keep same identity: %v", err)
+	}
+	if data, err := fresh.SyncStage(obj, allow); err != nil || string(data) != "complete" {
+		t.Fatalf("stage reconciliation: %q %v", data, err)
+	}
+	if _, err := fresh.SyncPublished(obj, allow); err == nil {
+		t.Fatal("staging mistaken for published bytes")
+	}
+	if err := fresh.Publish(obj, allow); err != nil {
+		t.Fatal(err)
+	}
+	if data, err := fresh.SyncPublished(obj, allow); err != nil || string(data) != "complete" {
+		t.Fatalf("published reconciliation: %q %v", data, err)
+	}
+}
+
+func TestReconciliationRequiresIntegrityDurabilityAndFence(t *testing.T) {
+	for _, kind := range []string{"staging", "revisions"} {
+		t.Run(kind, func(t *testing.T) {
+			s := testStore(t)
+			obj := stage(t, s, "original")
+			if err := s.Publish(obj, allow); err != nil {
+				t.Fatal(err)
+			}
+			reconcile := s.SyncStage
+			if kind == "revisions" {
+				reconcile = s.SyncPublished
+			}
+			if _, err := reconcile(obj, nil); !errors.Is(err, ErrFence) {
+				t.Fatalf("nil fence: %v", err)
+			}
+			calls := 0
+			denied := errors.New("revoked")
+			if _, err := reconcile(obj, func() error {
+				calls++
+				if calls == 2 {
+					return denied
+				}
+				return nil
+			}); !errors.Is(err, denied) {
+				t.Fatalf("late fence: %v", err)
+			}
+			s.hooks.sync = func(*os.File) error { return unix.EIO }
+			if _, err := reconcile(obj, allow); !errors.Is(err, ErrUncertain) {
+				t.Fatalf("sync failure: %v", err)
+			}
+			s.hooks.sync = nil
+			wrong := obj
+			wrong.SHA256 = strings.Repeat("0", 64)
+			if _, err := reconcile(wrong, allow); !errors.Is(err, ErrIntegrity) {
+				t.Fatalf("wrong hash: %v", err)
+			}
+			// Replacing the parent after verification cannot certify durability of
+			// the now-detached object. The original bytes remain recoverable.
+			calls = 0
+			if _, err := reconcile(obj, func() error {
+				calls++
+				if calls == 2 {
+					return os.Rename(filePath(s, kind, ""), filePath(s, kind+"-detached", ""))
+				}
+				return nil
+			}); !errors.Is(err, ErrUncertain) {
+				t.Fatalf("detached directory: %v", err)
+			}
+		})
+	}
+}

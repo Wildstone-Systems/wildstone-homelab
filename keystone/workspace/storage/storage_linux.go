@@ -134,7 +134,11 @@ func (s *Store) Stage(logicalPath string, body io.Reader) (Object, error) {
 		return Object{}, err
 	}
 	obj := Object{ID: id, SHA256: digest(data), Size: int64(len(data))}
-	return obj, s.StageObject(logicalPath, obj, strings.NewReader(string(data)), func() error { return nil })
+	err = s.StageObject(logicalPath, obj, strings.NewReader(string(data)), func() error { return nil })
+	if err != nil && !errors.Is(err, ErrUncertain) {
+		return Object{}, err
+	}
+	return obj, err
 }
 
 // StageObject persists an object whose complete identity was already journaled.
