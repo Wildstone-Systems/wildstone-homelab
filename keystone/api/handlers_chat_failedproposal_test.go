@@ -422,3 +422,23 @@ func TestFailedTurnProposalNoticeRetainsSessionPrivacy(t *testing.T) {
 		t.Fatalf("protected failed-turn notice leaked: %v", queued)
 	}
 }
+
+// An empty turn must never reach a person as a bare placeholder: both
+// texts explain what happened and offer a recovery that exists.
+func TestChatEmptyAnswerIsActionable(t *testing.T) {
+	for _, held := range []bool{false, true} {
+		got := chatReplyBody(askResponse{}, held)
+		if strings.Contains(got, "(no answer)") {
+			t.Errorf("held=%v: placeholder leaked: %q", held, got)
+		}
+		if !strings.Contains(got, "/new") {
+			t.Errorf("held=%v: no recovery offered: %q", held, got)
+		}
+		if strings.Contains(got, "Owner") != held {
+			t.Errorf("held=%v: wrong explanation: %q", held, got)
+		}
+	}
+	if got := chatReplyBody(askResponse{FinalText: " hi "}, true); got != "hi" {
+		t.Errorf("a real answer must pass through, got %q", got)
+	}
+}
