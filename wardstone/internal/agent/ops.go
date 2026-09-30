@@ -423,12 +423,30 @@ func (a *Agent) writeManagedFile(op *wsv1.WriteManagedFile) (*wsv1.OpResult_Writ
 	// rename that publishes it. UMask stays where it is: it is a sane
 	// default for everything else this agent writes, and the point here
 	// is that a managed file's mode is a decision, not a leftover.
+	//
+	// Only directories THIS write creates are widened. An existing
+	// directory is an earlier decision — an operator's, or a secret-bearing
+	// write's — and is left alone: widening it would undo the protection
+	// its 0600 files rely on, and chmod on a directory another uid owns
+	// would fail a write that would otherwise have succeeded.
 	dir := filepath.Dir(path)
+	var created []string
+	for d := dir; ; d = filepath.Dir(d) {
+		if _, err := os.Stat(d); !os.IsNotExist(err) {
+			break
+		}
+		created = append(created, d)
+		if filepath.Dir(d) == d {
+			break
+		}
+	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "mkdir: %v", err)
 	}
-	if err := os.Chmod(dir, 0o755); err != nil {
-		return nil, opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "chmod dir: %v", err)
+	for _, d := range created {
+		if err := os.Chmod(d, 0o755); err != nil {
+			return nil, opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "chmod dir: %v", err)
+		}
 	}
 	tmp := path + ".wildstone-tmp"
 	if err := os.WriteFile(tmp, content, mode); err != nil {
