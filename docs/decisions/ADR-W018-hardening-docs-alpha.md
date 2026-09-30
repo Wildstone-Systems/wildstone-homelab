@@ -1,11 +1,28 @@
 # ADR-W018: Hardening, docs, alpha release (E13)
 
 - **Status:** accepted; A2 amended by ADR-W033; A2 item 3 amended by
-  ADR-W045 A5 (secrets recovered from a sealed bundle)
+  ADR-W045 A5 (secrets recovered from a sealed bundle); constrained by
+  ADR-W030 (Butler runtime state and restore quarantine)
 - **Governed by:** ADR-W033 where they overlap.
 - **Relates to:** ADR-W002 (e2e boundary), ADR-W011 (backup engine),
   ADR-W012 (secrets path), ADR-W014 (installer), implementation scope E13
 - **Audience:** decision record AND implementation spec for E13.
+
+## Constraints from ADR-W030
+
+- Durable Butler runtime state (task/step ledgers, conversations and
+  selected memory, grants and immediate denials, routines, access settings,
+  delivery state and work traces) joins the recovery contract. Its off-host
+  copy publishes a measured recovery point; replication lag is possible
+  data loss. See [`docs/recovery.md`](../recovery.md).
+- A restore starts Butler in quarantine: no retrieval, dispatch, ingestion
+  or proactive delivery until current authority and later
+  deletions/revocations are reconciled (ADR-W030 A10).
+- The exit drill grows a restore/revocation case: restore an older snapshot
+  holding access and content revoked afterward, prove it stays
+  unavailable, and prove uncertain pending actions do not resume.
+  _Code note: `scripts/exit-drill.sh` does not run this case yet; quarantine
+  is covered by unit tests in `keystone/runtimedb` and `keystone/api`._
 
 ---
 

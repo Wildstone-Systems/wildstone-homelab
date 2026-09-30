@@ -153,7 +153,7 @@ drill pass.
 
 ADR-W030 adds recoverable Butler runtime state: task/step ledgers,
 conversations and selected memory, bindings and identity-link projections,
-temporary grants and immediate denials, routines/procedures, access settings,
+grants and immediate denials, routines/procedures, access settings,
 delivery state, structured work traces/feedback labels, and evaluator/config
 versions. Its encrypted off-host backup or replica must publish a
 measured recovery point; replication lag is possible data loss, not proof of
