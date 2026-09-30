@@ -553,3 +553,56 @@ func TestEntityDecodedLineEndingsNormalizeBeforeBounds(t *testing.T) {
 		}
 	}
 }
+
+func TestCancellationDuringAuthorizationRemainsDistinct(t *testing.T) {
+	for _, operation := range []string{"put", "read", "continue"} {
+		checks := 1
+		if operation != "read" {
+			checks = 2
+		}
+		for target := 1; target <= checks; target++ {
+			for _, deadline := range []bool{false, true} {
+				for _, returnContextError := range []bool{false, true} {
+					s := newStore(t)
+					p, err := s.Put(context.Background(), scope(), input("text/plain", strings.Repeat("x", 6000)))
+					if err != nil {
+						t.Fatal(err)
+					}
+					ctx, cancel := context.WithCancel(context.Background())
+					want := context.Canceled
+					if deadline {
+						cancel()
+						ctx, cancel = context.WithTimeout(context.Background(), 100*time.Millisecond)
+						want = context.DeadlineExceeded
+					}
+					calls := 0
+					s.authorize = func(ctx context.Context, _ Scope) error {
+						calls++
+						if calls == target {
+							if !deadline {
+								cancel()
+							}
+							<-ctx.Done()
+							if returnContextError {
+								return ctx.Err()
+							}
+						}
+						return nil
+					}
+					switch operation {
+					case "put":
+						_, err = s.Put(ctx, scope(), input("text/plain", "new"))
+					case "read":
+						_, err = s.Read(ctx, scope(), p.Source.SourceRef, "")
+					case "continue":
+						_, err = s.Continue(ctx, scope(), p.NextCursor)
+					}
+					cancel()
+					if err != want || calls != target || len(s.sources) != 1 {
+						t.Fatalf("%s check=%d deadline=%v callbackErr=%v: err=%v calls=%d sources=%d", operation, target, deadline, returnContextError, err, calls, len(s.sources))
+					}
+				}
+			}
+		}
+	}
+}

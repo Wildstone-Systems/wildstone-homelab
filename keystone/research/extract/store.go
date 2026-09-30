@@ -100,10 +100,17 @@ func (s *Store) allowed(ctx context.Context, scope Scope) error {
 	if !scope.valid() {
 		return ErrInput
 	}
-	if s.authorize == nil || s.authorize(ctx, scope) != nil {
+	if s.authorize == nil {
 		return ErrDenied
 	}
-	return ctx.Err()
+	authErr := s.authorize(ctx, scope)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if authErr != nil {
+		return ErrDenied
+	}
+	return nil
 }
 
 // Put publishes a fresh immutable extraction. Re-fetching a URL never changes
