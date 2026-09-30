@@ -58,6 +58,32 @@ references or audience forms fail closed; later provider/sharing adapters must
 supply reviewed, typed source rules rather than interpret arbitrary source IDs
 as public. No model-controlled source label can remove inherited restrictions.
 
+Memory sources use the same content-authority predicate as canonical recall:
+active Person/Agent access, audience and inherited audience constraints, scope,
+forgetting, and external Connection disclosure. The destination is the bound
+privacy turn's destination, not the originating workspace Connection. Every
+reachable memory is checked, including transitive derivatives. The existing
+verified one-to-one chat rule remains intact; an unverified destination requires
+compatible recorded and live reach, encryption, retention and surface profiles.
+Recall-only selection rules (supersession and promotion deduplication) do not
+remove historical sources or replace their authority checks.
+
+Task/session resume and delivery repeat this authority check whenever their
+history contains workspace revisions. They also repeat the original revision
+class/surface ceiling and live Person/Agent admission checks. Finished tasks
+retain provenance for delivery; finishing a task is not itself a content grant.
+The Console memory-query exemption does not waive workspace Agent grants.
+
+| Source dimension | Enforced at read/edit and workspace-derived resume/delivery |
+| --- | --- |
+| Person/Agent ownership and admission | Same private owner/Agent; live Person, role, Agent and explicit access |
+| Class/surface | Original revision task ceiling and current Agent ceiling |
+| Audience/scope | Current memory audience, inherited constraints and Agent scope restrictions |
+| External disclosure | Canonical memory disclosure predicate using the actual destination |
+| Revocation | Forgotten memory, revoked access and Connection checks on every evaluation |
+| Processing/privacy marks | Recursive local-only and trusted-only policy across all sources |
+
+
 ## Durable provenance
 
 Migration 0099 adds exact task/session-to-revision reads and immutable-revision

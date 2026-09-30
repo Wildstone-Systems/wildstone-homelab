@@ -56,51 +56,62 @@ func workspaceInputs(tx *sql.Tx, p *PrivacyTurn) error {
 	return nil
 }
 
-// checkWorkspaceSources rechecks inherited audience/scope as well as labels.
-// Sharing and external source adapters have separate slices; an unknown source
-// kind never becomes an implicitly public source here.
-func (db *DB) checkWorkspaceSources(tx *sql.Tx, a *WorkspaceAccess, object string) error {
-	task, err := parseButlerTaskID(a.task)
-	if err != nil {
-		return ErrWorkspaceDenied
-	}
+// workspaceSourceReader carries trusted reader identity and the original
+// class/surface ceiling, independent of whether a task has finished.
+type workspaceSourceReader struct {
+	person, agent string
+	class         string
+	surface       ButlerSurface
+}
+
+func (db *DB) checkWorkspaceSources(q privacyReader, reader workspaceSourceReader, destination MemoryDestination, object string) error {
 	var person string
-	if err := tx.QueryRow(`SELECT person_id FROM butler_members WHERE member=?`, a.person).Scan(&person); err != nil {
+	if err := q.QueryRow(`SELECT person_id FROM butler_members WHERE member=?`, reader.person).Scan(&person); err != nil {
 		return ErrWorkspaceDenied
 	}
-	visible, args, err := db.visibleAudienceClause("m.audience", "m.owner_person_id", person)
+	var agent int64
+	if err := q.QueryRow(`SELECT seq FROM butlers WHERE name=?`, reader.agent).Scan(&agent); err != nil {
+		return ErrWorkspaceDenied
+	}
+	// The destination comes from the bound privacy turn, not the workspace's
+	// ingress Connection or model-supplied arguments. Never use nil/internal
+	// memory authority for content that is about to reach a model or Person.
+	// Workspace authority always requires an explicit Agent grant, including
+	// Console Owners; the legacy memory-only Console exemption is not a grant.
+	destination.ConsoleOwner = false
+	read := &MemoryReadContext{person: person, agent: agent, destination: destination}
+	boundary, boundaryArgs := memoryBoundaryClause(person, reader.agent, read)
+	var admitted bool
+	if err := q.QueryRow(`SELECT 1 WHERE 1`+boundary, boundaryArgs...).Scan(&admitted); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrWorkspaceDenied
+		}
+		return err
+	}
+	authority, args, err := db.memoryContentAuthorityClause("m", person, reader.agent, read)
 	if err != nil {
 		return err
 	}
-	constraints, constraintArgs, err := db.memoryConstraintClause("m", person)
-	if err != nil {
-		return err
-	}
-	scope, scopeArgs := memoryScopeClause("m", a.agent, person)
 	query := privacySources + `SELECT EXISTS(SELECT 1 FROM sources s JOIN butler_memory m ON s.object='m:'||m.seq
- WHERE NOT COALESCE(m.forgotten_at='' AND ` + visible + ` AND ` + constraints + scope + `,0))`
-	values := []any{object}
-	values = append(values, args...)
-	values = append(values, constraintArgs...)
-	values = append(values, scopeArgs...)
+ WHERE NOT COALESCE(` + authority + `,0))`
+	values := append([]any{object}, args...)
 	var denied bool
-	if err = tx.QueryRow(query, values...).Scan(&denied); err != nil {
+	if err := q.QueryRow(query, values...).Scan(&denied); err != nil {
 		return err
 	}
 	if denied {
 		return ErrWorkspaceDenied
 	}
-	err = tx.QueryRow(privacySources+`SELECT EXISTS (
+	err = q.QueryRow(privacySources+`SELECT EXISTS (
  SELECT 1 FROM sources s JOIN workspace_revisions r ON s.object='wr:'||r.id
  JOIN workspace_artifacts artifact ON artifact.id=r.artifact_id JOIN agent_workspaces w ON w.id=artifact.workspace_id
  JOIN butlers b ON b.seq=w.agent_id
  JOIN butler_tasks origin ON origin.seq=r.task_id
- JOIN butler_tasks current ON current.seq=?
  WHERE w.person_id<>? OR b.name<>? OR w.visibility<>'private'
- OR origin.agent_class<>current.agent_class OR origin.surface<>current.surface
+ OR origin.agent_class<>? OR origin.surface<>? OR b.agent_class<>? OR b.surface<>?
  UNION ALL SELECT 1 FROM sources s JOIN workspace_provenance edge ON s.object='wr:'||edge.revision_id
  WHERE edge.source_revision IS NULL OR edge.audience NOT IN ('private','aud_owner',?)
- )`, object, task, person, a.agent, person).Scan(&denied)
+ )`, object, person, reader.agent, reader.class, reader.surface, reader.class, reader.surface, person).Scan(&denied)
 	if err != nil {
 		return err
 	}
@@ -111,7 +122,12 @@ func (db *DB) checkWorkspaceSources(tx *sql.Tx, a *WorkspaceAccess, object strin
 }
 
 func (db *DB) workspacePolicy(tx *sql.Tx, a *WorkspaceAccess, p *PrivacyTurn, object string) (PrivacyPolicy, error) {
-	if err := db.checkWorkspaceSources(tx, a, object); err != nil {
+	var reader workspaceSourceReader
+	reader.person, reader.agent = a.person, a.agent
+	if err := tx.QueryRow(`SELECT agent_class,surface FROM butler_tasks WHERE seq=?`, p.task).Scan(&reader.class, &reader.surface); err != nil {
+		return PrivacyPolicy{}, err
+	}
+	if err := db.checkWorkspaceSources(tx, reader, p.destination, object); err != nil {
 		return PrivacyPolicy{}, err
 	}
 	policy, err := contentPrivacy(tx, object)
@@ -250,4 +266,33 @@ func (db *DB) CreateWorkspaceRevisionForTask(ctx context.Context, a *WorkspaceAc
 		}
 	}
 	return tx.Commit()
+}
+
+// checkWorkspaceHistoryAuthority repeats source authority when retained output
+// is resumed or sent elsewhere. Memory-only history keeps its existing policy;
+// this slice adds no new grants or unattended-work authority.
+func (db *DB) checkWorkspaceHistoryAuthority(object string, task, session int64, destination MemoryDestination) error {
+	var workspace bool
+	if err := db.sql.QueryRow(privacySources+`SELECT EXISTS(SELECT 1 FROM sources s JOIN workspace_revisions r ON s.object='wr:'||r.id)`, object).Scan(&workspace); err != nil {
+		return err
+	}
+	if !workspace {
+		return nil
+	}
+	var reader workspaceSourceReader
+	var err error
+	if task != 0 {
+		err = db.sql.QueryRow(`SELECT p.member,t.butler,t.agent_class,t.surface FROM butler_tasks t JOIN butler_members p ON p.person_id=t.owner_person_id WHERE t.seq=? AND t.kind='conversation' AND t.audience=?`, task, ButlerAudiencePrivate).Scan(&reader.person, &reader.agent, &reader.class, &reader.surface)
+	} else if session != 0 {
+		err = db.sql.QueryRow(`SELECT p.member,b.name,b.agent_class,s.surface FROM butler_sessions s JOIN butler_members p ON p.person_id=s.person_id JOIN butlers b ON b.seq=s.agent_id WHERE s.seq=?`, session).Scan(&reader.person, &reader.agent, &reader.class, &reader.surface)
+	} else {
+		return ErrPrivacy
+	}
+	if err != nil {
+		return ErrPrivacy
+	}
+	if err = db.checkWorkspaceSources(db.sql, reader, destination, object); err != nil {
+		return ErrPrivacy
+	}
+	return nil
 }

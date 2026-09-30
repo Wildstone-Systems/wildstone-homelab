@@ -184,6 +184,9 @@ func (p *PrivacyTurn) Check() error {
 		if err = policy.Check(p.model, p.destination); err != nil {
 			return err
 		}
+		if err = p.db.checkWorkspaceHistoryAuthority(fmt.Sprintf("t:%d", p.task), p.task, 0, p.destination); err != nil {
+			return err
+		}
 	}
 	if p.session != 0 {
 		policy, err := p.db.contentPrivacy(fmt.Sprintf("s:%d", p.session))
@@ -191,6 +194,9 @@ func (p *PrivacyTurn) Check() error {
 			return err
 		}
 		if err = policy.Check(p.model, p.destination); err != nil {
+			return err
+		}
+		if err = p.db.checkWorkspaceHistoryAuthority(fmt.Sprintf("s:%d", p.session), p.task, p.session, p.destination); err != nil {
 			return err
 		}
 	}
@@ -245,6 +251,9 @@ func CheckPrivacyDelivery(ctx context.Context, d MemoryDestination) error {
 		if err = policy.Check(p.model, d); err != nil {
 			return err
 		}
+		if err = p.db.checkWorkspaceHistoryAuthority(fmt.Sprintf("t:%d", p.task), p.task, p.session, d); err != nil {
+			return err
+		}
 	}
 	if p.session != 0 {
 		policy, err := p.db.contentPrivacy(fmt.Sprintf("s:%d", p.session))
@@ -252,6 +261,9 @@ func CheckPrivacyDelivery(ctx context.Context, d MemoryDestination) error {
 			return err
 		}
 		if err = policy.Check(p.model, d); err != nil {
+			return err
+		}
+		if err = p.db.checkWorkspaceHistoryAuthority(fmt.Sprintf("s:%d", p.session), p.task, p.session, d); err != nil {
 			return err
 		}
 	}
@@ -274,7 +286,10 @@ func (db *DB) CheckSessionPrivacy(id, model string, d MemoryDestination) error {
 	if err != nil {
 		return err
 	}
-	return p.Check(model, d)
+	if err = p.Check(model, d); err != nil {
+		return err
+	}
+	return db.checkWorkspaceHistoryAuthority(fmt.Sprintf("s:%d", s.Seq), 0, s.Seq, d)
 }
 
 // CheckTaskPrivacy also covers first-turn workspace inputs before a session
@@ -288,7 +303,10 @@ func (db *DB) CheckTaskPrivacy(id, model string, d MemoryDestination) error {
 	if err != nil {
 		return err
 	}
-	return p.Check(model, d)
+	if err = p.Check(model, d); err != nil {
+		return err
+	}
+	return db.checkWorkspaceHistoryAuthority(fmt.Sprintf("t:%d", t.Seq), t.Seq, 0, d)
 }
 
 // includeTaskSources runs under mu. A newly remembered fact is still in this

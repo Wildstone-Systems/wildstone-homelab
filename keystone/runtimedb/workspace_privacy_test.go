@@ -382,11 +382,26 @@ func TestWorkspacePrivacyPreservesSourceTaskCeiling(t *testing.T) {
 	db, w, origin := workspaceAuthorityFixture(t)
 	sourceTask, _ := parseButlerTaskID(origin)
 	workspacePublish(t, db, workspaceIntent(t, db, w, sourceTask, "owner-source", "owner-r1", "", 1), "owner-receipt")
+	history, session := workspacePrivacyTask(t, db)
+	historyCtx, historyGuard, historyAccess := workspacePrivacyTurn(t, db, history, ModelLocal, MemoryDestination{BuiltIn: true})
+	if _, err := db.ReadWorkspaceRevision(historyCtx, historyAccess, w.ID, "owner-source", "owner-r1"); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := db.SetAgentClass("alfred", AgentClassMember, "mika"); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.GrantButlerAccess("alfred", "mika", "root-admin"); err != nil {
 		t.Fatal(err)
+	}
+	for name, check := range map[string]func() error{
+		"task":     func() error { return db.CheckTaskPrivacy(history, ModelLocal, MemoryDestination{BuiltIn: true}) },
+		"session":  func() error { return db.CheckSessionPrivacy(session, ModelLocal, MemoryDestination{BuiltIn: true}) },
+		"delivery": func() error { return CheckPrivacyDelivery(historyCtx, MemoryDestination{BuiltIn: true}) },
+		"resume":   historyGuard.Check,
+	} {
+		if err := check(); !errors.Is(err, ErrPrivacy) {
+			t.Fatalf("%s replayed Owner source: %v", name, err)
+		}
 	}
 	task, err := db.InsertButlerTask(ButlerTask{Kind: ButlerTaskConversation, Author: "mika", Owner: "mika", AgentClass: AgentClassMember, Surface: ButlerSurfaceFamily, Audience: ButlerAudiencePrivate, OriginConnection: "household_portal", Objective: "read own member files"})
 	if err != nil {
@@ -465,6 +480,129 @@ func TestWorkspacePrivacyAcceptsLegacyPersonAudience(t *testing.T) {
 				}
 			} else if !errors.Is(err, ErrWorkspaceDenied) || got.ID != "" {
 				t.Fatalf("foreign audience admitted: %+v %v", got, err)
+			}
+		})
+	}
+}
+
+func TestWorkspacePrivacyMemoryDisclosureAuthority(t *testing.T) {
+	for _, tc := range []struct{ name, mutation string }{
+		{"compatible", ""},
+		{"builtin source", ""},
+		{"builtin verified", ""},
+		{"verified chat", "UPDATE connection_disclosure SET retention='none'"},
+		{"missing classification", "DELETE FROM connection_disclosure"},
+		{"reach", "UPDATE connection_disclosure SET reach='local'"},
+		{"encryption", "UPDATE connection_disclosure SET encryption='end_to_end'"},
+		{"retention", "UPDATE connection_disclosure SET retention='none'"},
+		{"surface", "UPDATE connection_disclosure SET surface='trusted_ui'"},
+		{"unknown", "UPDATE connection_disclosure SET retention='unknown'"},
+		{"revoked origin", "UPDATE butler_addresses SET revoked_at='revoked'"},
+		{"forgotten", "UPDATE butler_memory SET forgotten_at='forgotten'"},
+		{"audience", "INSERT INTO memory_constraints(memory,audience,owner_person_id) SELECT m.seq,'aud_owner',p.person_id FROM butler_memory m CROSS JOIN butler_members p WHERE p.member='sam'"},
+		{"scope", "INSERT INTO memory_agent_restrictions(agent,scope) SELECT seq,'personal' FROM butlers WHERE name='alfred'"},
+		{"agent access", "UPDATE butler_access SET revoked_at='revoked'"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db, w, id := workspaceAuthorityFixture(t)
+			at := connect(t, db, "alfred", "telegram", ButlerSurfaceAdmin)
+			if _, err := db.sql.Exec(`UPDATE connection_disclosure SET retention='provider' WHERE connection=?`, at.Seq); err != nil {
+				t.Fatal(err)
+			}
+			origin := newTask(t, db, func(task *ButlerTask) {
+				task.AgentClass = AgentClassOwner
+				task.OriginConnection = at.Name()
+				task.OriginConnectionRef = at.Seq
+				if strings.HasPrefix(tc.name, "builtin") {
+					task.OriginConnection = "console"
+					task.OriginConnectionRef = 0
+				}
+			})
+			memory, err := db.RecordMemory(MemoryRecord{Scope: MemoryScopePersonal, Kind: MemoryFact, Content: "synthetic disclosure input", Owner: "mika", Author: "mika", Butler: "alfred", Audience: ButlerAudiencePrivate, PermissionLabel: "household", SourceKind: "conversation", SourceID: origin})
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, _, access := workspacePrivacyTurn(t, db, id, ModelLocal, MemoryDestination{BuiltIn: true})
+			if err = TrackMemoryPrivacy(ctx, memory, nil); err != nil {
+				t.Fatal(err)
+			}
+			if err = db.CreateWorkspaceArtifact(WorkspaceArtifact{ID: "output", WorkspaceID: w.ID, Path: "output.txt"}); err != nil {
+				t.Fatal(err)
+			}
+			if err = db.CreateWorkspaceRevisionForTask(ctx, access, w.ID, "", workspaceNewRevision("output-r1", "output")); err != nil {
+				t.Fatal(err)
+			}
+			seq, _ := parseButlerTaskID(id)
+			workspaceFinishRevision(t, db, w, seq, "output", "output-r1", "")
+			// Publish a second generation through an explicit base without a read.
+			derived, _ := workspacePrivacyTask(t, db)
+			derivedCtx, _, derivedAccess := workspacePrivacyTurn(t, db, derived, ModelLocal, MemoryDestination{BuiltIn: true})
+			if err = db.CreateWorkspaceRevisionForTask(derivedCtx, derivedAccess, w.ID, "output-r1", workspaceNewRevision("output-derived", "output")); err != nil {
+				t.Fatal(err)
+			}
+			derivedSeq, _ := parseButlerTaskID(derived)
+			workspaceFinishRevision(t, db, w, derivedSeq, "output", "output-derived", "output-r1")
+			// Capture a successful builtin read before tightening. All resumed
+			// and delivery paths must recheck live source authority themselves.
+			history, historySession := workspacePrivacyTask(t, db)
+			historyCtx, _, historyAccess := workspacePrivacyTurn(t, db, history, ModelLocal, MemoryDestination{BuiltIn: true})
+			if _, err = db.ReadWorkspaceRevision(historyCtx, historyAccess, w.ID, "output", "output-derived"); err != nil {
+				t.Fatal(err)
+			}
+			if tc.mutation != "" {
+				if _, err = db.sql.Exec(tc.mutation); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tc.name == "verified chat" || tc.name == "builtin verified" {
+				bind(t, db, at, "mika", "synthetic-account")
+			}
+			d := MemoryDestination{ConnectionRef: at.Seq}
+			hits, err := db.RetrieveMemory(MemoryQuery{Reader: "mika", Butler: "alfred", Kind: MemoryFact, ReadContext: db.BindMemoryRead("mika", "alfred", d)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := (tc.mutation == "" && tc.name != "builtin source") || tc.name == "verified chat" || tc.name == "builtin verified"
+			if (len(hits) > 0) != want {
+				t.Fatalf("canonical recall got %d, allowed=%v", len(hits), want)
+			}
+			_, resumed, _ := workspacePrivacyTurn(t, db, history, ModelLocal, d)
+			for name, check := range map[string]func() error{
+				"task":     func() error { return db.CheckTaskPrivacy(history, ModelLocal, d) },
+				"session":  func() error { return db.CheckSessionPrivacy(historySession, ModelLocal, d) },
+				"delivery": func() error { return CheckPrivacyDelivery(historyCtx, d) },
+				"resume":   resumed.Check,
+			} {
+				if err := check(); (err == nil) != want {
+					t.Fatalf("%s authority allowed=%v: %v", name, want, err)
+				}
+			}
+			next, _ := workspacePrivacyTask(t, db)
+			ctx, _, access = workspacePrivacyTurn(t, db, next, ModelLocal, d)
+			for _, revision := range []string{"output-r1", "output-derived"} {
+				got, err := db.ReadWorkspaceRevision(ctx, access, w.ID, "output", revision)
+				if want {
+					if err != nil {
+						t.Fatal(err)
+					}
+				} else if !errors.Is(err, ErrWorkspaceDenied) || got.ID != "" {
+					t.Fatalf("derivative disclosed metadata: %+v %v", got, err)
+				}
+			}
+			err = db.CreateWorkspaceRevisionForTask(ctx, access, w.ID, "output-derived", workspaceNewRevision("output-r2", "output"))
+			if want {
+				if err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				if !errors.Is(err, ErrWorkspaceDenied) {
+					t.Fatalf("edit authority: %v", err)
+				}
+				var n int
+				nextSeq, _ := parseButlerTaskID(next)
+				if err = db.sql.QueryRow(`SELECT (SELECT count(*) FROM workspace_task_sources WHERE task=?)+(SELECT count(*) FROM workspace_revisions WHERE id='output-r2')`, nextSeq).Scan(&n); err != nil || n != 0 {
+					t.Fatalf("denial persisted effects: %d %v", n, err)
+				}
 			}
 		})
 	}
