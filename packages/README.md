@@ -87,8 +87,8 @@ one mechanism, which is worth deciding before any of them individually.
 | `home-automation` | home-automation | adapter for a Home Assistant that already exists | — |
 | `home-assistant` | home-assistant | Home Assistant, run here | own |
 | `mqtt-mosquitto` | mqtt | Mosquitto broker, password-only, on one private LAN address; provides `mqtt:broker` | internal |
-| `zigbee-zigbee2mqtt` | zigbee | Zigbee2MQTT over a USB stick or a network coordinator | proxy |
-| `cameras-frigate` | cameras | Frigate NVR (CPU, Coral or GPU) | proxy |
+| `zigbee-zigbee2mqtt` | zigbee | Zigbee2MQTT over a USB stick or a network coordinator; requires `mqtt:broker` on its node | proxy |
+| `cameras-frigate` | cameras | Frigate NVR (CPU, Coral or GPU); `mqtt_enabled` switches on `mqtt:broker` | proxy |
 | `dns-pihole`, `dns-adguard` | dns | Pi-hole or AdGuard Home, on 53/udp and 53/tcp | proxy |
 | `vpn-gluetun` | vpn | Gluetun VPN client with a kill switch and an HTTP proxy for other containers | internal |
 | `passwords-vaultwarden` | passwords | Vaultwarden, Bitwarden-compatible | app OIDC |
@@ -416,6 +416,23 @@ Lint refuses a trait, mode, or class that is not in it, and names the ones
 that are — so `trait: identiy` is a message about a typo rather than an
 "unsatisfied requirement" during someone else's install.
 
+An integration your package offers but does not need goes behind a
+switch param with `when:`. The requirement then binds only an install
+whose value is `"true"`, and the param must be `validate:
+"enum:true|false"`:
+
+```yaml
+requires:
+  - { trait: mqtt, mode: broker, when: mqtt_enabled }
+params:
+  - { name: mqtt_enabled, default: "false", validate: "enum:true|false" }
+```
+
+Guard every `.Resolved` key that requirement supplies with the same
+switch (`{{ if eq .Params.mqtt_enabled "true" }}`): with it off, no
+provider is needed, so none of its keys can be relied on. `cameras-frigate` is the
+worked example.
+
 ### Providing values to other packages: `exports`
 
 If your package is the one others depend on, say what it hands them. Each
@@ -475,8 +492,14 @@ env:
   ZIGBEE2MQTT_CONFIG_MQTT_PASSWORD: "{{ .Resolved.MqttPasswordSecretRef }}"  # secret/mqtt-<capability>
 ```
 
-`MqttHost` and `MqttPort` are the same address split, for clients that
-take them separately (Frigate, Home Assistant). The address is the one
+That is `zigbee-zigbee2mqtt`'s block verbatim. `MqttHost` and
+`MqttPort` are the same address split, for clients that take them
+separately (Frigate, Home Assistant). A client that reads its password
+from a config file rather than env gets the reference in env and
+substitutes it itself where it can: `cameras-frigate` sets
+`FRIGATE_MQTT_PASSWORD: secret/mqtt-cameras` and writes
+`password: "{FRIGATE_MQTT_PASSWORD}"`, so its managed file never holds
+the password. The address is the one
 private IPv4 the operator bound the broker to (`listen_addr`,
 `validate: private_ipv4` — never `0.0.0.0` or loopback), so it works from
 host networking and from the Wildstone bridge network alike. Anonymous

@@ -102,6 +102,23 @@ type Requirement struct {
 	Trait string `yaml:"trait" json:"trait"`
 	Mode  string `yaml:"mode,omitempty" json:"mode,omitempty"`
 	Class string `yaml:"class,omitempty" json:"class,omitempty"`
+	// When names a switch param (validate: "enum:true|false") that turns
+	// this requirement on: it applies only to an install whose value for
+	// that param is "true". Empty means always.
+	//
+	// It exists for an integration a package offers but does not need —
+	// Frigate publishing events to MQTT is the case that asked. Without
+	// it the choice was between requiring a broker of every install,
+	// including the ones that switched MQTT off, and requiring nothing,
+	// so an install that switched it ON failed on a missing .Resolved key
+	// rather than on "unsatisfied requirement".
+	When string `yaml:"when,omitempty" json:"when,omitempty"`
+}
+
+// AppliesTo reports whether this requirement binds an install with the
+// given (merged) params.
+func (r Requirement) AppliesTo(params map[string]string) bool {
+	return r.When == "" || params[r.When] == "true"
 }
 
 // Provide is one entry of a package's `provides` list: a trait/mode this
@@ -569,6 +586,11 @@ func (p *Package) Validate() error {
 	for i, req := range p.Requires {
 		if req.Trait == "" {
 			return &ValidationError{Field: fmt.Sprintf("requires[%d].trait", i), Msg: "must not be empty"}
+		}
+		if req.When != "" {
+			if err := validateRequirementSwitch(p, req.When); err != nil {
+				return &ValidationError{Field: fmt.Sprintf("requires[%d].when", i), Msg: err.Error()}
+			}
 		}
 	}
 
@@ -1066,3 +1088,25 @@ var (
 	templateActionRegexp = regexp.MustCompile(`\{\{[^}]*\}\}`)
 	paramRefRegexp       = regexp.MustCompile(`\{\{\s*\.Params\.([a-z_]+)\s*\}\}`)
 )
+
+// validateRequirementSwitch holds a conditional requirement's `when` to a
+// param that can only be "true" or "false". A free-form param would make
+// "is this requirement on" depend on whether someone typed "yes", "1" or
+// "True" — each of which reads as on to a person and is off to AppliesTo.
+func validateRequirementSwitch(p *Package, name string) error {
+	for _, param := range p.Params {
+		if param.Name != name {
+			continue
+		}
+		values, isEnum := enumShapeValues(param.Validate)
+		set := map[string]bool{}
+		for _, v := range values {
+			set[v] = true
+		}
+		if !isEnum || len(values) != 2 || !set["true"] || !set["false"] {
+			return fmt.Errorf("param %q must be a switch (validate: \"enum:true|false\") to turn a requirement on", name)
+		}
+		return nil
+	}
+	return fmt.Errorf("names param %q, which the package does not declare", name)
+}

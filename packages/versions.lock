@@ -18,7 +18,7 @@ books-calibre-web 1.0.3 c3bdac664deed86b
 books-kavita 1.0.3 6c6fe6006484fde9
 budget-actual 1.1.1 3bcb0569c996b8f4
 calendar-radicale 2.2.1 a2e9cfe5fffa618b
-cameras-frigate 1.0.1 0ac585beb5876da1
+cameras-frigate 2.0.0 41ebd29eadcdd2f7
 captcha-flaresolverr 1.0.1 6420402a747e2ee5
 chat-discord 2.0.0 f18460627b32cd15
 chat-matrix 2.1.1 94161d2dc154aea0
@@ -75,4 +75,4 @@ tools-it-tools 1.0.0 08d30d25834cb937
 tv-sonarr 1.0.3 6ceff474d5acd38f
 vpn-gluetun 1.0.1 6e37d2b00dace21f
 wildstone-console 1.1.0 cb9c6f5dad6d36e7
-zigbee-zigbee2mqtt 1.0.2 7b16bd70a9c9571c
+zigbee-zigbee2mqtt 2.0.0 2fad956bc553e9ce

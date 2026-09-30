@@ -1,7 +1,27 @@
 # Zigbee capability, profile "zigbee2mqtt": bridges Zigbee bulbs,
 # sensors and switches onto MQTT, where Home Assistant picks them up
-# automatically. Needs a broker: install mqtt-mosquitto first (the
-# default mqtt_server names it).
+# automatically.
+#
+# THE BROKER. Requires mqtt:broker (mqtt-mosquitto) and takes its
+# address and credential from it: MqttURL is the one private address
+# the broker was bound to, never the container name "mosquitto", which
+# a host-networked Home Assistant cannot resolve either. The username is
+# this capability's name ("zigbee") and the password is the broker's
+# secret/mqtt-zigbee, handed over by reference in env — the agent
+# substitutes it at container start, so no literal password is written
+# here, in a plan, or in Zigbee2MQTT's own configuration.yaml.
+#
+# SAME MACHINE AS THE BROKER. That password is a node secret on the
+# broker's machine, and node secrets never leave their node, so this
+# package must be installed on the machine mqtt-mosquitto is on. Put
+# anywhere else it is refused at expansion, naming both machines,
+# rather than installed to fail authentication on every connect.
+#
+# UPGRADING FROM 1.x. The free-form mqtt_server param is gone (its
+# default pointed at the container name). Nothing Zigbee2MQTT keeps
+# moves: the zigbee2mqtt-data volume at /app/data (network key, every
+# pairing), usb_device, coordinator_url and coordinator_adapter render
+# exactly as before, and only the MQTT variables change.
 #
 # THE COORDINATOR: a USB stick on this machine, or a coordinator on the
 # network. For a stick, set usb_device to its stable name under
@@ -28,20 +48,22 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: zigbee-zigbee2mqtt
-  version: 1.0.2
+  # 2.0.0: the broker is a requirement (mqtt:broker) with its own
+  # credential, and the mqtt_server param is gone.
+  version: 2.0.0
   capability: zigbee
   profile: zigbee2mqtt
 requires:
   - { trait: identity, mode: oidc }
   - { trait: ingress, mode: private }
+  - { trait: mqtt, mode: broker }
 params:
   - { name: admin_domain, required: true, description: "The domain your admin-only services are named under. Under a tailnet this is a label rather than an address you type.", source: domain }
-  - { name: node, required: true, description: "Which machine to install this on.", source: node }
+  - { name: node, required: true, description: "Which machine to install this on. It must be the machine the MQTT broker (mqtt-mosquitto) is on: the broker's password for Zigbee2MQTT is kept on that machine only.", source: node }
   - { name: timezone, default: UTC, source: timezone, validate: iana_timezone, description: "Your timezone, e.g. Europe/London." }
   - { name: usb_device, default: "", example: "/dev/serial/by-id/usb-ITead_Sonoff_Zigbee_3.0_USB_Dongle_Plus_0001-if00-port0", description: "A USB Zigbee stick plugged into this machine, by its name under /dev/serial/by-id/. Leave empty to use a network coordinator instead." }
   - { name: coordinator_url, default: "tcp://192.168.1.60:6638", description: "Where a network Zigbee coordinator is, e.g. tcp://192.168.1.60:6638. Ignored when usb_device is set." }
   - { name: coordinator_adapter, default: zstack, description: "The coordinator's chip family: zstack, ember, deconz, zigate or zboss." }
-  - { name: mqtt_server, default: "mqtt://mosquitto:1883", description: "The MQTT broker to publish to. The default is the mqtt-mosquitto package on the same machine." }
 policies:
   classifications: [admin_tailscale]
   dataSensitivity: medium
@@ -69,7 +91,9 @@ templates:
       image: "koenkk/zigbee2mqtt@sha256:fef0de769dcd04c27b3a6d277b61046eb96284bdd4198dcb1687c3a01b3020f3"
       env:
         TZ: "{{ .Params.timezone }}"
-        ZIGBEE2MQTT_CONFIG_MQTT_SERVER: "{{ .Params.mqtt_server }}"
+        ZIGBEE2MQTT_CONFIG_MQTT_SERVER: "{{ .Resolved.MqttURL }}"
+        ZIGBEE2MQTT_CONFIG_MQTT_USER: "{{ .Resolved.MqttUsername }}"
+        ZIGBEE2MQTT_CONFIG_MQTT_PASSWORD: "{{ .Resolved.MqttPasswordSecretRef }}"
         ZIGBEE2MQTT_CONFIG_SERIAL_PORT: "{{ or .Params.usb_device .Params.coordinator_url }}"
         ZIGBEE2MQTT_CONFIG_SERIAL_ADAPTER: "{{ .Params.coordinator_adapter }}"
         ZIGBEE2MQTT_CONFIG_FRONTEND_ENABLED: "true"
