@@ -20,8 +20,8 @@ and cannot exempt a public fetch from validation.
 
 Both downloaded representation bytes and decompressed bytes have independent
 5-MiB ceilings (one extra byte is read to detect overflow). Gzip and identity are
-supported; other encodings, non-text media, unsuccessful status and incomplete
-bodies are refused. Headers are limited to 64 KiB. No partial page is returned
+supported; other encodings, non-text media, statuses other than 200 OK (including
+unsolicited 206 Partial Content), and incomplete bodies are refused. Headers are limited to 64 KiB. No partial page is returned
 on failure. Errors are fixed, contract-prefixed messages without upstream
 URLs, query strings, addresses, bodies or network diagnostics.
 

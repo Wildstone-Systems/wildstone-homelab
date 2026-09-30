@@ -190,6 +190,9 @@ func TestSizeAndRepresentation(t *testing.T) {
 		{"pdf", "HTTP/1.1 200 OK\r\nContent-Type: application/pdf\r\nContent-Length: 1\r\n\r\nx", ErrUnsupported},
 		{"upstream error", "HTTP/1.1 500 REPLACED-status\r\nContent-Length: 16\r\n\r\nREPLACED-content", ErrTransport},
 		{"rate limit", "HTTP/1.1 429 Too Many Requests\r\nContent-Length: 0\r\n\r\n", ErrRateLimited},
+		{"partial content", "HTTP/1.1 206 Partial Content\r\nContent-Type: text/plain\r\nContent-Range: bytes 0-0/99\r\nContent-Length: 1\r\n\r\nx", ErrTransport},
+		{"partial without range", "HTTP/1.1 206 Partial Content\r\nContent-Type: text/plain\r\nContent-Length: 1\r\n\r\nx", ErrTransport},
+		{"no content", "HTTP/1.1 204 No Content\r\nContent-Type: text/plain\r\n\r\n", ErrTransport},
 		{"truncated", "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 99\r\n\r\nx", ErrTransport},
 		{"chunked oversized", "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nTransfer-Encoding: chunked\r\n\r\n" + fmt.Sprintf("%x\r\n", MaxBytes+1) + strings.Repeat("x", MaxBytes+1) + "\r\n0\r\n\r\n", ErrSize},
 	}

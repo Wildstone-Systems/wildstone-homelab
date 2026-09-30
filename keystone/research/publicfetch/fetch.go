@@ -199,7 +199,9 @@ func readPage(resp *http.Response, u *url.URL) (Page, error) {
 	if resp.StatusCode == http.StatusTooManyRequests {
 		return Page{}, ErrRateLimited
 	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+	// We never request ranges. Unsolicited partial/multi-status responses
+	// cannot be represented as complete source evidence for extraction.
+	if resp.StatusCode != http.StatusOK {
 		return Page{}, ErrTransport
 	}
 	media, _, err := mime.ParseMediaType(resp.Header.Get("Content-Type"))
