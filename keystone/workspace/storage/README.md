@@ -18,7 +18,7 @@ Linux `openat2` refuses symlinks in every component and mount crossings below
 the configured root. Required-mount opening preserves the existing kernel
 mount-ID checks and never creates a missing root. Operations pin directory and
 file descriptors, validate regular-file type without blocking on FIFOs, and
-reopen/check current storage immediately before linking. Configured root opens
+reopen/check current storage immediately before linking and after the effect. Configured root opens
 also use atomic kernel no-symlink resolution, closing the earlier
 check-then-open window. Missing storage remains an actionable refusal.
 
@@ -36,7 +36,8 @@ copy only after verifying regular type, UTF-8, size and digest.
 or a bearer grant. Callers journal its full tuple and only disclose objects
 whose metadata is committed and currently authorized. Retry collisions remain
 explicit; the future publication coordinator reconciles the exact object.
-If a link succeeds but directory fsync fails, `ErrUncertain` means recovery is
+If a link succeeds but directory fsync or the post-link storage check fails,
+`ErrUncertain` means recovery is
 required. Stage returns the object even with that error, allowing its identity
 to be recorded. Never retry with a fresh ID or delete prior bytes to recover.
 Lifecycle removal, reservations and cross-store export are separate slices.

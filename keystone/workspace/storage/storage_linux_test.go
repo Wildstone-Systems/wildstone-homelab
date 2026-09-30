@@ -475,3 +475,68 @@ func TestStageDirectorySwapAndUncertainDurability(t *testing.T) {
 		}
 	})
 }
+
+// The pre-link current check cannot cover the syscall interval. Pinning
+// prevents redirection, but detached-tree success must be reported uncertain.
+func TestNamespaceChangesInsideLinkRequireRecovery(t *testing.T) {
+	for _, operation := range []string{"stage", "publish"} {
+		for _, fault := range []string{"ancestor-rename", "mount-loss"} {
+			t.Run(operation+"/"+fault, func(t *testing.T) {
+				s := testStore(t)
+				var o Object
+				if operation == "publish" {
+					o = stage(t, s, "retained")
+				}
+				detached := ""
+				s.hooks.link = func(a int, b string, c int, d string, flags int) error {
+					// This seam runs after current() and exactly before the real link.
+					if fault == "ancestor-rename" {
+						owner := filepath.Join(s.settings.Root, strings.Split(s.namespace, "/")[0])
+						detached = owner + "-detached"
+						if e := os.Rename(owner, detached); e != nil {
+							t.Fatal(e)
+						}
+						if e := os.Mkdir(owner, 0700); e != nil {
+							t.Fatal(e)
+						}
+					} else {
+						s.settings.RequiredMount = s.settings.Root
+					}
+					return unix.Linkat(a, b, c, d, flags)
+				}
+				var e error
+				if operation == "stage" {
+					o, e = s.Stage("x.md", strings.NewReader("retained"))
+				} else {
+					e = s.Publish(o, allow)
+				}
+				if !errors.Is(e, ErrUncertain) || !validObject(o, s.settings.MaxFileBytes) {
+					t.Fatalf("object=%+v err=%v", o, e)
+				}
+				// Restore the configured namespace only as a synthetic recovery fixture.
+				// The uncertain object must still be intact; never delete it on error.
+				if fault == "ancestor-rename" {
+					owner := filepath.Join(s.settings.Root, strings.Split(s.namespace, "/")[0])
+					if e = os.Remove(owner); e != nil {
+						t.Fatal(e)
+					}
+					if e = os.Rename(detached, owner); e != nil {
+						t.Fatal(e)
+					}
+				} else {
+					s.settings.RequiredMount = ""
+				}
+				s.hooks.link = nil
+				if operation == "stage" {
+					if e = s.Publish(o, allow); e != nil {
+						t.Fatal(e)
+					}
+				}
+				b, e := s.Read(o)
+				if e != nil || string(b) != "retained" {
+					t.Fatalf("%q %v", b, e)
+				}
+			})
+		}
+	}
+}

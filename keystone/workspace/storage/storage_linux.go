@@ -170,6 +170,11 @@ func (s *Store) Stage(logicalPath string, body io.Reader) (Object, error) {
 	if err = s.sync(dir); err != nil {
 		return obj, ErrUncertain
 	}
+	// A pinned directory remains writable after an ancestor rename/unmount.
+	// Do not claim success if the effect landed in a detached namespace.
+	if err = s.current(dir, "staging"); err != nil {
+		return obj, ErrUncertain
+	}
 	return obj, nil
 }
 func (s *Store) verified(kind string, obj Object) (*os.File, []byte, error) {
@@ -236,6 +241,9 @@ func (s *Store) Publish(obj Object, fence func() error) error {
 		return err
 	}
 	if err = s.sync(dir); err != nil {
+		return ErrUncertain
+	}
+	if err = s.current(dir, "revisions"); err != nil {
 		return ErrUncertain
 	}
 	return nil
