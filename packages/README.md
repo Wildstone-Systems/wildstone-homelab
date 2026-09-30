@@ -155,6 +155,11 @@ three: the port publishes as TCP, the device is absent, the capability
 is not granted, and the app says what it is missing. `IPC_LOCK` needs
 minor 21: Keystone refuses to dispatch a spec adding it to an older agent.
 
+Hand a radio to an app through the device mapping, not through env: map
+the operator's `/dev/serial/by-id/...` source to a fixed target such as
+`/dev/zigbee`, and point the app's env at that target. A real by-id name
+embeds a serial number the secret-literal policy rightly refuses in env.
+
 ### Not shipped, and why
 
 Recorded here rather than left in someone's head (ADR-W018 A4).
