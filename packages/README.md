@@ -155,14 +155,6 @@ three: the port publishes as TCP, the device is absent, the capability
 is not granted, and the app says what it is missing. `IPC_LOCK` needs
 minor 21: Keystone refuses to dispatch a spec adding it to an older agent.
 
-Hand a radio to the app through the device mapping, not through env. A
-real `/dev/serial/by-id/` name is a long mixed-case run the policy
-engine reads as secret-shaped, so an env value carrying it is refused
-(`secret-values-forbidden`) the moment an operator types a real one.
-Map it to a fixed `target` and give the app that path instead —
-`zwave-zwave-js-ui` maps the stick to `/dev/zwave` and sets
-`ZWAVE_PORT: /dev/zwave`.
-
 ### Not shipped, and why
 
 Recorded here rather than left in someone's head (ADR-W018 A4).
