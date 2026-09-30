@@ -2,6 +2,7 @@ package agent
 
 import (
 	"os"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -148,7 +149,7 @@ func TestCheckDeviceResolvesSymlinks(t *testing.T) {
 }
 
 func TestCapabilityAllowlist(t *testing.T) {
-	for _, ok := range []string{"NET_ADMIN", "NET_RAW", "SYS_NICE"} {
+	for _, ok := range []string{"IPC_LOCK", "NET_ADMIN", "NET_RAW", "SYS_NICE"} {
 		if oe := checkCapability(ok); oe != nil {
 			t.Errorf("%s refused: %v", ok, oe.GetMessage())
 		}
@@ -199,7 +200,7 @@ func TestEnsureContainerCarriesHostAccessToDocker(t *testing.T) {
 				{HostPort: 8080, ContainerPort: 80, Protocol: wsv1.PortProtocol_PORT_PROTOCOL_TCP},
 			},
 			Devices: []*wsv1.DeviceMapping{{HostPath: "/dev/net/tun"}},
-			CapAdd:  []string{"NET_ADMIN"},
+			CapAdd:  []string{"NET_ADMIN", "IPC_LOCK"},
 		},
 	}})
 	if oe := res.GetError(); oe != nil {
@@ -225,7 +226,7 @@ func TestEnsureContainerCarriesHostAccessToDocker(t *testing.T) {
 	if len(hc.Devices) != 1 || hc.Devices[0].PathOnHost != "/dev/net/tun" || hc.Devices[0].PathInContainer != "/dev/net/tun" || hc.Devices[0].CgroupPermissions != "rwm" {
 		t.Errorf("Devices = %+v", hc.Devices)
 	}
-	if len(hc.CapAdd) != 1 || hc.CapAdd[0] != "NET_ADMIN" {
+	if len(hc.CapAdd) != 2 || hc.CapAdd[0] != "NET_ADMIN" || hc.CapAdd[1] != "IPC_LOCK" {
 		t.Errorf("CapAdd = %+v", hc.CapAdd)
 	}
 
@@ -294,5 +295,19 @@ func TestBadDeviceOnUpdateLeavesTheOldContainerRunning(t *testing.T) {
 	}
 	if c.labels[SpecHashLabel] != "v1" {
 		t.Errorf("spec hash label = %q, want the pre-update v1", c.labels[SpecHashLabel])
+	}
+}
+
+// TestCapabilityAllowlistIsPinned fixes the exact set, mirroring
+// keystone/resource TestContainerCapabilityAllowlistIsPinned.
+func TestCapabilityAllowlistIsPinned(t *testing.T) {
+	want := []string{"IPC_LOCK", "NET_ADMIN", "NET_RAW", "SYS_NICE"}
+	var got []string
+	for n := range capabilities {
+		got = append(got, n)
+	}
+	sort.Strings(got)
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("allowlist = %v, want %v", got, want)
 	}
 }
