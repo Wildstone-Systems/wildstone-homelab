@@ -21,11 +21,15 @@ type fakeReader struct {
 
 func (f *fakeReader) Probe(context.Context) (Probe, error) {
 	f.calls = append(f.calls, "probe")
-	return Probe{Folders: []string{"INBOX"}}, f.probe
+	return Probe{Folders: []FolderStatus{{Folder: "INBOX", Available: true}}}, f.probe
 }
 
 func (f *fakeReader) Changes(_ context.Context, req ChangesRequest) (adapter.Answer, error) {
-	f.calls = append(f.calls, fmt.Sprintf("changes %s %d", req.Folder, req.Limit))
+	folder := req.Folder
+	if folder == "" {
+		folder = "all"
+	}
+	f.calls = append(f.calls, fmt.Sprintf("changes %s %d", folder, req.Limit))
 	return adapter.Answer{Data: map[string]any{"messages": []any{}}, Empty: true}, nil
 }
 
@@ -119,6 +123,14 @@ func TestRequestsAreBoundedBeforeTheReaderSeesThem(t *testing.T) {
 		{CapMessage, `{}`},
 		{CapMessage, `{"ref":"` + strings.Repeat("x", MaxRefLen+1) + `"}`},
 		{CapSearch, `{"since":"yesterday"}`},
+		{CapSearch, `{"since":"2026-10-02","before":"2026-10-01"}`},
+		{CapSearch, `{"since":"2025-01-01","before":"2026-10-01"}`},
+		// The cursor is bounded too: named folders, no duplicates, no
+		// more than the scope could hold, and nothing but its fields.
+		{CapChanges, `{"cursor":{"folders":[{"folder":"INBOX"},{"folder":"INBOX"}]}}`},
+		{CapChanges, `{"cursor":{"folders":[{"folder":""}]}}`},
+		{CapChanges, `{"cursor":{"folders":[` + strings.Repeat(`{"folder":"a"},`, MaxFolders) + `{"folder":"b"}]}}`},
+		{CapChanges, `{"cursor":{"uidValidity":1,"uid":2}}`},
 		{CapSearch, `{"folders":[` + strings.Repeat(`"a",`, MaxFolders) + `"a"]}`},
 		{CapSearch, `{"subject":"` + strings.Repeat("s", MaxSubjectLen+1) + `"}`},
 		{CapCapabilities, `{"folder":"INBOX"}`},
@@ -155,7 +167,7 @@ func TestValidRequestsReachTheReaderNormalized(t *testing.T) {
 	if data := a.Data.(map[string]any); data["readOnly"] != true {
 		t.Fatalf("capabilities = %+v", data)
 	}
-	want := "changes INBOX 50|search [INBOX] 5|message r-1|probe"
+	want := "changes all 50|search [] 5|message r-1|probe"
 	if got := strings.Join(f.calls, "|"); got != want {
 		t.Fatalf("reader calls = %s, want %s", got, want)
 	}

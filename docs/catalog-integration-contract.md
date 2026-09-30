@@ -267,6 +267,16 @@ else; everything below is the same for every adapter.
    scope. Found is not enabled — W030 A5 and W025's amendment both say
    so, and the package's declaration remains the ceiling.
 
+The four statuses are closed, so an adapter that needs to say more says
+it in two places, never by inventing a status. *Which* unavailability
+goes in the error text as a stable code (`not_configured`,
+`auth_failed`, `provider_unavailable`, `bad_request`, …), because an
+`unavailable` result carries no data. Anything the caller must act on —
+a cursor to commit — goes in an `ok` or `empty` result's data, with an
+`outcome` field. The mail adapter is the worked case: a UIDVALIDITY
+change is `ok` with `outcome: cursor_reset` and a restarted cursor
+(W030 A5.3).
+
 Catalog-side follow-ons, both already on W025's Part B list:
 `wild pkg new --adapter` (extends A5's scaffold) and the adapter chapter
 of `packages/AUTHORING.md` (Part B item 2).

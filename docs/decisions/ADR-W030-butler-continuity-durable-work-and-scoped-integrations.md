@@ -144,6 +144,16 @@ The declaration fails closed on version skew rather than loading partially: an o
 
 "One lease epoch permits only the current holder to claim work" is now enforced at the claim: an adapter principal may be bound to a placement node (migration 0097), and such a principal claims only while that node holds the lease and is not being removed. A principal bound without a node keeps the earlier connection-wide meaning.
 
+### A5.3 Amendment (epic #326 S04): the mail read contract
+
+`wild-mail-adapter` mounts one read-only IMAP reader per Personal connection (`keystone/adapter/mail/imapread`) behind the single dispatcher `keystone/adapter/mail.Upstream`; the four queries of the `mail` domain are the whole surface, and the reader has no second dispatcher. The reader only EXAMINEs, UID SEARCHes and UID FETCHes with BODY.PEEK.
+
+The cursor is per connection and spans its approved folders: `{folders: [{folder, uidValidity, lastUid}]}`. `mail.changes` returns it as `next`; the caller commits it after processing and sends it back unchanged. Delivery is at-least-once: a crash before commit replays the batch, and a per-connection keyed fingerprint (stable across reconnects, duplicate deliveries and UIDVALIDITY resets) lets the caller deduplicate. A folder the cursor does not name starts at now.
+
+Outcomes map onto the closed result types as follows. `ok`/`empty` carry data whose `outcome` field repeats the type; an empty `mail.changes` still carries `next` (a baseline must be committed). A UIDVALIDITY change is `ok` with `outcome: cursor_reset` and a restarted cursor — deliberately not `unavailable`, which carries no data and would strand the caller on the old numbering. Every other failure is `unavailable` with error text `…unavailable: <outcome>[: <reason>]`, `<outcome>` one of `not_configured`, `auth_failed`, `provider_unavailable`, `stale` (a `mail.message` reference from an earlier UIDVALIDITY — no data exists, so the wire's `stale` type, which means old data observed at a time, does not fit) or `bad_request` (including a folder or reference outside this connection), and `<reason>` a fixed category, never provider text.
+
+Two connections on one provider cannot see one another: separate sessions and cursors, and fingerprints and references keyed by a per-connection secret (`mailbox-fingerprint-key`, a second member-scoped need of `mail-roundcube`, ≥ 32 bytes, bound to the connection name before use). A reference minted for one connection is refused by every other. The adapter's approved scope reaches it as `WILD_MAILBOX_FILTERS` (`{folders, senders, subjectContains}`, decoded strictly); without a credential or key it answers `not_configured` and opens no mailbox.
+
 ## A6. Native automation where appropriate, Wildstone for cross-app coordination
 
 Butler authors native routines through supported app interfaces when that app owns the workflow. Wildstone executes cross-app routines using incoming events and targeted queries. Track external routine IDs and edits; do not silently duplicate or migrate execution.

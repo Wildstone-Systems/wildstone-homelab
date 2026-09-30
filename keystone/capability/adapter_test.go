@@ -69,7 +69,10 @@ func TestExpandAdapterRendersOneContainedAdapter(t *testing.T) {
 	out, err := NewEngine().ExpandAdapter(pkg, mailParams, "mail", AdapterPlacement{
 		Connection: "ada-mailbox", Node: "node-b", KeystoneURL: "http://192.0.2.10:9441",
 		TokenSecret: "mail-adapter-ada-mailbox-token",
-		Secrets:     map[string]string{"mailbox-app-password": "mail-ada-mailbox-app-password"},
+		Secrets: map[string]string{
+			"mailbox-app-password":    "mail-ada-mailbox-app-password",
+			"mailbox-fingerprint-key": "mail-ada-mailbox-fingerprint-key",
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -94,7 +97,7 @@ func TestExpandAdapterRendersOneContainedAdapter(t *testing.T) {
 	if c == nil || c.Metadata.Name != "mail-adapter-ada-mailbox" {
 		t.Fatalf("no adapter container in %+v", out)
 	}
-	if !secrets["mail-adapter-ada-mailbox-token"] || !secrets["mail-ada-mailbox-app-password"] || len(secrets) != 2 {
+	if !secrets["mail-adapter-ada-mailbox-token"] || !secrets["mail-ada-mailbox-app-password"] || !secrets["mail-ada-mailbox-fingerprint-key"] || len(secrets) != 3 {
 		t.Fatalf("secrets = %v", secrets)
 	}
 	spec := c.Container
@@ -107,7 +110,8 @@ func TestExpandAdapterRendersOneContainedAdapter(t *testing.T) {
 		"WILD_PACKAGE": "mail-roundcube", "WILD_PACKAGE_VERSION": pkg.Metadata.Version, "WILD_ADAPTER_CONTRACT": "1",
 		"WILD_PARAM_IMAP_HOST": "imap.example.internal", "WILD_PARAM_IMAP_PORT": "993",
 		"WILD_PARAM_IMAP_ENCRYPTION": "ssl", "WILD_PARAM_USERNAME_DOMAIN": "example.internal",
-		"WILD_SECRET_MAILBOX_APP_PASSWORD": "secret/mail-ada-mailbox-app-password",
+		"WILD_SECRET_MAILBOX_APP_PASSWORD":    "secret/mail-ada-mailbox-app-password",
+		"WILD_SECRET_MAILBOX_FINGERPRINT_KEY": "secret/mail-ada-mailbox-fingerprint-key",
 	}
 	for k, v := range want {
 		if spec.Env[k] != v {

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/x509"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -63,7 +64,11 @@ func TestLoadConfigFailsClosed(t *testing.T) {
 	}
 }
 
-// fakeKeystone hands out a fixed queue of work and records results.
+// fakeKeystone hands out a queue of work and records results. Every
+// field is guarded by mu: the runner's HTTP calls land on server
+// goroutines, including a claim still in flight when the test cancels
+// the run, so the test reads only through snapshot, after the server
+// has been closed.
 type fakeKeystone struct {
 	mu      sync.Mutex
 	queue   []adapter.Work
@@ -73,7 +78,6 @@ type fakeKeystone struct {
 
 func (f *fakeKeystone) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.auth = append(f.auth, r.Header.Get("Authorization"))
 	switch r.URL.Path {
 	case "/api/v1/integration-work/claim":
@@ -81,15 +85,86 @@ func (f *fakeKeystone) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if len(f.queue) > 0 {
 			work, f.queue = &f.queue[0], f.queue[1:]
 		}
+		f.mu.Unlock()
+		if work == nil {
+			// A short long-poll, so an idle runner is not a busy loop.
+			time.Sleep(10 * time.Millisecond)
+		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"work": work})
+		return
 	case "/api/v1/integration-work/result":
 		body, _ := io.ReadAll(r.Body)
 		var m map[string]any
 		_ = json.Unmarshal(body, &m)
 		f.results = append(f.results, m)
+		f.mu.Unlock()
 		_, _ = w.Write([]byte(`{}`))
-	default:
-		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+	f.mu.Unlock()
+	w.WriteHeader(http.StatusNotFound)
+}
+
+func (f *fakeKeystone) push(work ...adapter.Work) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.queue = append(f.queue, work...)
+}
+
+// snapshot copies what was recorded.
+func (f *fakeKeystone) snapshot() (results []map[string]any, auth []string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]map[string]any(nil), f.results...), append([]string(nil), f.auth...)
+}
+
+// waitResults waits until n results have been reported and returns them.
+func (f *fakeKeystone) waitResults(t *testing.T, n int) []map[string]any {
+	t.Helper()
+	deadline := time.Now().Add(20 * time.Second)
+	for {
+		results, _ := f.snapshot()
+		if len(results) >= n {
+			return results
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("only %d of %d results: %v", len(results), n, results)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// startRun runs the program against fk until the returned stop is
+// called; stop waits for a clean exit and closes the control plane, so
+// no handler is still running when the test reads what it recorded.
+// setEnv, when set, adjusts the rendered environment; roots, when set,
+// is the trust pool the IMAP reader validates against.
+func startRun(t *testing.T, fk *fakeKeystone, setEnv func(map[string]string), roots *x509.CertPool) (stop func()) {
+	t.Helper()
+	srv := httptest.NewServer(fk)
+	e := baseEnv(srv.URL)
+	e["WILD_HEALTH_ADDR"] = "127.0.0.1:0"
+	if setEnv != nil {
+		setEnv(e)
+	}
+	c, err := loadConfig(env(e))
+	if err != nil {
+		srv.Close()
+		t.Fatal(err)
+	}
+	c.rootCAs = roots
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- run(ctx, c, slog.New(slog.NewTextHandler(io.Discard, nil))) }()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			cancel()
+			if err := <-done; err != nil {
+				t.Errorf("run = %v; a signal is a clean stop", err)
+			}
+			srv.Close()
+		})
 	}
 }
 
@@ -103,50 +178,29 @@ func TestRunAnswersNotConfiguredAndRefusesWrites(t *testing.T) {
 		{Seq: 3, Connection: "ada-mailbox", Kind: "action", Capability: "mail.send", RequestJSON: json.RawMessage(`{"to":"x"}`), Epoch: 1},
 		{Seq: 4, Connection: "ada-mailbox", Kind: "query", Capability: "mail.move", Epoch: 1},
 	}}
-	srv := httptest.NewServer(fk)
-	defer srv.Close()
-	e := baseEnv(srv.URL)
-	e["WILD_HEALTH_ADDR"] = "127.0.0.1:0"
-	c, err := loadConfig(env(e))
-	if err != nil {
-		t.Fatal(err)
+	stop := startRun(t, fk, nil, nil)
+	fk.waitResults(t, 4)
+	stop()
+	results, auth := fk.snapshot()
+	if len(results) != 4 {
+		t.Fatalf("results = %v", results)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() { done <- run(ctx, c, slog.New(slog.NewTextHandler(io.Discard, nil))) }()
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		fk.mu.Lock()
-		n := len(fk.results)
-		fk.mu.Unlock()
-		if n == 4 {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("only %d results", n)
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	cancel()
-	if err := <-done; err != nil {
-		t.Fatalf("run = %v; a signal is a clean stop", err)
-	}
-	for _, res := range fk.results {
+	for _, res := range results {
 		if res["resultType"] != "unavailable" {
 			t.Errorf("result %v: want unavailable", res)
 		}
 	}
 	for _, i := range []int{0, 1} {
-		if !strings.Contains(fk.results[i]["error"].(string), mail.OutcomeNotConfigured) {
-			t.Errorf("read %v does not say not_configured", fk.results[i])
+		if !strings.Contains(results[i]["error"].(string), mail.OutcomeNotConfigured) {
+			t.Errorf("read %v does not say not_configured", results[i])
 		}
 	}
 	for _, i := range []int{2, 3} {
-		if !strings.Contains(fk.results[i]["error"].(string), "does not implement") {
-			t.Errorf("write %v was not refused as unimplemented", fk.results[i])
+		if !strings.Contains(results[i]["error"].(string), "does not implement") {
+			t.Errorf("write %v was not refused as unimplemented", results[i])
 		}
 	}
-	for _, a := range fk.auth {
+	for _, a := range auth {
 		if a != "Bearer REPLACED-token" {
 			t.Fatalf("authorization = %q", a)
 		}
@@ -157,11 +211,45 @@ func TestHealthIsReadyOnlyAfterKeystoneAnswers(t *testing.T) {
 	c, _ := loadConfig(env(baseEnv("http://192.0.2.10:9441")))
 	r := &adapter.Runner{}
 	rec := httptest.NewRecorder()
-	healthHandler(r, c, time.Minute).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	healthHandler(r, c, false, time.Minute).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
 	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), `"configured":false`) {
 		t.Fatalf("health before contact = %d %s", rec.Code, rec.Body)
 	}
 	if strings.Contains(rec.Body.String(), "REPLACED") {
 		t.Fatal("health leaked the token")
+	}
+}
+
+// readerFor mounts the IMAP reader only with a credential AND a
+// connection key, and a scope it fully understands.
+func TestReaderForNeedsCredentialKeyAndScope(t *testing.T) {
+	e := baseEnv("http://192.0.2.10:9441")
+	e["WILD_MAILBOX_USERNAME"], e["WILD_SECRET_MAILBOX_APP_PASSWORD"] = "ada", "REPLACED-app-password"
+	c, err := loadConfig(env(e))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if nc, ok := readerFor(c).(mail.NotConfigured); !ok || !strings.Contains(nc.Reason, "fingerprint key") {
+		t.Fatalf("no key, reader = %#v", readerFor(c))
+	}
+	e["WILD_SECRET_MAILBOX_FINGERPRINT_KEY"] = "too-short"
+	c, _ = loadConfig(env(e))
+	if _, ok := readerFor(c).(mail.NotConfigured); !ok {
+		t.Fatal("a short key was accepted")
+	}
+	e["WILD_SECRET_MAILBOX_FINGERPRINT_KEY"] = strings.Repeat("k", 32)
+	c, _ = loadConfig(env(e))
+	if _, ok := readerFor(c).(mail.NotConfigured); ok {
+		t.Fatalf("configured connection not mounted: %#v", readerFor(c))
+	}
+	for _, bad := range []string{`{"folders":["INBOX"],"store":true}`, `{"folders":["*"]}`, `{"folders":[]} {}`, `nope`} {
+		e["WILD_MAILBOX_FILTERS"] = bad
+		if _, err := loadConfig(env(e)); err == nil {
+			t.Errorf("filters %s accepted", bad)
+		}
+	}
+	secret := []byte(strings.Repeat("k", 32))
+	if string(connectionKey(secret, "ada-mailbox")) == string(connectionKey(secret, "grace-mailbox")) {
+		t.Fatal("one secret gave two connections the same key")
 	}
 }

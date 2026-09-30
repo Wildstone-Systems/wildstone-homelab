@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	mailapi "github.com/chickenrat17/wildstone-homelab/keystone/adapter/mail"
 	"github.com/chickenrat17/wildstone-homelab/keystone/adapter/mail/imapread/imapfake"
 	"github.com/chickenrat17/wildstone-homelab/keystone/adapter/mail/imapread/mimenorm"
 )
@@ -79,7 +80,7 @@ func (h *harness) reader(user string, f Filters) *Reader {
 	return r
 }
 
-func mail(i int, from, subject string) []byte {
+func letter(i int, from, subject string) []byte {
 	return []byte(fmt.Sprintf("From: %s\r\nTo: ada@example.internal\r\nSubject: %s\r\n"+
 		"Date: Mon, 05 Oct 2026 09:%02d:00 +0000\r\nMessage-ID: <m%d@example.internal>\r\n"+
 		"Content-Type: text/plain; charset=utf-8\r\n\r\nbody %d\r\n", from, subject, i%60, i, i))
@@ -88,7 +89,7 @@ func mail(i int, from, subject string) []byte {
 func (h *harness) deliver(user string, n, start int) []uint32 {
 	var uids []uint32
 	for i := start; i < start+n; i++ {
-		uids = append(uids, h.srv.Deliver(user, "INBOX", mail(i, "office@school.example.internal", fmt.Sprintf("Note %d", i))))
+		uids = append(uids, h.srv.Deliver(user, "INBOX", letter(i, "office@school.example.internal", fmt.Sprintf("Note %d", i))))
 	}
 	return uids
 }
@@ -118,7 +119,7 @@ func TestBaselineThenNewMail(t *testing.T) {
 			if res.Outcome != OutcomeEmpty || len(res.Messages) != 0 || res.Folders[0].Outcome != "baseline" {
 				t.Fatalf("first run must baseline, not import the archive: %+v", res)
 			}
-			if fc, _ := res.Next.get("INBOX"); fc.LastUID != 3 || fc.UIDValidity == 0 {
+			if fc, _ := cursorFolder(res.Next, "INBOX"); fc.LastUID != 3 || fc.UIDValidity == 0 {
 				t.Fatalf("baseline cursor %+v", fc)
 			}
 			h.deliver("ada@example.internal", 2, 3)
@@ -140,7 +141,7 @@ func TestBaselineWithoutUIDNext(t *testing.T) {
 	h.srv.SetFaults(imapfake.Faults{OmitUIDNext: true})
 	r := h.reader("ada@example.internal", Filters{})
 	res := r.Changes(ctx(t), Cursor{}, 0)
-	if fc, _ := res.Next.get("INBOX"); fc.LastUID != 4 {
+	if fc, _ := cursorFolder(res.Next, "INBOX"); fc.LastUID != 4 {
 		t.Fatalf("baseline without UIDNEXT: %+v", res.Next)
 	}
 	h.deliver("ada@example.internal", 1, 4)
@@ -226,7 +227,7 @@ func TestUIDValidityResetIsExplicitAndLosesNothing(t *testing.T) {
 		seen[m.Fingerprint] = true
 	}
 	old := res.Messages[0].Ref
-	prevValidity, _ := res.Next.get("INBOX")
+	prevValidity, _ := cursorFolder(res.Next, "INBOX")
 
 	// The provider rebuilds the mailbox, and a new message arrives.
 	newValidity := h.srv.ResetUIDValidity("ada@example.internal", "INBOX")
@@ -240,7 +241,7 @@ func TestUIDValidityResetIsExplicitAndLosesNothing(t *testing.T) {
 	if f.Outcome != "cursor_reset" || f.PreviousUIDValidity != prevValidity.UIDValidity || f.CurrentUIDValidity != newValidity {
 		t.Fatalf("folder result %+v", f)
 	}
-	if fc, _ := res.Next.get("INBOX"); fc.UIDValidity != newValidity || fc.LastUID != 0 {
+	if fc, _ := cursorFolder(res.Next, "INBOX"); fc.UIDValidity != newValidity || fc.LastUID != 0 {
 		t.Fatalf("reset cursor %+v", fc)
 	}
 
@@ -405,7 +406,7 @@ func TestExpungeBetweenSearchAndFetch(t *testing.T) {
 	if !reflect.DeepEqual(texts(res.Messages), []string{"body 0", "body 2"}) || res.Folders[0].Gone != 1 {
 		t.Fatalf("expunged mid-batch: %v %+v", texts(res.Messages), res.Folders)
 	}
-	if fc, _ := res.Next.get("INBOX"); fc.LastUID != uids[2] {
+	if fc, _ := cursorFolder(res.Next, "INBOX"); fc.LastUID != uids[2] {
 		t.Fatalf("cursor must pass the expunged UID: %+v", fc)
 	}
 }
@@ -486,10 +487,10 @@ func TestDistinctFailureOutcomes(t *testing.T) {
 
 func TestTwoConnectionsOnOneProviderAreIsolated(t *testing.T) {
 	h := newHarness(t, SecurityTLS)
-	shared := mail(1, "office@school.example.internal", "Family night")
+	shared := letter(1, "office@school.example.internal", "Family night")
 	h.srv.Deliver("ada@example.internal", "INBOX", shared)
 	h.srv.Deliver("grace@example.internal", "INBOX", shared)
-	h.srv.Deliver("grace@example.internal", "INBOX", mail(2, "doctor@example.internal", "Grace's appointment"))
+	h.srv.Deliver("grace@example.internal", "INBOX", letter(2, "doctor@example.internal", "Grace's appointment"))
 
 	ada := h.reader("ada@example.internal", Filters{})
 	grace := h.reader("grace@example.internal", Filters{})
@@ -530,11 +531,11 @@ func TestFilters(t *testing.T) {
 	h := newHarness(t, SecurityTLS)
 	h.srv.CreateMailbox("ada@example.internal", "School")
 	u := "ada@example.internal"
-	h.srv.Deliver(u, "INBOX", mail(0, "office@school.example.internal", "Family night"))
-	h.srv.Deliver(u, "INBOX", mail(1, "coach@sports.school.example.internal", "Practice moved"))
-	h.srv.Deliver(u, "INBOX", mail(2, "shop@example.invalid", "Family night sale"))
-	h.srv.Deliver(u, "INBOX", mail(3, "friend@example.internal", "Dinner"))
-	h.srv.Deliver(u, "School", mail(4, "office@school.example.internal", "Picture day"))
+	h.srv.Deliver(u, "INBOX", letter(0, "office@school.example.internal", "Family night"))
+	h.srv.Deliver(u, "INBOX", letter(1, "coach@sports.school.example.internal", "Practice moved"))
+	h.srv.Deliver(u, "INBOX", letter(2, "shop@example.invalid", "Family night sale"))
+	h.srv.Deliver(u, "INBOX", letter(3, "friend@example.internal", "Dinner"))
+	h.srv.Deliver(u, "School", letter(4, "office@school.example.internal", "Picture day"))
 
 	f := Filters{Folders: []string{"INBOX", "School"}, Senders: []string{"school.example.internal", "friend@example.internal"}, SubjectContains: []string{"family", "practice", "picture"}}
 	r := h.reader(u, f)
@@ -551,7 +552,7 @@ func TestFilters(t *testing.T) {
 		t.Errorf("filter accounting: %+v", res.Folders[0])
 	}
 	// The cursor passes filtered mail too: it is out of scope, not unread.
-	if fc, _ := res.Next.get("INBOX"); fc.LastUID != 4 {
+	if fc, _ := cursorFolder(res.Next, "INBOX"); fc.LastUID != 4 {
 		t.Errorf("cursor stopped at filtered mail: %+v", fc)
 	}
 	// A reference issued under a wider scope returns nothing once the
@@ -597,7 +598,7 @@ func TestSearchIsBounded(t *testing.T) {
 		if i%3 == 0 {
 			from = "shop@example.invalid"
 		}
-		h.srv.Deliver(u, "INBOX", mail(i, from, fmt.Sprintf("Update %d", i)))
+		h.srv.Deliver(u, "INBOX", letter(i, from, fmt.Sprintf("Update %d", i)))
 	}
 	r := h.reader(u, Filters{Senders: []string{"school.example.internal"}})
 	since := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
@@ -649,7 +650,7 @@ func TestHostileCorpusThroughTheReader(t *testing.T) {
 			names = append(names, e.Name())
 		}
 	}
-	big := append(mail(99, "office@school.example.internal", "Huge"), bytes.Repeat([]byte("x"), 10<<20)...)
+	big := append(letter(99, "office@school.example.internal", "Huge"), bytes.Repeat([]byte("x"), 10<<20)...)
 	h.srv.Deliver(u, "INBOX", big)
 	names = append(names, "(synthesized 10 MiB)")
 
@@ -736,9 +737,9 @@ func TestNewRejectsUnsafeConfig(t *testing.T) {
 
 func TestCursorJSONRoundTrip(t *testing.T) {
 	c := Cursor{Folders: []FolderCursor{{Folder: "INBOX", UIDValidity: 7, LastUID: 42}}}
-	b, _ := json.Marshal(ChangesRequest{Cursor: c, Limit: 5})
-	var back ChangesRequest
-	if err := json.Unmarshal(b, &back); err != nil || !reflect.DeepEqual(back.Cursor, c) {
+	b, _ := json.Marshal(mailapi.ChangesRequest{Cursor: &c, Limit: 5})
+	var back mailapi.ChangesRequest
+	if err := json.Unmarshal(b, &back); err != nil || back.Cursor == nil || !reflect.DeepEqual(*back.Cursor, c) {
 		t.Fatalf("round trip: %s %+v %v", b, back, err)
 	}
 	keys := []string{}

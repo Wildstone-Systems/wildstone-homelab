@@ -2,56 +2,19 @@ package imapread
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/chickenrat17/wildstone-homelab/keystone/adapter/mail"
 	"github.com/chickenrat17/wildstone-homelab/keystone/adapter/mail/imapread/mimenorm"
 )
 
-// The mail read surface (epic #326). All four are queries: there is no
-// action, and Query refuses any other name. The adapter binary wires
-// these names to its Upstream; this package owns their behaviour.
-const (
-	OpCapabilities = "mail.capabilities"
-	OpChanges      = "mail.changes"
-	OpMessage      = "mail.message"
-	OpSearch       = "mail.search"
-)
-
-// Operations is the complete offered surface, in a stable order.
-var Operations = []string{OpCapabilities, OpChanges, OpMessage, OpSearch}
-
-// ErrUnknownOperation is returned by Query for any other name —
-// including every write a caller might try.
-var ErrUnknownOperation = errors.New("imapread: no such operation (the mail surface is read-only)")
-
-// ErrBadRequest wraps a request the reader refuses to run.
+// ErrBadRequest wraps a request the reader refuses to run. MailReader
+// reports it as the mail contract's bad_request.
 var ErrBadRequest = errors.New("imapread: bad request")
-
-// Result is implemented by every operation's answer.
-type Result interface {
-	ResultOutcome() Outcome
-}
-
-func (r ChangesResult) ResultOutcome() Outcome      { return r.Outcome }
-func (r MessageResult) ResultOutcome() Outcome      { return r.Outcome }
-func (r SearchResult) ResultOutcome() Outcome       { return r.Outcome }
-func (r CapabilitiesResult) ResultOutcome() Outcome { return r.Outcome }
-
-// ChangesRequest is mail.changes's request.
-type ChangesRequest struct {
-	Cursor Cursor `json:"cursor"`
-	Limit  int    `json:"limit,omitempty"`
-}
-
-// MessageRequest is mail.message's request.
-type MessageRequest struct {
-	Ref string `json:"ref"`
-}
 
 // MessageResult is mail.message's answer.
 type MessageResult struct {
@@ -69,10 +32,12 @@ type SearchRequest struct {
 	Since   time.Time `json:"since"`
 	// Before defaults to now.
 	Before time.Time `json:"before,omitempty"`
-	// From and Subject are case-insensitive substrings.
-	From    string `json:"from,omitempty"`
-	Subject string `json:"subject,omitempty"`
-	Limit   int    `json:"limit,omitempty"`
+	// From matches when the sender's address or name contains any
+	// entry; Subject when the subject contains it. Both are
+	// case-insensitive.
+	From    []string `json:"from,omitempty"`
+	Subject string   `json:"subject,omitempty"`
+	Limit   int      `json:"limit,omitempty"`
 }
 
 // Summary is one search hit: headers and identity, no body.
@@ -93,12 +58,8 @@ type SearchResult struct {
 	Truncated bool      `json:"truncated,omitempty"`
 }
 
-// FolderStatus is one folder's reachability.
-type FolderStatus struct {
-	Folder    string `json:"folder"`
-	Available bool   `json:"available"`
-	Messages  uint32 `json:"messages"`
-}
+// FolderStatus is one folder's reachability (the mail contract's type).
+type FolderStatus = mail.FolderStatus
 
 // CapabilitiesResult is mail.capabilities's answer.
 type CapabilitiesResult struct {
@@ -114,55 +75,9 @@ type CapabilitiesResult struct {
 	} `json:"limits"`
 }
 
-// Query dispatches one named read. The request is decoded strictly.
-func (r *Reader) Query(ctx context.Context, op string, request json.RawMessage) (Result, error) {
-	decode := func(into any) error {
-		if len(request) == 0 {
-			request = json.RawMessage("{}")
-		}
-		dec := json.NewDecoder(strings.NewReader(string(request)))
-		dec.DisallowUnknownFields()
-		if err := dec.Decode(into); err != nil {
-			return fmt.Errorf("%w: %v", ErrBadRequest, err)
-		}
-		return nil
-	}
-	switch op {
-	case OpCapabilities:
-		return r.Capabilities(ctx), nil
-	case OpChanges:
-		var req ChangesRequest
-		if err := decode(&req); err != nil {
-			return nil, err
-		}
-		return r.Changes(ctx, req.Cursor, req.Limit), nil
-	case OpMessage:
-		var req MessageRequest
-		if err := decode(&req); err != nil {
-			return nil, err
-		}
-		res, err := r.Message(ctx, req.Ref)
-		if err != nil {
-			return nil, err
-		}
-		return res, nil
-	case OpSearch:
-		var req SearchRequest
-		if err := decode(&req); err != nil {
-			return nil, err
-		}
-		res, err := r.Search(ctx, req)
-		if err != nil {
-			return nil, err
-		}
-		return res, nil
-	}
-	return nil, ErrUnknownOperation
-}
-
 // Capabilities verifies the credential and each folder.
 func (r *Reader) Capabilities(ctx context.Context) CapabilitiesResult {
-	res := CapabilitiesResult{ReadOnly: true, Operations: append([]string(nil), Operations...)}
+	res := CapabilitiesResult{ReadOnly: true, Operations: append([]string(nil), mail.Operations...)}
 	res.Limits.MaxBatch = MaxBatch
 	res.Limits.MaxMessageBytes = r.limits.MaxMessageBytes
 	res.Limits.MaxHeaderBytes = r.limits.MaxHeaderBytes
@@ -257,9 +172,13 @@ func (req *SearchRequest) validate(f Filters, now time.Time) error {
 	if !req.Before.After(req.Since) || req.Before.Sub(req.Since) > MaxSearchWindow {
 		return fmt.Errorf("%w: the window must be positive and at most %s", ErrBadRequest, MaxSearchWindow)
 	}
-	if len(req.From) > maxFilterEntry || len(req.Subject) > maxFilterEntry ||
-		strings.ContainsAny(req.From+req.Subject, "\r\n\x00") {
-		return fmt.Errorf("%w: search terms too long or not single-line", ErrBadRequest)
+	if len(req.From) > maxFilterEntries {
+		return fmt.Errorf("%w: at most %d senders", ErrBadRequest, maxFilterEntries)
+	}
+	for _, term := range append([]string{req.Subject}, req.From...) {
+		if len(term) > maxFilterEntry || strings.ContainsAny(term, "\r\n\x00") {
+			return fmt.Errorf("%w: search terms too long or not single-line", ErrBadRequest)
+		}
 	}
 	if req.Limit <= 0 {
 		req.Limit = 20
@@ -307,7 +226,14 @@ func (r *Reader) Search(ctx context.Context, req SearchRequest) (SearchResult, e
 			o, reason := failure(err)
 			return SearchResult{Outcome: o, Reason: reason}, nil
 		}
-		uids, err := s.searchUIDs(searchQuery{Since: req.Since, Before: req.Before, From: req.From, Subject: req.Subject})
+		q := searchQuery{Since: req.Since, Before: req.Before, Subject: req.Subject}
+		if len(req.From) == 1 {
+			// One sender can be a server-side prefilter; several are
+			// matched here only (an IMAP OR tree is not worth the
+			// provider variance), inside the same bounded budget.
+			q.From = req.From[0]
+		}
+		uids, err := s.searchUIDs(q)
 		if err != nil {
 			o, reason := failure(err)
 			return SearchResult{Outcome: o, Reason: reason}, nil
@@ -364,18 +290,16 @@ func searchMatch(req SearchRequest, h mimenorm.Headers) bool {
 	if req.Subject != "" && !strings.Contains(strings.ToLower(h.Subject), strings.ToLower(req.Subject)) {
 		return false
 	}
-	if req.From != "" {
-		want := strings.ToLower(req.From)
-		ok := false
+	if len(req.From) == 0 {
+		return true
+	}
+	for _, want := range req.From {
+		want = strings.ToLower(strings.TrimSpace(want))
 		for _, a := range h.From {
 			if strings.Contains(strings.ToLower(a.Address), want) || strings.Contains(strings.ToLower(a.Name), want) {
-				ok = true
-				break
+				return true
 			}
 		}
-		if !ok {
-			return false
-		}
 	}
-	return true
+	return false
 }

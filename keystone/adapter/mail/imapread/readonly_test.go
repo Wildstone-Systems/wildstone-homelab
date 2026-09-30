@@ -12,7 +12,9 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	"time"
+
+	"github.com/chickenrat17/wildstone-homelab/keystone/adapter"
+	mailapi "github.com/chickenrat17/wildstone-homelab/keystone/adapter/mail"
 )
 
 // The read-only guarantee is pinned three ways: the command surface is
@@ -159,37 +161,52 @@ func TestNoCertificateBypassAnywhere(t *testing.T) {
 	}
 }
 
+// upstream is the reader exactly as the adapter binary mounts it: the
+// mail contract's Upstream over MailReader. There is no other
+// dispatcher, so this is the whole offered surface.
+func upstream(r *Reader) *mailapi.Upstream {
+	return &mailapi.Upstream{Reader: NewMailReader(r)}
+}
+
 func TestOfferedSurfaceIsReadOnly(t *testing.T) {
-	if !reflect.DeepEqual(Operations, []string{"mail.capabilities", "mail.changes", "mail.message", "mail.search"}) {
-		t.Fatalf("offered surface changed: %v", Operations)
+	if !reflect.DeepEqual(mailapi.Operations, []string{"mail.capabilities", "mail.changes", "mail.message", "mail.search"}) {
+		t.Fatalf("offered surface changed: %v", mailapi.Operations)
 	}
-	// Reader exposes no method that could act.
-	typ := reflect.TypeOf(&Reader{})
-	var methods []string
-	for i := 0; i < typ.NumMethod(); i++ {
-		methods = append(methods, typ.Method(i).Name)
-	}
-	sort.Strings(methods)
-	if !reflect.DeepEqual(methods, []string{"Capabilities", "Changes", "Message", "Query", "Search"}) {
-		t.Fatalf("Reader's exported methods changed: %v", methods)
-	}
-	h := newHarness(t, SecurityTLS)
-	r := h.reader("ada@example.internal", Filters{})
-	for _, op := range []string{"mail.send", "mail.delete", "mail.move", "mail.mark_read", "mail.draft", "mail.act", ""} {
-		if _, err := r.Query(ctx(t), op, nil); !errors.Is(err, ErrUnknownOperation) {
-			t.Errorf("%q: %v", op, err)
+	// Reader and MailReader expose no method that could act.
+	for typ, want := range map[reflect.Type][]string{
+		reflect.TypeOf(&Reader{}):    {"Capabilities", "Changes", "ChangesFolder", "InScope", "Message", "Search"},
+		reflect.TypeOf(MailReader{}): {"Changes", "Message", "Probe", "Search"},
+	} {
+		var methods []string
+		for i := 0; i < typ.NumMethod(); i++ {
+			methods = append(methods, typ.Method(i).Name)
+		}
+		sort.Strings(methods)
+		if !reflect.DeepEqual(methods, want) {
+			t.Fatalf("%s's exported methods changed: %v", typ, methods)
 		}
 	}
-	if _, err := r.Query(ctx(t), OpChanges, []byte(`{"cursor":{},"store":"\\Seen"}`)); !errors.Is(err, ErrBadRequest) {
+	h := newHarness(t, SecurityTLS)
+	u := upstream(h.reader("ada@example.internal", Filters{}))
+	for _, op := range []string{"mail.send", "mail.delete", "mail.move", "mail.mark_read", "mail.draft", "mail.act", ""} {
+		if _, err := u.Query(ctx(t), op, nil); !errors.Is(err, adapter.ErrNoSuchCapability) {
+			t.Errorf("query %q: %v", op, err)
+		}
+		if _, err := u.Act(ctx(t), op, nil); !errors.Is(err, adapter.ErrNoSuchCapability) {
+			t.Errorf("act %q: %v", op, err)
+		}
+	}
+	if _, err := u.Query(ctx(t), mailapi.CapChanges, []byte(`{"cursor":{},"store":"\\Seen"}`)); !errors.Is(err, mailapi.ErrBadRequest) {
 		t.Errorf("unknown request fields must be refused: %v", err)
 	}
-	if caps := r.Capabilities(ctx(t)); !caps.ReadOnly || caps.Outcome != OutcomeOK {
+	if caps := h.reader("ada@example.internal", Filters{}).Capabilities(ctx(t)); !caps.ReadOnly || caps.Outcome != OutcomeOK {
 		t.Errorf("capabilities: %+v", caps)
 	}
 }
 
-// TestOnlyReadCommandsOnTheWire drives every operation in both TLS
-// modes and checks the exact set of commands the server saw.
+// TestOnlyReadCommandsOnTheWire drives every operation, through the
+// adapter's dispatcher, in both TLS modes and checks the exact set of
+// commands the server saw.
 func TestOnlyReadCommandsOnTheWire(t *testing.T) {
 	allowed := map[string]bool{"LOGIN": true, "EXAMINE": true, "UID SEARCH": true, "UID FETCH": true}
 	for _, mode := range []Security{SecurityTLS, SecurityStartTLS} {
@@ -206,17 +223,13 @@ func TestOnlyReadCommandsOnTheWire(t *testing.T) {
 				name string
 				req  string
 			}{
-				{OpCapabilities, `{}`},
-				{OpChanges, `{"cursor":{"folders":[]},"limit":2}`},
-				{OpMessage, `{"ref":"` + res.Messages[0].Ref + `"}`},
-				{OpSearch, `{"since":"` + time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC).Format(time.RFC3339) + `","subject":"Note"}`},
+				{mailapi.CapCapabilities, `{}`},
+				{mailapi.CapChanges, `{"cursor":{"folders":[]},"limit":2}`},
+				{mailapi.CapMessage, `{"ref":"` + res.Messages[0].Ref + `"}`},
+				{mailapi.CapSearch, `{"since":"2026-09-01","before":"2026-11-01","subject":"Note"}`},
 			} {
-				out, err := r.Query(ctx(t), op.name, []byte(op.req))
-				if err != nil {
+				if _, err := upstream(r).Query(ctx(t), op.name, []byte(op.req)); err != nil {
 					t.Fatalf("%s: %v", op.name, err)
-				}
-				if o := out.ResultOutcome(); o != OutcomeOK && o != OutcomeEmpty {
-					t.Errorf("%s: outcome %s", op.name, o)
 				}
 			}
 			seen := map[string]bool{}

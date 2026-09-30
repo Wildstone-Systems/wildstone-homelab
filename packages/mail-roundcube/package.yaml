@@ -120,7 +120,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: mail-roundcube
-  version: 1.1.0
+  version: 1.1.1
   capability: mail
   profile: roundcube
 requires:
@@ -165,6 +165,9 @@ integrates:
           - name: mailbox-app-password
             scope: member
             purpose: "Reads this Person's own selected mail, read-only. Onboarded by that Person through the protected secret input, never chat; an app password they can revoke is strongly preferred, because the provider grants it full mailbox power."
+          - name: mailbox-fingerprint-key
+            scope: member
+            purpose: "This connection's own random key (at least 32 bytes) for message fingerprints and references, so two Persons on the same provider cannot compare or trade them. Not a provider credential; generated for the connection when it is onboarded, never shown to anyone."
     answers:
       - { query: mail.capabilities, deadline: 5s }
       - { query: mail.changes, deadline: 30s, supports: [folder, cursor, limit] }

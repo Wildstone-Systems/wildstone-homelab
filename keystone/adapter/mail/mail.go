@@ -57,21 +57,71 @@ const (
 	MaxSubjectLen = 200
 	// MaxRequestBytes caps the request envelope itself.
 	MaxRequestBytes = 16 << 10
-	// DefaultFolder is what an unnamed folder means.
+	// DefaultFolder is the folder a connection reads when its scope
+	// names none.
 	DefaultFolder = "INBOX"
+	// MaxSearchDays bounds mail.search's date window;
+	// DefaultSearchDays is the window when since is left out.
+	MaxSearchDays     = 366
+	DefaultSearchDays = 30
 )
 
-// Outcome codes carried in an unavailable result's error text. The
-// wire's result types are closed (ok|empty|unavailable|stale), and these
-// say WHICH unavailability, because "not set up", "wrong password" and
-// "provider down" ask three different people to do three different
-// things (epic #326: empty, unavailable, stale and authentication-failed
-// are distinct outcomes).
+// Outcome codes. The wire's result types are closed
+// (ok|empty|unavailable|stale), and these say WHICH unavailability,
+// because "not set up", "wrong password" and "provider down" ask three
+// different people to do three different things (epic #326: empty,
+// unavailable, stale and authentication-failed are distinct outcomes).
+//
+// An unavailable result's error text is always
+//
+//	adapter: the application is unavailable: <outcome>[: <reason>]
+//
+// where <outcome> is one of the codes below and <reason> a fixed
+// category (timeout, tls, connection, folder_missing, uidvalidity, …),
+// never provider text. An unavailable result carries no data, so a
+// reader never uses one for something the caller must commit.
 const (
+	// OutcomeNotConfigured: no reader, no credential or no connection key.
 	OutcomeNotConfigured = "not_configured"
-	OutcomeAuthFailed    = "auth_failed"
-	OutcomeBadRequest    = "bad_request"
+	// OutcomeAuthFailed: the provider refused the credential.
+	OutcomeAuthFailed = "auth_failed"
+	// OutcomeBadRequest: the request failed decoding or bounds, or names
+	// a folder or reference outside this connection.
+	OutcomeBadRequest = "bad_request"
+	// OutcomeProviderUnavailable: the provider could not be reached, or
+	// broke mid-call. Retry from the same cursor.
+	OutcomeProviderUnavailable = "provider_unavailable"
+	// OutcomeStale: mail.message named a reference taken under an
+	// earlier UIDVALIDITY. The message may still exist under a new UID;
+	// mail.changes returns it again (same fingerprint) after its
+	// cursor_reset. Carried as unavailable, not as the wire's stale
+	// result type: stale means "old data, observed at T", and here there
+	// is no data at all.
+	OutcomeStale = "stale"
 )
+
+// Data-level outcomes. These travel INSIDE an ok or empty result's data
+// (its "outcome" field), because they carry something the caller must
+// act on and an unavailable result carries nothing.
+const (
+	// OutcomeOK and OutcomeEmpty mirror the result type.
+	OutcomeOK    = "ok"
+	OutcomeEmpty = "empty"
+	// OutcomeCursorReset: mail.changes found at least one folder whose
+	// UIDVALIDITY changed. Reported with result type ok (never empty,
+	// never unavailable) so the new cursor reaches the caller: commit
+	// "next" and call again. Nothing was skipped, and messages already
+	// processed come back with the same fingerprint.
+	OutcomeCursorReset = "cursor_reset"
+)
+
+// Unavailable builds the error for one unavailability outcome.
+func Unavailable(outcome, reason string) error {
+	if reason == "" {
+		return fmt.Errorf("%w: %s", adapter.ErrUnavailable, outcome)
+	}
+	return fmt.Errorf("%w: %s: %s", adapter.ErrUnavailable, outcome, reason)
+}
 
 // ErrNotConfigured means this adapter has no mailbox to read: no reader
 // is plugged in, or no credential has been onboarded for its connection.
@@ -117,16 +167,30 @@ func (c Credentials) MarshalJSON() ([]byte, error) {
 // Present reports whether a login was onboarded at all.
 func (c Credentials) Present() bool { return c.Username != "" && c.Password != "" }
 
-// Cursor is the durable IMAP position: UIDVALIDITY plus the last UID
-// seen. A zero cursor means "from now".
-type Cursor struct {
+// FolderCursor is one folder's committed position: the UIDVALIDITY it
+// was taken under and the last UID the caller has processed.
+type FolderCursor struct {
+	Folder      string `json:"folder"`
 	UIDValidity uint32 `json:"uidValidity"`
-	UID         uint32 `json:"uid"`
+	LastUID     uint32 `json:"lastUid"`
+}
+
+// Cursor is a connection's durable position across all its approved
+// folders. mail.changes returns it as "next"; the caller commits it once
+// the batch is processed and sends it back unchanged. A folder the
+// cursor does not name starts at "now" (baseline): monitoring is for new
+// mail, not an import of the archive.
+type Cursor struct {
+	Folders []FolderCursor `json:"folders"`
 }
 
 // ChangesRequest is mail.changes.
 type ChangesRequest struct {
-	Folder string  `json:"folder,omitempty"`
+	// Folder narrows the read to one approved folder; empty reads every
+	// approved folder. Either way the cursor's other folders are carried
+	// through untouched.
+	Folder string `json:"folder,omitempty"`
+	// Cursor is the previous answer's "next"; absent starts from now.
 	Cursor *Cursor `json:"cursor,omitempty"`
 	Limit  int     `json:"limit,omitempty"`
 }
@@ -136,7 +200,8 @@ type MessageRequest struct {
 	Ref string `json:"ref"`
 }
 
-// SearchRequest is mail.search. Since and Before are YYYY-MM-DD.
+// SearchRequest is mail.search. Since and Before are YYYY-MM-DD (see
+// Window for the defaults); the window is at most MaxSearchDays.
 type SearchRequest struct {
 	Folders []string `json:"folders,omitempty"`
 	From    []string `json:"from,omitempty"`
@@ -146,23 +211,37 @@ type SearchRequest struct {
 	Limit   int      `json:"limit,omitempty"`
 }
 
+// FolderStatus is one approved folder's reachability.
+type FolderStatus struct {
+	Folder    string `json:"folder"`
+	Available bool   `json:"available"`
+	Messages  uint32 `json:"messages"`
+}
+
 // Probe is what a Reader found when it checked the mailbox.
 type Probe struct {
-	// Folders are the folders the credential can see.
-	Folders []string `json:"folders,omitempty"`
+	// Folders are the connection's approved folders and whether each
+	// could be opened.
+	Folders []FolderStatus `json:"folders,omitempty"`
 	// Server identifies the provider software, when it says.
 	Server string `json:"server,omitempty"`
+	// MaxMessageBytes and MaxHeaderBytes are the reader's fetch bounds.
+	MaxMessageBytes int64 `json:"maxMessageBytes,omitempty"`
+	MaxHeaderBytes  int   `json:"maxHeaderBytes,omitempty"`
 }
 
 // Reader is a read-only mailbox. It is the seam the IMAP implementation
-// plugs into; every request it receives has already been decoded
-// strictly and bounded, and it is only ever asked to READ.
+// (keystone/adapter/mail/imapread) plugs into; every request it receives
+// has already been decoded strictly and bounded, and it is only ever
+// asked to READ.
 //
-// Implementations return ErrNotConfigured, ErrAuthFailed or
-// adapter.ErrUnavailable (wrapped as they like) for the three kinds of
-// "could not look", and an adapter.Answer with Empty set for "looked and
-// found nothing". They never return message bodies beyond the bounded,
-// normalized text the contract allows.
+// Implementations return ErrNotConfigured, ErrAuthFailed, ErrBadRequest
+// or Unavailable(OutcomeProviderUnavailable|OutcomeStale, reason) for
+// the kinds of "could not look", and an adapter.Answer with Empty set
+// for "looked and found nothing". Every answer's data carries an
+// "outcome": OutcomeOK, OutcomeEmpty, or for mail.changes
+// OutcomeCursorReset. They never return message bodies beyond the
+// bounded, normalized text the contract allows.
 type Reader interface {
 	// Probe verifies the credential and lists visible folders. It is
 	// what mail.capabilities reports and what readiness checks.
@@ -259,12 +338,14 @@ func (u *Upstream) Query(ctx context.Context, capability string, request json.Ra
 			return adapter.Answer{}, err
 		}
 		return adapter.Answer{Data: map[string]any{
+			"outcome":    OutcomeOK,
 			"readOnly":   true,
 			"operations": Operations,
 			"folders":    probe.Folders,
 			"server":     probe.Server,
-			"limits": map[string]int{
-				"batch": MaxBatch, "folders": MaxFolders, "from": MaxFrom,
+			"limits": map[string]int64{
+				"batch": MaxBatch, "folders": MaxFolders, "from": MaxFrom, "searchDays": MaxSearchDays,
+				"messageBytes": probe.MaxMessageBytes, "headerBytes": int64(probe.MaxHeaderBytes),
 			},
 		}}, nil
 	case CapChanges:
@@ -359,19 +440,30 @@ func checkDate(field, v string) error {
 }
 
 func (r *ChangesRequest) normalize() error {
-	if r.Folder == "" {
-		r.Folder = DefaultFolder
-	}
-	if err := checkOpaque("folder", r.Folder, MaxFolderLen, true); err != nil {
+	if err := checkOpaque("folder", r.Folder, MaxFolderLen, false); err != nil {
 		return err
+	}
+	if r.Cursor != nil {
+		if len(r.Cursor.Folders) > MaxFolders {
+			return fmt.Errorf("%w: a cursor names at most %d folders", ErrBadRequest, MaxFolders)
+		}
+		seen := map[string]bool{}
+		for _, fc := range r.Cursor.Folders {
+			if err := checkOpaque("cursor folder", fc.Folder, MaxFolderLen, true); err != nil {
+				return err
+			}
+			if seen[fc.Folder] {
+				return fmt.Errorf("%w: the cursor names folder %q twice", ErrBadRequest, fc.Folder)
+			}
+			seen[fc.Folder] = true
+		}
 	}
 	return checkLimit(&r.Limit)
 }
 
+// normalize bounds a search. No folders means every approved folder;
+// the reader, which knows the connection's scope, refuses one outside it.
 func (r *SearchRequest) normalize() error {
-	if len(r.Folders) == 0 {
-		r.Folders = []string{DefaultFolder}
-	}
 	if len(r.Folders) > MaxFolders {
 		return fmt.Errorf("%w: at most %d folders", ErrBadRequest, MaxFolders)
 	}
@@ -397,5 +489,27 @@ func (r *SearchRequest) normalize() error {
 	if err := checkDate("before", r.Before); err != nil {
 		return err
 	}
+	if r.Since != "" && r.Before != "" {
+		since, before := r.Window(time.Time{})
+		if !before.After(since) || before.Sub(since) > MaxSearchDays*24*time.Hour {
+			return fmt.Errorf("%w: since must be before before, at most %d days apart", ErrBadRequest, MaxSearchDays)
+		}
+	}
 	return checkLimit(&r.Limit)
+}
+
+// Window resolves the search's date range, as UTC midnights: Before
+// defaults to the day after now (so today's mail is included), Since to
+// DefaultSearchDays before Before. Call it only on a normalized request.
+func (r SearchRequest) Window(now time.Time) (since, before time.Time) {
+	now = now.UTC()
+	before = time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC).AddDate(0, 0, 1)
+	if r.Before != "" {
+		before, _ = time.Parse(time.DateOnly, r.Before)
+	}
+	since = before.AddDate(0, 0, -DefaultSearchDays)
+	if r.Since != "" {
+		since, _ = time.Parse(time.DateOnly, r.Since)
+	}
+	return since, before
 }

@@ -42,7 +42,7 @@ func (c *countingReader) read() {
 
 func (c *countingReader) Probe(context.Context) (mail.Probe, error) {
 	c.read()
-	return mail.Probe{Folders: []string{"INBOX"}}, nil
+	return mail.Probe{Folders: []mail.FolderStatus{{Folder: "INBOX", Available: true}}}, nil
 }
 
 func (c *countingReader) Changes(ctx context.Context, _ mail.ChangesRequest) (adapter.Answer, error) {
