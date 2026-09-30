@@ -168,7 +168,11 @@ func (a *ddgs) Search(ctx context.Context, input SearchRequest) (SearchResult, e
 			u.Path = "/"
 		}
 		u.Host = strings.ToLower(u.Host)
-		source := Source{URL: u.String(), Title: row.Title, Provider: DDGS, Backend: "duckduckgo", RetrievedAt: stamp}
+		normalizedURL := u.String()
+		if _, ok := validURL(normalizedURL); !ok {
+			return fail(failure(ProviderUnavailable))
+		}
+		source := Source{URL: normalizedURL, Title: row.Title, Provider: DDGS, Backend: "duckduckgo", RetrievedAt: stamp}
 		if row.SourceDate != nil {
 			date, ok := utcStamp(*row.SourceDate)
 			if !ok {

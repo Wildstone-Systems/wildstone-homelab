@@ -446,3 +446,36 @@ func TestDDGSCallerDeadlineWins(t *testing.T) {
 	_, err := a.Search(ctx, SearchRequest{Query: "example"})
 	assertCode(t, err, Timeout)
 }
+
+func TestDDGSNormalizedURLBound(t *testing.T) {
+	for name, sourceURL := range map[string]string{
+		"added slash":  "https://example.com?" + strings.Repeat("q", 2048-len("https://example.com?")),
+		"escaped path": "https://example.com/" + strings.Repeat("é", 400),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if len(sourceURL) > 2048 {
+				t.Fatal("fixture must fit worker input bound")
+			}
+			encoded, err := json.Marshal(sourceURL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body := strings.Replace(successWire, `"https://example.com/docs#part"`, string(encoded), 1)
+			a := adapterServer(t, func(w http.ResponseWriter, r *http.Request) { respond(w, 200, body) })
+			result, err := a.Search(context.Background(), SearchRequest{Query: "example"})
+			assertCode(t, err, ProviderUnavailable)
+			if len(result.Items) != 0 {
+				t.Fatal("oversized normalized URL escaped")
+			}
+		})
+	}
+	t.Run("exact normalized boundary", func(t *testing.T) {
+		sourceURL := "https://example.com/?" + strings.Repeat("q", 2048-len("https://example.com/?"))
+		body := strings.Replace(successWire, "https://example.com/docs#part", sourceURL, 1)
+		a := adapterServer(t, func(w http.ResponseWriter, r *http.Request) { respond(w, 200, body) })
+		result, err := a.Search(context.Background(), SearchRequest{Query: "example"})
+		if err != nil || len(result.Items) != 1 || len(result.Items[0].URL) != 2048 {
+			t.Fatalf("boundary result: %+v %v", result, err)
+		}
+	})
+}
