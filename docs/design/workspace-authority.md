@@ -49,7 +49,11 @@ privacy, quota and execution authority immediately before effects/commit.
 This seam neither reserves quota nor publishes a revision.
 
 The first implementation admits only same-Person, same-Agent private workspace
-sources and currently authorized memory sources. Unrecognized external source
+sources and currently authorized memory sources. Every reachable revision must
+retain its originating task class/surface ceiling; changing an Agent class does
+not make old Owner/admin content available to a new Member/family task. Existing
+0097 edges naming the same owning stable Person ID remain valid private
+audiences; foreign Person selectors confer no access. Unrecognized external source
 references or audience forms fail closed; later provider/sharing adapters must
 supply reviewed, typed source rules rather than interpret arbitrary source IDs
 as public. No model-controlled source label can remove inherited restrictions.

@@ -60,6 +60,10 @@ func workspaceInputs(tx *sql.Tx, p *PrivacyTurn) error {
 // Sharing and external source adapters have separate slices; an unknown source
 // kind never becomes an implicitly public source here.
 func (db *DB) checkWorkspaceSources(tx *sql.Tx, a *WorkspaceAccess, object string) error {
+	task, err := parseButlerTaskID(a.task)
+	if err != nil {
+		return ErrWorkspaceDenied
+	}
 	var person string
 	if err := tx.QueryRow(`SELECT person_id FROM butler_members WHERE member=?`, a.person).Scan(&person); err != nil {
 		return ErrWorkspaceDenied
@@ -90,10 +94,13 @@ func (db *DB) checkWorkspaceSources(tx *sql.Tx, a *WorkspaceAccess, object strin
  SELECT 1 FROM sources s JOIN workspace_revisions r ON s.object='wr:'||r.id
  JOIN workspace_artifacts artifact ON artifact.id=r.artifact_id JOIN agent_workspaces w ON w.id=artifact.workspace_id
  JOIN butlers b ON b.seq=w.agent_id
+ JOIN butler_tasks origin ON origin.seq=r.task_id
+ JOIN butler_tasks current ON current.seq=?
  WHERE w.person_id<>? OR b.name<>? OR w.visibility<>'private'
+ OR origin.agent_class<>current.agent_class OR origin.surface<>current.surface
  UNION ALL SELECT 1 FROM sources s JOIN workspace_provenance edge ON s.object='wr:'||edge.revision_id
- WHERE edge.source_revision IS NULL OR edge.audience NOT IN ('private','aud_owner')
- )`, object, person, a.agent).Scan(&denied)
+ WHERE edge.source_revision IS NULL OR edge.audience NOT IN ('private','aud_owner',?)
+ )`, object, task, person, a.agent, person).Scan(&denied)
 	if err != nil {
 		return err
 	}

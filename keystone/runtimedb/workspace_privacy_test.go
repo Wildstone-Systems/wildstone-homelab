@@ -377,3 +377,95 @@ func TestWorkspacePrivacyBaseEditTracksTaskAndSession(t *testing.T) {
 		t.Fatalf("edit delivery lost base policy: %v", err)
 	}
 }
+
+func TestWorkspacePrivacyPreservesSourceTaskCeiling(t *testing.T) {
+	db, w, origin := workspaceAuthorityFixture(t)
+	sourceTask, _ := parseButlerTaskID(origin)
+	workspacePublish(t, db, workspaceIntent(t, db, w, sourceTask, "owner-source", "owner-r1", "", 1), "owner-receipt")
+	if _, err := db.SetAgentClass("alfred", AgentClassMember, "mika"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.GrantButlerAccess("alfred", "mika", "root-admin"); err != nil {
+		t.Fatal(err)
+	}
+	task, err := db.InsertButlerTask(ButlerTask{Kind: ButlerTaskConversation, Author: "mika", Owner: "mika", AgentClass: AgentClassMember, Surface: ButlerSurfaceFamily, Audience: ButlerAudiencePrivate, OriginConnection: "household_portal", Objective: "read own member files"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = db.SetTaskButler(task, "alfred"); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.CheckWorkspaceTask("mika", "alfred", task, "household_portal", w.ID); err != nil {
+		t.Fatal(err)
+	}
+	ctx, guard, err := db.BeginPrivacyTurn(context.Background(), ModelLocal, MemoryDestination{BuiltIn: true}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = guard.SetTask(task); err != nil {
+		t.Fatal(err)
+	}
+	access := db.BindWorkspaceAccess("mika", "alfred", task, "household_portal")
+	currentTask, _ := parseButlerTaskID(task)
+	derived := workspaceIntent(t, db, w, currentTask, "member-derived", "member-derived-r1", "", 1)
+	if err = db.RecordWorkspaceProvenance(WorkspaceProvenance{ID: "ceiling-edge", RevisionID: derived.RevisionID, SourceRevision: "owner-r1", Privacy: "normal", Audience: "private"}); err != nil {
+		t.Fatal(err)
+	}
+	workspacePublish(t, db, derived, "derived-receipt")
+	for _, target := range []struct{ artifact, revision string }{{"owner-source", "owner-r1"}, {"member-derived", "member-derived-r1"}} {
+		if got, err := db.ReadWorkspaceRevision(ctx, access, w.ID, target.artifact, target.revision); !errors.Is(err, ErrWorkspaceDenied) || got.ID != "" {
+			t.Fatalf("source ceiling disclosed metadata: %+v %v", got, err)
+		}
+		if err := db.CreateWorkspaceRevisionForTask(ctx, access, w.ID, target.revision, workspaceNewRevision(target.revision+"-edit", target.artifact)); !errors.Is(err, ErrWorkspaceDenied) {
+			t.Fatalf("source ceiling allowed edit: %v", err)
+		}
+	}
+	var n int
+	if err = db.sql.QueryRow(`SELECT COUNT(*) FROM workspace_task_sources WHERE task=?`, currentTask).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("denied ceiling left inputs: %d %v", n, err)
+	}
+	if err = db.sql.QueryRow(`SELECT COUNT(*) FROM workspace_revisions WHERE id LIKE '%-edit'`).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("denied ceiling left revision: %d %v", n, err)
+	}
+	workspacePublish(t, db, workspaceIntent(t, db, w, currentTask, "member-source", "member-r1", "", 1), "member-receipt")
+	if _, err = db.ReadWorkspaceRevision(ctx, access, w.ID, "member-source", "member-r1"); err != nil {
+		t.Fatalf("same-ceiling source refused: %v", err)
+	}
+}
+
+func TestWorkspacePrivacyAcceptsLegacyPersonAudience(t *testing.T) {
+	db, w, origin := workspaceAuthorityFixture(t)
+	seq, _ := parseButlerTaskID(origin)
+	workspacePublish(t, db, workspaceIntent(t, db, w, seq, "legacy-source", "legacy-source-r1", "", 1), "legacy-source-receipt")
+	other, err := db.GetButlerMember("sam")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, audience string
+		allowed        bool
+	}{{"own", w.PersonID, true}, {"foreign", other.PersonID, false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			artifact, revision := "legacy-"+tc.name, "legacy-"+tc.name+"-r1"
+			publication := workspaceIntent(t, db, w, seq, artifact, revision, "", 1)
+			// Existing 0097 callers store the stable Person ID, not a private alias.
+			if err := db.RecordWorkspaceProvenance(WorkspaceProvenance{ID: tc.name + "-edge", RevisionID: revision, SourceRevision: "legacy-source-r1", Privacy: "normal", Audience: tc.audience}); err != nil {
+				t.Fatal(err)
+			}
+			workspacePublish(t, db, publication, tc.name+"-receipt")
+			task, _ := workspacePrivacyTask(t, db)
+			ctx, _, access := workspacePrivacyTurn(t, db, task, ModelLocal, MemoryDestination{BuiltIn: true})
+			got, err := db.ReadWorkspaceRevision(ctx, access, w.ID, artifact, revision)
+			if tc.allowed {
+				if err != nil || got.ID != revision {
+					t.Fatalf("valid legacy audience refused: %+v %v", got, err)
+				}
+				if err = db.CreateWorkspaceRevisionForTask(ctx, access, w.ID, revision, workspaceNewRevision(revision+"-edit", artifact)); err != nil {
+					t.Fatal(err)
+				}
+			} else if !errors.Is(err, ErrWorkspaceDenied) || got.ID != "" {
+				t.Fatalf("foreign audience admitted: %+v %v", got, err)
+			}
+		})
+	}
+}
