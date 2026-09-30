@@ -19,10 +19,13 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"time"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/automation"
 	"github.com/chickenrat17/wildstone-homelab/keystone/butlerstore"
+	"github.com/chickenrat17/wildstone-homelab/keystone/householdtz"
+	"github.com/chickenrat17/wildstone-homelab/keystone/mailmonitor"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 )
 
@@ -37,38 +40,70 @@ const MailChangesMatchKind = "mail.changes"
 
 // newScheduledSubscriptions builds the scheduled engine this process
 // runs. Its Authority is the real one: nothing dispatches without the
-// Person-authorized, Owner-approved intersection, live.
-func newScheduledSubscriptions(db *runtimedb.DB, ledger *butlerstore.Ledger, log *slog.Logger) *automation.SubscriptionEngine {
+// Person-authorized, Owner-approved intersection, live. mail is the
+// mailbox monitor's processor (newMailMonitor); nil keeps mail.changes
+// refusing.
+func newScheduledSubscriptions(db *runtimedb.DB, ledger *butlerstore.Ledger, log *slog.Logger, mail *mailmonitor.Processor) *automation.SubscriptionEngine {
 	e := &automation.SubscriptionEngine{
 		DB: db, Ledger: ledger, Log: log,
 		Authority: automation.PersonalBackgroundAuthority{DB: db},
 	}
-	e.Dispatchers = scheduledDispatchers(e)
+	e.Dispatchers = scheduledDispatchers(e, mail)
 	return e
+}
+
+// newMailMonitor builds the mailbox monitor's processor (epic #326
+// S05): excerpts sealed under <dataDir>/mail-excerpts.key -- a key kept
+// out of the recovery set and every backup, so a restored database's
+// excerpts are unreadable and discarded -- times resolved in the
+// household zone, and extraction on the monitor Agent's own model
+// route, filtered by the Person's processing location. The review hook
+// is the no-op until S06 wires the private review.
+func newMailMonitor(db *runtimedb.DB, dataDir string, zone *householdtz.Zone, log *slog.Logger) (*mailmonitor.Processor, error) {
+	vault, err := db.OpenMailExcerptVault(filepath.Join(dataDir, "mail-excerpts.key"))
+	if err != nil {
+		return nil, fmt.Errorf("opening the mail excerpt key: %w", err)
+	}
+	return &mailmonitor.Processor{
+		DB: db, Vault: vault, Zone: zone, Log: log,
+		Extractor: &mailmonitor.Extractor{Router: mailmonitor.ButlerModelRouter{DB: db, Build: butlerProviderFor}},
+		Hook:      mailmonitor.NoopHook{},
+	}, nil
 }
 
 // scheduledDispatchers is THE registration point for scheduled match
 // kinds. A kind with no entry falls back to the engine's default: a
 // bounded Task and a `subscription` delivery for its Agent.
 //
-// mail.changes has an entry that refuses until the mailbox consumer
-// (epic #326 S05-S07: read changes through the adapter, extract
-// candidates, commit the checkpoint via e.CompleteRun) registers here.
-// The default would open an Agent Task every cadence that nothing
-// completes, each ending as an abandoned run; refusing records an
-// honest failure with backoff instead.
-func scheduledDispatchers(e *automation.SubscriptionEngine) map[string]automation.ScheduledDispatcher {
-	_ = e // the mail consumer will need e.CompleteRun
+// mail.changes is served by the mailbox monitor, which reads changes
+// through the adapter, records candidates, and only then commits the
+// checkpoint through e.CompleteRun. Without a monitor (mail == nil) the
+// entry refuses: the default would open an Agent Task every cadence that
+// nothing completes, each ending as an abandoned run; refusing records
+// an honest failure with backoff instead.
+func scheduledDispatchers(e *automation.SubscriptionEngine, mail *mailmonitor.Processor) map[string]automation.ScheduledDispatcher {
+	if mail != nil {
+		return map[string]automation.ScheduledDispatcher{
+			MailChangesMatchKind: mailmonitor.NewDispatcher(mailmonitor.Config{
+				DB: e.DB, Processor: mail, Runs: e, Log: e.Log,
+			}),
+		}
+	}
 	return map[string]automation.ScheduledDispatcher{
 		MailChangesMatchKind: automation.ScheduledDispatcherFunc(
 			func(context.Context, automation.ScheduledRun) (string, error) {
-				return "", fmt.Errorf("no %s consumer is installed in this Keystone yet", MailChangesMatchKind)
+				return "", fmt.Errorf("no %s consumer is installed in this Keystone", MailChangesMatchKind)
 			}),
 	}
 }
 
-// startScheduledSubscriptions runs the family until ctx is done.
-func startScheduledSubscriptions(ctx context.Context, e *automation.SubscriptionEngine, log *slog.Logger) {
+// startScheduledSubscriptions runs the family until ctx is done, and
+// the mailbox monitor's expiry and retention sweep beside it when there
+// is one.
+func startScheduledSubscriptions(ctx context.Context, e *automation.SubscriptionEngine, mail *mailmonitor.Processor, log *slog.Logger) {
 	log.Info("scheduled subscriptions running", "every", scheduledSubscriptionEvery)
 	go e.RunScheduled(ctx, scheduledSubscriptionEvery)
+	if mail != nil {
+		go mailmonitor.RunSweeper(ctx, e.DB, 0, runtimedb.DefaultMailRetention(), log)
+	}
 }

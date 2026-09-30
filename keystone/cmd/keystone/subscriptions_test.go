@@ -12,6 +12,7 @@ import (
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/automation"
 	"github.com/chickenrat17/wildstone-homelab/keystone/butlerstore"
+	"github.com/chickenrat17/wildstone-homelab/keystone/mailmonitor"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 )
 
@@ -27,7 +28,7 @@ func TestScheduledSubscriptionsWiring(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 
 	// Not the coordinator: the whole family is held.
-	held := newScheduledSubscriptions(db, nil, log)
+	held := newScheduledSubscriptions(db, nil, log, nil)
 	if _, err := held.TickScheduled(context.Background()); !errors.Is(err, runtimedb.ErrCoordinatorFenced) {
 		t.Fatalf("a tick without the coordinator lease = %v, want fenced", err)
 	}
@@ -36,7 +37,7 @@ func TestScheduledSubscriptionsWiring(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e := newScheduledSubscriptions(db, butlerstore.New(db, lease), log)
+	e := newScheduledSubscriptions(db, butlerstore.New(db, lease), log, nil)
 	if _, ok := e.Authority.(automation.PersonalBackgroundAuthority); !ok {
 		t.Fatalf("authority is %T, want the Personal evaluator", e.Authority)
 	}
@@ -52,6 +53,16 @@ func TestScheduledSubscriptionsWiring(t *testing.T) {
 	}
 	if _, err := e.TickScheduled(context.Background()); err != nil {
 		t.Fatalf("a coordinator tick with nothing due = %v", err)
+	}
+
+	// With the mailbox monitor built, mail.changes is its dispatcher.
+	mail, err := newMailMonitor(db, t.TempDir(), nil, log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	withMail := newScheduledSubscriptions(db, butlerstore.New(db, lease), log, mail)
+	if _, ok := withMail.Dispatchers[MailChangesMatchKind].(*mailmonitor.Dispatcher); !ok {
+		t.Fatalf("mail.changes dispatcher is %T, want the mailbox monitor", withMail.Dispatchers[MailChangesMatchKind])
 	}
 }
 

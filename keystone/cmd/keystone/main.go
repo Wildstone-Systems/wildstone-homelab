@@ -2017,7 +2017,14 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 			// Scheduled Agent subscriptions (ADR-W039 §3.6.1, epic
 			// #326): coordinator-held, on this ledger, gated by the
 			// Person's live background authorization.
-			startScheduledSubscriptions(context.Background(), newScheduledSubscriptions(db, ledger, log), log)
+			// mail.changes runs the mailbox monitor (epic #326 S05); if
+			// its excerpt key cannot be opened the entry refuses instead.
+			mailMonitor, mailErr := newMailMonitor(db, dataDir, householdZone, log)
+			if mailErr != nil {
+				log.Error("mailbox monitor unavailable; mail.changes runs will be refused", "err", mailErr)
+				mailMonitor = nil
+			}
+			startScheduledSubscriptions(context.Background(), newScheduledSubscriptions(db, ledger, log, mailMonitor), mailMonitor, log)
 
 			// The heartbeat sweeper (ADR-W039 §3.7, Phase 4, #340): the
 			// only thing that ever marks a runtime offline on its own,
