@@ -145,7 +145,7 @@ Agent class and connection restrictions remain independent of the file’s Perso
 
 ## 7. File operations and safe presentation
 
-The companion contract fixes individually registered `workspace_*` tools for list, read, search, mkdir, staged create/write, patch, move, trash, and restore. Permanent purge is a human control, not a routinely granted model tool. V1 must not grant arbitrary filesystem access.
+The companion contract fixes individually registered `workspace_*` tools for list, read, search, mkdir, empty-directory removal, staged create/write, patch, move, trash, and restore. Permanent purge is a human control, not a routinely granted model tool. V1 must not grant arbitrary filesystem access.
 
 Use the existing Member/Owner tool classes and resource-rule resolver. Add a workspace resource kind with explicit scope/revision checks; an Agent-level tool assignment alone is not a grant to every file. Research and workspace reads are nonmutating tools, so QA-only sessions can use them if otherwise authorized. Workspace create/edit/move/trash/restore and export are mutating and withheld/refused in QA-only mode. Use the domestic risk tier for reversible operations within the same authorized private scope; Shared disclosure requires explicit human intent plus source authority. Immediate purge requires the existing confirmation/freshness mechanisms appropriate to its scope. Provider installation and configuration remain Owner administration.
 
@@ -158,6 +158,7 @@ Agents may create, edit, and move files within authorized scope. Moving between 
 - Keep operations auditable without logging private file bodies.
 - Treat `.md`, `.txt`, `.json`, and `.csv` as data. No shell, import, plugin loading, or executable workspace hook is granted.
 - Markdown previews disable scripts, active HTML, and other executable content. Render JSON/CSV/text inertly; remote embeds must not silently disclose a viewer's identity or fetch arbitrary resources.
+- `workspace_rmdir` removes only an authorized empty, non-root directory at its expected identity/generation revision; atomic emptiness checks and namespace serialization protect concurrent creation. Human directory removal uses a scoped path endpoint because directories are not artifacts. No recursive removal or deletion of contained files/history is granted.
 - Deletion first moves files to recoverable trash. Immediate permanent deletion requires human confirmation; configured expiry is a separate lifecycle policy. This ADR explicitly amends ADR-W033 F6 only for workspace scratch and file-trash retention; indefinite recovery remains unchanged for People, Agents, Connections, routines, and other durable entities.
 
 Partial failure must leave existing files intact or expose a recoverable state. Idempotent operations and task evidence prevent duplicate artifacts or exports on retry/resume. No completion claim may cite a file link invented by the model.
@@ -168,12 +169,12 @@ Partial failure must leave existing files intact or expose a recoverable state. 
 | --- | --- |
 | Quota | 1 GiB per Agent, including scratch, revisions, and trash |
 | Maximum file size | 10 MiB for v1 formats |
-| Scratch retention | 7 days after task completion or cancellation |
+| Scratch retention | 7 days after entry into completed, failed or cancelled |
 | Trash retention | 30 days, then automatic purge under configured policy |
 | Artifact retention | Until explicitly deleted |
 | Backup | Daily for artifacts and revision history; scratch excluded |
 
-Active and waiting tasks are protected from scratch cleanup. Quota exhaustion produces an actionable refusal and must not silently delete durable artifacts. Writes, revisions, exports, and concurrent operations must account for capacity consistently.
+Pending, running, waiting and paused-offboarded tasks are protected from scratch cleanup; unknown states fail closed. Failed-task scratch and abandoned staging use the same seven-day terminal retention as completed/cancelled work. Cleanup rechecks task state, terminal timestamp and unresolved-publication recovery pins immediately before deletion. Quota exhaustion produces an actionable refusal and must not silently delete durable artifacts. Writes, revisions, exports, and concurrent operations must account for capacity consistently.
 
 Retiring an Agent preserves files and authorized human access. Agent removal or package removal must not accidentally destroy the workspace. Permanent purge is a separate human-confirmed operation. The configured trash expiry authorizes scheduled purge of trashed data; it does not authorize early model-initiated purge.
 
@@ -233,7 +234,7 @@ The native runtime, not a Hermes-only demonstration, must pass:
 7. Traversal, symlink escapes, private-network fetches, redirect/rebinding bypasses, and active-content previews are refused.
 8. Concurrent edits preserve the prior file; quota and collision failures leave existing artifacts intact.
 9. Research limits park work with saved progress; authorized continuation extends limits without erasing accumulated usage.
-10. Scratch cleanup protects active/waiting tasks; trash restore works; retirement preserves artifacts.
+10. Scratch/staging cleanup expires completed/failed/cancelled work after seven days and protects pending/running/waiting/paused-offboarded or unknown states and unresolved recovery data; trash restore works; retirement preserves artifacts.
 11. Filedrop Mine export succeeds, reports the actual destination, and does not grant content-read access. Shared export requires explicit permitted disclosure.
 12. Restart, retry, destination failure, and cancellation do not duplicate exports or falsely report completion. Notification failure leaves the artifact usable.
 13. Backup/restore preserves durable files and authorization metadata; revocation remains effective after restore.
@@ -241,6 +242,7 @@ The native runtime, not a Hermes-only demonstration, must pass:
 15. Upgrading an Agent with broad service bundles does not grant new tools; new native Agents get the explicitly seeded workspace set, and QA-only execution refuses writes even on hand-crafted calls.
 16. Large extraction and multipart report writes stay within message bounds; stale cursors, concurrent commits, interrupted staging, and restart recover without publishing partial files.
 17. Local-only/trusted-only source data cannot leave through queries, URLs, Shared export, cache reuse, or resumed artifact reads; absent provenance context refuses the call.
+18. Empty-directory removal works for Agents and humans with current scope/revision authority, refuses roots/nonempty or recreated targets, and is refused in QA-only mode. Files and revision history remain intact.
 
 Use provider contract fixtures and native-runtime end-to-end tests, then a separately recorded live DDGS conformance run. Record pinned versions, effective settings, model, task/trace identifiers, observed behavior, and limitations. Live household deployment is not authorized by this draft alone.
 
