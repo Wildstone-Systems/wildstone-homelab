@@ -277,6 +277,20 @@ func (db *DB) CheckSessionPrivacy(id, model string, d MemoryDestination) error {
 	return p.Check(model, d)
 }
 
+// CheckTaskPrivacy also covers first-turn workspace inputs before a session
+// exists. Task-backed delivery must not infer an empty policy from no session.
+func (db *DB) CheckTaskPrivacy(id, model string, d MemoryDestination) error {
+	t, err := db.GetButlerTask(id)
+	if err != nil {
+		return err
+	}
+	p, err := db.contentPrivacy(fmt.Sprintf("t:%d", t.Seq))
+	if err != nil {
+		return err
+	}
+	return p.Check(model, d)
+}
+
 // includeTaskSources runs under mu. A newly remembered fact is still in this
 // turn's context even before the first session exists or a retrieval reads it.
 func (p *PrivacyTurn) includeTaskSources() error {

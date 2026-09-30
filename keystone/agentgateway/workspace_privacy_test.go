@@ -61,6 +61,12 @@ func TestWorkspaceTaintBlocksGatewayLedgerReuseAndManifest(t *testing.T) {
 	if count := f.surface("alfred").count(req.Tool); count != 1 {
 		t.Fatalf("denied retry dispatched %d times", count)
 	}
+	payload, err := json.Marshal(map[string]any{"handle": string(h)})
+	must(err)
+	delivery := FilterDelivery(f.db, runtimedb.AgentDelivery{Butler: agent.Seq, Kind: agentapi.DeliveryTurn, Payload: string(payload)})
+	if !strings.Contains(delivery.Payload, `"withheld":true`) {
+		t.Fatal("first-turn delivery lost workspace provenance")
+	}
 	if _, err = f.g.Manifest(context.Background(), h); err == nil {
 		t.Fatal("manifest lost persisted workspace source")
 	}

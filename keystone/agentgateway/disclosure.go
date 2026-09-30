@@ -216,10 +216,16 @@ func deliveryPrivacyCheck(db *runtimedb.DB, row runtimedb.AgentDelivery, model s
 			return nil
 		}
 		task, err := db.GetButlerTask(taskID)
-		if err != nil || task.SessionID == "" {
+		if err != nil {
 			return nil
 		}
-		return privacyRestriction(db.CheckSessionPrivacy(task.SessionID, model, destination))
+		// Workspace reads can precede the first session. A resolved task
+		// must carry its own provenance through delivery, and a failed
+		// policy lookup must not turn a known task into unrestricted data.
+		if err := db.CheckTaskPrivacy(task.ID, model, destination); err != nil {
+			return runtimedb.ErrPrivacy
+		}
+		return nil
 	default:
 		return nil
 	}

@@ -174,13 +174,9 @@ func (g *Gateway) Invoke(ctx context.Context, req agentapi.InvokeRequest) (agent
 	// field comes from the handle: the task, this step, the Butler's
 	// name as the permission label, the task's admitted audience.
 	//
-	// The dispatch runs under a call-scoped disclosure turn (§3.5 rule
-	// 3, #345): whatever the Toolset reads through it
-	// — today, the "recall" tool's memory seams — is tracked exactly as
-	// butlerlive.Serve tracked a whole conversation for the provider
-	// wrapper, but scoped to this one call rather than the task's
-	// history, because it is this call's RESULT that is about to be
-	// handed to the runtime.
+	// The disclosure turn combines the restored task/session sources with
+	// this call's reads. Its result check persists new sources before the
+	// runtime receives content, so retries cannot shed earlier restrictions.
 	id := operation.Identity{TaskID: taskID, Step: step, PermissionLabel: label, Audience: audience}
 	outcome, err := s.toolset.Execute(operation.With(dctx, id), req.Tool, input, s.readOnly)
 	if err != nil {
