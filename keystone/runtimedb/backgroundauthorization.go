@@ -77,11 +77,22 @@ const (
 
 // BackgroundScope is which mail a monitor may look at. Folders default
 // to INBOX; senders and subjects are optional narrowing filters.
+//
+// ConflictCalendars (epic #326 S06) are the further calendars, beside
+// the target calendar, the Person lets a review check for conflicts.
+// Each is still checked only while the Person can read it. It is part
+// of the digested scope, so changing it is a material edit; omitted
+// when empty, so an authorization made before it existed digests the
+// same.
 type BackgroundScope struct {
-	Folders  []string `json:"folders"`
-	Senders  []string `json:"senders,omitempty"`
-	Subjects []string `json:"subjects,omitempty"`
+	Folders           []string `json:"folders"`
+	Senders           []string `json:"senders,omitempty"`
+	Subjects          []string `json:"subjects,omitempty"`
+	ConflictCalendars []string `json:"conflictCalendars,omitempty"`
 }
+
+// maxConflictCalendars bounds how many calendars a review checks.
+const maxConflictCalendars = 16
 
 // BackgroundAuthorizationRequest is what a Person authorizes.
 type BackgroundAuthorizationRequest struct {
@@ -195,6 +206,9 @@ func normalizeScope(s BackgroundScope) (BackgroundScope, error) {
 		return BackgroundScope{}, err
 	}
 	if out.Subjects, err = clean("subject filters", s.Subjects, maxScopeFilters); err != nil {
+		return BackgroundScope{}, err
+	}
+	if out.ConflictCalendars, err = clean("conflict calendars", s.ConflictCalendars, maxConflictCalendars); err != nil {
 		return BackgroundScope{}, err
 	}
 	return out, nil

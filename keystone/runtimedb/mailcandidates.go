@@ -28,6 +28,7 @@ package runtimedb
 import (
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
@@ -386,6 +387,11 @@ func BoundMailText(s string, max int) string {
 // refusing to start.
 type MailExcerptVault struct {
 	aead cipher.AEAD
+	// tokenKey derives mail review tokens (S06, mailreview.go). It is a
+	// subkey of the excerpt key, so it shares that key's property: it is
+	// in no backup, and a restored or re-keyed database can mint and
+	// match no token issued before.
+	tokenKey []byte
 }
 
 // OpenMailExcerptVault loads (or creates) the excerpt key and drops
@@ -424,6 +430,9 @@ func (db *DB) OpenMailExcerptVault(keyPath string) (*MailExcerptVault, error) {
 		return nil, errors.New("runtimedb: invalid mail excerpt key")
 	}
 	block, err := aes.NewCipher(key)
+	mac := hmac.New(sha256.New, key)
+	mac.Write([]byte("mail-review-token/v1"))
+	tokenKey := mac.Sum(nil)
 	clear(key)
 	if err != nil {
 		return nil, err
@@ -432,7 +441,7 @@ func (db *DB) OpenMailExcerptVault(keyPath string) (*MailExcerptVault, error) {
 	if err != nil {
 		return nil, err
 	}
-	v := &MailExcerptVault{aead: a}
+	v := &MailExcerptVault{aead: a, tokenKey: tokenKey}
 	if created {
 		// Whatever was sealed before this key existed is unreadable.
 		if _, err := db.sql.Exec(`DELETE FROM mail_candidate_excerpts`); err != nil {
@@ -1088,9 +1097,32 @@ func (db *DB) ReviseMailCandidate(actor, id string, baseRevision int, f MailCand
 	if err != nil || c.PersonID != person {
 		return MailCandidate{}, ErrMailCandidateNotFound
 	}
-	if c.Revision != baseRevision || !(c.Unresolved() || c.State == MailCandidateAccepted) {
+	if c.Revision != baseRevision {
 		return MailCandidate{}, ErrMailCandidateStale
 	}
+	out, err := reviseMailCandidateTx(tx, c, f, actor, at)
+	if err != nil {
+		return MailCandidate{}, err
+	}
+	return out, tx.Commit()
+}
+
+// reviseMailCandidateTx writes f as c's next revision. f is validated
+// by the caller. A candidate whose calendar write is in flight (S06)
+// cannot be edited: the write is for the revision that was approved.
+func reviseMailCandidateTx(tx *sql.Tx, c MailCandidate, f MailCandidateFields, actor string, at time.Time) (MailCandidate, error) {
+	if !(c.Unresolved() || c.State == MailCandidateAccepted) {
+		return MailCandidate{}, ErrMailCandidateStale
+	}
+	var inflight int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM mail_candidate_effects WHERE candidate = ? AND state = 'dispatching'`,
+		c.ID).Scan(&inflight); err != nil {
+		return MailCandidate{}, err
+	}
+	if inflight > 0 {
+		return MailCandidate{}, ErrMailCandidateStale
+	}
+	id, baseRevision := c.ID, c.Revision
 	next := c.Revision + 1
 	if err := insertMailRevision(tx, id, next, f, actor, at); err != nil {
 		return MailCandidate{}, err
@@ -1107,11 +1139,7 @@ func (db *DB) ReviseMailCandidate(actor, id string, baseRevision int, f MailCand
 	if err := mailAudit(tx, id, next, "revise", c.State, state, actor, "", at); err != nil {
 		return MailCandidate{}, err
 	}
-	out, err := mailCandidateTx(tx, id)
-	if err != nil {
-		return MailCandidate{}, err
-	}
-	return out, tx.Commit()
+	return mailCandidateTx(tx, id)
 }
 
 // mailTransitions is the closed lifecycle a Person (through S06's
@@ -1450,6 +1478,14 @@ func (db *DB) PurgeMailConnection(connection, actor, reason string, at time.Time
 		(SELECT id FROM mail_candidates WHERE connection = ?)`, seq); err != nil {
 		return 0, err
 	}
+	// Pending approvals die with the authority (S06): no review of this
+	// mailbox — including a pending update or cancel of an event already
+	// created — stays usable.
+	if _, err := tx.Exec(`UPDATE mail_reviews SET state = 'revoked', state_reason = ?, closed_at = ?
+		WHERE state = 'open' AND candidate IN (SELECT id FROM mail_candidates WHERE connection = ?)`,
+		BoundMailText(reason, 200), mailTS(at), seq); err != nil {
+		return 0, err
+	}
 	return len(open), tx.Commit()
 }
 
@@ -1466,6 +1502,9 @@ func (db *DB) ScrubIntegrationWorkResult(seq int64) error {
 // result is revived from a snapshot.
 func purgeMailOnRestore(db *DB) error {
 	if _, err := db.sql.Exec(`DELETE FROM mail_candidate_excerpts`); err != nil {
+		return err
+	}
+	if err := purgeMailReviewsOnRestore(db); err != nil {
 		return err
 	}
 	_, err := db.sql.Exec(`UPDATE integration_work SET result_json = '{}' WHERE capability IN (?, ?, ?)`, mailCapabilities...)
