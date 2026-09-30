@@ -58,7 +58,7 @@ func configFilePath(managedPrefix string, r resource.Resource) (string, error) {
 // — keystone cannot import wardstone — and deliberately the same shape,
 // because a mismatch here means Keystone asks for materialization the
 // agent will not perform, or fails to ask for one it would.
-var secretRefInContent = regexp.MustCompile(`(pbkdf2:)?secret/[A-Za-z0-9][A-Za-z0-9._-]{0,63}`)
+var secretRefInContent = regexp.MustCompile(`(pbkdf2:|mosquitto:)?secret/[A-Za-z0-9][A-Za-z0-9._-]{0,63}`)
 
 func configFileNeedsMaterialization(content string) bool {
 	return secretRefInContent.MatchString(content)
