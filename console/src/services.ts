@@ -73,8 +73,9 @@ const GROUP_OF: Record<string, Group> = {
   cameras: "Home",
   zigbee: "Home",
   zwave: "Home",
-  // The OpenThread Border Router (thread-otbr): radio plumbing Home
-  // Assistant uses, beside Zigbee.
+  // The Matter server and the Thread border router (#431): radios and
+  // protocols Home Assistant reaches, filed beside Zigbee and Z-Wave.
+  matter: "Home",
   thread: "Home",
   mqtt: "Home",
   inventory: "Home",

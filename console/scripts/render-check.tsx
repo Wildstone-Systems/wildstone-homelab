@@ -615,7 +615,7 @@ check("sign-in offers no token box", !gate.includes("<input") && !/token/i.test(
 const shell = renderToString(h(ConsoleStateProvider, { children: h(Shell) }));
 check("shell renders with no data yet", shell.length > 0);
 check("shell shows the icon rail", shell.includes('aria-label="Console sections"'), shell);
-for (const label of ["Home", "Services", "Butler", "Chat", "Household", "Plans", "Activity", "Backups", "Commitments", "Nodes", "Secrets", "Identity"]) {
+for (const label of ["Home", "Services", "Home automation", "Butler", "Chat", "Household", "Plans", "Activity", "Backups", "Commitments", "Nodes", "Secrets", "Identity"]) {
   check(`rail offers ${label}`, shell.includes(`aria-label="${label}"`));
 }
 check("the rail has no separate Connect chat screen", !shell.includes('aria-label="Connect chat"'));
@@ -858,11 +858,23 @@ check("every shipped capability has an explicit group",
   unmapped.length === 0, `unmapped: ${unmapped.join(", ")} — add them to GROUP_OF in src/services.ts`);
 // And the other way: a row for a capability nothing ships is a row that
 // outlived its package.
-const stale_ = mappedCapabilities().filter((c) => !shippedCapabilities.includes(c));
+// The one exception is a capability the home-automation component table
+// (keystone/api/home_automation_components.go) already names: the
+// aggregate reports it as `unavailable` until its package ships, so its
+// row is vocabulary the Console must already file, not a leftover. Read
+// from that table rather than listed here, so it cannot excuse anything
+// else.
+const haTableCapabilities = (() => {
+  const src = readFileSync(join(process.cwd(), "..", "keystone", "api", "home_automation_components.go"), "utf8");
+  return [...src.matchAll(/Capability:\s*"([A-Za-z0-9_.-]+)"/g)].map((m) => m[1]);
+})();
+check("the home-automation component table was actually read", haTableCapabilities.includes("zigbee"),
+  haTableCapabilities.join(", "));
+const stale_ = mappedCapabilities().filter((c) => !shippedCapabilities.includes(c) && !haTableCapabilities.includes(c));
 check("the group map names no capability the catalog dropped",
   stale_.length === 0, `no longer shipped: ${stale_.join(", ")}`);
 for (const [cap, want] of [["media", "Media"], ["photos", "Media"], ["dns", "Network"], ["zigbee", "Home"],
-                           ["identity", "Identity"], ["ai-chat", "AI"], ["chat-matrix", "Chat"],
+                           ["identity", "Identity"], ["ai-chat", "AI"], ["zwave", "Home"], ["matter", "Home"], ["thread", "Home"], ["chat-matrix", "Chat"],
                            ["matrix-homeserver", "Chat"], ["matrix-client", "Chat"],
                            ["documents", "Documents"], ["monitoring", "Ops"]] as const) {
   check(`${cap} files under ${want}`, groupOf({ capability: cap }) === want);
@@ -2643,6 +2655,120 @@ check("back from a password confirmation, the move is one click from done",
   renderToString(h(GroceryMoveView, { lists: [{ name: "Shopping", items: ["milk"] }], onMoved: () => {} }))
     .includes("Password confirmed. Move now to finish."));
 clearStepUp();
+
+// Home automation setup (#448). The screen renders the aggregate's
+// answer (#446) and a draft of the household's choices, and must never
+// let the second read as the first.
+import { EMPTY_DRAFT, GOAL_COPY, BLUETOOTH_COPY, HomeAutomationView, componentStanding, loadDraft, queryOf, saveDraft } from "../src/views/HomeAutomation";
+import type { Draft as HADraft } from "../src/views/HomeAutomation";
+import type { HomeAutomationComponent, HomeAutomationComponentId, HomeAutomationStatus } from "../src/api";
+
+const haComp = (id: HomeAutomationComponentId, title: string, over: Partial<HomeAutomationComponent> = {}): HomeAutomationComponent => ({
+  id, title, capability: id, topology: "shared", protocol: false, requires: [], packages: [],
+  selection: "none", state: "not_selected", reason: "not selected", blockers: [], actions: [], externalSteps: [], ...over,
+});
+const haStatus = (over: Partial<HomeAutomationStatus> = {}, comps: Partial<Record<HomeAutomationComponentId, Partial<HomeAutomationComponent>>> = {}): HomeAutomationStatus => ({
+  generatedAt: new Date().toISOString(),
+  topology: "none",
+  node: "node-a",
+  nodes: [
+    { id: "node-a", connected: true, selected: true, blockers: [], hostAddress: "node-a.example.internal" },
+    { id: "node-b", connected: false, selected: false, blockers: [], lastSeenAt: new Date(Date.now() - 3600_000).toISOString() },
+  ],
+  blockers: [],
+  components: ([
+    ["mqtt", "MQTT broker"], ["home-assistant", "Home Assistant (runs here)"], ["home-automation", "Existing Home Assistant"],
+    ["zigbee", "Zigbee"], ["zwave", "Z-Wave"], ["matter", "Matter"], ["thread", "Thread border router"], ["bluetooth", "Bluetooth"],
+  ] as [HomeAutomationComponentId, string][]).map(([id, title]) => haComp(id, title, comps[id])),
+  ...over,
+});
+const haRender = (status: HomeAutomationStatus, draft: HADraft, extra: Record<string, unknown> = {}) =>
+  text(renderToString(h(HomeAutomationView, { status, draft, onDraft: () => {}, onOpenPackage: () => {}, onOpenServices: () => {}, ...extra })));
+
+// One input tag, whatever order SSR writes its attributes in.
+const haInput = (html: string, attr: string) => new RegExp(`<input[^>]*${attr}[^>]*>`).exec(html)?.[0] ?? "";
+
+const haFresh = haRender(haStatus(), EMPTY_DRAFT);
+check("home automation offers both topologies",
+  haFresh.includes("Connect existing Home Assistant") && haFresh.includes("Run it here"), haFresh.slice(0, 800));
+check("the topologies are a keyboard-reachable radio group",
+  (haFresh.match(/type="radio" name="ha-topology"/g) ?? []).length === 2 && haFresh.includes("<legend"), haFresh.slice(0, 800));
+check("before a topology is chosen, no protocol or machine is asked for",
+  !haFresh.includes("Which kinds of devices") && !haFresh.includes("Which machine"));
+check("a fresh house is told nothing is installed", haFresh.includes("Nothing for home automation is installed yet"));
+check("and nothing on it reads as installed", !haFresh.includes(">Installed<"));
+check("the advanced path to Services stays one click away", haFresh.includes("Open Services"));
+
+const haManagedDraft: HADraft = { topology: "managed", goals: ["zigbee", "matter-thread"], bluetooth: "proxy", step: "choose" };
+const haManaged = haRender(haStatus({}, { mqtt: { selection: "dependency" } }), haManagedDraft);
+for (const g of Object.values(GOAL_COPY)) check(`the managed path explains ${g.title}`, haManaged.includes(g.body.slice(0, 40)));
+for (const b of ["host-bluez", "proxy"] as const) check(`the managed path explains Bluetooth: ${BLUETOOTH_COPY[b].title}`,
+  haManaged.includes(BLUETOOTH_COPY[b].body.slice(0, 40)));
+check("the managed path asks which machine, offline ones included",
+  haManaged.includes("Which machine") && haManaged.includes("node-a") && haManaged.includes("Offline, last seen"), haManaged);
+check("a chosen protocol is a ticked checkbox", haInput(haManaged, 'id="ha-goal-zigbee"').includes('checked=""'), haManaged);
+check("an unchosen protocol is not", !haInput(haManaged, 'id="ha-goal-zwave"').includes('checked=""'));
+check("each protocol checkbox is named and described",
+  haManaged.includes('aria-labelledby="ha-goal-zigbee-title"') && haManaged.includes('aria-describedby="ha-goal-zigbee-desc"'));
+check("a chosen protocol reads as chosen and not installed",
+  haManaged.includes(">Chosen<") && haManaged.includes("Not installed") && !haManaged.includes(">Installed<"), haManaged);
+check("the set-up-now card lists nothing that is only chosen", haManaged.includes("Nothing for home automation is installed yet"));
+check("what a choice pulls in is named from the API", haManaged.includes("Also needed: MQTT broker"));
+check("the managed path continues to the readiness step", haManaged.includes("Next: check the machine is ready") && haManaged.includes("Continue"));
+check("Bluetooth is only offered where Home Assistant runs here",
+  !haRender(haStatus(), { ...haManagedDraft, topology: "external" }).includes('name="ha-bluetooth"'));
+
+// Installed is the API's word, not the draft's.
+const haInstalled = haRender(haStatus({ topology: "managed" }, {
+  "home-assistant": { selection: "installed", state: "ready" },
+  zigbee: { selection: "installed", state: "degraded" },
+  zwave: { selection: "pending", state: "awaiting_approval" },
+  thread: { selection: "requested", state: "unavailable", reason: "No catalog package provides thread." },
+}), { ...EMPTY_DRAFT });
+check("a house already running Home Assistant opens on that topology",
+  haInput(haInstalled, 'value="managed"').includes('checked=""'), haInstalled.slice(0, 1200));
+check("installed parts are listed under set up now",
+  haInstalled.includes("Home Assistant (runs here)") && haInstalled.includes("Installed, needs attention"));
+check("a pending plan reads as waiting, not installed", haInstalled.includes("Plan waiting for approval"));
+check("an installed protocol cannot be unticked here", /checked="".*disabled=""|disabled="".*checked=""/.test(haInput(haInstalled, 'id="ha-goal-zigbee"')), haInstalled);
+check("an unavailable protocol says why", haInstalled.includes("Not available here: No catalog package provides thread."));
+check("standing never promotes a request to installed",
+  componentStanding(haComp("zigbee", "Zigbee", { selection: "requested", state: "ready_to_propose" })).label === "Not installed");
+
+const haExternal = haRender(haStatus({}, {
+  "home-automation": { selection: "requested", state: "ready_to_propose", package: "home-automation",
+    actions: [{ kind: "install_package", label: "Install", package: "home-automation" }] },
+}), { ...EMPTY_DRAFT, topology: "external" });
+check("the external path hands off to the connector's package form",
+  haExternal.includes("Set up the connector") && haExternal.includes("Next: the Home Assistant connector"), haExternal);
+check("the external path does not jump to the managed readiness step", !haExternal.includes("Next: check the machine is ready"));
+
+const haReady = haRender(haStatus({}, {
+  "home-assistant": { selection: "requested", state: "blocked", reason: "blocked by node",
+    blockers: [{ code: "ipv6_missing", severity: "blocking", message: "IPv6 is off on node-a.", evidence: [], actions: [] }] },
+}), { ...haManagedDraft, step: "readiness" });
+check("the readiness step shows the API's own blockers", haReady.includes("Is node-a ready?") && haReady.includes("IPv6 is off on node-a."), haReady);
+check("the readiness step can go back and check again", haReady.includes("Back to choices") && haReady.includes("Check again"));
+
+// The draft: kept across leaving and coming back, and never trusted.
+const haStore = new Map<string, string>();
+const haStorage = { getItem: (k: string) => haStore.get(k) ?? null, setItem: (k: string, v: string) => void haStore.set(k, v) };
+saveDraft(haManagedDraft, haStorage);
+const haBack = loadDraft(haStorage);
+check("choices survive leaving the screen", JSON.stringify(haBack) === JSON.stringify({ ...haManagedDraft, node: undefined }), JSON.stringify(haBack));
+haStore.set("wildstone.homeAutomation.draft", JSON.stringify({ topology: "cloud", goals: ["zigbee", "wifi-toaster"], bluetooth: "laser", step: "readiness" }));
+const haJunk = loadDraft(haStorage);
+check("a junk draft keeps only what it recognises",
+  haJunk.topology === undefined && haJunk.goals.join() === "zigbee" && haJunk.bluetooth === "none" && haJunk.step === "choose", JSON.stringify(haJunk));
+check("a throwing storage reads as a clean start",
+  JSON.stringify(loadDraft({ getItem: () => { throw new Error("denied"); } })) === JSON.stringify(EMPTY_DRAFT));
+saveDraft(haManagedDraft, { setItem: () => { throw new Error("quota"); } });
+check("a throwing storage does not break saving", true);
+const haQ = queryOf(haManagedDraft);
+check("the draft asks the API about exactly the chosen components",
+  haQ.topology === "managed" && haQ.select?.slice().sort().join() === "bluetooth,matter,thread,zigbee" && haQ.bluetooth === "proxy", JSON.stringify(haQ));
+check("Bluetooth is not asked about on the external path",
+  !queryOf({ ...haManagedDraft, topology: "external" }).select?.includes("bluetooth"));
 
 console.log(failures === 0 ? "\nALL CHECKS PASSED" : `\n${failures} CHECK(S) FAILED`);
 process.exit(failures === 0 ? 0 : 1);

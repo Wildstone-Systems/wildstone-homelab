@@ -6,6 +6,7 @@ import {
   Cpu,
   House,
   IdentificationCard,
+  Lightbulb,
   Key,
   ListChecks,
   PlugsConnected,
@@ -41,6 +42,7 @@ import { Butler } from "./views/Butler";
 import { ButlerAuthority } from "./views/ButlerAuthority";
 import { Chat } from "./views/Chat";
 import { Home } from "./views/Home";
+import { HomeAutomation } from "./views/HomeAutomation";
 import { Household } from "./views/Household";
 import { Integrations } from "./views/Integrations";
 import { IdentityView } from "./views/Identity";
@@ -57,6 +59,7 @@ import { Services } from "./views/Services";
 type View =
   | "home"
   | "services"
+  | "homeAutomation"
   | "butler"
   | "work"
   | "authority"
@@ -84,6 +87,7 @@ type View =
 const TITLES: Record<View, [string, string]> = {
   home: ["Overview", "Home"],
   services: ["Catalog", "Services"],
+  homeAutomation: ["Setup", "Home automation"],
   butler: ["Operator", "Butler"],
   work: ["Durable", "Work"],
   authority: ["Admission", "Butler access"],
@@ -145,6 +149,10 @@ export function Shell() {
   // Routines screen keeps its own mode and cannot be told from outside
   // once it is mounted.
   const [openRoutine, setOpenRoutine] = useState<string | undefined>();
+  // Which package another screen asked Services to open — the Home
+  // Automation flow hands off to the ordinary install form rather than
+  // growing a second one. Held here for the same reason as openRoutine.
+  const [openPackage, setOpenPackage] = useState<string | undefined>();
   const { snap, error } = useConsoleState();
 
   useEffect(() => {
@@ -170,6 +178,7 @@ export function Shell() {
     return [
       { id: "home", label: "Home", icon: <House size={ICON} />, pip: homePip },
       { id: "services", label: "Services", icon: <SquaresFour size={ICON} /> },
+      { id: "homeAutomation", label: "Home automation", icon: <Lightbulb size={ICON} /> },
       { id: "butler", label: "Butler", icon: <Sparkle size={ICON} /> },
       { id: "butlers", label: "Butlers", icon: <UsersThree size={ICON} /> },
       { id: "work", label: "Work", icon: <ListChecks size={ICON} /> },
@@ -204,6 +213,7 @@ export function Shell() {
         // something else asked to open one routine a moment ago.
         onSelect={(to) => {
           setOpenRoutine(undefined);
+          setOpenPackage(undefined);
           setView(to);
         }}
         mark={<ShieldCheck size={22} weight="fill" />}
@@ -234,7 +244,19 @@ export function Shell() {
         <div className={FULL_BLEED.has(view) ? "screen screen-flush" : "screen"}>
           <ErrorLine error={error} />
           {view === "home" && <Home onNavigate={setView} />}
-          {view === "services" && <Services />}
+          {view === "services" && <Services key={openPackage ?? "board"} openPackage={openPackage} />}
+          {view === "homeAutomation" && (
+            <HomeAutomation
+              onOpenPackage={(name) => {
+                setOpenPackage(name);
+                setView("services");
+              }}
+              onOpenServices={() => {
+                setOpenPackage(undefined);
+                setView("services");
+              }}
+            />
+          )}
           {view === "butler" && <Butler onEyebrow={setEyebrowOverride} onNavigate={setView} />}
           {view === "work" && <Work />}
           {view === "authority" && <ButlerAuthority />}
