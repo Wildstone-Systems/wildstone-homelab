@@ -711,6 +711,14 @@ func (db *DB) AuthorizeBackgroundUse(ctx context.Context, connection string, sub
 	if sub.ApprovedVersion != approvedVersion {
 		return deny("subscription %d is at approved version %d, not %d", subscription, sub.ApprovedVersion, approvedVersion)
 	}
+	// Every edit bumps version and leaves approved_version behind (0099,
+	// S03). The approved version is only the one in force while nothing
+	// has been edited since: an edit that did not touch the digested
+	// content (a source or cadence change) must not ride on the old
+	// approval either.
+	if sub.Version != sub.ApprovedVersion {
+		return deny("subscription %d was edited to version %d after an Owner approved version %d", subscription, sub.Version, sub.ApprovedVersion)
+	}
 	if !sub.Enabled {
 		return deny("subscription %d is disabled", subscription)
 	}

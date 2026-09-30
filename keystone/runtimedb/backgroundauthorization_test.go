@@ -648,3 +648,43 @@ func TestAdapterPlacementEnvFollowsTheLiveAuthorization(t *testing.T) {
 		t.Fatalf("fingerprint key ref = %q", ref)
 	}
 }
+
+// S03 bumps a subscription's version on every edit and leaves
+// approved_version behind; the evaluator's approvedVersion check agrees
+// with that. An edit that leaves the digested content alone still stops
+// background use until the Owner approves the new version — and once
+// they do, the Person's authorization (whose digest did not move) holds
+// for it without being given again.
+func TestEditedSubscriptionNeedsItsNewVersionApproved(t *testing.T) {
+	f := newMailFixture(t)
+	_, sub := f.authorize(t)
+	ctx := context.Background()
+	s, err := f.db.GetAgentSubscription(sub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	same := s.MatchJSON
+	v, err := f.db.ReviseAgentSubscription(sub, AgentSubscriptionRevision{MatchJSON: &same}, "mika")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v != 2 {
+		t.Fatalf("edit produced version %d, want 2", v)
+	}
+	if _, err := f.db.AuthorizeBackgroundUse(ctx, "sam-mail", sub, 1); !errors.Is(err, ErrBackgroundUseDenied) {
+		t.Fatalf("version 1's approval carried over an edit: %v", err)
+	}
+	if _, err := f.db.AuthorizeBackgroundUse(ctx, "sam-mail", sub, 2); !errors.Is(err, ErrBackgroundUseDenied) {
+		t.Fatalf("an unapproved version 2 was accepted: %v", err)
+	}
+	if err := f.db.ApproveAgentSubscriptionVersion(sub, 2, "mika"); err != nil {
+		t.Fatal(err)
+	}
+	grant, err := f.db.AuthorizeBackgroundUse(ctx, "sam-mail", sub, 2)
+	if err != nil {
+		t.Fatalf("approved version 2 with an unchanged digest = %v", err)
+	}
+	if grant.SubscriptionVersion != 2 {
+		t.Fatalf("grant names version %d, want 2", grant.SubscriptionVersion)
+	}
+}
