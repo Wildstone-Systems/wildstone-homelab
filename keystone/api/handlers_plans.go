@@ -60,7 +60,15 @@ func (s *Server) listPlans(r *http.Request, id principal.Identity) (any, int, er
 		}
 		visible = append(visible, p)
 	}
-	return viewPlans(visible), http.StatusOK, nil
+	views := viewPlans(visible)
+	// Lists currently omit proposal JSON. Keep Owner-only research details
+	// protected even if the storage projection later includes full proposals.
+	if s.researchOwner(id) != nil {
+		for i := range views {
+			views[i].Research = nil
+		}
+	}
+	return views, http.StatusOK, nil
 }
 
 func (s *Server) getPlan(r *http.Request, id principal.Identity) (any, int, error) {
@@ -74,7 +82,13 @@ func (s *Server) getPlan(r *http.Request, id principal.Identity) (any, int, erro
 	if err := s.DB.CheckPlanPrivacy(rec.ID, runtimedb.ModelLocal, apiMemoryDestination(id)); err != nil {
 		return nil, http.StatusForbidden, err
 	}
-	return viewPlan(rec), http.StatusOK, nil
+	view := viewPlan(rec)
+	if view.Research != nil {
+		if err := s.researchOwner(id); err != nil {
+			return nil, http.StatusForbidden, err
+		}
+	}
+	return view, http.StatusOK, nil
 }
 
 func (s *Server) proposePlan(r *http.Request, id principal.Identity) (any, int, error) {
@@ -154,6 +168,21 @@ func (s *Server) approvePlan(r *http.Request, id principal.Identity) (any, int, 
 	var stored storedProposal
 	if err := json.Unmarshal([]byte(rec.PlanJSON), &stored); err != nil {
 		return nil, http.StatusInternalServerError, fmt.Errorf("stored plan corrupt: %w", err)
+	}
+
+	if stored.Research != nil {
+		if stored.AuditOnly || stored.Routine != nil || stored.Setting != nil || stored.Subscription != nil || stored.Plan != nil || len(stored.Put) > 0 || len(stored.Delete) > 0 {
+			return nil, http.StatusBadRequest, fmt.Errorf("research Plans cannot include other changes")
+		}
+		if body, code, err := s.freshResearchOwner(r, id); err != nil {
+			return body, code, err
+		}
+		if err := s.DB.ApproveResearchPlan(planID, actingMember(id)); err != nil {
+			return nil, http.StatusConflict, err
+		}
+		s.event("plan.applied", planID, id, "research provider configuration applied")
+		rec, err = s.DB.GetPlan(planID)
+		return viewPlan(rec), http.StatusOK, err
 	}
 
 	if stored.Routine != nil {
@@ -302,6 +331,12 @@ func (s *Server) rejectPlan(r *http.Request, id principal.Identity) (any, int, e
 	if err := json.Unmarshal([]byte(rec.PlanJSON), &stored); err != nil {
 		return nil, http.StatusBadRequest, err
 	}
+	if stored.Research != nil {
+		if body, code, err := s.freshResearchOwner(r, id); err != nil {
+			return body, code, err
+		}
+	}
+
 	if stored.Routine != nil {
 		if body, code, err := s.freshOwnerReview(r, id); err != nil {
 			return body, code, err
