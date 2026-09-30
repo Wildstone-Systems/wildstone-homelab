@@ -267,6 +267,15 @@ func (f *markupFilter) feed(input string, preserve bool) error {
 			} else if n.Type == html.ElementNode {
 				if !item.exit {
 					switch n.Data {
+					case "td", "th":
+						// Cells are separate columns even when their source has
+						// no intervening whitespace. Keep inline text continuous.
+						for previous := n.PrevSibling; previous != nil; previous = previous.PrevSibling {
+							if previous.Type == html.ElementNode && (previous.Data == "td" || previous.Data == "th") {
+								f.out.write(" ")
+								break
+							}
+						}
 					case "a":
 						if f.out.count <= MaxCharacters {
 							for _, a := range n.Attr {

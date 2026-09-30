@@ -724,3 +724,19 @@ func TestMarkdownTableGapsStayWithTheirRows(t *testing.T) {
 		t.Fatalf("trailing quote prefix moved before cell: %q %v", d.Text, err)
 	}
 }
+
+func TestAdjacentTableCellsRemainSeparate(t *testing.T) {
+	for _, media := range []string{"text/html", "text/markdown"} {
+		for _, row := range []string{
+			"<td>First</td><td>Second</td>",
+			"<th>First</th><td>Second</td>",
+			"<td>First</td><!-- comment --><td>Second</td>",
+			"<td>Fir<em>st</em><td>Second",
+		} {
+			d, err := Extract(input(media, "<table><tr>"+row+"</tr></table>"))
+			if err != nil || d.Text != "First Second" {
+				t.Fatalf("%s %q: %q %v", media, row, d.Text, err)
+			}
+		}
+	}
+}
