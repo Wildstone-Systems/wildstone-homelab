@@ -42,6 +42,16 @@
 // Empty, unavailable, stale and auth_failed are distinct, as the epic
 // requires; see Outcome. Errors carry categories, never provider text,
 // so no credential or server banner reaches a log or a model.
+//
+// # One contract
+//
+// The wire contract — the four operation names, request decoding and
+// bounds, the Cursor, and how each Outcome becomes an adapter result —
+// belongs to keystone/adapter/mail, and this package shares its types
+// (Cursor, FolderCursor and FolderStatus are aliases). There is no
+// second dispatcher here: MailReader adapts a Reader to mail.Reader,
+// and mail.Upstream is the only thing that turns an operation name into
+// a call.
 package imapread
 
 import (
@@ -55,31 +65,33 @@ import (
 	"strings"
 	"time"
 
+	"github.com/chickenrat17/wildstone-homelab/keystone/adapter/mail"
 	"github.com/chickenrat17/wildstone-homelab/keystone/adapter/mail/imapread/mimenorm"
 )
 
-// Outcome is the closed set of call-level results.
+// Outcome is the closed set of call-level results. Its values are the
+// mail contract's outcome codes where the two meet.
 type Outcome string
 
 const (
 	// OutcomeOK: the answer has content.
-	OutcomeOK Outcome = "ok"
+	OutcomeOK Outcome = mail.OutcomeOK
 	// OutcomeEmpty: the mailbox answered and there is nothing (new).
-	OutcomeEmpty Outcome = "empty"
+	OutcomeEmpty Outcome = mail.OutcomeEmpty
 	// OutcomeUnavailable: the provider could not be reached, refused
 	// for a reason other than credentials, or broke mid-call. Retry
 	// later from the same cursor.
 	OutcomeUnavailable Outcome = "unavailable"
 	// OutcomeStale: the request names something from an older state of
 	// the mailbox (a reference taken under a previous UIDVALIDITY).
-	OutcomeStale Outcome = "stale"
+	OutcomeStale Outcome = mail.OutcomeStale
 	// OutcomeAuthFailed: the provider rejected the credential. Retrying
 	// will not help; the Person must replace the app password.
-	OutcomeAuthFailed Outcome = "auth_failed"
+	OutcomeAuthFailed Outcome = mail.OutcomeAuthFailed
 	// OutcomeCursorReset: at least one folder's UIDVALIDITY changed.
 	// The returned cursor restarts those folders; commit it and call
 	// again.
-	OutcomeCursorReset Outcome = "cursor_reset"
+	OutcomeCursorReset Outcome = mail.OutcomeCursorReset
 )
 
 // Security is the transport mode, named as the mail-roundcube package's
@@ -211,20 +223,16 @@ func normalizedLimits(l mimenorm.Limits) mimenorm.Limits {
 	return l
 }
 
-// FolderCursor is one folder's committed position.
-type FolderCursor struct {
-	Folder      string `json:"folder"`
-	UIDValidity uint32 `json:"uidValidity"`
-	LastUID     uint32 `json:"lastUid"`
-}
+// FolderCursor is one folder's committed position (the mail contract's
+// type).
+type FolderCursor = mail.FolderCursor
 
-// Cursor is a connection's committed position across its folders. The
-// zero Cursor means "never read": each folder starts at now.
-type Cursor struct {
-	Folders []FolderCursor `json:"folders"`
-}
+// Cursor is a connection's committed position across its folders (the
+// mail contract's type). The zero Cursor means "never read": each
+// folder starts at now.
+type Cursor = mail.Cursor
 
-func (c Cursor) get(folder string) (FolderCursor, bool) {
+func cursorFolder(c Cursor, folder string) (FolderCursor, bool) {
 	for _, f := range c.Folders {
 		if f.Folder == folder {
 			return f, true
@@ -233,7 +241,7 @@ func (c Cursor) get(folder string) (FolderCursor, bool) {
 	return FolderCursor{}, false
 }
 
-func (c Cursor) with(fc FolderCursor) Cursor {
+func cursorWith(c Cursor, fc FolderCursor) Cursor {
 	out := Cursor{Folders: make([]FolderCursor, 0, len(c.Folders)+1)}
 	replaced := false
 	for _, f := range c.Folders {
@@ -330,10 +338,29 @@ func (r *Reader) open(ctx context.Context) (readSession, context.Context, contex
 	return s, ctx, cancel, nil
 }
 
-// Changes returns the next bounded batch after cur. limit <= 0 means
-// DefaultBatch; it is capped at MaxBatch and counts messages scanned
-// (in scope or not), so one call's work is bounded.
+// InScope reports whether folder is one of the connection's approved
+// folders.
+func (r *Reader) InScope(folder string) bool { return r.cfg.Filters.hasFolder(folder) }
+
+// Changes returns the next bounded batch after cur across every approved
+// folder. limit <= 0 means DefaultBatch; it is capped at MaxBatch and
+// counts messages scanned (in scope or not), so one call's work is
+// bounded.
 func (r *Reader) Changes(ctx context.Context, cur Cursor, limit int) ChangesResult {
+	return r.changes(ctx, r.cfg.Filters.folders(), cur, limit)
+}
+
+// ChangesFolder is Changes narrowed to one approved folder. The cursor's
+// other folders are carried through untouched. A folder outside the
+// scope is ErrBadRequest.
+func (r *Reader) ChangesFolder(ctx context.Context, folder string, cur Cursor, limit int) (ChangesResult, error) {
+	if !r.InScope(folder) {
+		return ChangesResult{}, fmt.Errorf("%w: folder %q is outside this connection's scope", ErrBadRequest, folder)
+	}
+	return r.changes(ctx, []string{folder}, cur, limit), nil
+}
+
+func (r *Reader) changes(ctx context.Context, folders []string, cur Cursor, limit int) ChangesResult {
 	if limit <= 0 {
 		limit = DefaultBatch
 	}
@@ -355,7 +382,7 @@ func (r *Reader) Changes(ctx context.Context, cur Cursor, limit int) ChangesResu
 	remaining := limit
 	var runBytes int64
 	resets, missing := 0, 0
-	for _, folder := range r.cfg.Filters.folders() {
+	for _, folder := range folders {
 		fr := FolderResult{Folder: folder}
 		st, err := s.examine(folder)
 		if errors.Is(err, errFolderMissing) {
@@ -367,19 +394,19 @@ func (r *Reader) Changes(ctx context.Context, cur Cursor, limit int) ChangesResu
 		if err != nil {
 			return fail(err)
 		}
-		fc, known := cur.get(folder)
+		fc, known := cursorFolder(cur, folder)
 		switch {
 		case !known:
 			last, err := r.highestUID(s, st)
 			if err != nil {
 				return fail(err)
 			}
-			res.Next = res.Next.with(FolderCursor{Folder: folder, UIDValidity: st.UIDValidity, LastUID: last})
+			res.Next = cursorWith(res.Next, FolderCursor{Folder: folder, UIDValidity: st.UIDValidity, LastUID: last})
 			fr.Outcome = "baseline"
 			res.Folders = append(res.Folders, fr)
 			continue
 		case fc.UIDValidity != st.UIDValidity:
-			res.Next = res.Next.with(FolderCursor{Folder: folder, UIDValidity: st.UIDValidity, LastUID: 0})
+			res.Next = cursorWith(res.Next, FolderCursor{Folder: folder, UIDValidity: st.UIDValidity, LastUID: 0})
 			fr.Outcome = string(OutcomeCursorReset)
 			fr.PreviousUIDValidity, fr.CurrentUIDValidity = fc.UIDValidity, st.UIDValidity
 			res.Folders = append(res.Folders, fr)
@@ -450,7 +477,7 @@ func (r *Reader) Changes(ctx context.Context, cur Cursor, limit int) ChangesResu
 				remaining = 0
 			}
 		}
-		res.Next = res.Next.with(FolderCursor{Folder: folder, UIDValidity: st.UIDValidity, LastUID: last})
+		res.Next = cursorWith(res.Next, FolderCursor{Folder: folder, UIDValidity: st.UIDValidity, LastUID: last})
 		if fr.Scanned-fr.Filtered > 0 {
 			fr.Outcome = string(OutcomeOK)
 		} else {
@@ -463,7 +490,7 @@ func (r *Reader) Changes(ctx context.Context, cur Cursor, limit int) ChangesResu
 		res.Outcome = OutcomeCursorReset
 	case len(res.Messages) > 0:
 		res.Outcome = OutcomeOK
-	case missing == len(r.cfg.Filters.folders()):
+	case missing == len(folders):
 		res.Outcome, res.Reason = OutcomeUnavailable, "folder_missing"
 	default:
 		res.Outcome = OutcomeEmpty
