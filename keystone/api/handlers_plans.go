@@ -12,6 +12,7 @@ import (
 	"github.com/chickenrat17/wildstone-homelab/keystone/plan"
 	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
 	"github.com/chickenrat17/wildstone-homelab/keystone/proposals"
+	"github.com/chickenrat17/wildstone-homelab/keystone/research"
 	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 )
@@ -234,8 +235,14 @@ func (s *Server) approvePlan(r *http.Request, id principal.Identity) (any, int, 
 		return s.applySubscriptionPlan(planID, stored, id)
 	}
 
-	s.researchServiceMu.Lock()
-	defer s.researchServiceMu.Unlock()
+	serviceChange, err := changesResearchService(stored)
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	if serviceChange {
+		s.researchServiceMu.Lock()
+		defer s.researchServiceMu.Unlock()
+	}
 
 	head, err := s.State.Head()
 	if err != nil {
@@ -249,8 +256,12 @@ func (s *Server) approvePlan(r *http.Request, id principal.Identity) (any, int, 
 		return nil, http.StatusConflict, fmt.Errorf("statefile changed since proposal; plan superseded")
 	}
 
-	if err := s.invalidateResearchServicePlan(stored); err != nil {
-		return nil, http.StatusInternalServerError, err
+	// Fence readiness before any resource write, including a partial/failed
+	// apply. A stale Plan above cannot invalidate a currently usable provider.
+	if serviceChange {
+		if err := s.DB.InvalidateSearchService(research.ManagedEndpointRef); err != nil {
+			return nil, http.StatusInternalServerError, err
+		}
 	}
 
 	for i, doc := range stored.Put {

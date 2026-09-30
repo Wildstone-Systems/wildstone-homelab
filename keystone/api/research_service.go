@@ -29,27 +29,22 @@ func (s *Server) ResolveManagedResearchEndpoint(ctx context.Context, ref string)
 	return research.ManagedEndpoint(current, s.NodeID, ref)
 }
 
-// invalidateResearchServicePlan runs before the first desired-state mutation.
-// Even a partial/failed apply must never retain a successful provider test.
-// Both raw-resource and package Plans pass here. A DB error prevents the write.
-func (s *Server) invalidateResearchServicePlan(stored storedProposal) error {
-	affected := false
+// changesResearchService identifies raw-resource and package Plans affecting
+// the singleton dependency. Unrelated infrastructure keeps its existing path.
+func changesResearchService(stored storedProposal) (bool, error) {
 	for _, doc := range stored.Put {
 		r, err := resource.Unmarshal([]byte(doc))
 		if err != nil {
-			return err
+			return false, err
 		}
 		if r.Kind == resource.KindContainer && r.Metadata.Name == research.ManagedContainer {
-			affected = true
+			return true, nil
 		}
 	}
 	for _, d := range stored.Delete {
 		if resource.Kind(d.Kind) == resource.KindContainer && d.Name == research.ManagedContainer {
-			affected = true
+			return true, nil
 		}
 	}
-	if !affected {
-		return nil
-	}
-	return s.DB.InvalidateSearchService(research.ManagedEndpointRef)
+	return false, nil
 }
