@@ -15,8 +15,8 @@ transaction, with foreign keys enabled. It does not rebuild existing tables,
 backfill workspaces, seed tools, or modify existing Agent assignments.
 
 The integration target is `feature/471-native-agent-capabilities`, refreshed
-through `3c2c023c9aadcfb78eeda3bde591a1d652fc6921` (PR #513). The migration
-number is unchanged because that feature-branch update adds no migration.
+through `efe1b0a8426ebae0b975b07ccf37a0be65d3a43f` (PRs #513 and #516). The
+migration number is unchanged because those updates add no migrations.
 This is the first database slice of #471. Successors #490 and #497 must
 refresh that feature branch and allocate the next unused migration number
 after 0097;
