@@ -62,11 +62,21 @@ func (c *Catalog) installed(provider *pkgspec.Package) []resource.Resource {
 		return nil
 	}
 	if c.rehearsal {
-		// A nil catalog: the provider's own exports are not resolved,
-		// which is what keeps this from recursing into itself, and a
-		// provider that itself requires something simply has no
-		// rehearsal answer.
-		rendered, err := NewEngine().Expand(provider, rehearsalParams(provider), nil)
+		// The provider is rendered against this same catalog, so one that
+		// itself requires something — a Z-Wave server whose admin Route
+		// needs identity:oidc (#444) — still has a rehearsal answer. It
+		// is rendered ONE level deep: the nested catalog answers every
+		// installed-state question with nothing, which is what keeps a
+		// provider from recursing into itself (or into a provider that
+		// requires it back). A provider whose own requirement needs an
+		// installed-state answer to render has no rehearsal answer,
+		// which is the honest result for a chain nobody has installed.
+		if c.rehearsalNested {
+			return nil
+		}
+		nested := *c
+		nested.rehearsalNested = true
+		rendered, err := NewEngine().Expand(provider, rehearsalParams(provider), &nested)
 		if err != nil {
 			return nil
 		}

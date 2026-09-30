@@ -293,6 +293,42 @@ var registry = []Trait{
 		},
 	},
 	{
+		Name: "zwave",
+		Description: "A Z-Wave network a home-automation service can control — the " +
+			"controller stick and the server that owns it. A consumer (Home Assistant's " +
+			"Z-Wave integration) requires this instead of guessing a container name, which " +
+			"a host-networked service cannot resolve anyway.",
+		Modes: []Mode{
+			{
+				Name: "server",
+				Description: "A Z-Wave JS server: the WebSocket API zwave-js-server speaks " +
+					"(Z-Wave JS UI's \"WS Server\"), one per controller. It has no " +
+					"authentication of its own, so the provider publishes it on one " +
+					"private address the operator chose, never on every interface. The " +
+					"network's security keys stay with the server; a consumer is never " +
+					"handed them.",
+				Exports: []Export{
+					{
+						Key: "ZwaveWsHost",
+						Description: "The private address the server's WebSocket listens on, " +
+							"as installed — an IPv4 literal on the provider's node, reachable " +
+							"both from a host-networked service and from a container on the " +
+							"Wildstone network. Never a container name.",
+					},
+					{
+						Key:         "ZwaveWsPort",
+						Description: "The TCP port the WebSocket listens on at ZwaveWsHost. Plain ws://, no TLS.",
+					},
+					{
+						Key: "ZwaveWsURL",
+						Description: "ZwaveWsHost and ZwaveWsPort as one ws://host:port URL — " +
+							"the single value Home Assistant's Z-Wave JS integration asks for.",
+					},
+				},
+			},
+		},
+	},
+	{
 		Name: "storage",
 		Description: "Somewhere for a service to keep data. Structural: satisfied by the " +
 			"Volumes a package declares (ADR-W004 A1). The class is declarative — it says " +

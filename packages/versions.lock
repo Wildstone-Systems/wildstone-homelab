@@ -42,7 +42,7 @@ indexers-prowlarr 1.0.3 7cd42be5106f7470
 ingress 1.0.2 4bbd2bd5e6db1d92
 ingress-tailnet 1.0.1 59e7276e5bb0a51c
 ingress-tailnet-public 1.0.1 16dea82d8a073bdf
-ingress-tailnet-ts 1.1.2 8c527da33c6f53ca
+ingress-tailnet-ts 1.1.3 a07c8110f42cfe09
 inventory-homebox 1.1.1 e41d648d88be7ac2
 knowledge-wildstone 1.0.0 b5a489b55e24c813
 lists-wildstone 1.0.0 0d908ac2d2b01860
@@ -76,3 +76,4 @@ tv-sonarr 1.0.3 6ceff474d5acd38f
 vpn-gluetun 1.0.1 6e37d2b00dace21f
 wildstone-console 1.1.0 cb9c6f5dad6d36e7
 zigbee-zigbee2mqtt 2.0.0 2fad956bc553e9ce
+zwave-zwave-js-ui 1.0.0 8265cdb909989bc0

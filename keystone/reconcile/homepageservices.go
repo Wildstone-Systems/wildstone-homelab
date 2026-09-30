@@ -104,6 +104,7 @@ var homepageApps = map[string]homepageApp{
 	"adguard-home":   {"AdGuard Home", "adguard-home", "Ad blocking for the whole network"},
 	"vaultwarden":    {"Passwords", "vaultwarden", "The household password vault"},
 	"zigbee2mqtt":    {"Zigbee", "zigbee2mqtt", "Zigbee bulbs, sensors and switches"},
+	"zwave-js-ui":    {"Z-Wave", "z-wave-js-ui", "Z-Wave locks, switches and sensors"},
 	"open-webui":     {"Chat", "open-webui", "Talk to an AI that runs at home"},
 	"grafana":        {"Grafana", "grafana", "Graphs of how everything is doing"},
 	"qbittorrent":    {"Downloads", "qbittorrent", "The download queue"},
