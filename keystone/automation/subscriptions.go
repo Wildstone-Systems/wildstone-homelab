@@ -29,6 +29,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
+	"time"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/butlerstore"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
@@ -58,6 +59,16 @@ type eventTypeMatch struct {
 // reason (a subscription must not fire on the engine's own bookkeeping).
 func MatchesSubscription(sub runtimedb.AgentSubscription, ev runtimedb.HouseholdEvent) bool {
 	if !sub.Enabled || sub.ApprovedVersion == 0 {
+		return false
+	}
+	// An edited row awaiting approval of its new version matches nothing
+	// (0099); a zero Version is a row read before 0099 existed.
+	if sub.Version != 0 && sub.ApprovedVersion != sub.Version {
+		return false
+	}
+	// A scheduled subscription is due on its cadence; it is never matched
+	// against the event stream, whatever its match document says.
+	if sub.TriggerKind == runtimedb.SubscriptionTriggerSchedule {
 		return false
 	}
 	if ev.Source == Source {
@@ -127,6 +138,24 @@ type SubscriptionEngine struct {
 	// its cursor. Zero means DefaultBatch (the same constant Engine
 	// uses).
 	Batch int
+
+	// Scheduled family (scheduled.go, epic #326 S03).
+	//
+	// Now is the scheduler's clock; nil means time.Now. Every cadence,
+	// catch-up, lease and backoff decision reads it, never the wall.
+	Now func() time.Time
+	// Authority is the Personal background-use check consulted before
+	// every scheduled dispatch and checkpoint commit. nil means
+	// DenyAllBackgroundAuthority: nothing scheduled runs until a real
+	// evaluator is wired.
+	Authority BackgroundAuthority
+	// Dispatchers starts a claimed run, keyed by the subscription's
+	// MatchKind; a kind with no entry opens a bounded Task and delivery
+	// for its Agent, as an event match does.
+	Dispatchers map[string]ScheduledDispatcher
+	// RunLease is how long a run may stay in flight before it is
+	// abandoned; zero means runtimedb.DefaultSubscriptionRunLease.
+	RunLease time.Duration
 }
 
 func (e *SubscriptionEngine) log() *slog.Logger {
@@ -247,17 +276,6 @@ func (e *SubscriptionEngine) primaryOwner() (string, error) {
 }
 
 func (e *SubscriptionEngine) spawn(sub runtimedb.AgentSubscription, ev runtimedb.HouseholdEvent) error {
-	if e.Ledger == nil {
-		return fmt.Errorf("automation: the subscription engine has no ledger to open a task on")
-	}
-	b, err := e.DB.GetButlerBySeq(sub.Butler)
-	if err != nil {
-		return fmt.Errorf("automation: subscription %d names an agent that no longer exists: %w", sub.ID, err)
-	}
-	audience := runtimedb.ButlerTaskAudience(sub.Audience)
-	if audience == "" {
-		audience = runtimedb.ButlerAudiencePrivate
-	}
 	// A subscription's own approved_by (routineprincipal.go's shape:
 	// possessing the approved version, not any person present now, is
 	// what a matched Task's AUTHORITY traces back to) is an Actor
@@ -271,34 +289,60 @@ func (e *SubscriptionEngine) spawn(sub runtimedb.AgentSubscription, ev runtimedb
 	if err != nil {
 		return fmt.Errorf("automation: subscription %d: %w", sub.ID, err)
 	}
+	_, err = e.openTask(sub, who,
+		fmt.Sprintf("subscription %d: a %s event matched (%s)", sub.ID, ev.Type, ev.EventID),
+		strconv.FormatInt(ev.Seq, 10),
+		map[string]any{"eventType": ev.Type, "eventId": ev.EventID})
+	return err
+}
+
+// openTask opens the bounded Task a subscription run gets, authored and
+// owned by who, and records the `subscription` delivery its Agent's
+// runtime discovers it by. extra is merged into the delivery payload
+// beside the handle, subscription and task.
+func (e *SubscriptionEngine) openTask(sub runtimedb.AgentSubscription, who, objective, cursor string, extra map[string]any) (string, error) {
+	if e.Ledger == nil {
+		return "", fmt.Errorf("automation: the subscription engine has no ledger to open a task on")
+	}
+	b, err := e.DB.GetButlerBySeq(sub.Butler)
+	if err != nil {
+		return "", fmt.Errorf("automation: subscription %d names an agent that no longer exists: %w", sub.ID, err)
+	}
+	audience := runtimedb.ButlerTaskAudience(sub.Audience)
+	if audience == "" {
+		audience = runtimedb.ButlerAudiencePrivate
+	}
 	taskID, err := e.DB.InsertButlerTask(runtimedb.ButlerTask{
 		Kind: runtimedb.ButlerTaskConversation, Author: who, Owner: who,
 		Surface: b.Surface, AgentClass: b.AgentClass, Audience: audience,
-		Objective:          fmt.Sprintf("subscription %d: a %s event matched (%s)", sub.ID, ev.Type, ev.EventID),
+		Objective:          objective,
 		CompletionCriteria: "answer or act within this subscription's approved capability set, then complete",
 		ObjectiveKind:      runtimedb.ObjectiveEffectful,
 		GrantsJSON:         SubscriptionGrantsJSON(sub.ID),
 		Retention:          runtimedb.ButlerRetentionManual,
 	})
 	if err != nil {
-		return fmt.Errorf("automation: opening a task for subscription %d: %w", sub.ID, err)
+		return "", fmt.Errorf("automation: opening a task for subscription %d: %w", sub.ID, err)
 	}
 	if err := e.DB.SetTaskButler(taskID, b.Name); err != nil {
-		return fmt.Errorf("automation: binding subscription %d's task to %s: %w", sub.ID, b.Name, err)
+		return "", fmt.Errorf("automation: binding subscription %d's task to %s: %w", sub.ID, b.Name, err)
 	}
 	handle, err := e.Ledger.IssueHandle(taskID)
 	if err != nil {
-		return fmt.Errorf("automation: issuing a handle for subscription %d's task: %w", sub.ID, err)
+		return "", fmt.Errorf("automation: issuing a handle for subscription %d's task: %w", sub.ID, err)
 	}
-	payload, err := json.Marshal(map[string]any{
-		"handle": string(handle), "subscription": sub.ID, "task": taskID,
-		"eventType": ev.Type, "eventId": ev.EventID,
-	})
+	body := map[string]any{"handle": string(handle), "subscription": sub.ID, "task": taskID}
+	for k, v := range extra {
+		if _, taken := body[k]; !taken {
+			body[k] = v
+		}
+	}
+	payload, err := json.Marshal(body)
 	if err != nil {
-		return err
+		return "", err
 	}
-	if _, err := e.DB.RecordSubscriptionDelivery(sub.Butler, strconv.FormatInt(ev.Seq, 10), string(payload)); err != nil {
-		return fmt.Errorf("automation: recording subscription %d's delivery: %w", sub.ID, err)
+	if _, err := e.DB.RecordSubscriptionDelivery(sub.Butler, cursor, string(payload)); err != nil {
+		return "", fmt.Errorf("automation: recording subscription %d's delivery: %w", sub.ID, err)
 	}
-	return nil
+	return taskID, nil
 }
