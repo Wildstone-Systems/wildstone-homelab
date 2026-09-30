@@ -16,17 +16,31 @@ import (
 	"time"
 )
 
-// HasLivePersonChatBinding checks current Person admission and the existing
-// human-established binding. Source provenance does not substitute for this
-// check when queued private work is delivered back to its originating chat.
+// HasLivePersonChatBinding checks current Person and Connection admission and
+// the existing human-established binding. Source provenance does not substitute
+// for this check when queued private work returns to its originating chat.
 func (db *DB) HasLivePersonChatBinding(connection int64, person string) (bool, error) {
-	var live bool
-	err := db.sql.QueryRow(`SELECT EXISTS (
- SELECT 1 FROM chat_bindings cb JOIN butler_members p ON p.person_id=cb.person_id
+	var role string
+	err := db.sql.QueryRow(`SELECT p.role
+ FROM chat_bindings cb JOIN butler_members p ON p.person_id=cb.person_id
  WHERE cb.connection=? AND p.member=? AND cb.revoked_at=''
  AND p.admitted=1 AND p.disabled_at='' AND p.offboarded_at=''
- )`, connection, person).Scan(&live)
-	return live, err
+ LIMIT 1`, connection, person).Scan(&role)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	at, err := db.ChatConnectionBySeq(connection)
+	if err != nil {
+		return false, err
+	}
+	// Use the canonical closed-set admission check, including subject kind,
+	// current Agent class/surface and current Person role. Missing or unknown
+	// policy never grants authority merely because a binding survives.
+	admitted, _ := at.Admits(role)
+	return admitted, nil
 }
 
 // ChatBinding is one chat account admitted to one Connection — so to

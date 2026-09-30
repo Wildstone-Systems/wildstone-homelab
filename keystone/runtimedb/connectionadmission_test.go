@@ -475,3 +475,26 @@ func TestTheOutboundQueueIsOneAgents(t *testing.T) {
 		t.Fatalf("alfred's bot polled %d message(s) = %+v, want only its own", len(got), got)
 	}
 }
+
+func TestWorkspaceDeliveryBindingRechecksConnectionAdmission(t *testing.T) {
+	for _, mutation := range []string{
+		"UPDATE connection_admission SET admits='owners'",
+		"UPDATE connection_admission SET subject_kind='group'",
+		"DELETE FROM connection_admission",
+	} {
+		t.Run(mutation, func(t *testing.T) {
+			db := householdWith(t, "sam")
+			at := connect(t, db, "sandy", "telegram", ButlerSurfaceFamily)
+			bind(t, db, at, "sam", "synthetic-account")
+			if live, err := db.HasLivePersonChatBinding(at.Seq, "sam"); err != nil || !live {
+				t.Fatalf("initial binding: live=%v err=%v", live, err)
+			}
+			if _, err := db.sql.Exec(mutation); err != nil {
+				t.Fatal(err)
+			}
+			if live, err := db.HasLivePersonChatBinding(at.Seq, "sam"); err != nil || live {
+				t.Fatalf("changed admission: live=%v err=%v", live, err)
+			}
+		})
+	}
+}

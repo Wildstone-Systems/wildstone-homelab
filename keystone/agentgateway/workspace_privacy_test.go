@@ -76,25 +76,32 @@ func TestWorkspaceTaintBlocksGatewayLedgerReuseAndManifest(t *testing.T) {
 }
 
 func TestWorkspaceMemoryDeliveryUsesRecordedDestination(t *testing.T) {
-	for _, scenario := range []string{"builtin", "verified", "workspace only verified", "workspace only revoked binding", "foreign agent", "revoked binding", "revoked connection", "group", "cloud", "trusted external"} {
+	for _, scenario := range []string{"builtin", "verified", "workspace only verified", "workspace only revoked binding", "workspace only narrowed admission", "workspace only owner narrowed admission", "foreign agent", "revoked binding", "revoked connection", "group", "cloud", "trusted external"} {
 		t.Run(scenario, func(t *testing.T) {
 			f := newFixture(t)
+			agentName, personName := "alfred", "mika"
+			if strings.Contains(scenario, "narrowed admission") {
+				agentName = "joan"
+				if scenario == "workspace only narrowed admission" {
+					personName = "sam"
+				}
+			}
 			must := func(err error) {
 				t.Helper()
 				if err != nil {
 					t.Fatal(err)
 				}
 			}
-			origin, _ := f.openTask(t, "alfred", "mika")
+			origin, _ := f.openTask(t, agentName, personName)
 			task, err := f.db.GetButlerTask(origin)
 			must(err)
-			person, err := f.db.GetButlerMember("mika")
+			person, err := f.db.GetButlerMember(personName)
 			must(err)
-			agent, err := f.db.GetButler("alfred")
+			agent, err := f.db.GetButler(agentName)
 			must(err)
 			var memory int64
 			if !strings.HasPrefix(scenario, "workspace only") {
-				memory, err = f.db.RecordMemory(runtimedb.MemoryRecord{Scope: runtimedb.MemoryScopePersonal, Kind: runtimedb.MemoryFact, Content: "synthetic workspace input", Owner: "mika", Author: "mika", Butler: "alfred", Audience: runtimedb.ButlerAudiencePrivate, PermissionLabel: "household", SourceKind: "conversation", SourceID: origin})
+				memory, err = f.db.RecordMemory(runtimedb.MemoryRecord{Scope: runtimedb.MemoryScopePersonal, Kind: runtimedb.MemoryFact, Content: "synthetic workspace input", Owner: personName, Author: personName, Butler: agentName, Audience: runtimedb.ButlerAudiencePrivate, PermissionLabel: "household", SourceKind: "conversation", SourceID: origin})
 				must(err)
 			}
 			w := runtimedb.Workspace{ID: "workspace", PersonID: person.PersonID, AgentID: agent.Seq}
@@ -113,13 +120,13 @@ func TestWorkspaceMemoryDeliveryUsesRecordedDestination(t *testing.T) {
 			destination := runtimedb.MemoryDestination{BuiltIn: true}
 			connectionName := "console"
 			if scenario == "builtin" || scenario == "cloud" || scenario == "foreign agent" {
-				id, handle = f.openTask(t, "alfred", "mika")
+				id, handle = f.openTask(t, agentName, personName)
 			} else {
-				id, handle, connection = f.openTaskOnConnection(t, "alfred", "mika", "telegram", "synthetic-workspace-chat")
+				id, handle, connection = f.openTaskOnConnection(t, agentName, personName, "telegram", "synthetic-workspace-chat")
 				at, err := f.db.ChatConnectionBySeq(connection)
 				must(err)
 				hash := fmt.Sprintf("%x", sha256.Sum256([]byte(t.Name())))
-				must(f.db.InsertChatClaimCode(hash, runtimedb.ChatClaimCode{Connection: connection, Identity: "mika", CreatedBy: "root-admin", ExpiresAt: time.Now().Add(time.Hour)}))
+				must(f.db.InsertChatClaimCode(hash, runtimedb.ChatClaimCode{Connection: connection, Identity: personName, CreatedBy: "root-admin", ExpiresAt: time.Now().Add(time.Hour)}))
 				binding, err = f.db.RedeemChatClaimCode(hash, at, "synthetic-account", "synthetic", "synthetic-conversation")
 				must(err)
 				destination = runtimedb.MemoryDestination{ConnectionRef: connection}
@@ -128,9 +135,9 @@ func TestWorkspaceMemoryDeliveryUsesRecordedDestination(t *testing.T) {
 			ctx, p, err := f.db.BeginPrivacyTurn(context.Background(), runtimedb.ModelLocal, destination, "")
 			must(err)
 			must(p.SetTask(id))
-			_, err = f.db.ReadWorkspaceRevision(ctx, f.db.BindWorkspaceAccess("mika", "alfred", id, connectionName), w.ID, "artifact", "revision")
+			_, err = f.db.ReadWorkspaceRevision(ctx, f.db.BindWorkspaceAccess(personName, agentName, id, connectionName), w.ID, "artifact", "revision")
 			must(err)
-			setProcessingClass(t, f, "alfred", agentapi.ProcessingLocalOnly)
+			setProcessingClass(t, f, agentName, agentapi.ProcessingLocalOnly)
 			payload, err := json.Marshal(map[string]any{"handle": string(handle)})
 			must(err)
 			recipient := agent.Seq
@@ -159,19 +166,22 @@ func TestWorkspaceMemoryDeliveryUsesRecordedDestination(t *testing.T) {
 			switch scenario {
 			case "revoked binding", "workspace only revoked binding":
 				must(f.db.RevokeChatBinding(binding.ID))
+			case "workspace only narrowed admission", "workspace only owner narrowed admission":
+				_, err := f.db.SetConnectionAdmission("telegram", "synthetic-workspace-chat", runtimedb.AdmitOwners, "root-admin")
+				must(err)
 			case "revoked connection":
-				must(f.db.RevokeButlerAddressFor("alfred", "telegram", "synthetic-workspace-chat", "mika"))
+				must(f.db.RevokeButlerAddressFor(agentName, "telegram", "synthetic-workspace-chat", personName))
 			case "group":
 				must(f.db.NoteChatRoom(connection, "synthetic-workspace-chat"))
 			case "cloud":
-				must(f.db.SetMemoryPrivacy("mika", memory, runtimedb.PrivacyPolicy{LocalOnly: true}))
-				setProcessingClass(t, f, "alfred", agentapi.ProcessingCloud)
+				must(f.db.SetMemoryPrivacy(personName, memory, runtimedb.PrivacyPolicy{LocalOnly: true}))
+				setProcessingClass(t, f, agentName, agentapi.ProcessingCloud)
 			case "trusted external":
-				must(f.db.SetMemoryPrivacy("mika", memory, runtimedb.PrivacyPolicy{TrustedOnly: true}))
+				must(f.db.SetMemoryPrivacy(personName, memory, runtimedb.PrivacyPolicy{TrustedOnly: true}))
 			}
 			for _, row := range queued {
 				got := FilterDelivery(f.db, row)
-				allowed := scenario == "builtin" || scenario == "verified" || scenario == "workspace only verified"
+				allowed := scenario == "builtin" || scenario == "verified" || scenario == "workspace only verified" || scenario == "workspace only owner narrowed admission"
 				if (got.Payload == row.Payload) != allowed {
 					t.Fatalf("%s allowed=%v but payload withheld=%v", row.Kind, allowed, got.Payload != row.Payload)
 				}
