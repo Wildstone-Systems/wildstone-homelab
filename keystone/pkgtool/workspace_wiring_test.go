@@ -56,3 +56,28 @@ func TestWorkspaceCapabilityIsContainerFreeAndGrantsNothing(t *testing.T) {
 		}
 	}
 }
+
+// Desired limits must survive rendering unchanged. Enforcement belongs to S06;
+// clamping here to the dormant metadata foundation's defaults would silently
+// discard the Owner's configuration before that integration can consume it.
+func TestWorkspaceConfiguredLimitBoundariesRoundTrip(t *testing.T) {
+	sp := walkShipped(t)[workspace.Package]
+	for _, tc := range []struct {
+		name, quota, file   string
+		wantQuota, wantFile int64
+	}{
+		{"upper quota", "1099511627776", "10485760", workspace.MaxQuotaBytes, workspace.MaxFileBytes},
+		{"lower limits", "1", "1", 1, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rendered, err := capability.NewEngine().Expand(sp.pkg, map[string]string{"node": "n1", "quota_bytes": tc.quota, "max_file_bytes": tc.file}, capability.NewCatalog(sp.pkg))
+			if err != nil {
+				t.Fatal(err)
+			}
+			settings, err := workspace.Read(rendered, "n1")
+			if err != nil || settings.QuotaBytes != tc.wantQuota || settings.MaxFileBytes != tc.wantFile {
+				t.Fatalf("configured limits changed: %+v %v", settings, err)
+			}
+		})
+	}
+}

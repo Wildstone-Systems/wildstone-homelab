@@ -29,6 +29,24 @@ does not migrate data; migration remains separate work.
 These settings supply limits to later storage/retention implementations; this
 slice does not implement accounting, publication, cleanup or backup.
 
+Quota enforcement is explicitly owned by [S06/#479](https://github.com/chickenrat17/wildstone-homelab/issues/479).
+Do not connect this seam to S02's default-only reservation API and claim that
+configured limits are enforced: its 1 GiB reservation/aggregate bound must be
+replaced by atomic admission against the current authorized quota. Keep the
+10 MiB platform file ceiling and additionally enforce any lower configured
+file limit. Never silently clamp configured values to S02 defaults or ignore
+lower limits. If migration 0097 has merged, schema changes need a new forward
+migration. This is a required integration before write-tool activation, not an
+optional enhancement; [S08/#481](https://github.com/chickenrat17/wildstone-homelab/issues/481)
+already depends on S06.
+
+S06 must consume the current settings/revision at reservation and publication,
+revalidate or refuse stale configuration, and cover concurrent reservations,
+quotas above and below 1 GiB, lower file limits, and lowering limits below
+existing usage. Refusals preserve existing bytes and recovery-pinned charges.
+The settings revision is a freshness input, never model-supplied authority.
+Root/mount readiness alone does not establish quota admission or write readiness.
+
 `Server.WorkspaceSettings()` reloads desired state and checks dependency
 readiness on every call. Consumers must not cache it between invocations.
 Missing configuration, unknown/wrong placement, duplicate configuration,
