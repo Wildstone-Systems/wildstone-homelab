@@ -278,19 +278,55 @@ type haBuild struct {
 	selection  map[string]string
 	modeHint   map[string]string
 	requires   map[string][]string
-	comps      map[string]*haComponent
+	// provider maps a catalog trait to the component whose packages
+	// provide it.
+	provider map[string]string
+	comps    map[string]*haComponent
 }
 
 func (s *Server) homeAutomationStatus(r *http.Request, _ principal.Identity) (any, int, error) {
 	q := r.URL.Query()
-	topology := q.Get("topology")
+	goals := haGoals{topology: q.Get("topology"), requested: map[string]bool{}, modeHint: map[string]string{}, node: q.Get("node")}
+	for _, id := range splitCSV(q["select"]) {
+		goals.requested[id] = true
+	}
+	if m := q.Get("bluetooth"); m != "" {
+		goals.modeHint[haBluetooth] = m
+	}
+	_, view, code, err := s.evaluateHomeAutomation(r.Context(), goals)
+	if err != nil {
+		return nil, code, err
+	}
+	return view, http.StatusOK, nil
+}
+
+// haGoals are what one evaluation is asked about: the household's
+// topology, the components it chose, a mode per mode component and the
+// node. Never stored — the GET and the orchestration API (#447) both
+// pass them per request.
+type haGoals struct {
+	topology  string
+	requested map[string]bool
+	modeHint  map[string]string
+	node      string
+}
+
+// evaluateHomeAutomation is the one evaluation behind GET
+// /api/v1/home-automation and the orchestration endpoints (#447): it
+// validates the goals, reads every input once, probes the nodes that
+// matter and judges each component. The build is returned alongside the
+// view so a caller reaches the inputs the judgement was made from
+// (catalog packages, installed params, node inventories) rather than
+// reading them a second time and risking a different answer.
+func (s *Server) evaluateHomeAutomation(ctx context.Context, goals haGoals) (*haBuild, haView, int, error) {
+	topology := goals.topology
 	if topology != "" && topology != haTopologyManaged && topology != haTopologyExternal {
-		return nil, http.StatusBadRequest, fmt.Errorf("topology must be managed or external")
+		return nil, haView{}, http.StatusBadRequest, fmt.Errorf("topology must be managed or external")
 	}
 	requested := map[string]bool{}
-	for _, id := range splitCSV(q["select"]) {
+	for id := range goals.requested {
 		if _, ok := haSpec(id); !ok {
-			return nil, http.StatusBadRequest, fmt.Errorf("unknown component %q in select", id)
+			return nil, haView{}, http.StatusBadRequest, fmt.Errorf("unknown component %q in select", id)
 		}
 		requested[id] = true
 	}
@@ -301,17 +337,20 @@ func (s *Server) homeAutomationStatus(r *http.Request, _ principal.Identity) (an
 		requested[haExternalHA] = true
 	}
 	modeHint := map[string]string{}
-	if m := q.Get("bluetooth"); m != "" {
-		spec, _ := haSpec(haBluetooth)
-		if !haContains(spec.OnModes, m) {
-			return nil, http.StatusBadRequest, fmt.Errorf("bluetooth must be one of %s", strings.Join(spec.OnModes, ", "))
+	for id, m := range goals.modeHint {
+		spec, ok := haSpec(id)
+		if !ok || len(spec.ModeParams) == 0 {
+			return nil, haView{}, http.StatusBadRequest, fmt.Errorf("%s has no mode to choose", id)
 		}
-		modeHint[haBluetooth] = m
+		if !haContains(spec.OnModes, m) {
+			return nil, haView{}, http.StatusBadRequest, fmt.Errorf("%s must be one of %s", id, strings.Join(spec.OnModes, ", "))
+		}
+		modeHint[id] = m
 	}
 
 	current, err := s.State.Load()
 	if err != nil {
-		return nil, http.StatusInternalServerError, fmt.Errorf("loading statefile: %w", err)
+		return nil, haView{}, http.StatusInternalServerError, fmt.Errorf("loading statefile: %w", err)
 	}
 	b := &haBuild{s: s, current: current, health: map[string]runtimedb.Observed{},
 		modeHint: modeHint, comps: map[string]*haComponent{}, nodes: map[string]*haNode{}}
@@ -324,7 +363,7 @@ func (s *Server) homeAutomationStatus(r *http.Request, _ principal.Identity) (an
 	for _, st := range []runtimedb.PlanState{runtimedb.PlanProposed, runtimedb.PlanApproved, runtimedb.PlanApplying} {
 		recs, err := s.DB.PlansInState(st)
 		if err != nil {
-			return nil, http.StatusInternalServerError, err
+			return nil, haView{}, http.StatusInternalServerError, err
 		}
 		for _, rec := range recs {
 			var sp plan.StoredProposal
@@ -337,11 +376,11 @@ func (s *Server) homeAutomationStatus(r *http.Request, _ principal.Identity) (an
 		b.backupRuns = runs
 	}
 	if err := b.loadNodes(); err != nil {
-		return nil, http.StatusInternalServerError, err
+		return nil, haView{}, http.StatusInternalServerError, err
 	}
-	if n := q.Get("node"); n != "" {
+	if n := goals.node; n != "" {
 		if _, ok := b.nodes[n]; !ok {
-			return nil, http.StatusBadRequest, fmt.Errorf("unknown node %q", n)
+			return nil, haView{}, http.StatusBadRequest, fmt.Errorf("unknown node %q", n)
 		}
 		b.node = n
 	}
@@ -351,7 +390,7 @@ func (s *Server) homeAutomationStatus(r *http.Request, _ principal.Identity) (an
 	if b.node == "" {
 		b.node = b.defaultNode()
 	}
-	b.probeNodes(r.Context())
+	b.probeNodes(ctx)
 
 	view := haView{GeneratedAt: time.Now().UTC(), RequestedTopology: topology, Node: b.node, Blockers: []haBlocker{}}
 	if s.Catalog == nil {
@@ -381,7 +420,7 @@ func (s *Server) homeAutomationStatus(r *http.Request, _ principal.Identity) (an
 	if view.Nodes == nil {
 		view.Nodes = []haNode{}
 	}
-	return view, http.StatusOK, nil
+	return b, view, http.StatusOK, nil
 }
 
 func haContains(list []string, v string) bool {
@@ -463,6 +502,7 @@ func (b *haBuild) resolveRequires() {
 			}
 		}
 	}
+	b.provider = provider
 	b.requires = map[string][]string{}
 	for _, spec := range haComponents {
 		reqs := append([]string{}, spec.Requires...)

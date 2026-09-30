@@ -447,6 +447,11 @@ func (s *Server) Handler() http.Handler {
 	// The home-automation aggregate (#446): a read joining the probes
 	// above with catalog, desired/observed state, plans and backups.
 	mux.Handle("GET /api/v1/home-automation", s.handle(principal.VerbRead, s.homeAutomationStatus))
+	// Its orchestration (#447): the next safe package step for a
+	// household's goals, previewed or filed as ONE ordinary plan through
+	// the capability pipeline. Never approves, never waits.
+	mux.Handle("POST /api/v1/home-automation/preview", s.handle(principal.VerbPropose, s.homeAutomationPreview))
+	mux.Handle("POST /api/v1/home-automation/propose", s.handle(principal.VerbPropose, s.homeAutomationPropose))
 
 	// Container logs (ADR-W015 A2): read verb; the response passes the
 	// redacting encoder like everything else.

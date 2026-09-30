@@ -270,6 +270,13 @@ var haComponents = []haComponentSpec{
 	},
 }
 
+// haRadioParams are the param names (first declared wins) through which a
+// radio-claiming component's package takes the radio's stable path. The
+// orchestration API (#447) fills one from the chosen radio, so a
+// household never types a serial path; a new protocol package (Matter,
+// Thread) plugs in by declaring one of these names.
+var haRadioParams = []string{"usb_device", "radio_device", "serial_device"}
+
 func haSpec(id string) (haComponentSpec, bool) {
 	for _, s := range haComponents {
 		if s.ID == id {

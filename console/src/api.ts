@@ -459,6 +459,89 @@ function homeAutomationPath(q: HomeAutomationQuery = {}): string {
   return "/api/v1/home-automation" + (qs ? "?" + qs : "");
 }
 
+// Home-automation orchestration (POST /api/v1/home-automation/preview and
+// /propose, #447). The server orders the selected components and names the
+// ONE next safe step; propose files exactly that step as an ordinary plan
+// (approved on the Plans screen, never here). Nothing is stored: send the
+// same goals on every call, and the answer is rebuilt from installed and
+// pending state, so a reload or a restart resumes honestly. A 409 (stale
+// or conflicting radio, a changed next step, nothing to propose) still
+// carries the full fresh answer on ApiError.body.
+export type HomeAutomationStepAction =
+  | "install_package"
+  | "reconfigure_package"
+  | "await_approval"
+  | "await_apply"
+  | "await_observation"
+  | "resolve_blockers"
+  | "external_step"
+  | "done";
+
+export interface HomeAutomationPlanRequest {
+  topology: HomeAutomationTopology;
+  node?: string;
+  select?: HomeAutomationComponentId[];
+  // component -> radio id from the node's inventory; "" asks for none
+  // (Zigbee's network coordinator).
+  radios?: Partial<Record<HomeAutomationComponentId, string>>;
+  modes?: { bluetooth?: BluetoothMode };
+  // component -> further package params (not node, radio, mode or the
+  // settings a dependency decides).
+  options?: Partial<Record<HomeAutomationComponentId, Record<string, string>>>;
+  // "<component>/<step id>" for steps Wildstone cannot observe.
+  confirmedSteps?: string[];
+  // propose only: the next.id the caller previewed.
+  expectStep?: string;
+}
+
+export interface HomeAutomationChecklistStep extends HomeAutomationExternalStep {
+  component: HomeAutomationComponentId;
+  // The component is installed, so the step can be done now.
+  due: boolean;
+  confirmed: boolean;
+}
+
+export interface HomeAutomationPlanStep {
+  // Stable while it is the same step; pass as expectStep.
+  id: string;
+  component?: HomeAutomationComponentId;
+  title: string;
+  action: HomeAutomationStepAction;
+  status: "done" | "current" | "upcoming";
+  state?: HomeAutomationState;
+  reason: string;
+  package?: string;
+  version?: string;
+  node?: string;
+  // Full params of the current package step (installed ones carried).
+  params?: Record<string, string>;
+  radioId?: string;
+  planId?: string;
+  // Adds to the aggregate's codes: radio_choice_needed, mode_needed,
+  // param_needed, dependency_on_other_node, radio_unsupported,
+  // plan_refused, plan_conflict. Action kinds add choose_mode and
+  // provide_option.
+  blockers: HomeAutomationBlocker[];
+  actions: HomeAutomationAction[];
+  externalSteps?: HomeAutomationChecklistStep[];
+}
+
+export interface HomeAutomationPlanAnswer {
+  generatedAt: string;
+  topology: HomeAutomationTopology;
+  node?: string;
+  complete: boolean;
+  next: HomeAutomationPlanStep;
+  sequence: HomeAutomationPlanStep[];
+  externalSteps: HomeAutomationChecklistStep[];
+  // Refused choices (radio_stale, radio_conflict), with a 409.
+  rejected?: HomeAutomationBlocker[];
+  // preview: the capability dry run for next.
+  preview?: EnablePreview & { blockers?: string[] };
+  // propose: the plan record filed.
+  plan?: PlanRecord;
+}
+
 export interface JoinTokenResponse {
   joinToken: string;
   caFingerprint?: string;
@@ -509,6 +592,9 @@ export class ApiError extends Error {
     // task cannot submit it either — the operator has to ask again, and
     // will not know to unless this is shown.
     public proposalErrors?: string[],
+    // The refusal's whole JSON body, for endpoints whose refusals carry a
+    // fresh answer (the home-automation orchestration's 409s).
+    public body?: unknown,
   ) {
     super(message);
   }
@@ -613,6 +699,7 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
       failed.error ?? res.statusText,
       failed.sessionId,
       failed.proposalErrors,
+      data,
     );
   }
   // The interrupted action has now been done.
@@ -2608,6 +2695,10 @@ export const api = {
     ),
   homeAutomation: (q?: HomeAutomationQuery) =>
     call<HomeAutomationStatus>("GET", homeAutomationPath(q)),
+  homeAutomationPreview: (req: HomeAutomationPlanRequest) =>
+    call<HomeAutomationPlanAnswer>("POST", "/api/v1/home-automation/preview", req),
+  homeAutomationPropose: (req: HomeAutomationPlanRequest) =>
+    call<HomeAutomationPlanAnswer>("POST", "/api/v1/home-automation/propose", req),
   probeHttp: (node: string, url: string) =>
     call<ProbeResult>(
       "GET",
