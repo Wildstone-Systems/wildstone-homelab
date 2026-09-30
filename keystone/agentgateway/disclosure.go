@@ -219,6 +219,24 @@ func deliveryPrivacyCheck(db *runtimedb.DB, row runtimedb.AgentDelivery, model s
 		if err != nil {
 			return nil
 		}
+		// The queue recipient must be the Agent assigned to this task;
+		// a payload handle cannot redirect another Agent's private history.
+		agentName, err := db.TaskButler(task.ID)
+		if err != nil {
+			return runtimedb.ErrPrivacy
+		}
+		agent, err := db.GetButler(agentName)
+		if err != nil || agent.Seq != row.Butler {
+			return runtimedb.ErrPrivacy
+		}
+		destination = memoryDestinationForTask(task)
+		if destination.ConnectionRef != 0 {
+			at, err := db.ChatConnectionBySeq(destination.ConnectionRef)
+			if err != nil || at.Butler != agentName || at.Name() != task.OriginConnection {
+				return runtimedb.ErrPrivacy
+			}
+			destination.Group = destination.Group || db.IsChatRoom(at.Seq, at.ExternalID)
+		}
 		// Workspace reads can precede the first session. A resolved task
 		// must carry its own provenance through delivery, and a failed
 		// policy lookup must not turn a known task into unrestricted data.
