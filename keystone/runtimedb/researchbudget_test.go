@@ -15,6 +15,9 @@ func researchTask(t *testing.T, db *DB) (string, int64) {
 	if _, err := db.AcquireCoordinator("research-test"); err != nil {
 		t.Fatal(err)
 	}
+	if err := db.AdmitButlerMember("mika", "test-admin"); err != nil {
+		t.Fatal(err)
+	}
 	id := newTask(t, db, nil)
 	if err := db.TransitionButlerTask(id, ButlerTaskRunning, "test", ""); err != nil {
 		t.Fatal(err)
@@ -76,14 +79,14 @@ func TestResearchConcurrentRestartAndContinuation(t *testing.T) {
 		t.Fatalf("reset: %+v %v", b, err)
 	}
 	for _, bad := range []ResearchLimits{{0, 20}, {101, 20}, {10, 20}, {12, 201}, {12, 19}} {
-		if err = db.ContinueResearch(task, "test-human", b.Revision, bad); err == nil {
+		if err = db.ContinueResearch(task, "mika", b.Revision, bad); err == nil {
 			t.Fatalf("accepted %+v", bad)
 		}
 	}
-	if err = db.ContinueResearch(task, "test-human", b.Revision, ResearchLimits{12, 20}); err != nil {
+	if err = db.ContinueResearch(task, "mika", b.Revision, ResearchLimits{12, 20}); err != nil {
 		t.Fatal(err)
 	}
-	if err = db.ContinueResearch(task, "test-human", b.Revision, ResearchLimits{12, 20}); !errors.Is(err, ErrResearchConflict) {
+	if err = db.ContinueResearch(task, "mika", b.Revision, ResearchLimits{12, 20}); !errors.Is(err, ErrResearchConflict) {
 		t.Fatalf("duplicate: %v", err)
 	}
 	_, b, err = db.ReserveResearchAttempt(ctx, task, a, "search", DefaultResearchLimits())
@@ -214,7 +217,7 @@ func TestResearchWaitAndContinuationRollback(t *testing.T) {
 	if _, err := db.sql.Exec(`CREATE TRIGGER fail_research_continue BEFORE INSERT ON research_continuations BEGIN SELECT RAISE(ABORT,'injected failure'); END`); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.ContinueResearch(task, "test-human", b.Revision, ResearchLimits{2, 2}); err == nil {
+	if err := db.ContinueResearch(task, "mika", b.Revision, ResearchLimits{2, 2}); err == nil {
 		t.Fatal("fault ignored")
 	}
 	after, err := db.GetResearchBudget(task)
@@ -226,7 +229,7 @@ func TestResearchWaitAndContinuationRollback(t *testing.T) {
 		t.Fatalf("resumed without continuation: %+v %v", current, err)
 	}
 	// Ordinary resume cannot replenish research allowance.
-	if err := db.ResolveButlerTaskWait(task, "test-human", "generic resume"); err != nil {
+	if err := db.ResolveButlerTaskWait(task, "mika", "generic resume"); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := db.ReserveResearchAttempt(ctx, task, a, "search", limits); !errors.Is(err, ErrResearchBudgetExhausted) {
@@ -284,7 +287,7 @@ func TestResearchDoesNotResumeUnrelatedWait(t *testing.T) {
 	if _, _, err := db.ReserveResearchAttempt(context.Background(), task, a, "search", DefaultResearchLimits()); !errors.Is(err, ErrResearchConflict) {
 		t.Fatalf("unrelated wait: %v", err)
 	}
-	if err := db.ContinueResearch(task, "test-human", 1, ResearchLimits{20, 40}); err == nil {
+	if err := db.ContinueResearch(task, "mika", 1, ResearchLimits{20, 40}); err == nil {
 		t.Fatal("continued unrelated wait")
 	}
 }
@@ -361,5 +364,33 @@ func TestResearchExecutionGates(t *testing.T) {
 				t.Fatalf("transaction gate=%v want=%v", err, want)
 			}
 		})
+	}
+}
+
+func TestResearchContinuationRequiresLivePerson(t *testing.T) {
+	db := openWith(t, "mika")
+	task, a := researchTask(t, db)
+	ctx := context.Background()
+	limits := ResearchLimits{1, 2}
+	if _, _, err := db.ReserveResearchAttempt(ctx, task, a, "search", limits); err != nil {
+		t.Fatal(err)
+	}
+	_, b, err := db.ReserveResearchAttempt(ctx, task, a, "search", limits)
+	if !errors.Is(err, ErrResearchBudgetExhausted) {
+		t.Fatal(err)
+	}
+	raised := ResearchLimits{2, 2}
+	if err = db.ContinueResearch(task, "machine-fixture", b.Revision, raised); !errors.Is(err, ErrResearchConflict) {
+		t.Fatalf("machine actor: %v", err)
+	}
+	if _, err = db.sql.Exec(`UPDATE butler_members SET admitted=0`); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.ContinueResearch(task, "mika", b.Revision, raised); !errors.Is(err, ErrResearchConflict) {
+		t.Fatalf("unadmitted actor: %v", err)
+	}
+	after, err := db.GetResearchBudget(task)
+	if err != nil || after != b {
+		t.Fatalf("denial changed budget: %+v %v", after, err)
 	}
 }

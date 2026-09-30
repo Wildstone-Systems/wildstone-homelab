@@ -32,7 +32,7 @@ CREATE INDEX research_checkpoints_task ON research_checkpoints(task,seq);
 CREATE TABLE research_continuations (
     task INTEGER NOT NULL REFERENCES research_budgets(task),
     revision INTEGER NOT NULL,
-    actor TEXT NOT NULL CHECK(actor <> ''),
+    actor_person_id TEXT NOT NULL REFERENCES butler_members(person_id),
     created_at TEXT NOT NULL,
     searches_allowed INTEGER NOT NULL,
     fetches_allowed INTEGER NOT NULL,

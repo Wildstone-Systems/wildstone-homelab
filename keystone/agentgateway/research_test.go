@@ -96,7 +96,7 @@ func TestResearchBudgetParksThroughLegacySliceAndCanonicalGateway(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = f.db.ContinueResearch(task, "test-human", budget.Revision, runtimedb.ResearchLimits{Searches: 2, Fetches: 2}); err != nil {
+	if err = f.db.ContinueResearch(task, "mika", budget.Revision, runtimedb.ResearchLimits{Searches: 2, Fetches: 2}); err != nil {
 		t.Fatal(err)
 	}
 	if err = f.g.Wait(ctx, agentapi.WorkWait{Handle: h, Reason: agentapi.WorkWaitBudgetExhausted, Detail: runtimedb.ErrResearchBudgetExhausted.Error()}); err != nil {

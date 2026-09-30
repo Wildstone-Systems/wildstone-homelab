@@ -348,6 +348,19 @@ func (db *DB) ContinueResearch(taskID, actor string, expected int64, limits Rese
 	if err = db.researchFenceTx(tx); err != nil {
 		return err
 	}
+	// Continuation names a current admitted human, not a runtime or machine
+	// principal. The policy callback still owns task/surface/intent authority.
+	person, err := resolvePersonID(tx, actor)
+	if err != nil {
+		return ErrResearchConflict
+	}
+	var admitted int
+	if err = tx.QueryRow(`SELECT count(*) FROM butler_members WHERE person_id=? AND admitted=1 AND disabled_at='' AND offboarded_at=''`, person).Scan(&admitted); err != nil {
+		return err
+	}
+	if admitted != 1 {
+		return ErrResearchConflict
+	}
 	b, err := researchBudgetTx(tx, task)
 	if err != nil {
 		return err
@@ -364,7 +377,7 @@ func (db *DB) ContinueResearch(taskID, actor string, expected int64, limits Rese
 	if err != nil {
 		return err
 	}
-	if _, err = tx.Exec(`INSERT INTO research_continuations(task,revision,actor,created_at,searches_allowed,fetches_allowed) VALUES(?,?,?,?,?,?)`, task, expected+1, actor, now(), limits.Searches, limits.Fetches); err != nil {
+	if _, err = tx.Exec(`INSERT INTO research_continuations(task,revision,actor_person_id,created_at,searches_allowed,fetches_allowed) VALUES(?,?,?,?,?,?)`, task, expected+1, person, now(), limits.Searches, limits.Fetches); err != nil {
 		return err
 	}
 	if _, err = tx.Exec(`UPDATE research_budgets SET searches_allowed=?,fetches_allowed=?,revision=revision+1,wait_seq=NULL WHERE task=?`, limits.Searches, limits.Fetches, task); err != nil {

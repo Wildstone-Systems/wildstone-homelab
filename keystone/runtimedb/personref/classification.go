@@ -233,6 +233,9 @@ var LegacyColumns = []Column{
 }
 
 var Columns = []Column{
+	{"research_continuations", "actor_person_id", PersonID, "0101: ContinueResearch resolves the authorized continuation actor to an admitted live Person in the same transaction; foreign-keyed to butler_members(person_id)"},
+	{"research_checkpoints", "steps_json", NotAPerson, "0101: bounded array of verified same-task ledger step row IDs, never Person selectors"},
+	{"research_checkpoints", "next_action", NotAPerson, "0101: closed research action enum search/fetch/read/report, not an identity"},
 	{"offboarding_resource_dispositions", "person_id", PersonID, "0077: canonical Person whose offboarding recorded this resource decision"},
 	{"offboarding_resource_dispositions", "resource_kind", NotAPerson, "0077: closed resource type label, not an identity"},
 	{"offboarding_resource_dispositions", "resource_ref", NotAPerson, "0077: resource key (task ID, memory seq, secret ID, Connection, routine or Agent name), not a Person reference"},

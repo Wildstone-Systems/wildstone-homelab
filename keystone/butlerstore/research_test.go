@@ -12,6 +12,9 @@ import (
 func TestResearchCoordinatorAccountingAndAuthority(t *testing.T) {
 	db, l := testLedger(t, filepath.Join(t.TempDir(), "runtime.db"))
 	defer db.Close()
+	if err := db.AdmitButlerMember("mika", "test-admin"); err != nil {
+		t.Fatal(err)
+	}
 	task := newTask(t, db)
 	if err := l.Running(task, "test"); err != nil {
 		t.Fatal(err)
@@ -93,7 +96,7 @@ func TestResearchCoordinatorAccountingAndAuthority(t *testing.T) {
 		t.Fatalf("human denied: %v", err)
 	}
 	r.AuthorizeContinuation = func(context.Context, string, int64, runtimedb.ResearchLimits) (string, error) {
-		return "test-human", nil
+		return "mika", nil
 	}
 	if err := r.Continue(ctx, task, b.Revision, limits); err != nil {
 		t.Fatal(err)
