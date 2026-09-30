@@ -411,6 +411,12 @@ type Package struct {
 	// Publishes declares the household events this package emits
 	// (ADR-W024 A10). nil means it emits none.
 	Publishes *PublishesSpec `yaml:"publishes,omitempty"`
+	// Integrates declares the package's integration adapters and the
+	// closed-vocabulary queries they answer (integrates.go). Declaring an
+	// adapter runs nothing at install: it is rendered per connection
+	// placement, so a bundled adapter stays dormant until someone
+	// creates a connection.
+	Integrates []IntegrationSpec `yaml:"integrates,omitempty"`
 	// ExternalConfig declares rendered ConfigFiles read by something
 	// Wildstone does not run.
 	ExternalConfig []ExternalConfigDecl `yaml:"externalConfig,omitempty"`
@@ -624,6 +630,10 @@ func (p *Package) Validate() error {
 		if err := validatePublishes(p.Publishes); err != nil {
 			return err
 		}
+	}
+
+	if err := validateIntegrates(p); err != nil {
+		return err
 	}
 
 	// accessGroups: shape only — non-empty and not repeated. WHICH

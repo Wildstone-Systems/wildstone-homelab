@@ -53,7 +53,12 @@ type packageView struct {
 	Provides   []pkgspec.Provide      `json:"provides,omitempty"`
 	Requires   []pkgspec.Requirement  `json:"requires,omitempty"`
 	Publishes  *pkgspec.PublishesSpec `json:"publishes,omitempty"`
-	Enabled    bool                   `json:"enabled"`
+	// Integrates is the package's integration declaration, shown so an
+	// Owner can inspect exactly which queries a bundled adapter offers
+	// before anyone enables it. Offered is not enabled: nothing here runs
+	// until a connection is created and placed (epic #326).
+	Integrates []pkgspec.IntegrationSpec `json:"integrates,omitempty"`
+	Enabled    bool                      `json:"enabled"`
 	// ProvidedSecrets are the secrets this package declares that only an
 	// operator can supply. A form that collects them must ask for THESE
 	// names: they differ per package (a Telegram bot token, a Matrix
@@ -428,6 +433,7 @@ func (s *Server) listPackages(r *http.Request, id principal.Identity) (any, int,
 			Capability: p.Metadata.Capability, Profile: p.Metadata.Profile,
 			Params: resolveParams(p.Params, facts, installedParamsForPackage(installedParams, p)), Provides: p.Provides, Requires: p.Requires,
 			Publishes:       p.Publishes,
+			Integrates:      p.Integrates,
 			ProvidedSecrets: pkgspec.ProvidedSecrets(p),
 			Icon:            packageIcon(p),
 			// Whether THIS PACKAGE is installed, not whether its
