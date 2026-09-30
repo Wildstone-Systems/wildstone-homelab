@@ -31,6 +31,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/chickenrat17/wildstone-homelab/proto/secreterase"
 )
 
 // ErrQuarantined is returned by anything Butler-facing while a restored
@@ -304,7 +306,31 @@ func (db *DB) ReconcileRestore() (applied int, err error) {
 					return applied, err
 				}
 			}
+		case "grant":
+			// A Person's background authorization revoked after the
+			// snapshot stays revoked: the restored row is not a reason to
+			// run again.
+			var seq int64
+			if id, ok := strings.CutPrefix(e.id, backgroundAuthorizationJournalPrefix); !ok {
+				break
+			} else if _, err := fmt.Sscanf(id, "%d", &seq); err == nil {
+				if err := replayed(db.RevokeBackgroundAuthorizationSeq(seq, e.actor,
+					"revoked after the restored snapshot was taken")); err != nil {
+					return applied, err
+				}
+			}
 		case "secret":
+			if strings.HasPrefix(e.id, secreterase.PersonalPrefix) {
+				// A managed Personal credential: fenced again — revoked,
+				// its authorizations with it, every copy an erasure to
+				// prove — and left erasure_unverified until the nodes
+				// prove it, because nobody has been to them since.
+				if err := replayed(db.FencePersonalCredentialRef(e.id, e.actor,
+					"revoked after the restored snapshot was taken")); err != nil {
+					return applied, err
+				}
+				break
+			}
 			if strings.HasPrefix(e.id, "household-secret/") {
 				state := "quarantine"
 				if e.action == "deleted" {
@@ -343,7 +369,7 @@ func (db *DB) ReconcileRestore() (applied int, err error) {
 					return applied, err
 				}
 				for _, s := range secrets {
-					if s.SecretRef != e.id || !s.RevokedAt.IsZero() {
+					if s.SecretRef != e.id || !s.RevokedAt.IsZero() || s.Managed() {
 						continue
 					}
 					err := db.RevokeConnectionSecret(c.Name, s.Seq)

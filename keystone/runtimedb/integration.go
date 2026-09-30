@@ -103,6 +103,10 @@ type IntegrationConnection struct {
 	CreatedAt       time.Time          `json:"createdAt"`
 	CreatedBy       string             `json:"createdBy"`
 	DegradedReason  string             `json:"degradedReason,omitempty"`
+	// Executable is the adapter program its placements run,
+	// "<package>@<version>/<program>" (migration 0098). A Person's
+	// background authorization is bound to it.
+	Executable string `json:"executable,omitempty"`
 }
 
 // CreateConnection registers a named connection.
@@ -148,14 +152,14 @@ func (db *DB) GetConnection(name string) (IntegrationConnection, error) {
 
 const connectionColumns = `SELECT seq, name, adapter, endpoint, ownership, owner, audience,
 	 actions_enabled, indexing_enabled, cloud_allowed, state, lease_epoch, created_at,
-	 created_by, degraded_reason FROM integration_connections`
+	 created_by, degraded_reason, executable FROM integration_connections`
 
 func scanConnection(row rowScanner) (IntegrationConnection, error) {
 	var c IntegrationConnection
 	var audience, created string
 	var actions, indexing, cloud int
 	err := row.Scan(&c.Seq, &c.Name, &c.Adapter, &c.Endpoint, &c.Ownership, &c.Owner, &audience,
-		&actions, &indexing, &cloud, &c.State, &c.LeaseEpoch, &created, &c.CreatedBy, &c.DegradedReason)
+		&actions, &indexing, &cloud, &c.State, &c.LeaseEpoch, &created, &c.CreatedBy, &c.DegradedReason, &c.Executable)
 	if errors.Is(err, sql.ErrNoRows) {
 		return IntegrationConnection{}, ErrNotFound
 	}

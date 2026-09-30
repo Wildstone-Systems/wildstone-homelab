@@ -53,6 +53,19 @@ func (s *Server) offboardMember(r *http.Request, id principal.Identity) (any, in
 		return nil, http.StatusBadRequest, err
 	}
 	s.EndConsoleSessions(member)
+	// Their Personal credentials were fenced in the store; now prove each
+	// copy erased on its node. Anything not proven leaves the connection
+	// erasure_unverified and is visible in the result, never assumed.
+	erasures := map[string][]erasureOutcome{}
+	if connections, err := s.DB.ListConnections(); err == nil {
+		for _, c := range connections {
+			if c.Owner == member && c.Ownership == runtimedb.OwnershipPersonal {
+				if out := s.eraseCredentialCopies(r.Context(), c.Name, false); len(out) > 0 {
+					erasures[c.Name] = out
+				}
+			}
+		}
+	}
 	records, err := s.DB.ListOffboardingRecords(member)
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
@@ -62,9 +75,10 @@ func (s *Server) offboardMember(r *http.Request, id principal.Identity) (any, in
 		return nil, http.StatusInternalServerError, err
 	}
 	return map[string]any{
-		"result":    result,
-		"records":   records,
-		"resources": resources,
+		"result":             result,
+		"records":            records,
+		"resources":          resources,
+		"credentialErasures": erasures,
 		"note": "access is denied now. Personal work is paused and nothing was deleted; shared work " +
 			"moved to the administrator and kept its original author; desired-state cleanup follows " +
 			"as plans, and a failure there never restores access",
@@ -160,6 +174,22 @@ func (s *Server) reconcileRestore(r *http.Request, id principal.Identity) (any, 
 		return nil, http.StatusInternalServerError, err
 	}
 	out := map[string]any{"replayed": applied}
+	// A replay that re-fenced a Personal credential has only said it is
+	// revoked; the copies still have to be proven gone, and a newer
+	// version the snapshot never heard of may be sitting on a node.
+	// Erasing only removes access, so it runs even while quarantined.
+	erasures := map[string][]erasureOutcome{}
+	if connections, err := s.DB.ListConnections(); err == nil {
+		for _, c := range connections {
+			if c.Ownership != runtimedb.OwnershipPersonal {
+				continue
+			}
+			if res := s.eraseCredentialCopies(r.Context(), c.Name, true); len(res) > 0 {
+				erasures[c.Name] = res
+			}
+		}
+	}
+	out["credentialErasures"] = erasures
 	if req.Release {
 		if err := s.DB.ReleaseRestoreQuarantine(actingMember(id)); err != nil {
 			return nil, http.StatusBadRequest, err

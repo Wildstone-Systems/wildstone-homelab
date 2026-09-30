@@ -20,6 +20,7 @@ package runtimedb
 // lie about who wanted what.
 
 import (
+	"errors"
 	"fmt"
 	"time"
 )
@@ -281,8 +282,13 @@ func (db *DB) OffboardMember(member, actor, administrator string) (OffboardingRe
 		if err != nil {
 			return result, err
 		}
+		managed := false
 		for _, s := range secrets {
 			if s.Member != member || !s.RevokedAt.IsZero() {
+				continue
+			}
+			if s.Managed() {
+				managed = true
 				continue
 			}
 			if err := db.RevokeConnectionSecret(c.Name, s.Seq); err != nil {
@@ -300,6 +306,35 @@ func (db *DB) OffboardMember(member, actor, administrator string) (OffboardingRe
 			result.Stores["credentials-revoked"]++
 			if err := db.journal("secret", s.SecretRef, "revoked", actor, "owner offboarded"); err != nil {
 				return result, err
+			}
+		}
+		// A Personal credential onboarded through the intake is fenced
+		// here — revoked, its background authorization with it — and its
+		// copies become erasures the API proves against the nodes. Until
+		// each is proven the connection says erasure_unverified.
+		if c.Owner == member && c.Ownership == OwnershipPersonal {
+			if err := db.RevokeBackgroundAuthorization(c.Name, actor, "owner offboarded"); err == nil {
+				result.Stores["background-authorizations-revoked"]++
+			} else if !errors.Is(err, ErrNotFound) {
+				return result, err
+			}
+		}
+		if managed {
+			n, err := db.RevokePersonalCredentials(c.Name, actor, "owner offboarded")
+			if err != nil {
+				return result, err
+			}
+			result.Stores["credentials-revoked"] += n
+			pending, err := db.OutstandingCredentialErasures(c.Name)
+			if err != nil {
+				return result, err
+			}
+			if len(pending) > 0 {
+				result.Stores["credential-erasures-pending"] += len(pending)
+				if err := db.recordOffboarding(member, actor, "credential-erasures-pending", len(pending),
+					fmt.Sprintf("%s: %d credential copies await verified erasure", c.Name, len(pending))); err != nil {
+					return result, err
+				}
 			}
 		}
 	}

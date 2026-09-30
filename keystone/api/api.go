@@ -575,6 +575,23 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/integrations/{name}/placement/remove", s.handle(principal.VerbManage, s.removeIntegrationPlacement))
 	mux.Handle("POST /api/v1/integrations/{name}/placement/proof", s.handle(principal.VerbManage, s.proveIntegrationPlacementRemoval))
 	mux.Handle("POST /api/v1/integrations/{name}/secrets", s.handle(principal.VerbManage, s.onboardIntegrationSecret))
+	// Personal credentials and unattended-use authorization (epic #326
+	// S02). The Console/CLI routes and the Homepage routes call the same
+	// handlers; the store decides who may, and for onboarding, replacing,
+	// inspecting and authorizing that is the connection's owner alone.
+	// An Owner on the Console may revoke and erase, never more.
+	mux.Handle("GET /api/v1/integrations/{name}/credential", s.handle(principal.VerbManage, s.consoleCredential))
+	mux.Handle("POST /api/v1/integrations/{name}/credential", s.handle(principal.VerbManage, s.consoleSubmitCredential))
+	mux.Handle("POST /api/v1/integrations/{name}/credential/revoke", s.handle(principal.VerbManage, s.consoleRevokeCredential))
+	mux.Handle("POST /api/v1/integrations/{name}/credential/erase", s.handle(principal.VerbManage, s.consoleEraseCredential))
+	mux.Handle("POST /api/v1/integrations/{name}/authorization", s.handle(principal.VerbManage, s.consoleAuthorizeBackground))
+	mux.Handle("POST /api/v1/integrations/{name}/authorization/revoke", s.handle(principal.VerbManage, s.consoleRevokeBackground))
+	mux.Handle("POST /api/v1/integrations/{name}/executable", s.handle(principal.VerbManage, s.setIntegrationExecutable))
+	mux.Handle("GET /api/v1/home/integrations/{name}/credential", s.portal(surfaceHome, s.homeCredential))
+	mux.Handle("POST /api/v1/home/integrations/{name}/credential", s.portal(surfaceHome, s.homeSubmitCredential))
+	mux.Handle("POST /api/v1/home/integrations/{name}/credential/revoke", s.portal(surfaceHome, s.homeRevokeCredential))
+	mux.Handle("POST /api/v1/home/integrations/{name}/authorization", s.portal(surfaceHome, s.homeAuthorizeBackground))
+	mux.Handle("POST /api/v1/home/integrations/{name}/authorization/revoke", s.portal(surfaceHome, s.homeRevokeBackground))
 	// The adapter's side: claim and answer, and nothing else.
 	mux.Handle("POST /api/v1/integration-work/claim", s.handle(principal.VerbClaimIntegrationWork, s.claimIntegrationWork))
 	mux.Handle("POST /api/v1/integration-work/result", s.handle(principal.VerbReportIntegrationResult, s.reportIntegrationResult))

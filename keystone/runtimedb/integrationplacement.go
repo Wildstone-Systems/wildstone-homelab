@@ -317,6 +317,12 @@ func (db *DB) BeginPlacementRemoval(connection, node string) error {
 		now(), conn.Seq); err != nil {
 		return fmt.Errorf("runtimedb: removing placement: %w", err)
 	}
+	// Every Personal credential copy on the node becomes an erasure to
+	// prove (migration 0098). ProvePlacementRemoval will not accept
+	// "secret erased" for this node until the node's evidence has.
+	if err := fenceCredentialCopiesOnNodeTx(tx, conn.Seq, node, conn.LeaseEpoch+1); err != nil {
+		return err
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("runtimedb: removing placement: %w", err)
 	}
@@ -380,6 +386,20 @@ func (db *DB) ProvePlacementRemoval(connection, node string, containerRemoved, s
 	// placement — no epoch bump, so the node it was running on is
 	// still holding a credential nothing has revoked, and the
 	// connection would be reported Ready.
+	// A caller's word that the secret is gone is not evidence when
+	// Keystone sent a Personal credential there itself: those copies are
+	// proven erased only by the node's own erase evidence
+	// (RecordCredentialErasure), and until then this proof is partial.
+	credentialEvidenceMissing := false
+	if secretErased {
+		outstanding, err := db.credentialCopiesOutstandingOnNode(conn.Seq, node)
+		if err != nil {
+			return false, fmt.Errorf("runtimedb: proving placement removal: %w", err)
+		}
+		if outstanding > 0 {
+			secretErased, credentialEvidenceMissing = false, true
+		}
+	}
 	res, err := db.sql.Exec(
 		`UPDATE integration_placements SET container_removed = ?, secret_erased = ?, credential_revoked = ?
 		 WHERE connection = ? AND node = ? AND removing_at <> ''`,
@@ -399,7 +419,9 @@ func (db *DB) ProvePlacementRemoval(connection, node string, containerRemoved, s
 		if !containerRemoved {
 			missing = append(missing, "the container is still there")
 		}
-		if !secretErased {
+		if credentialEvidenceMissing {
+			missing = append(missing, ErasureUnverifiedReason+": the node has not returned erase evidence for every credential copy")
+		} else if !secretErased {
 			missing = append(missing, "the local secret is not proven erased")
 		}
 		if !credentialRevoked {
@@ -444,7 +466,19 @@ type ConnectionSecret struct {
 	CreatedAt        time.Time `json:"createdAt"`
 	CreatedBy        string    `json:"createdBy"`
 	RevokedAt        time.Time `json:"revokedAt,omitzero"`
+	// Need, Version and State are set for a credential onboarded through
+	// the protected intake (migration 0098); a reference recorded the
+	// older way is state "recorded". The login and the value are never
+	// here.
+	Need    string `json:"need,omitempty"`
+	Version int    `json:"version,omitempty"`
+	State   string `json:"state"`
 }
+
+// Managed reports whether this credential's lifecycle — staging, copies,
+// verified erasure — is managed by personalcredentials.go rather than
+// being a bare recorded reference.
+func (s ConnectionSecret) Managed() bool { return s.State != "" && s.State != CredentialRecorded }
 
 // RecordConnectionSecret records that a credential exists and where its
 // reference lives.
@@ -519,7 +553,8 @@ func (db *DB) ListConnectionSecrets(connection string) ([]ConnectionSecret, erro
 		return nil, err
 	}
 	rows, err := db.sql.Query(
-		`SELECT seq, member, secret_ref, upstream_read_only, disclosure, created_at, created_by, revoked_at
+		`SELECT seq, member, secret_ref, upstream_read_only, disclosure, created_at, created_by, revoked_at,
+		        need, version, state
 		 FROM integration_secrets WHERE connection = ? ORDER BY seq`, conn.Seq)
 	if err != nil {
 		return nil, fmt.Errorf("runtimedb: listing connection secrets: %w", err)
@@ -531,7 +566,7 @@ func (db *DB) ListConnectionSecrets(connection string) ([]ConnectionSecret, erro
 		var readOnly int
 		var created, revoked string
 		if err := rows.Scan(&s.Seq, &s.Member, &s.SecretRef, &readOnly, &s.Disclosure,
-			&created, &s.CreatedBy, &revoked); err != nil {
+			&created, &s.CreatedBy, &revoked, &s.Need, &s.Version, &s.State); err != nil {
 			return nil, err
 		}
 		s.UpstreamReadOnly = readOnly != 0
@@ -556,6 +591,13 @@ func (db *DB) ListConnectionSecrets(connection string) ([]ConnectionSecret, erro
 // correct order — fence the placement, then erase — is the one the
 // removal path already takes.
 func (db *DB) RevokeConnectionSecret(connection string, seq int64) error {
+	var state string
+	if err := db.sql.QueryRow(`SELECT state FROM integration_secrets WHERE seq = ?`, seq).Scan(&state); err == nil &&
+		state != CredentialRecorded {
+		// A managed Personal credential is revoked by fencing it and then
+		// proving each copy erased, never by stamping the row.
+		return fmt.Errorf("runtimedb: credential %d is managed; revoke it with RevokePersonalCredentials", seq)
+	}
 	placements, err := db.ListPlacements(connection)
 	if err != nil {
 		return err

@@ -496,6 +496,16 @@ Administrative lifecycle operations are deliberately a separate concept. An Owne
 
 **Personal-secret raw reveal is deferred for MVP.** Members may propose Personal secrets and use authorized ones through tools; direct create/edit/delete controls are deferred, and there is no Personal reveal surface at all unless a separately approved trusted one is added later. Household secrets are the shared case the rules below describe, and their reveal rules are unchanged.
 
+### D1.1 Amendment (2026-09-30, epic #326 S02): Person-authorized unattended use of one Personal credential
+
+D1 left one door closed pending a design: "explicit Person-authorized exact-version delegation with its own revocation, audit and interface semantics". Mailbox monitoring needs exactly that, and only that, so it is now designed — for a Personal *integration credential* (a Person's mailbox app password), not for Household-vault Personal secrets, which stay fail-closed as D1 says.
+
+- **Who.** Only the Person who owns the Personal connection may authorize, onboard, replace or inspect its credential. D1's list of stand-ins stays exhaustive and stays refused: an Owner, another Person, an Agent's grants, a shared-Agent relationship, the proposer, the approver. An Owner may still *revoke* and *erase* (administration removes authority; it never confers use or reveal).
+- **What.** The authorization binds the exact connection, credential version, source scope (folders, sender and subject filters), processing location, result audience (the mailbox owner alone), Agent, target calendar and adapter executable (`<package>@<version>/<program>`). These are digested (`sha256:`-prefixed); the row is immutable except for revocation.
+- **Intersection.** Unattended use requires, live on every dispatch, both the Person's unrevoked authorization and an Owner's approval (E2–E4) of the exact subscription version whose `match_json` names that connection and authorization digest. The Person's row names the subscription and a digest of its content. Neither artifact alone authorizes anything. `runtimedb.AuthorizeBackgroundUse(ctx, connection, subscriptionID, approvedVersion)` is the one evaluator; it also refuses while restore quarantine or a household stop holds.
+- **Material edits.** Any change to a bound field is a new authorization with a new digest, which the previously approved subscription does not name — so the edit invalidates both. Replacing the credential or changing the adapter executable revokes the live authorization; editing the subscription in place fails its content digest.
+- **Revocation and audit.** Either the Person or an Owner revoking fences at once (lease epoch moves, queued reads are cancelled). Every revocation is written to the deletion journal (subject kind `grant`, id `background-authorization/<seq>`), so a restored snapshot cannot revive it.
+
 ## D2. Models receive references, not raw secret values
 
 By default, a model receives an opaque secret reference rather than the value.

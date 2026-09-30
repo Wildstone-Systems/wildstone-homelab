@@ -426,11 +426,18 @@ func (s *Server) removeIntegrationPlacement(r *http.Request, _ principal.Identit
 		}
 		return nil, http.StatusBadRequest, err
 	}
-	return map[string]any{
+	out := map[string]any{
 		"fencing": req.Node,
 		"note": "the adapter is fenced already. The connection stays degraded until the container " +
 			"removal, the secret erasure and the credential revocation are each proven",
-	}, http.StatusOK, nil
+	}
+	// Personal credential copies on the node were fenced with it; erase
+	// them now and let the node's evidence, not a caller, say they are
+	// gone (ProvePlacementRemoval checks it).
+	if erasures := s.eraseCredentialCopies(r.Context(), name, false); len(erasures) > 0 {
+		out["credentialErasures"] = erasures
+	}
+	return out, http.StatusOK, nil
 }
 
 // proveIntegrationPlacementRemoval records what has actually been
