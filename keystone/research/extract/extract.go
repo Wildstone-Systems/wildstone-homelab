@@ -247,7 +247,7 @@ func (f *markupFilter) feed(input string, preserve bool) error {
 					f.writeLiteralText(n.Data)
 				} else {
 					f.out.write(strings.Map(func(r rune) rune {
-						if unicode.IsSpace(r) {
+						if unicode.IsSpace(r) && r != '\r' && r != '\n' {
 							return ' '
 						}
 						return r

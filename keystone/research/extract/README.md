@@ -23,7 +23,9 @@ HTML uses the tolerant HTML tree parser and caps retained output during construc
 so repeated links cannot amplify a bounded response into unbounded text.
 Parsing still inspects the complete bounded response to detect challenges and
 controls beyond the retained-text cap; the cap is not an early parsing exit.
-Normalization follows HTML tree semantics, not CSS layout or script execution. Executable/embedded subtrees, comments and
+Normalization preserves textual CR/LF as LF (including decoded references),
+collapses other HTML whitespace, and adds block/heading boundaries. It follows
+HTML tree semantics, not CSS layout or script execution. Executable/embedded subtrees, comments and
 attributes are discarded; headings retain line boundaries and HTTP/S links
 are resolved against the final URL as inert text. Markdown uses pinned Goldmark v1.7.13 to identify actual HTML spans. It replaces
 Markdown-only text with collision-checked literal markers, restored directly

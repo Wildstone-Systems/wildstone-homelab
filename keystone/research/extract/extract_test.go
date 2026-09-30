@@ -465,7 +465,7 @@ func TestHTMLPreservesInlineWordAndWhitespaceBoundaries(t *testing.T) {
 		{"docu<em>ment</em>ation", "documentation"},
 		{"one <em>two</em> three", "one two three"},
 		{"one<em> two </em>three", "one two three"},
-		{"one\t<span>\n two</span>  three", "one two three"},
+		{"one\t<span>\n two</span>  three", "one\ntwo three"},
 		{"one<p>two</p>three", "one\ntwo\nthree"},
 	} {
 		d, err := Extract(input("text/html", tc.body))
@@ -534,19 +534,22 @@ func TestChallengeDetectionAcrossRepresentationsAndOutputCap(t *testing.T) {
 }
 
 func TestEntityDecodedLineEndingsNormalizeBeforeBounds(t *testing.T) {
-	for _, body := range []string{
-		"<div>A&#13;B</div>",
-		"<div>A&#13;&#10;B</div>",
-		"<div>A&#13;<span>&#10;B</span></div>",
-	} {
-		d, err := Extract(input("text/markdown", body))
-		if err != nil || d.Text != "A\nB" {
-			t.Fatalf("%q: %q %v", body, d.Text, err)
+	for _, media := range []string{"text/html", "text/markdown"} {
+		for _, body := range []string{
+			"<div>A&#13;B</div>",
+			"<div>A&#13;&#10;B</div>",
+			"<div>A&#13;<span>&#10;B</span></div>",
+			"<div>A&#10;B</div>",
+		} {
+			d, err := Extract(input(media, body))
+			if err != nil || d.Text != "A\nB" {
+				t.Fatalf("%s %q: %q %v", media, body, d.Text, err)
+			}
 		}
-	}
-	body := "<div>" + strings.Repeat("x", MaxCharacters-2) + "&#13;&#10;y</div>"
-	d, err := Extract(input("text/markdown", body))
-	if err != nil || utf8.RuneCountInString(d.Text) != MaxCharacters || d.Source.Truncated || !strings.HasSuffix(d.Text, "\ny") {
-		t.Fatalf("normalized cap: %d %+v %v", utf8.RuneCountInString(d.Text), d.Source, err)
+		body := "<div>" + strings.Repeat("x", MaxCharacters-2) + "&#13;&#10;y</div>"
+		d, err := Extract(input(media, body))
+		if err != nil || utf8.RuneCountInString(d.Text) != MaxCharacters || d.Source.Truncated || !strings.HasSuffix(d.Text, "\ny") {
+			t.Fatalf("%s normalized cap: %d %+v %v", media, utf8.RuneCountInString(d.Text), d.Source, err)
+		}
 	}
 }
