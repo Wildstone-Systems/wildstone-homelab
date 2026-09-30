@@ -1,6 +1,8 @@
 package resource
 
 import (
+	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -139,6 +141,8 @@ func TestRequiredProtocolMinor(t *testing.T) {
 		"resources":        {ContainerSpec{Image: "x", Resources: &ContainerResources{Memory: "4g"}}, HardeningProtocolMinor},
 		"shmSize":          {ContainerSpec{Image: "x", ShmSize: "1g"}, HardeningProtocolMinor},
 		"hardening+device": {ContainerSpec{Image: "x", ReadOnlyRootfs: true, Devices: []DeviceMapping{{Source: "/dev/net/tun"}}}, HardeningProtocolMinor},
+		"hostNetwork":      {ContainerSpec{Image: "x", NetworkMode: NetworkModeHost}, HostNetworkProtocolMinor},
+		"host+hardening":   {ContainerSpec{Image: "x", NetworkMode: NetworkModeHost, ReadOnlyRootfs: true, CapAdd: []string{"NET_RAW"}}, HostNetworkProtocolMinor},
 	} {
 		if got := tc.spec.RequiredProtocolMinor(); got != tc.want {
 			t.Errorf("%s: RequiredProtocolMinor = %d, want %d", name, got, tc.want)
@@ -209,5 +213,86 @@ func TestContainerCapabilityAllowlistIsPinned(t *testing.T) {
 		if err := spec.Validate(); err == nil {
 			t.Errorf("%q accepted", bad)
 		}
+	}
+}
+
+// TestContainerNetworkModeIsValidated: host is the one non-default mode,
+// it cannot be combined with published ports, and a Job may not use it.
+func TestContainerNetworkModeIsValidated(t *testing.T) {
+	host := containerWith(func(s *ContainerSpec) {
+		s.NetworkMode = NetworkModeHost
+		s.Devices = []DeviceMapping{{Source: "/dev/ttyUSB0"}}
+	})
+	if err := host.Validate(); err != nil {
+		t.Fatalf("networkMode: host refused: %v", err)
+	}
+	for name, tc := range map[string]struct {
+		mutate func(*ContainerSpec)
+		field  string
+	}{
+		"bridge spelled out":  {func(s *ContainerSpec) { s.NetworkMode = "bridge" }, "spec.networkMode"},
+		"none":                {func(s *ContainerSpec) { s.NetworkMode = "none" }, "spec.networkMode"},
+		"container namespace": {func(s *ContainerSpec) { s.NetworkMode = "container:other" }, "spec.networkMode"},
+		"wrong case":          {func(s *ContainerSpec) { s.NetworkMode = "Host" }, "spec.networkMode"},
+		"host with ports": {func(s *ContainerSpec) {
+			s.NetworkMode = NetworkModeHost
+			s.Ports = []string{"8123:8123"}
+		}, "spec.ports"},
+	} {
+		err := containerWith(tc.mutate).Validate()
+		var ve *ValidationError
+		if !errors.As(err, &ve) {
+			t.Errorf("%s: got %v, want a ValidationError", name, err)
+			continue
+		}
+		if ve.Field != tc.field {
+			t.Errorf("%s: field = %q, want %q", name, ve.Field, tc.field)
+		}
+	}
+
+	job := &Resource{ApiVersion: ApiVersion, Kind: KindJob, Metadata: Metadata{Name: "j", Owner: "capability/x", Node: "n1"},
+		Job: &JobSpec{Run: ContainerSpec{Image: host.Container.Image, NetworkMode: NetworkModeHost}}}
+	var ve *ValidationError
+	if err := job.Validate(); !errors.As(err, &ve) || ve.Field != "spec.run.networkMode" {
+		t.Errorf("job with networkMode: host: got %v, want a spec.run.networkMode refusal", err)
+	}
+}
+
+// TestContainerNetworkModeYAMLAndHashShape: the field is spelled
+// networkMode in YAML, and an omitted mode adds nothing to the JSON the
+// reconciler hashes, so no existing container's hash moves.
+func TestContainerNetworkModeYAMLAndHashShape(t *testing.T) {
+	r, err := Unmarshal([]byte(`
+apiVersion: wildstone.dev/v1
+kind: Container
+metadata:
+  name: hub
+  owner: capability/home
+  node: node-a
+spec:
+  image: ghcr.io/example/hub@sha256:` + strings.Repeat("a", 64) + `
+  networkMode: host
+`))
+	if err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if !r.Container.HostNetwork() {
+		t.Fatalf("networkMode = %q, want host", r.Container.NetworkMode)
+	}
+	if err := r.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	out, err := Marshal(r)
+	if err != nil || !strings.Contains(string(out), "networkMode: host") {
+		t.Errorf("Marshal = %q, %v; want networkMode: host", out, err)
+	}
+
+	plain, _ := json.Marshal(&ContainerSpec{Image: "x"})
+	if strings.Contains(string(plain), "networkMode") {
+		t.Errorf("omitted networkMode reached the hashed JSON: %s", plain)
+	}
+	withHost, _ := json.Marshal(&ContainerSpec{Image: "x", NetworkMode: NetworkModeHost})
+	if !strings.Contains(string(withHost), `"networkMode":"host"`) {
+		t.Errorf("host networkMode missing from the hashed JSON: %s", withHost)
 	}
 }

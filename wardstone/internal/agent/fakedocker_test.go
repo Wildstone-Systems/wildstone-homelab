@@ -38,6 +38,16 @@ type fakeContainer struct {
 	suppressPorts bool
 }
 
+// dockerNetworkMode is what Docker records in HostConfig.NetworkMode: the
+// mode the create body asked for, or its "bridge" default when it named
+// none.
+func (c *fakeContainer) dockerNetworkMode() string {
+	if c.host.NetworkMode != "" {
+		return c.host.NetworkMode
+	}
+	return "bridge"
+}
+
 type fakeVolume struct {
 	name   string
 	labels map[string]string
@@ -290,7 +300,7 @@ func (f *fakeDocker) handle(w http.ResponseWriter, r *http.Request) {
 				"Image":  c.image,
 				"Labels": c.labels,
 			},
-			"HostConfig":      map[string]any{"PortBindings": c.host.PortBindings},
+			"HostConfig":      map[string]any{"PortBindings": c.host.PortBindings, "NetworkMode": c.dockerNetworkMode()},
 			"NetworkSettings": map[string]any{"Ports": livePorts},
 		})
 	case m[3] == "start" && r.Method == http.MethodPost:

@@ -295,6 +295,36 @@ message EnsureContainer {
   // toolset needs this raised (§5.2); most images never touch /dev/shm at
   // all, which is why Docker's default is small enough to matter.
   string shm_size = 17;
+
+  // Which network namespace the container runs in (protocol minor 22).
+  // UNSPECIFIED is everything before this field existed: Docker's bridge
+  // networking, attached to `network` when that is set. HOST shares the
+  // node's own network namespace — what a home-automation hub needs to
+  // see mDNS, SSDP and the other link-local discovery traffic a bridge
+  // never forwards.
+  //
+  // HOST is mutually exclusive with `ports` (there is nothing to publish:
+  // every listener is already on the host) and with `network` (a
+  // container in the host namespace cannot also be attached to a bridge).
+  // The agent refuses either combination BEFORE touching an existing
+  // container, so a malformed spec fails with the old one still running.
+  // An unknown value from a newer Keystone is refused rather than read as
+  // UNSPECIFIED, because guessing bridge for a spec that asked for
+  // something else is a quiet wrong answer.
+  //
+  // A pre-minor-22 agent ignores this field and would start the container
+  // on the bridge with nothing published, which is why Keystone refuses to
+  // dispatch a HOST spec to one (resource.HostNetworkProtocolMinor).
+  ContainerNetworkMode network_mode = 18;
+}
+
+// ContainerNetworkMode is a closed set on purpose: Docker also accepts
+// "none", "container:<id>" and arbitrary network names here, and the
+// second of those joins another container's namespace — a capability no
+// package has asked for and none should get by accident.
+enum ContainerNetworkMode {
+  CONTAINER_NETWORK_MODE_UNSPECIFIED = 0; // bridge (plus `network`, if set)
+  CONTAINER_NETWORK_MODE_HOST = 1;
 }
 
 // ContainerResources bounds what one container may consume (protocol
@@ -484,6 +514,13 @@ message InspectContainerResult {
   // rather than "no addresses": a reader must keep whatever it already
   // had rather than concluding the proxy has gone.
   repeated string ip_addresses = 7;
+
+  // Docker's HostConfig.NetworkMode verbatim (protocol minor 22): "host"
+  // for a container in the node's namespace, otherwise the bridge or
+  // network name Docker recorded. Verbatim for the reason `status` is.
+  // Empty from an agent older than minor 22, which readers must treat as
+  // "unknown" rather than "bridge".
+  string network_mode = 8;
 }
 
 message PruneImages {}

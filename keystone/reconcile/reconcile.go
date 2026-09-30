@@ -972,7 +972,7 @@ func (r *Reconciler) observeContainer(ctx context.Context, nodeID string, k resK
 	// verdict turns out to be: a converged container whose app says
 	// "unhealthy" is exactly the case this exists to make visible.
 	appHealth := inspect.GetAppHealth()
-	if inspect.GetLabels()[specHashLabel] == specHash(want.Container, ContainerNetwork, configDigest(r.ManagedPrefix, want.Container, cfgContents), hostAliases) && inspect.GetRunning() {
+	if inspect.GetLabels()[specHashLabel] == specHash(want.Container, containerNetworkFor(want.Container), configDigest(r.ManagedPrefix, want.Container, cfgContents), hostAliases) && inspect.GetRunning() {
 		return &containerObserveResult{appHealth: appHealth}, want, nil
 	}
 	// Present but stale (spec drifted, or a pre-spec-hash container) or
@@ -1532,7 +1532,7 @@ func (r *Reconciler) applyContainerStep(ctx context.Context, nodeID string, step
 			sr.Error = pr
 			return sr
 		}
-		res, err := r.retryDispatch(ctx, nodeID, containerEnsureOp(step.Name, want.Container, ContainerNetwork, configDigest(r.ManagedPrefix, want.Container, cfgContents), hostAliases))
+		res, err := r.retryDispatch(ctx, nodeID, containerEnsureOp(step.Name, want.Container, containerNetworkFor(want.Container), configDigest(r.ManagedPrefix, want.Container, cfgContents), hostAliases))
 		if err != nil {
 			sr.Error = err.Error()
 			return sr
@@ -1677,6 +1677,20 @@ const ContainerNetwork = "wildstone"
 // resolved by name on ContainerNetwork.
 const DefaultAutheliaAddr = "authelia:9091"
 
+// containerNetworkFor is the managed network a container is attached to:
+// ContainerNetwork, or nothing for a container in the host's network
+// namespace, which cannot also join a bridge (protocol minor 22). The
+// same value feeds specHash, so a move between bridge and host changes
+// the "\x00net=" suffix as well as the spec's own networkMode and the
+// container is replaced; a container that never set networkMode keeps
+// ContainerNetwork and therefore the hash it already had.
+func containerNetworkFor(spec *resource.ContainerSpec) string {
+	if spec.HostNetwork() {
+		return ""
+	}
+	return ContainerNetwork
+}
+
 func (r *Reconciler) autheliaAddr() string {
 	if r.AutheliaAddr != "" {
 		return r.AutheliaAddr
@@ -1819,6 +1833,13 @@ func (r *Reconciler) refuseIfAgentTooOld(nodeID string, step plan.PlanStep, spec
 	if !known || have >= need {
 		return ""
 	}
+	if need >= resource.HostNetworkProtocolMinor {
+		return fmt.Sprintf("%s/%s needs wardstone protocol minor %d (networkMode: host) and the agent on node %s "+
+			"speaks minor %d: upgrade wardstoned there first. An older agent would ignore the network mode and start "+
+			"the container on the bridge with nothing published, running but unreachable, so it is refused before "+
+			"the existing container is touched",
+			step.Kind, step.Name, need, nodeID, have)
+	}
 	if need >= resource.HardeningProtocolMinor {
 		return fmt.Sprintf("%s/%s needs wardstone protocol minor %d (readOnlyRootfs, capDrop, noNewPrivileges, "+
 			"resources or shmSize) and the agent on node %s speaks minor %d: upgrade wardstoned there first. An "+
@@ -1864,6 +1885,13 @@ func containerEnsureOp(name string, spec *resource.ContainerSpec, network, cfgDi
 	if r := spec.Resources; r != nil {
 		resources = &wsv1.ContainerResources{Memory: r.Memory, Cpus: r.Cpus, PidsLimit: int64(r.PidsLimit)}
 	}
+	// Host networking (protocol minor 22): refuseIfAgentTooOld keeps a
+	// host-mode spec away from an agent that would ignore this and start
+	// the container on the bridge instead.
+	networkMode := wsv1.ContainerNetworkMode_CONTAINER_NETWORK_MODE_UNSPECIFIED
+	if spec.HostNetwork() {
+		networkMode = wsv1.ContainerNetworkMode_CONTAINER_NETWORK_MODE_HOST
+	}
 	return &wsv1.Operation{Op: &wsv1.Operation_EnsureContainer{EnsureContainer: &wsv1.EnsureContainer{
 		Name: name, Image: spec.Image, Env: spec.Env, Ports: ports, Mounts: mounts, RestartPolicy: spec.Restart,
 		Command:         spec.Command,
@@ -1876,6 +1904,7 @@ func containerEnsureOp(name string, spec *resource.ContainerSpec, network, cfgDi
 		NoNewPrivileges: spec.NoNewPrivileges,
 		Resources:       resources,
 		ShmSize:         spec.ShmSize,
+		NetworkMode:     networkMode,
 		Labels:          map[string]string{specHashLabel: specHash(spec, network, cfgDigest, aliases)},
 	}}}
 }

@@ -87,6 +87,9 @@ type containerInspect struct {
 	} `json:"Config"`
 	HostConfig struct {
 		PortBindings map[string][]portBinding `json:"PortBindings"`
+		// NetworkMode is Docker's own record of the namespace the
+		// container runs in: "host", or a bridge/network name.
+		NetworkMode string `json:"NetworkMode"`
 	} `json:"HostConfig"`
 	// Networks is keyed by Docker network name; a container attached to
 	// several has an address on each. Parsed because Keystone has to
@@ -234,6 +237,11 @@ type hostConfig struct {
 	PidsLimit int64 `json:"PidsLimit,omitempty"`
 	// ShmSize (bytes); zero leaves Docker's own default (64 MiB).
 	ShmSize int64 `json:"ShmSize,omitempty"`
+	// NetworkMode is "host" for a CONTAINER_NETWORK_MODE_HOST op and
+	// empty otherwise, which Docker reads as its default bridge (protocol
+	// minor 22). Nothing else is ever written here: "container:<id>"
+	// would join another container's namespace.
+	NetworkMode string `json:"NetworkMode,omitempty"`
 }
 
 // deviceMapping is Docker's HostConfig.Devices entry.

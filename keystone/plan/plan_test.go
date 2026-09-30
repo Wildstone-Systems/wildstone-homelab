@@ -568,3 +568,33 @@ func TestDiffOffsiteExcludeRemoved(t *testing.T) {
 		t.Fatal("adding an exclude graded High")
 	}
 }
+
+// TestDiffContainerNetworkModeIsDescribed: a move to host networking is a
+// Medium update, and both the description and the blast radius say so,
+// because sharing the node's interfaces is what the approver is actually
+// being asked to allow.
+func TestDiffContainerNetworkModeIsDescribed(t *testing.T) {
+	host := cont("hub", imgA(), nil)
+	host.Container.NetworkMode = resource.NetworkModeHost
+
+	p := Diff([]resource.Resource{host}, []resource.Resource{cont("hub", imgA(), nil)})
+	if len(p.Steps) != 1 || p.Steps[0].Action != ActionUpdate || p.Steps[0].Risk != RiskMedium {
+		t.Fatalf("bridge -> host: got %+v, want one Medium update", p.Steps)
+	}
+	if s := p.Steps[0]; !strings.Contains(s.Description, "host network") || !strings.Contains(s.BlastRadius, "host's network namespace") {
+		t.Errorf("bridge -> host step does not say host networking: %+v", s)
+	}
+
+	p = Diff([]resource.Resource{cont("hub", imgA(), nil)}, []resource.Resource{host})
+	if len(p.Steps) != 1 || p.Steps[0].Action != ActionUpdate {
+		t.Fatalf("host -> bridge: got %+v, want one update", p.Steps)
+	}
+	if strings.Contains(p.Steps[0].Description, "host network") {
+		t.Errorf("host -> bridge step still says host network: %q", p.Steps[0].Description)
+	}
+
+	p = Diff([]resource.Resource{host}, nil)
+	if len(p.Steps) != 1 || p.Steps[0].Risk != RiskLow || !strings.Contains(p.Steps[0].Description, "(host network)") {
+		t.Errorf("host create: got %+v, want a Low create described as host network", p.Steps)
+	}
+}

@@ -114,7 +114,17 @@ import (
 // 21: adds IPC_LOCK to the closed capability allowlist (#441). An older
 // agent refuses it as FORBIDDEN, so Keystone gates a spec adding it on
 // this minor (resource.IPCLockProtocolMinor).
-const ProtocolMinor = 21
+//
+// 22: adds EnsureContainer.network_mode (CONTAINER_NETWORK_MODE_HOST) and
+//
+//	InspectContainerResult.network_mode. A home-automation hub has to
+//	share the node's network namespace to hear mDNS, SSDP and the other
+//	link-local discovery a bridge never forwards. Host mode excludes
+//	ports and network; both are refused before an existing container is
+//	touched. A pre-minor-22 agent would ignore the field and start the
+//	container on the bridge with nothing published, so Keystone refuses
+//	to dispatch a host-mode spec to one (resource.HostNetworkProtocolMinor).
+const ProtocolMinor = 22
 
 // maxUpdateMsgBytes is the gRPC message size cap on both ends of the
 // session/join connections (ADR-W003 W5). SelfUpdate ships the new binary
