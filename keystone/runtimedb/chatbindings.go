@@ -20,22 +20,29 @@ import (
 // the existing human-established binding. Source provenance does not substitute
 // for this check when queued private work returns to its originating chat.
 func (db *DB) HasLivePersonChatBinding(connection int64, person string) (bool, error) {
-	var role string
-	err := db.sql.QueryRow(`SELECT p.role
+	var role, surface, admits, subject string
+	var at Connection
+	// Every input to Admits belongs to this one statement's snapshot. Separate
+	// role and Connection reads can admit a combination that never existed.
+	err := db.sql.QueryRow(`SELECT p.role,b.surface,b.agent_class,
+ COALESCE(ca.admits,''),COALESCE(ca.subject_kind,'')
  FROM chat_bindings cb JOIN butler_members p ON p.person_id=cb.person_id
+ JOIN butler_addresses a ON a.seq=cb.connection
+ JOIN butlers b ON b.seq=a.butler
+ LEFT JOIN connection_admission ca ON ca.connection=a.seq
  WHERE cb.connection=? AND p.member=? AND cb.revoked_at=''
  AND p.admitted=1 AND p.disabled_at='' AND p.offboarded_at=''
- LIMIT 1`, connection, person).Scan(&role)
+ AND a.revoked_at=''
+ LIMIT 1`, connection, person).Scan(&role, &surface, &at.AgentClass, &admits, &subject)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
 	if err != nil {
 		return false, err
 	}
-	at, err := db.ChatConnectionBySeq(connection)
-	if err != nil {
-		return false, err
-	}
+	at.Surface = ButlerSurface(surface)
+	at.Admission = parseAdmission(admits)
+	at.AdmissionSubject = parseAdmissionSubject(subject)
 	// Use the canonical closed-set admission check, including subject kind,
 	// current Agent class/surface and current Person role. Missing or unknown
 	// policy never grants authority merely because a binding survives.

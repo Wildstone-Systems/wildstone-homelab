@@ -272,8 +272,21 @@ func (db *DB) CreateWorkspaceRevisionForTask(ctx context.Context, a *WorkspaceAc
 // is resumed or sent elsewhere. Memory-only history keeps its existing policy;
 // this slice adds no new grants or unattended-work authority.
 func (db *DB) checkWorkspaceHistoryAuthority(object string, task, session int64, destination MemoryDestination) error {
+	tx, err := db.sql.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err = db.checkWorkspaceHistoryAuthorityIn(tx, object, task, session, destination); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// All lineage, identity, source admission and disclosure reads share a snapshot.
+func (db *DB) checkWorkspaceHistoryAuthorityIn(q privacyReader, object string, task, session int64, destination MemoryDestination) error {
 	var workspace bool
-	if err := db.sql.QueryRow(privacySources+`SELECT EXISTS(SELECT 1 FROM sources s JOIN workspace_revisions r ON s.object='wr:'||r.id)`, object).Scan(&workspace); err != nil {
+	if err := q.QueryRow(privacySources+`SELECT EXISTS(SELECT 1 FROM sources s JOIN workspace_revisions r ON s.object='wr:'||r.id)`, object).Scan(&workspace); err != nil {
 		return err
 	}
 	if !workspace {
@@ -282,16 +295,16 @@ func (db *DB) checkWorkspaceHistoryAuthority(object string, task, session int64,
 	var reader workspaceSourceReader
 	var err error
 	if task != 0 {
-		err = db.sql.QueryRow(`SELECT p.member,t.butler,t.agent_class,t.surface FROM butler_tasks t JOIN butler_members p ON p.person_id=t.owner_person_id WHERE t.seq=? AND t.kind='conversation' AND t.audience=?`, task, ButlerAudiencePrivate).Scan(&reader.person, &reader.agent, &reader.class, &reader.surface)
+		err = q.QueryRow(`SELECT p.member,t.butler,t.agent_class,t.surface FROM butler_tasks t JOIN butler_members p ON p.person_id=t.owner_person_id WHERE t.seq=? AND t.kind='conversation' AND t.audience=?`, task, ButlerAudiencePrivate).Scan(&reader.person, &reader.agent, &reader.class, &reader.surface)
 	} else if session != 0 {
-		err = db.sql.QueryRow(`SELECT p.member,b.name,b.agent_class,s.surface FROM butler_sessions s JOIN butler_members p ON p.person_id=s.person_id JOIN butlers b ON b.seq=s.agent_id WHERE s.seq=?`, session).Scan(&reader.person, &reader.agent, &reader.class, &reader.surface)
+		err = q.QueryRow(`SELECT p.member,b.name,b.agent_class,s.surface FROM butler_sessions s JOIN butler_members p ON p.person_id=s.person_id JOIN butlers b ON b.seq=s.agent_id WHERE s.seq=?`, session).Scan(&reader.person, &reader.agent, &reader.class, &reader.surface)
 	} else {
 		return ErrPrivacy
 	}
 	if err != nil {
 		return ErrPrivacy
 	}
-	if err = db.checkWorkspaceSources(db.sql, reader, destination, object); err != nil {
+	if err = db.checkWorkspaceSources(q, reader, destination, object); err != nil {
 		return ErrPrivacy
 	}
 	return nil
