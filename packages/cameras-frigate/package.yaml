@@ -22,8 +22,25 @@
 # authenticated listener — never 5000, which trusts everything).
 # admin_tailscale: camera feeds are the operator's, not a public page.
 #
-# MQTT is optional and off by default; set mqtt_host to "mosquitto"
-# after installing mqtt-mosquitto to get events into Home Assistant.
+# MQTT is optional and off by default. Switched off, this package needs
+# no broker and renders `mqtt: enabled: false`. Set mqtt_enabled to
+# "true" (after installing mqtt-mosquitto) to get events into Home
+# Assistant: the mqtt:broker requirement then applies (requires[].when),
+# and the broker's address — the one private IPv4 it was bound to, never
+# the container name "mosquitto" — its port, and the username "cameras"
+# come from it. The password is the broker's secret/mqtt-cameras, handed
+# to the container by reference as FRIGATE_MQTT_PASSWORD, which Frigate
+# substitutes into `password: "{FRIGATE_MQTT_PASSWORD}"` itself; no
+# literal password is written into the managed config file.
+#
+# With MQTT on, this package must be on the broker's machine: that
+# password is a node secret there, and node secrets never leave their
+# node. Elsewhere the install is refused at expansion, naming both
+# machines. With MQTT off it can go anywhere.
+#
+# UPGRADING FROM 1.x. mqtt_host is gone; an install that set it sets
+# mqtt_enabled: "true" instead. Volumes, cameras and devices are
+# unchanged.
 #
 # Image digest is REAL, resolved 2026-09-07 via the OCI registry API:
 #   ghcr.io/blakeblackshear/frigate:stable -> sha256:d4351369...7010
@@ -31,20 +48,23 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: cameras-frigate
-  version: 1.0.1
+  # 2.0.0: MQTT comes from mqtt:broker behind the mqtt_enabled switch,
+  # authenticated; the free-form mqtt_host param is gone.
+  version: 2.0.0
   capability: cameras
   profile: frigate
 requires:
   - { trait: identity, mode: oidc }
   - { trait: ingress, mode: private }
   - { trait: storage, class: bulk }
+  - { trait: mqtt, mode: broker, when: mqtt_enabled }
 params:
   - { name: admin_domain, required: true, description: "The domain your admin-only services are named under. Under a tailnet this is a label rather than an address you type.", source: domain }
   - { name: node, required: true, description: "Which machine to install this on.", source: node }
   - { name: timezone, default: UTC, source: timezone, validate: iana_timezone, description: "Your timezone, e.g. Europe/London." }
   - { name: camera_name, default: front_door, description: "A short name for your first camera, letters and underscores only, e.g. front_door." }
   - { name: camera_rtsp_url, required: true, example: "rtsp://192.168.1.50:554/stream1", description: "The RTSP stream address of your first camera, e.g. rtsp://192.168.1.50:554/stream1. If it needs a login, put it in the address (rtsp://user:pass@host/...) and add more cameras in the config file later." }
-  - { name: mqtt_host, default: "", description: "Container name of an MQTT broker to publish events to, e.g. mosquitto. Leave empty for none." }
+  - { name: mqtt_enabled, default: "false", validate: "enum:true|false", description: "Publish detection events to the MQTT broker (mqtt-mosquitto), so Home Assistant sees them. Needs the broker installed on this same machine first. Leave false for none." }
   - { name: retain_days, default: "7", description: "How many days of recordings to keep." }
   - { name: gpu_device, default: "", example: "/dev/dri", description: "A GPU render node for hardware video decoding, e.g. /dev/dri on Intel or AMD. Leave empty to decode on the CPU." }
   - { name: coral_device, default: "", example: "/dev/apex_0", description: "A Coral TPU for detection, e.g. /dev/apex_0 for the PCIe or M.2 versions, or /dev/bus/usb for the USB one. Leave empty to detect on the CPU." }
@@ -77,8 +97,15 @@ templates:
           header_map:
             user: remote-user
         mqtt:
-          enabled: {{ if .Params.mqtt_host }}true{{ else }}false{{ end }}
-          {{ with .Params.mqtt_host }}host: {{ . }}{{ end }}
+        {{- if eq .Params.mqtt_enabled "true" }}
+          enabled: true
+          host: "{{ .Resolved.MqttHost }}"
+          port: {{ .Resolved.MqttPort }}
+          user: "{{ .Resolved.MqttUsername }}"
+          password: "{FRIGATE_MQTT_PASSWORD}"
+        {{- else }}
+          enabled: false
+        {{- end }}
         detectors:
         {{- if .Params.coral_device }}
           coral:
@@ -129,6 +156,9 @@ templates:
       env:
         TZ: "{{ .Params.timezone }}"
         CONFIG_FILE: /etc/wildstone/cameras/config.yml
+        {{- if eq .Params.mqtt_enabled "true" }}
+        FRIGATE_MQTT_PASSWORD: "{{ .Resolved.MqttPasswordSecretRef }}"
+        {{- end }}
       mounts:
         - { source: frigate-config, target: /config }
         - { source: frigate-media, target: /media/frigate }

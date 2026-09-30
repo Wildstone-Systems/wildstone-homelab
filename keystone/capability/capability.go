@@ -146,6 +146,12 @@ func (e *Engine) Expand(pkg *pkgspec.Package, params map[string]string, catalog 
 	}
 
 	for _, req := range pkg.Requires {
+		if !req.AppliesTo(merged) {
+			// A switched-off integration (requires[].when) needs no
+			// provider. Its templates must not read the keys one would
+			// supply; a missing key there still fails loudly.
+			continue
+		}
 		if trait.IsStructural(req.Trait) {
 			// ingress/storage are system mechanisms, always satisfiable
 			// (ADR-W010 A1 making ADR-W005 A2's prose real): ingress by the
