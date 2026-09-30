@@ -142,6 +142,13 @@ var imageArgv0 = map[string][]string{
 	// sha256:717f9d26…2f89 (11.24.2), pulled from Docker Hub on
 	// 2026-09-30, and TestZwaveJSUIServesHomeAssistant boots it.
 	"zwavejs/zwave-js-ui": {"node"},
+	// The OpenThread project's border router image declares
+	// ENTRYPOINT ["/app/etc/docker/test/docker_entrypoint.sh"], which
+	// parses --radio-url/--backbone-interface/--debug-level itself and
+	// drops anything else, so a command carries those flags only.
+	// Evidence: `docker image inspect` of the pinned digest on 2026-09-30,
+	// and TestOTBRImageContract, which starts it.
+	"openthread/otbr": {""},
 }
 
 // TestPackageCommandsNameTheirBinary walks every shipped package's

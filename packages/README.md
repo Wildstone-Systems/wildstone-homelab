@@ -89,6 +89,7 @@ one mechanism, which is worth deciding before any of them individually.
 | `mqtt-mosquitto` | mqtt | Mosquitto broker, password-only, on one private LAN address; provides `mqtt:broker` | internal |
 | `zigbee-zigbee2mqtt` | zigbee | Zigbee2MQTT over a USB stick or a network coordinator; requires `mqtt:broker` on its node | proxy |
 | `zwave-zwave-js-ui` | zwave | Z-Wave JS UI on a USB stick (by `/dev/serial/by-id/`); WS server for Home Assistant on one private address, provides `zwave:server`; MQTT gateway off | proxy |
+| `thread-otbr` | thread | OpenThread Border Router on a local USB Thread radio, host-networked; REST on 127.0.0.1:8081 for Home Assistant on the same node, no Route | — |
 | `cameras-frigate` | cameras | Frigate NVR (CPU, Coral or GPU); `mqtt_enabled` switches on `mqtt:broker` | proxy |
 | `dns-pihole`, `dns-adguard` | dns | Pi-hole or AdGuard Home, on 53/udp and 53/tcp | proxy |
 | `vpn-gluetun` | vpn | Gluetun VPN client with a kill switch and an HTTP proxy for other containers | internal |
@@ -323,7 +324,8 @@ params:
 ```
 
 `validate:` names a shape from a closed vocabulary (`iana_timezone`,
-`url`, `hostname`, `email`, `port`, `duration`, `private_ipv4`) and `capability.Expand`
+`url`, `hostname`, `email`, `port`, `duration`, `private_ipv4`,
+`interface_name`, `serial_by_id`) and `capability.Expand`
 refuses a value that fails it — so the check runs against the value an
 operator actually supplied, not only the one you shipped.
 

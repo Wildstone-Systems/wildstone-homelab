@@ -73,6 +73,9 @@ const GROUP_OF: Record<string, Group> = {
   cameras: "Home",
   zigbee: "Home",
   zwave: "Home",
+  // The OpenThread Border Router (thread-otbr): radio plumbing Home
+  // Assistant uses, beside Zigbee.
+  thread: "Home",
   mqtt: "Home",
   inventory: "Home",
   recipes: "Home",

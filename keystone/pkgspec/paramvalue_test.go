@@ -122,3 +122,46 @@ func TestValidateEnumShapeDecl(t *testing.T) {
 		}
 	}
 }
+
+// TestInterfaceNameShape: a node interface name lands in a sysfs path and
+// an upstream script's sed expression, so anything with a separator,
+// whitespace or more than IFNAMSIZ-1 bytes is refused.
+func TestInterfaceNameShape(t *testing.T) {
+	for _, v := range []string{"eth0", "enp1s0", "br-lan", "eth0.100", "wlp2s0", "enx001122334455"} {
+		if err := ValidateParamValue("interface_name", v); err != nil {
+			t.Errorf("%s: unexpected error: %v", v, err)
+		}
+	}
+	for _, v := range []string{"../eth0", "eth0/", "eth 0", "a-name-that-is-too-long", ".hidden", "eth0;reboot", "s/x/y/"} {
+		if err := ValidateParamValue("interface_name", v); err == nil {
+			t.Errorf("%q: accepted, want refused", v)
+		}
+	}
+}
+
+// TestSerialByIDShape: a radio is named by its stable alias, never by a
+// plug-order tty and never by anything outside /dev/serial/by-id.
+func TestSerialByIDShape(t *testing.T) {
+	for _, v := range []string{
+		"/dev/serial/by-id/usb-Nabu_Casa_Home_Assistant_Connect_ZBT-1_REPLACED-SERIAL-if00-port0",
+		"/dev/serial/by-id/usb-SEGGER_J-Link_000683000000-if00",
+	} {
+		if err := ValidateParamValue("serial_by_id", v); err != nil {
+			t.Errorf("%s: unexpected error: %v", v, err)
+		}
+	}
+	for v, want := range map[string]string{
+		"/dev/ttyUSB0":                  "plug order",
+		"/dev/ttyACM0":                  "plug order",
+		"/dev/serial/by-id/../../sda":   "not a /dev/serial/by-id/ path",
+		"/dev/serial/by-id/":            "not a /dev/serial/by-id/ path",
+		"/dev/serial/by-path/pci-0:1.0": "not a /dev/serial/by-id/ path",
+		"/dev/serial/by-id/a/b":         "not a /dev/serial/by-id/ path",
+		"tcp://192.168.1.5:6638":        "not a /dev/serial/by-id/ path",
+	} {
+		err := ValidateParamValue("serial_by_id", v)
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: want an error containing %q, got %v", v, want, err)
+		}
+	}
+}

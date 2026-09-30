@@ -5,6 +5,8 @@ import (
 	"net/mail"
 	"net/netip"
 	"net/url"
+	"path"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -24,13 +26,15 @@ import (
 // a value must LOOK LIKE once it arrives, whoever supplied it. Most
 // params have a source and no shape, or a shape and no source.
 var ParamShapes = map[string]func(string) error{
-	"iana_timezone": validateIANATimezone,
-	"url":           validateURL,
-	"hostname":      validateHostname,
-	"email":         validateEmail,
-	"port":          validatePort,
-	"duration":      validateDuration,
-	"private_ipv4":  validatePrivateIPv4,
+	"iana_timezone":  validateIANATimezone,
+	"url":            validateURL,
+	"hostname":       validateHostname,
+	"email":          validateEmail,
+	"port":           validatePort,
+	"duration":       validateDuration,
+	"private_ipv4":   validatePrivateIPv4,
+	"interface_name": validateInterfaceName,
+	"serial_by_id":   validateSerialByID,
 }
 
 // ParamShapeNames lists the vocabulary, for a diagnostic that names what
@@ -241,4 +245,42 @@ func validatePrivateIPv4(v string) error {
 		}
 	}
 	return fmt.Errorf("%q is not a private address (10/8, 172.16/12, 192.168/16, or a tailnet's 100.64/10)", v)
+}
+
+// interfaceNameRegexp is a Linux network interface name as the kernel
+// accepts one (IFNAMSIZ: at most 15 bytes) narrowed to the characters
+// real names use — enp1s0, eth0, br-lan, eth0.100 — so the value is safe
+// to land in a sysfs path, an argv and an upstream script's sed pattern.
+var interfaceNameRegexp = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,14}$`)
+
+// validateInterfaceName is for a param that names one of the node's own
+// network interfaces — the thread-otbr backbone is the case that asked
+// for it. The node is the authority on which interfaces EXIST (the
+// home-automation readiness probe lists them); this only refuses what
+// could never be one.
+func validateInterfaceName(v string) error {
+	if !interfaceNameRegexp.MatchString(v) {
+		return fmt.Errorf("%q is not a network interface name: give the node's LAN-facing interface as `ip link` shows it, e.g. eth0 or enp1s0 (at most 15 characters)", v)
+	}
+	return nil
+}
+
+// serialByIDRegexp is one entry directly under /dev/serial/by-id/.
+var serialByIDRegexp = regexp.MustCompile(`^/dev/serial/by-id/[A-Za-z0-9][A-Za-z0-9._:+-]*$`)
+
+// validateSerialByID is for a radio a container is handed. /dev/ttyUSB0
+// and /dev/ttyACM0 are numbered in plug order, so a second stick or a
+// reboot can swap them and hand a Thread radio's port to a Zigbee
+// stack; the by-id alias names the device itself. The device allowlist
+// admits the numbered names for older packages, so the stable form is
+// asked for here, where the value arrives.
+func validateSerialByID(v string) error {
+	if path.Clean(v) != v || !serialByIDRegexp.MatchString(v) {
+		hint := ""
+		if strings.HasPrefix(v, "/dev/tty") {
+			hint = " — /dev/tty* names change with plug order"
+		}
+		return fmt.Errorf("%q is not a /dev/serial/by-id/ path%s: use the stick's name under /dev/serial/by-id/ (the node's radio inventory lists it)", v, hint)
+	}
+	return nil
 }
