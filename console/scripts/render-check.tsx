@@ -1422,7 +1422,17 @@ check("the identity code is set at display size", idCode.includes("identity-code
 check("the identity code says when it was read", text(idCode).includes("read 1m ago"), text(idCode));
 check("the identity screen invents no expiry", !idCode.includes("expires"), idCode);
 const noCode = renderToString(h(IdentityCode, { note: { note: "" }, readAt: new Date() }));
-check("no code waiting says what to do", noCode.includes("Ask the person to request one"));
+check("no code waiting says what to do", noCode.includes("Ask the person to request a code or reset"));
+// A password reset carries a link and no code (#463). The link is the
+// whole, unredacted one, shown to copy rather than to follow — opening
+// it here would spend it.
+const resetLink = "https://auth.example.internal/reset-password/step2?token=REPLACED-token";
+const idReset = renderToString(h(IdentityCode, { note: { resetLink, body: "reset: [REDACTED]", note: "" }, readAt: new Date() }));
+check("a reset link is shown whole", idReset.includes(resetLink), idReset);
+check("a reset link is not a link to follow", !idReset.includes("<a "), idReset);
+check("a reset without a code is not reported as nothing waiting", !idReset.includes("Nothing is waiting"), idReset);
+const idOther = renderToString(h(IdentityCode, { note: { body: "something else", note: "" }, readAt: new Date() }));
+check("a notification with neither code nor link is still shown", idOther.includes("something else"), idOther);
 
 // Household members (ADR-W020 A3). The screen has to say the two things
 // an operator would otherwise assume wrongly: adding somebody proposes a
