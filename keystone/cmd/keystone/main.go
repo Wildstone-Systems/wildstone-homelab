@@ -11,6 +11,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/chickenrat17/wildstone-homelab/keystone/mailreview"
 	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
 	"io"
 	"log/slog"
@@ -2023,6 +2024,15 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 			if mailErr != nil {
 				log.Error("mailbox monitor unavailable; mail.changes runs will be refused", "err", mailErr)
 				mailMonitor = nil
+			}
+			// The private review of its candidates (epic #326 S06): the
+			// monitor's hook, the Person-scoped candidate API and /mail,
+			// and the reconciler that settles interrupted calendar writes.
+			if mailMonitor != nil {
+				review := newMailReview(db, mailMonitor, calendarActions, log)
+				mailMonitor.Hook = review
+				apiSrv.MailReview = review
+				go mailreview.RunReconciler(context.Background(), review, time.Minute, log)
 			}
 			startScheduledSubscriptions(context.Background(), newScheduledSubscriptions(db, ledger, log, mailMonitor), mailMonitor, log)
 

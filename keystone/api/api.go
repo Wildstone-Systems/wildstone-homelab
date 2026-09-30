@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/chickenrat17/wildstone-homelab/keystone/householdtz"
+	"github.com/chickenrat17/wildstone-homelab/keystone/mailreview"
 	"log/slog"
 	"net"
 	"net/http"
@@ -41,6 +42,9 @@ import (
 // OnApproved.
 type Server struct {
 	SecretVault *runtimedb.SecretVault
+	// MailReview is the private review of mail event candidates (epic
+	// #326 S06). nil leaves the candidate routes reading only.
+	MailReview *mailreview.Engine
 	// PairingHTTP, when set, is the client pairing calls PantryOS with
 	// (tests); its redirect policy is always replaced with "never follow".
 	PairingHTTP *http.Client
@@ -595,6 +599,17 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/home/integrations/{name}/credential/revoke", s.portal(surfaceHome, s.homeRevokeCredential))
 	mux.Handle("POST /api/v1/home/integrations/{name}/authorization", s.portal(surfaceHome, s.homeAuthorizeBackground))
 	mux.Handle("POST /api/v1/home/integrations/{name}/authorization/revoke", s.portal(surfaceHome, s.homeRevokeBackground))
+	// Mail event candidates and their private review (epic #326 S06).
+	// Person-scoped in the store; acting needs the Person's own identity
+	// (never an Agent or a delegate) and manage, which no Agent holds.
+	mux.Handle("GET /api/v1/mail/candidates", s.handle(principal.VerbRead, s.consoleMailCandidates))
+	mux.Handle("GET /api/v1/mail/candidates/{id}", s.handle(principal.VerbRead, s.consoleMailCandidate))
+	mux.Handle("POST /api/v1/mail/candidates/{id}/act", s.handle(principal.VerbManage, s.consoleMailAct))
+	mux.Handle("POST /api/v1/mail/act", s.handle(principal.VerbManage, s.consoleMailAct))
+	mux.Handle("GET /api/v1/home/mail/candidates", s.portal(surfaceHome, s.homeMailCandidates))
+	mux.Handle("GET /api/v1/home/mail/candidates/{id}", s.portal(surfaceHome, s.homeMailCandidate))
+	mux.Handle("POST /api/v1/home/mail/candidates/{id}/act", s.portal(surfaceHome, s.homeMailAct))
+	mux.Handle("POST /api/v1/home/mail/act", s.portal(surfaceHome, s.homeMailAct))
 	// The adapter's side: claim and answer, and nothing else.
 	mux.Handle("POST /api/v1/integration-work/claim", s.handle(principal.VerbClaimIntegrationWork, s.claimIntegrationWork))
 	mux.Handle("POST /api/v1/integration-work/result", s.handle(principal.VerbReportIntegrationResult, s.reportIntegrationResult))
@@ -1253,6 +1268,17 @@ func (s *Server) writeJSON(w http.ResponseWriter, status int, body any) {
 		// Redacted everywhere but the password-reset link an admin hands
 		// over (identityNotification.redacted), and never cached.
 		if raw, err = body.(identityNotification).redacted(); err != nil {
+			s.Log.Error("response redaction failed", "err", err)
+			http.Error(w, `{"error":"internal"}`, http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Pragma", "no-cache")
+	case mailCandidateResponse:
+		// Redacted everywhere but the Person's own review tokens, which
+		// they present back to act (mailCandidateResponse.redacted), and
+		// never cached.
+		if raw, err = body.(mailCandidateResponse).redacted(); err != nil {
 			s.Log.Error("response redaction failed", "err", err)
 			http.Error(w, `{"error":"internal"}`, http.StatusInternalServerError)
 			return

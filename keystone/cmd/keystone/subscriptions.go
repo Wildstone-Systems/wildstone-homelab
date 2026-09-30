@@ -24,8 +24,10 @@ import (
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/automation"
 	"github.com/chickenrat17/wildstone-homelab/keystone/butlerstore"
+	"github.com/chickenrat17/wildstone-homelab/keystone/domestic"
 	"github.com/chickenrat17/wildstone-homelab/keystone/householdtz"
 	"github.com/chickenrat17/wildstone-homelab/keystone/mailmonitor"
+	"github.com/chickenrat17/wildstone-homelab/keystone/mailreview"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 )
 
@@ -58,7 +60,8 @@ func newScheduledSubscriptions(db *runtimedb.DB, ledger *butlerstore.Ledger, log
 // excerpts are unreadable and discarded -- times resolved in the
 // household zone, and extraction on the monitor Agent's own model
 // route, filtered by the Person's processing location. The review hook
-// is the no-op until S06 wires the private review.
+// is the no-op here; the caller replaces it with the private review
+// (newMailReview, S06) once the calendar path exists.
 func newMailMonitor(db *runtimedb.DB, dataDir string, zone *householdtz.Zone, log *slog.Logger) (*mailmonitor.Processor, error) {
 	vault, err := db.OpenMailExcerptVault(filepath.Join(dataDir, "mail-excerpts.key"))
 	if err != nil {
@@ -69,6 +72,20 @@ func newMailMonitor(db *runtimedb.DB, dataDir string, zone *householdtz.Zone, lo
 		Extractor: &mailmonitor.Extractor{Router: mailmonitor.ButlerModelRouter{DB: db, Build: butlerProviderFor}},
 		Hook:      mailmonitor.NoopHook{},
 	}, nil
+}
+
+// newMailReview builds the private review engine for the monitor's
+// candidates (epic #326 S06). Its calendar path is the calendar
+// capability's own exact, Person-scoped one — the Person's current
+// calendar access, the deployment's calendar credential, never the
+// mailbox credential. With no calendar configured, candidates are still
+// offered (Edit and Dismiss work) but nothing can be added.
+func newMailReview(db *runtimedb.DB, mail *mailmonitor.Processor, cal *domestic.Calendar, log *slog.Logger) *mailreview.Engine {
+	e := &mailreview.Engine{DB: db, Vault: mail.Vault, Log: log}
+	if cal != nil {
+		e.Calendar = cal
+	}
+	return e
 }
 
 // scheduledDispatchers is THE registration point for scheduled match
