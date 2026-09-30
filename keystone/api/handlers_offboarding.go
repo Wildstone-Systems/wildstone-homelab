@@ -188,6 +188,13 @@ func (s *Server) reconcileRestore(r *http.Request, id principal.Identity) (any, 
 			if res := s.eraseCredentialCopies(r.Context(), c.Name, true); len(res) > 0 {
 				erasures[c.Name] = res
 			}
+			// The snapshot's desired state may still render an adapter
+			// the replay has just fenced (or be missing one it did not).
+			// Re-file the render so an Owner reviews the placement that
+			// matches the replayed authority; like every render it waits
+			// for approval, and the reconciler applies nothing while the
+			// database is quarantined (epic #326 S08).
+			s.refileAdapterRender(c.Name, actingMember(id))
 		}
 	}
 	out["credentialErasures"] = erasures

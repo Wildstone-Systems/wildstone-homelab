@@ -1,6 +1,7 @@
 package runtimedb
 
 import (
+	"database/sql"
 	"fmt"
 	"io"
 	"os"
@@ -50,6 +51,41 @@ func (db *DB) BackupTo(destination string) error {
 	if _, err := db.sql.Exec(`VACUUM INTO ?`, absDestination); err != nil {
 		return fmt.Errorf("runtimedb: online backup: %w", err)
 	}
+	if err := scrubBackupCopy(absDestination); err != nil {
+		_ = os.Remove(absDestination)
+		return err
+	}
+	return nil
+}
+
+// scrubBackupCopy removes from a snapshot what must never be in a backup
+// (epic #326 S05/S08): a mail read's answer still in the work queue
+// (it carries normalized message text, and the collector or the sweep
+// may not have scrubbed it yet) and every sealed mail excerpt (its key
+// is in no backup, and a restore discards them anyway). The copy is then
+// vacuumed again, so the removed rows do not survive as free pages.
+//
+// Credentials need nothing here: no column can hold a Personal
+// credential value (migration 0098), and the node bundles leave out
+// every pc.<connection> name.
+func scrubBackupCopy(path string) error {
+	copyDB, err := sql.Open("sqlite", fmt.Sprintf("file:%s?_pragma=busy_timeout(5000)", path))
+	if err != nil {
+		return fmt.Errorf("runtimedb: opening the backup copy to scrub it: %w", err)
+	}
+	defer copyDB.Close()
+	for _, q := range []struct {
+		query string
+		args  []any
+	}{
+		{`UPDATE integration_work SET result_json = '{}' WHERE capability IN (?, ?, ?) AND result_json <> '{}'`, mailCapabilities},
+		{`DELETE FROM mail_candidate_excerpts`, nil},
+		{`VACUUM`, nil},
+	} {
+		if _, err := copyDB.Exec(q.query, q.args...); err != nil {
+			return fmt.Errorf("runtimedb: scrubbing mail content from the backup copy: %w", err)
+		}
+	}
 	return nil
 }
 
@@ -95,6 +131,15 @@ func RestoreBackup(source, destination, reason string, snapshotAt time.Time) (*D
 		_ = os.Remove(destination)
 		return nil, err
 	}
+	// Quarantine first, before anything else is touched: a restored copy
+	// that a crash left half-prepared must still hold every Butler-facing
+	// path, including scheduled mail reads and review delivery (epic #326
+	// S08). Nothing below revives access; it only removes.
+	if err := restored.EnterRestoreQuarantine(reason, snapshotAt); err != nil {
+		restored.Close()
+		_ = os.Remove(destination)
+		return nil, err
+	}
 	// Observed rows describe the machine that was lost, not durable household
 	// intent. Keeping them would make the fresh reconciler believe volumes,
 	// containers and external backup routes still exist on the replacement
@@ -125,11 +170,6 @@ func RestoreBackup(source, destination, reason string, snapshotAt time.Time) (*D
 		restored.Close()
 		_ = os.Remove(destination)
 		return nil, fmt.Errorf("runtimedb: purging mail excerpts during restore: %w", err)
-	}
-	if err := restored.EnterRestoreQuarantine(reason, snapshotAt); err != nil {
-		restored.Close()
-		_ = os.Remove(destination)
-		return nil, err
 	}
 	return restored, nil
 }

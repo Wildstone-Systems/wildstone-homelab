@@ -251,8 +251,14 @@ func TestMailAdapterRunnerPlacementFailoverAndFencing(t *testing.T) {
 		}
 		fallback.reader.hold = nil
 		got := readWork(t, h, seq)
-		if got.State != runtimedb.WorkClaimed || got.ResultType != "" || (got.ResultJSON != "" && got.ResultJSON != "{}") {
+		if got.ResultType != "" || (got.ResultJSON != "" && got.ResultJSON != "{}") {
 			t.Fatalf("fenced work = %+v; the superseded answer must not land", got)
+		}
+		// Nor does it stay claimed for ever (epic #326 S08): nothing can
+		// finish work from a fenced epoch, so the fence withdraws it and
+		// whoever waits on it learns at once.
+		if got.State != runtimedb.WorkCancelled || got.Error != runtimedb.FencedWorkReason {
+			t.Fatalf("fenced work = %s %q; want cancelled as fenced", got.State, got.Error)
 		}
 	})
 

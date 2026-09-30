@@ -138,7 +138,19 @@ func actionVerb(kind, action string) string {
 // after an interruption goes back to review (with a fresh token), and
 // only a new approval sends it again — still under If-None-Match on the
 // same UID, so it can never make a second event.
+//
+// It does nothing while a restored database is quarantined (epic #326
+// S08): an effect the snapshot recorded as dispatching is settled only
+// after the deletion journal has been replayed and the quarantine
+// released, so a restore cannot re-offer a review — or look at a
+// calendar on a Person's behalf — before their authority is known.
 func (e *Engine) Reconcile(ctx context.Context) error {
+	if err := e.DB.CheckQuarantine(); err != nil {
+		if errors.Is(err, runtimedb.ErrQuarantined) {
+			return nil
+		}
+		return err
+	}
 	at := e.now()
 	if _, err := e.DB.ExpireMailReviews(at); err != nil {
 		return err

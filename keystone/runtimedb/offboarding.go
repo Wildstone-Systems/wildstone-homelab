@@ -339,6 +339,31 @@ func (db *DB) OffboardMember(member, actor, administrator string) (OffboardingRe
 		}
 	}
 
+	// 8b. What their mailbox monitors learned. Only now — after step 5
+	//     moved the epochs and step 8 revoked the authorizations and
+	//     credentials — so nothing is recording while it goes: their
+	//     candidates, reviews, excerpts, effects, dedupe state and
+	//     checkpoints are deleted, and journalled so a restore deletes
+	//     them again (epic #326 S08).
+	for _, c := range connections {
+		if c.Owner != member || c.Ownership != OwnershipPersonal {
+			continue
+		}
+		erased, err := db.EraseMailConnectionState(c.Name, actor, "owner offboarded", time.Now().UTC())
+		if err != nil {
+			return result, fmt.Errorf("runtimedb: erasing %s's mailbox state: %w", c.Name, err)
+		}
+		if erased.Total() == 0 {
+			continue
+		}
+		result.Stores["mail-state-erased"] += erased.Total()
+		if _, err := db.sql.Exec(`INSERT OR IGNORE INTO offboarding_resource_dispositions
+		 (person_id,resource_kind,resource_ref,disposition,decided_at,decided_by)
+		 VALUES(?,'mail-monitor',?,'deleted',?,?)`, memberPerson, c.Name, now(), actor); err != nil {
+			return result, err
+		}
+	}
+
 	// 9. The durable inventory is an explicit policy decision for every
 	// associated object, not an implication inferred later from a count.
 	// Shared material stays with the household; personal material remains

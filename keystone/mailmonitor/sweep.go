@@ -31,6 +31,13 @@ func RunSweeper(ctx context.Context, db *runtimedb.DB, interval time.Duration, r
 		case <-ctx.Done():
 			return
 		case <-t.C:
+			// Work a fence or a lost adapter left unfinished is withdrawn
+			// first, so a waiting run learns and the next one re-reads.
+			if n, err := db.ExpireIntegrationWork(); err != nil {
+				log.Warn("integration work expiry failed", "err", err)
+			} else if n > 0 {
+				log.Info("integration work withdrawn", "count", n)
+			}
 			out, err := db.SweepMailMonitor(time.Now().UTC(), r)
 			if err != nil {
 				log.Warn("mail monitor sweep failed", "err", err)

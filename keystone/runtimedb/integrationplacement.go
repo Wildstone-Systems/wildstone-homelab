@@ -275,6 +275,9 @@ func (db *DB) PlaceConnection(connection string, stabilization time.Duration) (P
 		now(), conn.Seq); err != nil {
 		return Placement{}, false, fmt.Errorf("runtimedb: placing connection: %w", err)
 	}
+	if err := cancelFencedWorkTx(tx); err != nil {
+		return Placement{}, false, err
+	}
 	if err := tx.Commit(); err != nil {
 		return Placement{}, false, fmt.Errorf("runtimedb: placing connection: %w", err)
 	}
@@ -316,6 +319,9 @@ func (db *DB) BeginPlacementRemoval(connection, node string) error {
 		fmt.Sprintf("removing the adapter on %s: its container, secret and credential are not yet proven gone", node),
 		now(), conn.Seq); err != nil {
 		return fmt.Errorf("runtimedb: removing placement: %w", err)
+	}
+	if err := cancelFencedWorkTx(tx); err != nil {
+		return err
 	}
 	// Every Personal credential copy on the node becomes an erasure to
 	// prove (migration 0098). ProvePlacementRemoval will not accept

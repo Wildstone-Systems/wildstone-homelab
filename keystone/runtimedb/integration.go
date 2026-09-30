@@ -233,7 +233,8 @@ func (db *DB) WidenConnection(name string, actions, indexing, cloud bool) error 
 }
 
 // BumpConnectionEpoch fences the current adapter. Work already claimed
-// under the old epoch is refused when its result arrives.
+// under the old epoch is refused when its result arrives, and is
+// withdrawn now rather than left claimed (cancelFencedWorkTx).
 func (db *DB) BumpConnectionEpoch(name string) (int64, error) {
 	tx, err := db.sql.Begin()
 	if err != nil {
@@ -253,6 +254,9 @@ func (db *DB) BumpConnectionEpoch(name string) (int64, error) {
 		`UPDATE integration_connections SET lease_epoch = ?, updated_at = ? WHERE name = ?`,
 		epoch, now(), name); err != nil {
 		return 0, fmt.Errorf("runtimedb: fencing connection: %w", err)
+	}
+	if err := cancelFencedWorkTx(tx); err != nil {
+		return 0, err
 	}
 	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf("runtimedb: fencing connection: %w", err)
@@ -502,6 +506,11 @@ func (db *DB) ClaimIntegrationWork(principal string) (IntegrationWork, bool, err
 		WorkQueued, stamp); err != nil {
 		return IntegrationWork{}, false, fmt.Errorf("runtimedb: expiring integration work: %w", err)
 	}
+	// And withdraw anything a lease move left behind, whichever path
+	// moved it.
+	if err := cancelFencedWorkTx(tx); err != nil {
+		return IntegrationWork{}, false, err
+	}
 
 	var w IntegrationWork
 	var created, deadline string
@@ -661,17 +670,58 @@ func (db *DB) GetIntegrationWork(seq int64) (IntegrationWork, error) {
 	return w, nil
 }
 
-// ExpireIntegrationWork marks everything past its deadline unavailable.
-// It runs on claim as well; this is the sweep for work nobody polled for.
+// ExpireIntegrationWork marks everything past its deadline unavailable
+// and withdraws work a lease move fenced. It runs on claim as well; this
+// is the sweep for work nobody polled for, and for claimed work whose
+// adapter will never answer.
 func (db *DB) ExpireIntegrationWork() (int, error) {
+	tx, err := db.sql.Begin()
+	if err != nil {
+		return 0, fmt.Errorf("runtimedb: expiring integration work: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
 	stamp := now()
-	res, err := db.sql.Exec(
+	res, err := tx.Exec(
 		`UPDATE integration_work SET state = ?, finished_at = ?, result_type = ?, error = ?
 		 WHERE state IN (?, ?) AND deadline_at <= ?`,
 		WorkExpired, stamp, ResultUnavailable, "deadline passed", WorkQueued, WorkClaimed, stamp)
 	if err != nil {
 		return 0, fmt.Errorf("runtimedb: expiring integration work: %w", err)
 	}
-	n, err := res.RowsAffected()
-	return int(n), err
+	n, _ := res.RowsAffected()
+	fenced, err := cancelFencedWork(tx)
+	if err != nil {
+		return 0, err
+	}
+	return int(n + fenced), tx.Commit()
+}
+
+// FencedWorkReason is the error recorded on work withdrawn because its
+// connection's lease moved past the epoch it was queued under.
+const FencedWorkReason = "fenced: the connection's lease moved to a newer epoch"
+
+// cancelFencedWorkTx withdraws every queued or claimed item whose epoch
+// is behind its connection's lease (epic #326 S08). Nothing can finish
+// it any more — a claim needs the current epoch, and a report from the
+// old one is refused — so left alone it stayed "claimed" for ever, and
+// whoever was waiting on it learned nothing until its deadline, if
+// anything swept that at all. Cancelled, the waiter learns at once and
+// retries under the new lease; a late answer from the fenced adapter is
+// still refused (the epoch check comes first in ReportIntegrationResult).
+func cancelFencedWorkTx(tx *sql.Tx) error {
+	_, err := cancelFencedWork(tx)
+	return err
+}
+
+func cancelFencedWork(tx *sql.Tx) (int64, error) {
+	res, err := tx.Exec(
+		`UPDATE integration_work SET state = ?, finished_at = ?, error = ?
+		 WHERE state IN (?, ?) AND epoch < (
+		   SELECT c.lease_epoch FROM integration_connections c WHERE c.seq = integration_work.connection)`,
+		WorkCancelled, now(), FencedWorkReason, WorkQueued, WorkClaimed)
+	if err != nil {
+		return 0, fmt.Errorf("runtimedb: withdrawing fenced integration work: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
 }

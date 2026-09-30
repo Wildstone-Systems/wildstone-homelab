@@ -293,6 +293,15 @@ func (db *DB) ReconcileRestore() (applied int, err error) {
 					return applied, err
 				}
 			}
+			if e.action == "deleted" {
+				// A mailbox monitor whose owner was offboarded after the
+				// snapshot: what it learned is deleted again, before
+				// anyone can read it (epic #326 S08).
+				var erased MailStateErased
+				if err := db.eraseMailConnectionState(e.id, &erased); err != nil {
+					return applied, err
+				}
+			}
 		case "routine":
 			if r, err := db.GetHouseholdRoutine(e.id); err == nil && r.DisabledAt.IsZero() {
 				if err := db.DisableHouseholdRoutine(e.id, e.actor); err != nil {

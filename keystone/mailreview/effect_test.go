@@ -227,3 +227,43 @@ func TestACorrectionIsAnExactUpdateProposalNeverASilentEdit(t *testing.T) {
 		t.Fatalf("correction candidate %s", got.State)
 	}
 }
+
+// Epic #326 S08: a restored database is quarantined, and the reconciler
+// neither looks at a calendar nor re-offers a review on a Person's behalf
+// until the journal has been replayed and the quarantine released.
+func TestTheReconcilerWaitsForTheQuarantineToLift(t *testing.T) {
+	e := newEnv(t)
+	c := e.record(t, "mfp1_a", draft(schoolNight()))
+	_, tokens := e.tokens(t, c.ID)
+	claimOnly(t, e, c.ID, tokens["add"])
+	if err := e.db.EnterRestoreQuarantine("restored from last night", now); err != nil {
+		t.Fatal(err)
+	}
+	e.clock.advance(3 * time.Minute)
+	notices, _ := e.db.ListNotices(10, runtimedb.NoticeFilter{Recipient: "sam"})
+	if err := e.eng.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if effects, _ := e.db.ListMailEffects("sam", c.ID); len(effects) != 1 || effects[0].State != runtimedb.MailEffectDispatching {
+		t.Fatalf("the reconciler settled an effect under quarantine: %+v", effects)
+	}
+	if after, _ := e.db.ListNotices(10, runtimedb.NoticeFilter{Recipient: "sam"}); len(after) != len(notices) {
+		t.Fatal("the reconciler re-offered a review under quarantine")
+	}
+	if err := e.db.AssertJournalCurrent("mika"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.db.ReconcileRestore(); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.db.ReleaseRestoreQuarantine("mika"); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.eng.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if effects, _ := e.db.ListMailEffects("sam", c.ID); len(effects) != 1 || effects[0].State != runtimedb.MailEffectReturned {
+		t.Fatalf("after release the interrupted write was not returned to review: %+v", effects)
+	}
+	noEvent(t, e)
+}
