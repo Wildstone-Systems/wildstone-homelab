@@ -13,12 +13,15 @@ package api
 // possible without root, docker, and knowing which file.
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
+	"github.com/chickenrat17/wildstone-homelab/keystone/redact"
 	wsv1 "github.com/chickenrat17/wildstone-homelab/proto/gen/wardstone/v1"
 )
 
@@ -33,12 +36,50 @@ func identityNotificationPath() string { return "/srv/wildstone/identity/notific
 // they are rate-limited on.
 var oneTimeCodeRegexp = regexp.MustCompile(`(?m)^[A-Z0-9]{8}$`)
 
+// resetLinkScanRegexp finds candidate links in the notification. Every
+// candidate is then checked by resetLinkFrom; the regexp only narrows.
+var resetLinkScanRegexp = regexp.MustCompile(`https://[^\s"'<>]+`)
+
+// resetLinkPath is the only page a reset link may point at: Authelia's
+// second password-reset step, which consumes the token.
+const resetLinkPath = "/reset-password/step2"
+
+// resetLinkFrom returns the one password-reset link in body, or "" when
+// there is not exactly one well-formed link. Well-formed is strict on
+// purpose: this value skips redaction (#463), so anything that is not
+// unmistakably a reset link — another scheme, credentials in the host,
+// a different page, extra parameters, a fragment — is not returned.
+func resetLinkFrom(body string) string {
+	found := ""
+	for _, m := range resetLinkScanRegexp.FindAllString(body, -1) {
+		u, err := url.Parse(m)
+		if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil ||
+			u.Path != resetLinkPath || u.Fragment != "" || u.RawFragment != "" {
+			continue
+		}
+		q, err := url.ParseQuery(u.RawQuery)
+		if err != nil || len(q) != 1 || len(q["token"]) != 1 || q.Get("token") == "" {
+			continue
+		}
+		if found != "" && found != m {
+			// Two different links: handing over the wrong one wastes
+			// the reset, so hand over neither.
+			return ""
+		}
+		found = m
+	}
+	return found
+}
+
 type identityNotification struct {
 	// Code is the one-time code, when the file holds one.
 	Code string `json:"code,omitempty"`
-	// Body is the whole notification, because Authelia also sends
-	// password-reset links through the same channel and an admin should
-	// see what they are actually handing over.
+	// ResetLink is the password-reset link, when the file holds one. It
+	// is the one field this response carries unredacted (see redacted).
+	ResetLink string `json:"resetLink,omitempty"`
+	// Body is the whole notification, so an admin can see what they are
+	// handing over. It is redacted like any other body: a reset link in
+	// it arrives with its token replaced, which is why ResetLink exists.
 	Body string `json:"body,omitempty"`
 	// Note is what the operator most needs to know and cannot see:
 	// requesting another code REPLACES this one. That rotation silently
@@ -70,5 +111,27 @@ func (s *Server) identityCode(r *http.Request, _ principal.Identity) (any, int, 
 	if m := oneTimeCodeRegexp.FindString(strings.TrimSpace(body)); m != "" {
 		out.Code = m
 	}
+	out.ResetLink = resetLinkFrom(body)
 	return out, http.StatusOK, nil
+}
+
+// redacted is this response as writeJSON sends it: redacted like any
+// other body EXCEPT ResetLink (#463). The link's token is exactly the
+// shape redaction catches, and a redacted link cannot complete a reset,
+// so an admin had nothing to hand over. It reaches only VerbManage
+// callers, the same people who can already mint tokens. The rest — the
+// free-text body in particular — is still redacted.
+func (n identityNotification) redacted() ([]byte, error) {
+	link := n.ResetLink
+	n.ResetLink = ""
+	raw, err := json.Marshal(n)
+	if err != nil {
+		return nil, err
+	}
+	var clean identityNotification
+	if err := json.Unmarshal([]byte(redact.String(string(raw))), &clean); err != nil {
+		return nil, err
+	}
+	clean.ResetLink = link
+	return json.Marshal(clean)
 }

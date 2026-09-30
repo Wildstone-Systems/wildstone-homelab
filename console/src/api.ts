@@ -769,6 +769,10 @@ export interface ChatTransport {
 
 export interface IdentityNotification {
   code?: string;
+  // The whole password-reset link, the one field Keystone does not
+  // redact (#463). Present only when the notification holds one.
+  resetLink?: string;
+  // Redacted: a reset link in here has its token replaced.
   body?: string;
   note: string;
 }

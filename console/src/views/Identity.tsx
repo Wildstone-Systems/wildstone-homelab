@@ -71,12 +71,15 @@ export function IdentityCode({
   note: IdentityNotification;
   readAt: Date | null;
 }) {
-  if (!note.code) {
+  if (!note.code && !note.resetLink) {
     return (
       <div className="card">
         <div className="muted">
-          No code is waiting on this node. Ask the person to request one, then read again.
+          {note.body
+            ? "The latest notification holds no code or reset link. It is shown below as it was written."
+            : "Nothing is waiting on this node. Ask the person to request a code or reset, then read again."}
         </div>
+        {note.body && <pre>{note.body}</pre>}
       </div>
     );
   }
@@ -85,7 +88,7 @@ export function IdentityCode({
       <div className="sect">
         <span className="eyebrow">
           <IdentificationCard size={13} style={{ verticalAlign: "-2px", marginRight: 5 }} />
-          One-time code
+          {note.code ? "One-time code" : "Password reset link"}
         </span>
         <span className="fade" />
         {/* The code is whatever the last read found. It has no expiry on
@@ -94,7 +97,11 @@ export function IdentityCode({
             worse than one labelled honestly. */}
         {readAt && <StatusPill kind="mute">read {ago(readAt)}</StatusPill>}
       </div>
-      <div className="identity-code tnum">{note.code}</div>
+      {note.code && <div className="identity-code tnum">{note.code}</div>}
+      {/* The body's copy of this link is redacted and cannot complete a
+          reset; this one is whole (#463). Shown as text to copy, not a
+          link to follow: opening it here would spend it. */}
+      {note.resetLink && <pre className="identity-link">{note.resetLink}</pre>}
       <div className="muted">{note.note}</div>
       {note.body && (
         <details>

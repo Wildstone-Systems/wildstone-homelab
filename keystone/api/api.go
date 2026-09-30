@@ -1195,8 +1195,8 @@ func (s *Server) actingPersonMayStillHold(id principal.Identity) bool {
 // writeJSON is the ONLY response encoder on the public plane: it redacts
 // the serialized bytes, so no handler can leak a secret-shaped value even
 // by mistake (ADR-W007 A5 — redaction is a serialization property). The
-// typed exceptions are minted tokens and authorized protected Household
-// reveal/submission review. Ordinary chat and tool replies cannot use those
+// typed exceptions are minted tokens, authorized protected Household
+// reveal/submission review, and the admin-only password-reset link. Ordinary chat and tool replies cannot use those
 // response types.
 func (s *Server) writeJSON(w http.ResponseWriter, status int, body any) {
 	if a, ok := body.(audioResponse); ok {
@@ -1219,6 +1219,16 @@ func (s *Server) writeJSON(w http.ResponseWriter, status int, body any) {
 		// §4.1): a newly minted API token, join token or runtime
 		// credential, each in the only moment it ever exists in a
 		// response.
+	case identityNotification:
+		// Redacted everywhere but the password-reset link an admin hands
+		// over (identityNotification.redacted), and never cached.
+		if raw, err = body.(identityNotification).redacted(); err != nil {
+			s.Log.Error("response redaction failed", "err", err)
+			http.Error(w, `{"error":"internal"}`, http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Pragma", "no-cache")
 	case deliveriesResponse:
 		// Redacted everywhere but each delivery's task handle, which the
 		// runtime must present back (deliveriesResponse.redacted).
