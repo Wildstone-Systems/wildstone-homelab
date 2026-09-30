@@ -299,3 +299,26 @@ copy is cryptographically gone — by design.
 | I10 | DB consistency hooks for DB-backed packages (pg_dump, sqlite) | I1 |
 | I11 | Hardening: Object Lock, key rotation guide, provider guides | I3 |
 | I12 | Total-loss runbook and CI exit drill against a local S3 server | I7, I9 |
+
+## Proposed W047 companion extension: coherent workspace recovery sets
+
+Pending acceptance of [ADR-W047](ADR-W047-native-agent-research-and-workspaces.md)
+and the [v1 contract](../design/native-agent-capability-contract-v1.md).
+The existing backup engine, encryption, destinations and quarantine stand;
+workspace capture/restore support is not claimed implemented here.
+
+Include durable workspace artifact bytes, retained revision history/trash and
+matching runtime-database ownership/grant/privacy/lifecycle/publication metadata
+in a coherent recovery set identified by a versioned manifest. Exclude task
+scratch/staging. Coordinate snapshot selection with concurrent publication and
+cleanup; an independent directory copy plus SQLite snapshot is insufficient.
+Daily backup is a configured target only where an authorized destination
+exists; otherwise expose backup-not-configured.
+
+Validate manifests, hashes, metadata references and mount/publication state
+under existing restore quarantine. Reconcile post-snapshot revocation,
+demotion, forgetting and offboarding evidence before restoring access. When
+later-revocation evidence cannot be established, affected access remains
+quarantined for explicit human recovery review/reauthorization rather than
+silently re-enabling stale grants. Restore does not replay recorded deliveries
+or exports. Workspace deletion does not claim historical backup erasure.

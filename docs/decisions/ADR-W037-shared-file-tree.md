@@ -100,3 +100,23 @@ errors receive actionable responses without exposing host paths.
 
 Store and API tests, `console/scripts/filedrop-check.mjs` (Chromium, 1280px and
 390px) and an opt-in NFS fixture test cover these rules.
+
+## Proposed W047 companion extension: generated-artifact export
+
+Pending acceptance of [ADR-W047](ADR-W047-native-agent-research-and-workspaces.md)
+and its [v1 interface contract](../design/native-agent-capability-contract-v1.md);
+no new export operation is claimed implemented here.
+
+Keystone may publish an authorized committed workspace artifact directly into
+the requesting Person's Mine, or into Shared with explicit permitted disclosure.
+The new `artifact_export` tool uses current Person-folder mappings, confined
+pinned-parent upload staging, exclusive no-overwrite publication, destination
+limits, required-mount checks and execution fences. Another Person's Mine and
+generic reads of existing Filedrop document bytes remain unavailable to Agents.
+
+Copy is the default. Requested move copies, verifies/records destination
+publication, then trashes the workspace source; retries use durable receipts.
+No cross-store atomic rename or NFS check-then-rename fallback is introduced.
+Everyone with Filedrop access can change Shared copies; workspace grants do
+not impose new Shared ACLs. Existing Filedrop immediate deletion, no-trash
+guarantee, flat domestic tools and opaque attachment downloads stand.
