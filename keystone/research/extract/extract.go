@@ -92,6 +92,7 @@ func Extract(p publicfetch.Page) (Document, error) {
 	if hasControls(text) {
 		return Document{}, publicfetch.ErrUnsupported
 	}
+	text = strings.ReplaceAll(strings.ReplaceAll(text, "\r\n", "\n"), "\r", "\n")
 	text = strings.TrimSpace(text)
 	runes := []rune(text)
 	truncated := bounded || len(runes) > MaxCharacters
@@ -121,6 +122,7 @@ type limitedText struct {
 	count     int
 	pending   strings.Builder
 	normalize bool
+	lastCR    bool
 }
 
 func (b *limitedText) appendRune(r rune) {
@@ -131,6 +133,16 @@ func (b *limitedText) appendRune(r rune) {
 }
 func (b *limitedText) write(s string) {
 	for _, r := range s {
+		// Entity decoding can introduce CR/CRLF after response decoding.
+		// Normalize before counting, including a pair split across nodes.
+		if r == '\n' && b.lastCR {
+			b.lastCR = false
+			continue
+		}
+		b.lastCR = r == '\r'
+		if b.lastCR {
+			r = '\n'
+		}
 		if b.count > MaxCharacters {
 			return
 		}

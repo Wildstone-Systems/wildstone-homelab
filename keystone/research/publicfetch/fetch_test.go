@@ -432,3 +432,19 @@ func TestRedirectAuthenticationChallengeDoesNotFollow(t *testing.T) {
 		t.Fatalf("challenge followed: calls=%d err=%v", *calls, err)
 	}
 }
+
+func TestEveryAuthenticationHeaderValueIsInspected(t *testing.T) {
+	for _, status := range []int{200, 302} {
+		for _, headers := range []string{
+			"WWW-Authenticate: \r\nWWW-Authenticate: Basic\r\n",
+			"WWW-Authenticate: \t\r\nWWW-Authenticate: \r\nWWW-Authenticate: Bearer\r\n",
+		} {
+			f, calls := fixture(t, func(*http.Request) string {
+				return fmt.Sprintf("HTTP/1.1 %d Response\r\nLocation: /login\r\n%sContent-Length: 0\r\n\r\n", status, headers)
+			})
+			if _, err := f.Fetch(context.Background(), "http://example.com/"); err != ErrBlocked || *calls != 1 {
+				t.Fatalf("%d challenge followed: calls=%d err=%v", status, *calls, err)
+			}
+		}
+	}
+}

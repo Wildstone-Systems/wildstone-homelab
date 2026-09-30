@@ -81,7 +81,7 @@ func (f Fetcher) Fetch(ctx context.Context, rawURL string) (Page, error) {
 		if err != nil {
 			return Page{}, err
 		}
-		if resp.Header.Get("WWW-Authenticate") != "" {
+		if hasAuthenticationChallenge(resp.Header) {
 			resp.Body.Close()
 			return Page{}, ErrBlocked
 		}
@@ -202,8 +202,17 @@ func (f Fetcher) request(ctx context.Context, u *url.URL) (*http.Response, error
 	return resp, nil
 }
 
+func hasAuthenticationChallenge(header http.Header) bool {
+	for _, value := range header.Values("WWW-Authenticate") {
+		if strings.TrimSpace(value) != "" {
+			return true
+		}
+	}
+	return false
+}
+
 func readPage(resp *http.Response, u *url.URL) (Page, error) {
-	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusProxyAuthRequired || resp.Header.Get("WWW-Authenticate") != "" {
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusProxyAuthRequired || hasAuthenticationChallenge(resp.Header) {
 		return Page{}, ErrBlocked
 	}
 	if resp.StatusCode == http.StatusTooManyRequests {
