@@ -345,10 +345,23 @@ export function PendingPlan({
       () =>
         (verb === "approve" ? api.approvePlan(plan.id) : api.rejectPlan(plan.id)).then(onResolved),
       verb === "approve"
-        ? (plan.routine ? "version approved; automatic execution is not available yet" : "approved — handed to the reconciler")
+        ? (plan.research ? "provider configuration applied" : plan.routine ? "version approved; automatic execution is not available yet" : "approved — handed to the reconciler")
         : "rejected — the Butler is told why on its next session",
     );
 
+  const research = plan.research;
+  const reviewableResearch = !research || Boolean(
+    research.providerId &&
+    (research.operation === "create" || research.expectedConfigRevision) &&
+    (research.operation === "delete" ||
+      ((research.operation === "create" || research.operation === "update") &&
+        research.config?.name && research.config.kind && research.config.limits &&
+        [research.config.limits.searchesPerTask, research.config.limits.fetchesPerTask,
+          research.config.limits.requestTimeoutSeconds, research.config.limits.downloadBytes,
+          research.config.limits.extractedCharacters, research.config.limits.cacheSeconds]
+          .every(value => Number.isInteger(value) && value > 0) &&
+        Array.isArray(research.config.backends) && Array.isArray(research.config.fallbackOrder))),
+  );
   const risky = kindOf(plan.risk) === "bad";
   const restores = (plan.plan?.steps ?? []).some((s) => (s.action ?? "").toLowerCase().includes("restore"));
 
@@ -380,7 +393,10 @@ export function PendingPlan({
         )
       }
       body={
-        plan.auditOnly ? <>Maintenance tracker update by {plan.principal}. Recorded immediately in household history; no Owner approval was required.</> : plan.setting ? (
+        plan.auditOnly ? <>Maintenance tracker update by {plan.principal}. Recorded immediately in household history; no Owner approval was required.</> : research ? (
+          <>Proposed by {plan.principal}. Approving applies the provider registry change below.
+            No service is provisioned and no Agent tool permissions are granted.</>
+        ) : plan.setting ? (
           // A setting, not desired state: there is no reconciler step to
           // read, so say exactly what approving changes.
           <>
@@ -410,7 +426,7 @@ export function PendingPlan({
         <>
           {!done && (
             <>
-              <button className="btn btn-primary" disabled={busy} onClick={resolve("approve")}>
+              <button className="btn btn-primary" disabled={busy || !reviewableResearch} onClick={resolve("approve")}>
                 <SealCheck size={14} />
                 {busy ? "Working…" : "Approve"}
               </button>
@@ -448,7 +464,34 @@ export function PendingPlan({
         <p>Where and how it is delivered:</p><pre>{plan.routine.delivery}</pre>
         <details><summary>Exact routine being approved</summary><pre>{plan.routine.document}</pre></details>
       </section>}
-      <PlanSteps plan={plan.plan} />
+      {research && <section className="work-section">
+        <h3>Search provider: {research.operation}</h3>
+        <p>Provider ID: {research.providerId}</p>
+        <p>Expected configuration revision: {research.expectedConfigRevision || "New provider"}</p>
+        {!reviewableResearch && <ErrorLine error="The provider change is incomplete. Reload before approving." />}
+        {research.operation === "delete" ? (
+          <p>Removes this provider. Agents selecting it become unavailable; their selection does not fall back to another provider.</p>
+        ) : <>
+          <p>Clears any previous test result. This configuration must pass a new test before it is ready.</p>
+          {research.config && <>
+            <p>Name: {research.config.name}</p>
+            <p>Kind: {research.config.kind}</p>
+            <p>Endpoint reference: {research.config.endpointRef || "None — provider remains unconfigured"}</p>
+            <p>Credential reference: {research.config.credentialRef || "None"}</p>
+            <p>Backends: {research.config.backends?.join(", ") || "None"}</p>
+            <p>Fallback order: {research.config.fallbackOrder?.join(" → ") || "None"}</p>
+            {research.config.limits && <dl>
+              <dt>Searches per task</dt><dd>{research.config.limits.searchesPerTask}</dd>
+              <dt>Fetches per task</dt><dd>{research.config.limits.fetchesPerTask}</dd>
+              <dt>Request timeout (seconds)</dt><dd>{research.config.limits.requestTimeoutSeconds}</dd>
+              <dt>Maximum download (bytes)</dt><dd>{research.config.limits.downloadBytes}</dd>
+              <dt>Maximum extracted characters</dt><dd>{research.config.limits.extractedCharacters}</dd>
+              <dt>Cache lifetime (seconds)</dt><dd>{research.config.limits.cacheSeconds}</dd>
+            </dl>}
+          </>}
+        </>}
+      </section>}
+      {!research && <PlanSteps plan={plan.plan} />}
     </ProblemCard>
   );
 }

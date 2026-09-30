@@ -60,7 +60,15 @@ func (s *Server) listPlans(r *http.Request, id principal.Identity) (any, int, er
 		}
 		visible = append(visible, p)
 	}
-	return viewPlans(visible), http.StatusOK, nil
+	views := viewPlans(visible)
+	// Lists currently omit proposal JSON. Keep Owner-only research details
+	// protected even if the storage projection later includes full proposals.
+	if s.researchOwner(id) != nil {
+		for i := range views {
+			views[i].Research = nil
+		}
+	}
+	return views, http.StatusOK, nil
 }
 
 func (s *Server) getPlan(r *http.Request, id principal.Identity) (any, int, error) {

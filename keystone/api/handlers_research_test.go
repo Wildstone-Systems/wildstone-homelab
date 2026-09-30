@@ -57,6 +57,16 @@ func TestResearchOwnerPlanLifecycle(t *testing.T) {
 		t.Fatalf("proposal mutated registry: %v %v", ps, err)
 	}
 	for _, role := range []runtimedb.Role{runtimedb.RoleButler, runtimedb.RoleOperator, runtimedb.RoleAdmin} {
+		var listed []map[string]any
+		if resp := h.do(role, "GET", "/api/v1/plans", nil, &listed); resp.StatusCode != http.StatusOK {
+			t.Fatalf("list plans: %d", resp.StatusCode)
+		}
+		for _, item := range listed {
+			raw, _ := json.Marshal(item)
+			if item["research"] != nil || strings.Contains(string(raw), "service/ddgs") || strings.Contains(string(raw), "secret/ddgs") {
+				t.Fatalf("non-Owner %s read research configuration in list: %v", role, item)
+			}
+		}
 		var detail map[string]any
 		if resp := h.do(role, "GET", "/api/v1/plans/"+planID, nil, &detail); resp.StatusCode != http.StatusForbidden || detail["research"] != nil {
 			t.Fatalf("non-Owner %s read research Plan: %d %v", role, resp.StatusCode, detail)
