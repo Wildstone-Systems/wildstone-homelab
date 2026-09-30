@@ -132,13 +132,19 @@ func (b *limitedText) appendRune(r rune) {
 	}
 }
 
-// A generated boundary only fills absent source whitespace. Source whitespace
-// replaces it, preserving Markdown spacing without inventing extra blank lines.
+// Structural boundaries require a newline. Coalesce generated boundaries and
+// let a source newline replace the generated one, retaining Markdown whitespace.
 func (b *limitedText) boundary() {
-	if b.pending.Len() == 0 {
-		b.write("\n")
-		b.generatedBoundary = b.pending.Len() != 0
+	if b.count == 0 || b.count > MaxCharacters || strings.Contains(b.pending.String(), "\n") {
+		return
 	}
+	whitespace := b.pending.String()
+	b.pending.Reset()
+	b.pending.WriteByte('\n')
+	if !b.normalize {
+		b.pending.WriteString(whitespace)
+	}
+	b.generatedBoundary = true
 }
 
 func (b *limitedText) write(s string) {
@@ -157,8 +163,10 @@ func (b *limitedText) write(s string) {
 			return
 		}
 		if unicode.IsSpace(r) {
-			if b.generatedBoundary {
+			if b.generatedBoundary && r == '\n' {
+				whitespace := strings.TrimPrefix(b.pending.String(), "\n")
 				b.pending.Reset()
+				b.pending.WriteString(whitespace)
 				b.generatedBoundary = false
 			}
 			if b.count == 0 {
@@ -310,7 +318,7 @@ func (f *markupFilter) feed(input string, preserve bool) error {
 					}
 				}
 				switch n.Data {
-				case "address", "article", "aside", "blockquote", "br", "caption", "center",
+				case "address", "article", "aside", "blockquote", "br", "button", "caption", "center",
 					"dd", "details", "dialog", "dir", "div", "dl", "dt", "fieldset", "figcaption", "figure",
 					"footer", "form", "h1", "h2", "h3", "h4", "h5", "h6", "header", "hgroup", "hr",
 					"legend", "li", "main", "menu", "nav", "ol", "option", "optgroup", "p", "pre", "search", "section", "summary",

@@ -720,7 +720,7 @@ func TestMarkdownTableGapsStayWithTheirRows(t *testing.T) {
 		}
 	}
 	d, err := Extract(input("text/markdown", "> <table>\n> <tr><td>A</td></tr>\n> </table>"))
-	if err != nil || d.Text != "> \n> A\n>" {
+	if err != nil || d.Text != "> \n>\n A\n>" {
 		t.Fatalf("trailing quote prefix moved before cell: %q %v", d.Text, err)
 	}
 }
@@ -851,5 +851,37 @@ func TestCacheTTLStartsAtPublicationAfterAuthorization(t *testing.T) {
 	now = publishedAt.Add(cacheTTL)
 	if _, err := s.Continue(ctx, scope(), p.NextCursor); err != ErrStale {
 		t.Fatalf("expiry boundary: %v", err)
+	}
+}
+
+func TestControlAndStructuralBoundariesPreserveNewlines(t *testing.T) {
+	for _, media := range []string{"text/html", "text/markdown"} {
+		for _, separator := range []string{"", " ", "\t", "\n", " \n", "\n "} {
+			for _, parts := range [][2]string{
+				{"A<br>", "B"},
+				{"<p>A</p>", "<p>B</p>"},
+				{"<button>A</button>", "<button>B</button>"},
+				{"<button><em>A</em></button>", "<button><strong>B</strong></button>"},
+			} {
+				body := parts[0] + separator + parts[1]
+				d, err := Extract(input(media, body))
+				want := "A\nB"
+				if media == "text/markdown" {
+					space := separator
+					if !strings.Contains(space, "\n") {
+						space = "\n" + space
+					}
+					want = "A" + space + "B"
+				}
+				if err != nil || d.Text != want {
+					t.Fatalf("%s %q: %q want %q err=%v", media, body, d.Text, want, err)
+				}
+				body = strings.Replace(body, "A", strings.Repeat("x", MaxCharacters-utf8.RuneCountInString(want)+1), 1)
+				d, err = Extract(input(media, body))
+				if err != nil || d.Source.Truncated || utf8.RuneCountInString(d.Text) != MaxCharacters || !strings.HasSuffix(d.Text, "B") {
+					t.Fatalf("%s structural cap: %d %+v %v", media, utf8.RuneCountInString(d.Text), d.Source, err)
+				}
+			}
+		}
 	}
 }
