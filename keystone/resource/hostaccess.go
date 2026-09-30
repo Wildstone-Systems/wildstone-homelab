@@ -83,6 +83,12 @@ const HostAccessProtocolMinor = 12
 // cannot honour it, exactly as HostAccessProtocolMinor already is.
 const HardeningProtocolMinor = 18
 
+// IPCLockProtocolMinor is the wardstone protocol minor whose closed
+// capability allowlist first admits IPC_LOCK. An older agent still
+// refuses it as FORBIDDEN, so a spec asking for it is gated on this
+// minor rather than on HostAccessProtocolMinor.
+const IPCLockProtocolMinor = 21
+
 // RequiredProtocolMinor reports the lowest agent protocol minor that can
 // honour this spec in full, or 0 when any agent can. An agent below it
 // does not fail: it IGNORES the fields it cannot read, which is the
@@ -97,6 +103,11 @@ const HardeningProtocolMinor = 18
 func (s *ContainerSpec) RequiredProtocolMinor() uint32 {
 	if s == nil {
 		return 0
+	}
+	for _, c := range s.CapAdd {
+		if c == "IPC_LOCK" {
+			return IPCLockProtocolMinor
+		}
 	}
 	if s.usesHardeningFields() {
 		return HardeningProtocolMinor

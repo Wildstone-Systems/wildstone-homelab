@@ -149,7 +149,8 @@ Coral TPUs, video devices) — never a block device. Capabilities are
 will not be. The agent resolves device aliases and refuses one that
 leads outside the list. A node whose agent predates minor 12 ignores all
 three: the port publishes as TCP, the device is absent, the capability
-is not granted, and the app says what it is missing.
+is not granted, and the app says what it is missing. `IPC_LOCK` needs
+minor 21: Keystone refuses to dispatch a spec adding it to an older agent.
 
 ### Not shipped, and why
 

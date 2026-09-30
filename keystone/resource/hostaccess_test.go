@@ -130,6 +130,8 @@ func TestRequiredProtocolMinor(t *testing.T) {
 		"udp":              {ContainerSpec{Image: "x", Ports: []string{"53:53/udp"}}, HostAccessProtocolMinor},
 		"device":           {ContainerSpec{Image: "x", Devices: []DeviceMapping{{Source: "/dev/net/tun"}}}, HostAccessProtocolMinor},
 		"cap":              {ContainerSpec{Image: "x", CapAdd: []string{"NET_ADMIN"}}, HostAccessProtocolMinor},
+		"ipcLock":          {ContainerSpec{Image: "x", CapAdd: []string{"IPC_LOCK"}}, IPCLockProtocolMinor},
+		"ipcLock+harden":   {ContainerSpec{Image: "x", CapAdd: []string{"IPC_LOCK"}, ReadOnlyRootfs: true}, IPCLockProtocolMinor},
 		"nil spec":         {ContainerSpec{}, 0},
 		"readOnlyRootfs":   {ContainerSpec{Image: "x", ReadOnlyRootfs: true}, HardeningProtocolMinor},
 		"capDrop":          {ContainerSpec{Image: "x", CapDrop: []string{"ALL"}}, HardeningProtocolMinor},
