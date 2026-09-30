@@ -83,6 +83,7 @@ func TestMaterializationIsDerivedFromContent(t *testing.T) {
 	}{
 		{"client_secret: 'pbkdf2:secret/immich-oidc'\n", true},
 		{"password: secret/lldap-admin\n", true},
+		{"z2m:mosquitto:secret/mqtt-z2m\n", true},
 		{"jwks:\n  - key: |\n      secret/authelia-oidc-jwks\n", true},
 		{"log_level: debug\n", false},
 		{"note: this file has no references\n", false},

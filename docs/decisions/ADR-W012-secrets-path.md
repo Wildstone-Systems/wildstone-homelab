@@ -113,6 +113,20 @@ guarantees keep the value contained: InspectContainer never returns env
 does not perturb drift detection. Mount sources and other fields are
 NOT materialized — env only, matching every shipped consumer.
 
+#### Destination formats for managed-file materialization
+
+Managed files may reference a node secret in three forms, resolved by
+the agent at write time: `secret/<name>` (plaintext), `pbkdf2:secret/<name>`
+(Authelia's `$pbkdf2-sha512$` digest) and `mosquitto:secret/<name>`, which
+yields only the password field of a Mosquitto password-file entry
+(`<user>:` comes from the template). The Mosquitto form is the `$7$`
+scheme, PBKDF2-HMAC-SHA512 with 101 iterations (the `mosquitto_passwd`
+default), a 12-byte random salt and a 64-byte key, both base64 with
+standard padding. Salted output differs per write, so convergence
+compares the pre-materialization source hash as for every materialized
+file. Keystone, the reconciler and the resource validator all
+recognise the same prefix set.
+
 ### A5. Rotation is re-creation, driven level-triggered
 
 Rotating `secret/<name>` is a Keystone-side plan:

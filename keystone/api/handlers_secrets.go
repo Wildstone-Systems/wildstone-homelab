@@ -436,7 +436,7 @@ func (s *Server) secretReaders(desired []resource.Resource, node, name string) (
 // small-duplicated-constant pattern, for the same reason: a mismatch
 // here means Keystone acts on a reference the agent would not
 // substitute, or misses one it would.
-var secretRefInContent = regexp.MustCompile(`(?:pbkdf2:)?secret/([A-Za-z0-9][A-Za-z0-9._-]{0,63})`)
+var secretRefInContent = regexp.MustCompile(`(?:pbkdf2:|mosquitto:)?secret/([A-Za-z0-9][A-Za-z0-9._-]{0,63})`)
 
 // contentReferencesSecret reports whether content names THIS secret,
 // matching whole references rather than substrings.
