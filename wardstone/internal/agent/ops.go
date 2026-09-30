@@ -423,12 +423,38 @@ func (a *Agent) writeManagedFile(op *wsv1.WriteManagedFile) (*wsv1.OpResult_Writ
 	// rename that publishes it. UMask stays where it is: it is a sane
 	// default for everything else this agent writes, and the point here
 	// is that a managed file's mode is a decision, not a leftover.
+	//
+	// Only directories THIS write creates are widened. An existing
+	// directory is an earlier decision — an operator's, or a secret-bearing
+	// write's — and is left alone: widening it would undo the protection
+	// its 0600 files rely on, and chmod on a directory another uid owns
+	// would fail a write that would otherwise have succeeded.
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return nil, opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "mkdir: %v", err)
+	// Directories are created one component at a time, shallowest first,
+	// and only those whose Mkdir actually succeeded are widened. A
+	// Stat-then-MkdirAll pair would misattribute a directory that another
+	// operation or host process created in between, and widen it.
+	var missing []string
+	for d := dir; ; d = filepath.Dir(d) {
+		if _, err := os.Stat(d); !os.IsNotExist(err) {
+			break
+		}
+		missing = append(missing, d)
+		if filepath.Dir(d) == d {
+			break
+		}
 	}
-	if err := os.Chmod(dir, 0o755); err != nil {
-		return nil, opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "chmod dir: %v", err)
+	for i := len(missing) - 1; i >= 0; i-- {
+		d := missing[i]
+		if err := os.Mkdir(d, 0o755); err != nil {
+			if os.IsExist(err) {
+				continue // created concurrently: not ours, left alone
+			}
+			return nil, opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "mkdir: %v", err)
+		}
+		if err := os.Chmod(d, 0o755); err != nil {
+			return nil, opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "chmod dir: %v", err)
+		}
 	}
 	tmp := path + ".wildstone-tmp"
 	if err := os.WriteFile(tmp, content, mode); err != nil {

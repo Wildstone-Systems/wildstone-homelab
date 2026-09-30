@@ -420,6 +420,17 @@ func TestManagedFileModeSurvivesTheUmask(t *testing.T) {
 		t.Errorf("managed directory landed %04o, want 0755 — a non-root container cannot even traverse it", got)
 	}
 
+	// Every level this write created is traversable, not just the leaf.
+	nested := filepath.Join(a.cfg.ManagedPrefixes[0], "metrics2", "grafana", "provisioning", "x.ini")
+	if _, oerr := a.writeManagedFile(writeFileOp(nested, "a = b\n", false)); oerr != nil {
+		t.Fatalf("write nested: %v", oerr)
+	}
+	for d := filepath.Dir(nested); d != a.cfg.ManagedPrefixes[0]; d = filepath.Dir(d) {
+		if fi, err := os.Stat(d); err != nil || fi.Mode().Perm() != 0o755 {
+			t.Errorf("created directory %s is %v (err %v), want 0755", d, fi.Mode().Perm(), err)
+		}
+	}
+
 	// The narrowing for secret-bearing files still holds, and now means
 	// something: it differs from the default rather than matching it.
 	si, err := os.Stat(secret)
@@ -428,5 +439,68 @@ func TestManagedFileModeSurvivesTheUmask(t *testing.T) {
 	}
 	if got := si.Mode().Perm(); got != 0o600 {
 		t.Errorf("a materialized file landed %04o, want 0600 — it holds live secrets", got)
+	}
+}
+
+// A directory that already exists is an earlier decision. Writing into it
+// must not widen it.
+func TestManagedFileWriteLeavesExistingDirectoryModeAlone(t *testing.T) {
+	old := syscall.Umask(0o077)
+	defer syscall.Umask(old)
+
+	a := materializeAgent(t)
+	putSecret(t, a, "photos-oidc", "s3cret-value")
+	dir := filepath.Join(a.cfg.ManagedPrefixes[0], "private")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	secret := filepath.Join(dir, "a.json")
+	if _, oerr := a.writeManagedFile(writeFileOp(secret, `{"s":"secret/photos-oidc"}`, true)); oerr != nil {
+		t.Fatalf("write secret: %v", oerr)
+	}
+	plain := filepath.Join(dir, "b.ini")
+	if _, oerr := a.writeManagedFile(writeFileOp(plain, "a = b\n", false)); oerr != nil {
+		t.Fatalf("write plain: %v", oerr)
+	}
+
+	if fi, err := os.Stat(dir); err != nil || fi.Mode().Perm() != 0o700 {
+		t.Errorf("existing directory is %v (err %v), want it left at 0700", fi.Mode().Perm(), err)
+	}
+	if fi, err := os.Stat(secret); err != nil || fi.Mode().Perm() != 0o600 {
+		t.Errorf("secret file is %v (err %v), want 0600", fi.Mode().Perm(), err)
+	}
+}
+
+// chmod needs ownership; a write into a directory owned by another uid must
+// not fail on it.
+func TestManagedFileWriteIntoForeignOwnedDirectory(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("needs root to chown a fixture directory")
+	}
+	old := syscall.Umask(0o077)
+	defer syscall.Umask(old)
+
+	a := materializeAgent(t)
+	dir := filepath.Join(a.cfg.ManagedPrefixes[0], "foreign")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chown(dir, 65534, 65534); err != nil {
+		t.Fatal(err)
+	}
+
+	plain := filepath.Join(dir, "c.ini")
+	if _, oerr := a.writeManagedFile(writeFileOp(plain, "a = b\n", false)); oerr != nil {
+		t.Fatalf("write into foreign-owned directory: %v", oerr)
+	}
+	if fi, err := os.Stat(dir); err != nil || fi.Mode().Perm() != 0o700 {
+		t.Errorf("directory is %v (err %v), want 0700", fi.Mode().Perm(), err)
 	}
 }
