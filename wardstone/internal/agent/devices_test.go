@@ -311,3 +311,117 @@ func TestCapabilityAllowlistIsPinned(t *testing.T) {
 		t.Errorf("allowlist = %v, want %v", got, want)
 	}
 }
+
+// hostSystemMountExamples is the fixture keystone/resource's twin
+// (TestHostSystemMountAllowlist) runs verbatim (#445).
+var hostSystemMountExamples = map[string]bool{
+	"/run/dbus":                     true,
+	"/run/dbus/":                    false,
+	"/run/dbus/system_bus_socket":   false,
+	"/var/run/dbus":                 false,
+	"/run/../run/dbus":              false,
+	"/run":                          false,
+	"/run/docker.sock":              false,
+	"/var/run/docker.sock":          false,
+	"/run/systemd":                  false,
+	"/etc":                          false,
+	"/":                             false,
+	"run/dbus":                      false,
+	"":                              false,
+	"/run/dbus-other":               false,
+	"/sys/class/bluetooth":          false,
+	"/dev/bus/usb":                  false,
+	"/run/dbus/../docker.sock":      false,
+	"/run/dbus/containers":          false,
+	"/run/user/1000/bus":            false,
+	"/var/lib/bluetooth":            false,
+	"/etc/dbus-1/system.d":          false,
+	"/run/dbus/system_bus_socket/x": false,
+}
+
+func TestHostSystemMountAllowlist(t *testing.T) {
+	for path, want := range hostSystemMountExamples {
+		if got := hostSystemMountAllowed(path); got != want {
+			t.Errorf("hostSystemMountAllowed(%q) = %v, want %v", path, got, want)
+		}
+	}
+	if len(hostSystemMounts) != 1 {
+		t.Errorf("hostSystemMounts = %v: a new entry is a new way into the host and needs keystone's twin, a fixture row and a review", hostSystemMounts)
+	}
+}
+
+// TestEnsureContainerMountsTheSystemBusReadOnly (#445): /run/dbus reaches
+// Docker as a read-only bind at its own path even though it is outside
+// every managed prefix; written any other way, through a symlink, or on a
+// host with no D-Bus, the op fails before anything is created.
+func TestEnsureContainerMountsTheSystemBusReadOnly(t *testing.T) {
+	fake := newFakeDocker(t)
+	h := startGateway(t, []string{"tok"}, "")
+	newTestAgent(t, h, "node-a", "tok", func(c *Config) { c.DockerEndpoint = fake.URL() })
+	if !h.gw.WaitConnected("node-a", 10*time.Second) {
+		t.Fatal("agent never connected")
+	}
+	// The machine running the tests may have no D-Bus; stand in for the
+	// resolution, which is also the existence check.
+	resolveTo := map[string]string{"/run/dbus": "/run/dbus"}
+	prev := evalSymlinks
+	evalSymlinks = func(p string) (string, error) {
+		if r, ok := resolveTo[p]; ok {
+			return r, nil
+		}
+		return "", os.ErrNotExist
+	}
+	t.Cleanup(func() { evalSymlinks = prev })
+
+	ensure := func(name string, m *wsv1.Mount) *wsv1.OpError {
+		t.Helper()
+		return dispatch(t, h, "node-a", &wsv1.Operation{Op: &wsv1.Operation_EnsureContainer{
+			EnsureContainer: &wsv1.EnsureContainer{
+				Name: name, Image: testDigestImage,
+				NetworkMode: wsv1.ContainerNetworkMode_CONTAINER_NETWORK_MODE_HOST,
+				Mounts:      []*wsv1.Mount{{Source: "hass-config", Target: "/config"}, m},
+				CapAdd:      []string{"NET_ADMIN", "NET_RAW"},
+			},
+		}}).GetError()
+	}
+	if oe := ensure("hass", &wsv1.Mount{Source: "/run/dbus", Target: "/run/dbus", ReadOnly: true}); oe != nil {
+		t.Fatalf("read-only /run/dbus refused: %v", oe)
+	}
+	fake.mu.Lock()
+	hc := fake.containers["hass"].host
+	fake.mu.Unlock()
+	if strings.Join(hc.Binds, ",") != "hass-config:/config,/run/dbus:/run/dbus:ro" {
+		t.Errorf("Binds = %v, want the config volume and /run/dbus read-only", hc.Binds)
+	}
+
+	for name, tc := range map[string]struct {
+		m    *wsv1.Mount
+		code wsv1.ErrorCode
+	}{
+		"writable":      {&wsv1.Mount{Source: "/run/dbus", Target: "/run/dbus"}, wsv1.ErrorCode_ERROR_CODE_FORBIDDEN},
+		"moved":         {&wsv1.Mount{Source: "/run/dbus", Target: "/host-dbus", ReadOnly: true}, wsv1.ErrorCode_ERROR_CODE_FORBIDDEN},
+		"trailing":      {&wsv1.Mount{Source: "/run/dbus/", Target: "/run/dbus", ReadOnly: true}, wsv1.ErrorCode_ERROR_CODE_FORBIDDEN},
+		"docker socket": {&wsv1.Mount{Source: "/var/run/docker.sock", Target: "/var/run/docker.sock", ReadOnly: true}, wsv1.ErrorCode_ERROR_CODE_FORBIDDEN},
+	} {
+		if oe := ensure("bad-"+strings.ReplaceAll(name, " ", "-"), tc.m); oe == nil || oe.GetCode() != tc.code {
+			t.Errorf("%s: got %v, want %v", name, oe, tc.code)
+		}
+	}
+
+	// A symlinked /run/dbus is refused, and a host with none is NOT_FOUND.
+	resolveTo["/run/dbus"] = "/etc/wildstone"
+	if oe := ensure("linked", &wsv1.Mount{Source: "/run/dbus", Target: "/run/dbus", ReadOnly: true}); oe == nil || oe.GetCode() != wsv1.ErrorCode_ERROR_CODE_FORBIDDEN {
+		t.Errorf("symlinked /run/dbus: got %v, want FORBIDDEN", oe)
+	}
+	delete(resolveTo, "/run/dbus")
+	if oe := ensure("absent", &wsv1.Mount{Source: "/run/dbus", Target: "/run/dbus", ReadOnly: true}); oe == nil || oe.GetCode() != wsv1.ErrorCode_ERROR_CODE_NOT_FOUND {
+		t.Errorf("no /run/dbus: got %v, want NOT_FOUND", oe)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	for name := range fake.containers {
+		if name != "hass" {
+			t.Errorf("container %s was created despite the refusal", name)
+		}
+	}
+}

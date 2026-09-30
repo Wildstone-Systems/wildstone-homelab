@@ -85,7 +85,7 @@ one mechanism, which is worth deciding before any of them individually.
 | `metrics-grafana` | metrics | Grafana dashboards | app OIDC |
 | `metrics-prometheus` | timeseries | Prometheus, the store Grafana reads | internal |
 | `home-automation` | home-automation | adapter for a Home Assistant that already exists | — |
-| `home-assistant` | home-assistant | Home Assistant, run here on the host's network (LAN discovery; port 8123 on the LAN); `mqtt_enabled` switches on `mqtt:broker` | own |
+| `home-assistant` | home-assistant | Home Assistant, run here on the host's network (LAN discovery; port 8123 on the LAN); `mqtt_enabled` switches on `mqtt:broker`; `bluetooth` is `proxy` (default, ESPHome proxies, no host access), `host-bluez` or `off` — see [Bluetooth](#bluetooth-home-assistant) | own |
 | `mqtt-mosquitto` | mqtt | Mosquitto broker, password-only, on one private LAN address; provides `mqtt:broker` | internal |
 | `zigbee-zigbee2mqtt` | zigbee | Zigbee2MQTT over a USB stick or a network coordinator; requires `mqtt:broker` on its node | proxy |
 | `zwave-zwave-js-ui` | zwave | Z-Wave JS UI on a USB stick (by `/dev/serial/by-id/`); WS server for Home Assistant on one private address, provides `zwave:server`; MQTT gateway off | proxy |
@@ -163,6 +163,71 @@ Map it to a fixed `target` and give the app that path instead —
 `zwave-zwave-js-ui` maps the stick to `/dev/zwave` and sets
 `ZWAVE_PORT: /dev/zwave`.
 
+Host paths are bind-mounted only from Wardstone's managed prefixes
+(ADR-W003 A1), with one closed exception list, `HostSystemMounts` in the
+same file (protocol minor 26, #445). It holds exactly `/run/dbus`, the
+D-Bus system bus, and only as `{ source: /run/dbus, target: /run/dbus,
+readOnly: true }`: lint refuses it writable or elsewhere inside, and the
+agent also refuses it through a symlink or on a host that has none. It
+exists for Home Assistant's host Bluetooth (below). Keystone refuses to
+dispatch it to an older agent, and checks the node's BlueZ readiness
+before creating or replacing a container that uses it.
+
+### Bluetooth (Home Assistant)
+
+`home-assistant` takes a closed choice, `bluetooth`:
+
+| Mode | Host access | Where Bluetooth comes from |
+|---|---|---|
+| `proxy` (default) | none | ESPHome Bluetooth proxies on the network |
+| `host-bluez` | `/run/dbus` read-only; `NET_ADMIN`, `NET_RAW` | this machine's adapter, through the host's BlueZ |
+| `off` | none | nowhere |
+
+**BLE only.** Home Assistant's Bluetooth is Bluetooth Low Energy:
+sensors, beacons, BLE locks and lights. It does not do Bluetooth
+Classic, so speakers, headsets and classic serial devices do not work in
+any mode.
+
+**Proxy (recommended).** An ESPHome Bluetooth proxy is an ESP32 board on
+the household's Wi-Fi or Ethernet that forwards BLE advertisements and
+connections to Home Assistant over the network. Put one near the devices;
+add more to cover a bigger home. Wildstone does not own, flash or manage
+these boards. The operator:
+
+1. flashes the board with ESPHome's "Bluetooth Proxy" firmware from
+   ESPHome's web installer (a Chromium browser and a USB cable), and
+   joins it to the household Wi-Fi there;
+2. waits for Home Assistant to discover it. Home Assistant is on the
+   host's network, so ESPHome's mDNS announcement reaches it, and the
+   board appears under Settings > Devices & services > Discovered;
+3. adds it there. BLE devices it hears then show up in Home Assistant's
+   Bluetooth integration as they would from a local adapter.
+
+No port, device or capability on this machine is involved. If discovery
+does not show the board, add the ESPHome integration by hand with the
+board's address. Check the node's multicast readiness first
+(`GET /api/v1/nodes/{node}/probes/home-automation`).
+
+**Host BlueZ.** Uses the machine's own adapter. BlueZ
+(`bluetooth.service`), the D-Bus system bus and an unblocked adapter are
+the host's to provide. Wildstone does not install BlueZ. Before creating
+or replacing the container, the reconciler reads the same readiness probe
+and refuses the step when `dbus_system_bus` or `bluez_service` is
+`missing`/`unsupported`, or when no `bluetooth_adapter` is `ready` and
+one is `missing` (no controller, or rfkill-blocked). The refusal carries
+the evidence and leaves the running container untouched. `unknown` is not
+refused, because the probe could not tell (for example, systemd could not
+be asked about the unit). The step goes ahead and the probe still shows
+it. The container is on the host's network, so `NET_ADMIN` and `NET_RAW`
+act on the host's network stack. That is why this mode is not the
+default. No USB bus and no `/dev` node are passed.
+
+**Switching** replaces only the container. The `home-assistant-config`
+volume stays at `/config`, and every other resource renders identically
+in all three modes. Integrations, history and BLE devices Home Assistant
+knows about survive. Bonding keys held by the host's BlueZ stay on the
+host.
+
 ### Not shipped, and why
 
 Recorded here rather than left in someone's head (ADR-W018 A4).
@@ -194,7 +259,8 @@ Recorded here rather than left in someone's head (ADR-W018 A4).
   it works only when the two nodes are the same.
 - **Anything that mounts the Docker socket** (Portainer, Dozzle,
   Watchtower, Beszel's agent) — Wardstone bind-mounts only from its
-  managed prefixes (ADR-W003 A1), and the socket is the one path that
+  managed prefixes (ADR-W003 A1) plus the closed `/run/dbus` exception
+  above, and the socket is the one path that
   would let a container do what the agent exists to mediate.
 - **NVIDIA GPUs for Ollama** — the device nodes are on the allowlist,
   but CUDA in a container also needs the NVIDIA container runtime's

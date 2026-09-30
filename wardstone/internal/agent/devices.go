@@ -80,6 +80,56 @@ var capabilities = map[string]string{
 	"SYS_NICE": "scheduling priority for transcodes",
 }
 
+// hostSystemMounts is the closed set of host paths OUTSIDE the managed
+// prefixes a container may be bind-mounted (protocol minor 26, #445).
+// Everywhere else ADR-W003 A1 holds: a host path is mounted only from a
+// managed prefix. Each entry is an exact path, mounted read-only at the
+// same path inside; keystone/resource.HostSystemMounts is the lint twin
+// and TestHostSystemMountAllowlist on each side runs one fixture.
+//
+// Not here, and not to be: /var/run/docker.sock or anything else that
+// is the agent's own job in a socket, /, /etc, /sys, /proc.
+var hostSystemMounts = map[string]string{
+	// The D-Bus system bus, for Home Assistant's Bluetooth over the
+	// host's BlueZ. The directory rather than the socket, because
+	// dbus-daemon recreates the socket on restart. Read-only: connecting
+	// to a socket is not a write, and what the bus lets the client do is
+	// the host's D-Bus policy.
+	"/run/dbus": "the D-Bus system bus, for host BlueZ (Bluetooth)",
+}
+
+// hostSystemMountAllowed reports whether a host path, exactly as written
+// (no cleaning), is on the host system mount allowlist.
+func hostSystemMountAllowed(path string) bool {
+	_, ok := hostSystemMounts[path]
+	return ok
+}
+
+// checkHostSystemMount holds an allowlisted host system mount to its
+// rules: read-only, the same path inside, and the path itself rather than
+// a symlink to somewhere else. A missing path is NOT_FOUND — the host has
+// no D-Bus system bus — rather than letting Docker create an empty
+// directory there.
+func checkHostSystemMount(m *wsv1.Mount) *wsv1.OpError {
+	src := m.GetSource()
+	if !m.GetReadOnly() || m.GetTarget() != src {
+		return opErr(wsv1.ErrorCode_ERROR_CODE_FORBIDDEN,
+			"host path %q (%s) may only be mounted read-only at the same path inside", src, hostSystemMounts[src])
+	}
+	resolved, err := evalSymlinks(src)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return opErr(wsv1.ErrorCode_ERROR_CODE_NOT_FOUND, "host path %q does not exist on this node", src)
+		}
+		return opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "resolve %q: %v", src, err)
+	}
+	if resolved != src {
+		return opErr(wsv1.ErrorCode_ERROR_CODE_FORBIDDEN,
+			"host path %q resolves to %q: an allowlisted host path is mounted only as itself", src, resolved)
+	}
+	return nil
+}
+
 // statDevice is os.Stat, replaceable in tests: the allowlist can be
 // exercised on a machine with no such devices, and the existence check
 // is what makes a typo in a device path a NOT_FOUND now rather than a
