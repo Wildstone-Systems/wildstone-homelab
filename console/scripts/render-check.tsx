@@ -2651,6 +2651,9 @@ clearStepUp();
 // household list is an Owner's alone.
 import {
   CandidateCard,
+  awaitsYou,
+  MAIL_OUTCOME_NOTE,
+  openReview,
   healthOf as mailHealthOf,
   MailWatchView,
   stageOf,
@@ -2659,7 +2662,7 @@ import {
   connectionNameFor,
   MailWatchEntry,
 } from "../src/views/MailWatch";
-import type { AgentSubscription, MailCandidate, MailMonitor, MailSetup } from "../src/api";
+import type { AgentSubscription, MailCandidateRow, MailMonitor, MailReview, MailSetup } from "../src/api";
 
 const mailNow = new Date("2026-10-01T12:00:00Z");
 const mailMatch = JSON.stringify({
@@ -2798,26 +2801,56 @@ check("and offers an Owner the retry",
   renderMail(mailSetup({ owner: true, monitors: [mon({ connection: { ...mailConn, state: "degraded", degradedReason: "erasure_unverified" } })] }))
     .includes("Retry the erasure"));
 
-// Candidate review: Add, Edit, Dismiss; needs_details holds Add; conflicts named.
-const cand = (over: Partial<MailCandidate> = {}): MailCandidate => ({
+// Candidate review (S06's contract): rows carry their latest review; the
+// review's own actions decide the buttons; needs_details holds Add;
+// conflicts come from the review; update and cancel offer Apply.
+const review = (over: Partial<MailReview> = {}): MailReview => ({
+  id: "mr_1", candidate: "c1", revision: 2, kind: "create", targetCalendar: "family", fieldsDigest: "d",
+  route: "notice", availability: "busy", checkedCalendars: ["family", "Household"],
+  conflicts: [{ calendar: "Household", title: "Soccer", start: "2026-10-15T23:30:00Z" }],
+  issuedAt: "2026-10-01T11:50:00Z", expiresAt: "2026-10-04T11:50:00Z", state: "open",
+  actions: ["add", "edit", "dismiss"], ...over,
+});
+const cand = (over: Partial<MailCandidateRow> = {}): MailCandidateRow => ({
   id: "c1", revision: 2, connection: "sam-mail", targetCalendar: "family", state: "proposed",
   fields: { title: "Family night", start: "2026-10-15T23:00:00Z", end: "2026-10-16T00:30:00Z", allDay: false,
     tz: "America/Chicago", location: "School", confidence: 0.9, missing: [], ambiguous: [] },
-  conflicts: [{ calendar: "Household", title: "Soccer", start: "2026-10-15T23:30:00Z" }],
-  createdAt: "2026-10-01T11:50:00Z", ...over,
+  review: review(), createdAt: "2026-10-01T11:50:00Z", ...over,
 });
-const candReady = text(renderToString(h(CandidateCard, { candidate: cand(), onChanged: () => {} })));
+const candCard = (c: MailCandidateRow) =>
+  text(renderToString(h(CandidateCard, { candidate: c, onChanged: () => {}, now: mailNow })));
+const candReady = candCard(cand());
 check("a ready candidate offers Add, Edit and Dismiss",
-  candReady.includes(">Add<") && candReady.includes(">Edit<") && candReady.includes(">Dismiss<") && !/<button[^>]*disabled=""[^>]*>Add</.test(candReady), candReady);
+  candReady.includes(">Add<") && candReady.includes(">Edit<") && candReady.includes(">Dismiss<") &&
+  !candReady.includes(">Apply<") && !/<button[^>]*disabled=""[^>]*>Add</.test(candReady), candReady);
 check("its conflicts are named", candReady.includes("Soccer on Household"));
-const held = text(renderToString(h(CandidateCard, {
-  candidate: cand({ state: "needs_details", conflicts: null,
-    fields: { ...cand().fields, start: undefined, end: undefined, missing: ["start", "timezone"] } }),
-  onChanged: () => {},
-})));
+const held = candCard(cand({ state: "needs_details",
+  review: review({ availability: "not_checked", conflicts: null, actions: ["edit", "dismiss"] }),
+  fields: { ...cand().fields, start: undefined, end: undefined, missing: ["start", "timezone"] } }));
 check("a candidate that needs details cannot be added", /<button[^>]*disabled=""[^>]*>Add</.test(held), held);
 check("and says what is missing", held.includes("missing start time, time zone"));
 check("and opens the details to fill in", held.includes("Save details"));
+const upd = candCard(cand({ review: review({ kind: "update", actions: ["apply", "edit", "dismiss"], conflicts: [] }) }));
+check("an update review offers Apply, not Add",
+  upd.includes(">Apply<") && !upd.includes(">Add<") && upd.includes("change to an added event") &&
+  upd.includes("No conflicts on family, Household"), upd);
+const cancelRow = cand({ state: "created", updatePending: "cancel",
+  review: review({ kind: "cancel", actions: ["apply", "dismiss"], conflicts: null, availability: "not_checked" }) });
+const canc = candCard(cancelRow);
+check("a cancel review offers Apply or Dismiss (keep)",
+  canc.includes(">Apply<") && canc.includes(">Dismiss<") && !canc.includes(">Edit<") && canc.includes("Dismiss keeps it"), canc);
+check("an added event with an open cancel review awaits the Person", awaitsYou(cancelRow, mailNow));
+check("a resolved candidate with no open review does not",
+  !awaitsYou(cand({ state: "created", review: review({ state: "used" }) }), mailNow));
+check("an expired review offers nothing of its own",
+  openReview(cand({ review: review({ expiresAt: "2026-10-01T00:00:00Z" }) }), mailNow) === undefined);
+check("a review of an older revision is not this one's",
+  openReview(cand({ review: review({ revision: 1 }) }), mailNow) === undefined);
+check("the calendar being unreachable is said, not hidden",
+  candCard(cand({ review: review({ availability: "unavailable", conflicts: [] }) })).includes("could not be checked"));
+check("every outcome has words",
+  (["added", "updated", "cancelled", "dismissed", "kept", "revised", "returned_to_review", "pending_reconciliation"] as const)
+    .every((o) => !!MAIL_OUTCOME_NOTE[o]));
 check("with no candidates it says nothing is added without you",
   renderMail(mailSetup()).includes("Nothing is ever added to a calendar without you"));
 check("before the review API exists it says so rather than failing",

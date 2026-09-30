@@ -4,8 +4,14 @@ import {
   ApiError,
   mailApi,
   type AgentSubscription,
+  type MailActOutcome,
+  type MailActResult,
   type MailCandidate,
+  type MailCandidateAction,
   type MailCandidateEdit,
+  type MailCandidateRow,
+  type MailReview,
+  type MailReviewKind,
   type MailMonitor,
   type MailSetup,
   type MailWatchChoice,
@@ -406,7 +412,7 @@ export function MailWatchView({
   now,
 }: {
   setup: MailSetup;
-  candidates: MailCandidate[];
+  candidates: MailCandidateRow[];
   candidatesError?: string | null;
   reviewUnavailable?: boolean;
   household?: AgentSubscription[];
@@ -448,6 +454,7 @@ export function MailWatchView({
           error={candidatesError}
           unavailable={reviewUnavailable}
           onChanged={onChanged}
+          now={now}
         />
       )}
 
@@ -1271,6 +1278,12 @@ export function HealthPanel({
 
 // ---------------------------------------------------------------- candidates
 
+// The review is S06's (ADR-W030 A5.7): every row is the caller's own,
+// every offer names one revision, and an action is sent with the token
+// the candidate's GET returned for exactly that action. Nothing here
+// decides what may be done — the review's own `actions` do — and a 409
+// is always "nothing changed; look again".
+
 const FIELD_LABEL: Record<string, string> = {
   title: "title",
   start: "start time",
@@ -1281,6 +1294,7 @@ const FIELD_LABEL: Record<string, string> = {
   tz: "time zone",
   location: "place",
   duration: "length",
+  recurrence: "repeat",
 };
 
 function fieldList(names: string[] | null | undefined): string {
@@ -1293,6 +1307,42 @@ export function needsDetails(c: MailCandidate): boolean {
   if (c.state === "needs_details") return true;
   return [...(c.fields.missing ?? []), ...(c.fields.ambiguous ?? [])].some((n) => n !== "location");
 }
+
+// openReview is the row's review while it can still be answered.
+export function openReview(row: MailCandidateRow, now: Date = new Date()): MailReview | undefined {
+  const rv = row.review;
+  if (!rv || rv.state !== "open" || rv.revision !== row.revision) return undefined;
+  if (rv.expiresAt && new Date(rv.expiresAt).getTime() <= now.getTime()) return undefined;
+  return rv;
+}
+
+// awaitsYou: an unresolved candidate, or an event already added whose
+// correction or cancellation is waiting on an open review.
+export function awaitsYou(row: MailCandidateRow, now: Date = new Date()): boolean {
+  return row.state === "proposed" || row.state === "needs_details" || openReview(row, now) !== undefined;
+}
+
+// actionsFor is what the Person may do with this row: the open review's
+// own actions, or — with no review open yet — the unresolved candidate's
+// usual Edit/Dismiss (Add only once nothing is missing).
+export function actionsFor(row: MailCandidateRow, now: Date = new Date()): MailCandidateAction[] {
+  const rv = openReview(row, now);
+  if (rv) return rv.actions ?? [];
+  if (row.state === "proposed") return ["add", "edit", "dismiss"];
+  if (row.state === "needs_details") return ["edit", "dismiss"];
+  return [];
+}
+
+export const MAIL_OUTCOME_NOTE: Record<MailActOutcome, string> = {
+  added: "Added to your calendar.",
+  updated: "The event on your calendar was changed.",
+  cancelled: "The event was removed from your calendar.",
+  dismissed: "Dismissed. You will not be asked about this message again.",
+  kept: "The event stays on your calendar.",
+  revised: "Saved as a new version. Look it over and decide again.",
+  returned_to_review: "Nothing was changed: something moved since it was offered. Look at it again.",
+  pending_reconciliation: "Your calendar did not answer in time. It is being checked; nothing will be added twice.",
+};
 
 function eventWhen(f: MailCandidate["fields"]): string {
   if (!f.start) return "time not known";
@@ -1307,13 +1357,15 @@ export function CandidateList({
   error,
   unavailable,
   onChanged,
+  now,
 }: {
-  candidates: MailCandidate[];
+  candidates: MailCandidateRow[];
   error: string | null;
   unavailable?: boolean;
   onChanged: () => void;
+  now?: Date;
 }) {
-  const open = candidates.filter((c) => c.state === "proposed" || c.state === "needs_details");
+  const open = candidates.filter((c) => awaitsYou(c, now));
   return (
     <section className="work-section" aria-label="events found in your mail">
       <div className="sect">
@@ -1328,7 +1380,9 @@ export function CandidateList({
       ) : open.length === 0 ? (
         <div className="muted">Nothing waiting. Nothing is ever added to a calendar without you.</div>
       ) : (
-        open.map((c) => <CandidateCard key={`${c.id}@${c.revision}`} candidate={c} onChanged={onChanged} />)
+        open.map((c) => (
+          <CandidateCard key={`${c.id}@${c.revision}`} candidate={c} onChanged={onChanged} now={now} />
+        ))
       )}
     </section>
   );
@@ -1348,49 +1402,106 @@ function fromLocalInput(v: string): string | undefined {
   return isNaN(d.getTime()) ? undefined : d.toISOString();
 }
 
-export function CandidateCard({ candidate, onChanged }: { candidate: MailCandidate; onChanged: () => void }) {
+// actOnMail sends one action the way S06 prefers: it reads the
+// candidate afresh, and answers with the token that review issued for
+// exactly this action. A revision that moved on is refused here, before
+// anything is sent; with no token (no review open yet) it names the
+// exact revision instead, which the server checks the same way.
+export async function actOnMail(
+  row: MailCandidate,
+  action: MailCandidateAction,
+  fields?: MailCandidateEdit,
+): Promise<MailActResult> {
+  try {
+    const detail = await mailApi.candidate(row.id);
+    if (detail.candidate.revision !== row.revision) {
+      throw new Error("This event changed since you opened it. Look at the current version and decide again.");
+    }
+    const token = detail.review?.revision === row.revision ? detail.tokens?.[action] : undefined;
+    return await mailApi.actOnCandidate(row.id, token ? { token } : { revision: row.revision }, action, fields);
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 409) {
+      throw new Error(`Nothing was changed: ${e.message}. Look at the current version and decide again.`);
+    }
+    if (e instanceof ApiError && e.status === 404) {
+      throw new Error("This event is no longer waiting for you.");
+    }
+    if (e instanceof ApiError && e.status === 403) {
+      throw new Error("Only you can answer this, from your own session.");
+    }
+    throw e;
+  }
+}
+
+const KIND_PILL: Record<MailReviewKind, string> = {
+  create: "ready to add",
+  update: "change to an added event",
+  cancel: "cancelled by the organizer",
+};
+
+export function CandidateCard({
+  candidate,
+  onChanged,
+  now,
+}: {
+  candidate: MailCandidateRow;
+  onChanged: () => void;
+  now?: Date;
+}) {
   const f = candidate.fields;
-  const held = needsDetails(candidate);
-  const [editing, setEditing] = useState(held);
+  const rv = openReview(candidate, now);
+  const kind: MailReviewKind = rv?.kind ?? (candidate.updatePending === "cancel" ? "cancel" : "create");
+  const actions = actionsFor(candidate, now);
+  const held = kind !== "cancel" && needsDetails(candidate);
+  const [editing, setEditing] = useState(held && actions.includes("edit"));
   const [draft, setDraft] = useState<MailCandidateEdit>({
     title: f.title,
     start: f.start,
     end: f.end,
     allDay: f.allDay,
+    tz: f.tz,
     location: f.location ?? "",
     notes: f.notes ?? "",
   });
-  const act = useAction();
-  const conflicts = candidate.conflicts ?? [];
-  const send = (action: "add" | "edit" | "dismiss", fields?: MailCandidateEdit) =>
-    act.run(async () => {
-      try {
-        await mailApi.actOnCandidate(candidate.id, candidate.revision, action, fields);
-      } catch (e) {
-        // A stale revision or a spent review approves nothing; say so
-        // and show what is current.
-        if (e instanceof ApiError && e.status === 409) {
-          onChanged();
-          throw new Error("This event changed since you opened it. Look at the current version and decide again.");
-        }
-        throw e;
-      }
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const conflicts = rv?.conflicts ?? [];
+  const send = async (action: MailCandidateAction, fields?: MailCandidateEdit) => {
+    setBusy(true);
+    setError(null);
+    setNote(null);
+    try {
+      const res = await actOnMail(candidate, action, fields);
+      setNote(MAIL_OUTCOME_NOTE[res.outcome] ?? res.message);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
       onChanged();
-    }, action === "add" ? "Added to your calendar." : action === "dismiss" ? "Dismissed." : "Saved as a new version.");
+    }
+  };
 
   return (
     <div className="card" aria-label={`event candidate ${f.title || "untitled"}`}>
       <div className="card-head">
         <EnvelopeSimple size={16} aria-hidden />
         <strong className="card-name">{f.title || "Untitled event"}</strong>
-        <StatusPill kind={held ? "warn" : "ok"}>{held ? "needs details" : "ready to add"}</StatusPill>
+        <StatusPill kind={held ? "warn" : kind === "create" ? "ok" : "warn"}>
+          {held ? "needs details" : KIND_PILL[kind]}
+        </StatusPill>
       </div>
       <div>{eventWhen(f)}</div>
       {f.location && <div className="muted">{f.location}</div>}
       {f.notes && <div className="muted">{f.notes}</div>}
       <div className="muted">
-        Would be added to {candidate.targetCalendar} · confidence {Math.round(f.confidence * 100)}%
-        {candidate.expiresAt ? ` · decide by ${when(candidate.expiresAt)}` : ""}
+        {kind === "cancel"
+          ? `Apply removes it from ${rv?.targetCalendar ?? candidate.targetCalendar}; Dismiss keeps it.`
+          : kind === "update"
+            ? `Apply changes the event already on ${rv?.targetCalendar ?? candidate.targetCalendar}`
+            : `Would be added to ${rv?.targetCalendar ?? candidate.targetCalendar}`}
+        {kind !== "cancel" && ` · confidence ${Math.round(f.confidence * 100)}%`}
+        {rv?.expiresAt ? ` · decide by ${when(rv.expiresAt)}` : candidate.expiresAt ? ` · decide by ${when(candidate.expiresAt)}` : ""}
       </div>
       {held && (
         <div className="callout callout-warn">
@@ -1401,22 +1512,29 @@ export function CandidateCard({ candidate, onChanged }: { candidate: MailCandida
           . Nothing is added, and no conflicts are checked, until you fill them in.
         </div>
       )}
-      {!held &&
-        (conflicts.length === 0 ? (
-          <div className="muted">No conflicts on the calendars you chose.</div>
+      {!held && kind !== "cancel" && rv && (
+        rv.availability === "unavailable" ? (
+          <div className="callout callout-warn">
+            Your calendars could not be checked for conflicts. They are checked again when you decide.
+          </div>
+        ) : conflicts.length === 0 ? (
+          <div className="muted">
+            No conflicts on {(rv.checkedCalendars ?? []).length > 0 ? (rv.checkedCalendars ?? []).join(", ") : "the calendars you chose"}.
+          </div>
         ) : (
           <div className="callout callout-warn">
             Conflicts:
             <ul>
               {conflicts.map((c, i) => (
                 <li key={i}>
-                  {c.title ?? "busy"} on {c.calendar}
-                  {c.start ? ` — ${when(c.start)}` : ""}
+                  {c.title || "busy"} on {c.calendar}
+                  {c.start ? ` — ${c.allDay ? new Date(c.start).toLocaleDateString() : when(c.start)}` : ""}
                 </li>
               ))}
             </ul>
           </div>
-        ))}
+        )
+      )}
       {editing && (
         <div style={{ display: "grid", gap: "var(--space-2)", marginTop: "var(--space-3)" }}>
           <div className="field">
@@ -1451,24 +1569,39 @@ export function CandidateCard({ candidate, onChanged }: { candidate: MailCandida
         </div>
       )}
       <div className="row">
-        <button className="btn btn-primary" disabled={held || act.state.phase === "busy"} onClick={() => send("add")}>
-          Add
-        </button>
-        {editing ? (
-          <button className="btn btn-secondary" disabled={!draft.title.trim() || !draft.start || act.state.phase === "busy"} onClick={() => send("edit", draft)}>
-            Save details
-          </button>
-        ) : (
-          <button className="btn btn-secondary" onClick={() => setEditing(true)}>
-            Edit
+        {actions.includes("add") && (
+          <button className="btn btn-primary" disabled={held || busy} onClick={() => send("add")}>
+            Add
           </button>
         )}
-        <button className="btn btn-ghost" disabled={act.state.phase === "busy"} onClick={() => send("dismiss")}>
-          Dismiss
-        </button>
+        {!actions.includes("add") && kind === "create" && actions.length > 0 && (
+          <button className="btn btn-primary" disabled>
+            Add
+          </button>
+        )}
+        {actions.includes("apply") && (
+          <button className="btn btn-primary" disabled={held || busy} onClick={() => send("apply")}>
+            Apply
+          </button>
+        )}
+        {actions.includes("edit") &&
+          (editing ? (
+            <button className="btn btn-secondary" disabled={!draft.title.trim() || !draft.start || busy} onClick={() => send("edit", draft)}>
+              Save details
+            </button>
+          ) : (
+            <button className="btn btn-secondary" onClick={() => setEditing(true)}>
+              Edit
+            </button>
+          ))}
+        {actions.includes("dismiss") && (
+          <button className="btn btn-ghost" disabled={busy} onClick={() => send("dismiss")}>
+            Dismiss
+          </button>
+        )}
       </div>
-      {act.state.phase === "done" && <div className="msg-note">{act.state.message}</div>}
-      {act.state.phase === "error" && <ErrorLine error={act.state.message} />}
+      {note && <div className="msg-note">{note}</div>}
+      <ErrorLine error={error} />
     </div>
   );
 }

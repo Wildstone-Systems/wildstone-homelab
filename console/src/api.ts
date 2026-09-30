@@ -2600,14 +2600,18 @@ export interface MailSetup {
   calendarsError?: string;
 }
 
-// An event candidate, as the Person-scoped review API serves it (S06).
-// Coded against the expected contract; conflicts are only the ones the
-// Person may see.
+// An event candidate, as the Person-scoped review API serves it (S06,
+// ADR-W030 A5.7). Everything here is the caller's own: another Person's
+// candidate is a 404, the same answer as "no such candidate".
+
+// One event already on a calendar the Person can read that overlaps
+// the candidate. Only calendars the Person may see are ever checked.
 export interface MailCandidateConflict {
   calendar: string;
-  title?: string;
-  start?: string;
+  title: string;
+  start: string;
   end?: string;
+  allDay?: boolean;
 }
 
 export interface MailCandidateFields {
@@ -2628,22 +2632,111 @@ export interface MailCandidate {
   id: string;
   revision: number;
   connection: string;
+  source?: string;
   targetCalendar: string;
+  // proposed, needs_details, accepted, created, dismissed, superseded,
+  // expired or cancelled.
   state: string;
   stateReason?: string;
   fields: MailCandidateFields;
-  conflicts?: MailCandidateConflict[] | null;
+  supersedes?: string;
+  supersededBy?: string;
+  // "update" or "cancel": the event this candidate created has a
+  // correction or a cancellation waiting for the Person.
+  updatePending?: "" | "update" | "cancel";
   createdAt: string;
+  updatedAt?: string;
   expiresAt?: string;
+  resolvedAt?: string;
 }
 
-export type MailCandidateAction = "add" | "edit" | "dismiss";
+export type MailReviewKind = "create" | "update" | "cancel";
+export type MailCandidateAction = "add" | "edit" | "dismiss" | "apply";
 
-// The edits a Person may make to a candidate before adding it.
+// One offer to the Person: exactly one revision, one kind, one target
+// calendar, and the actions it allows. Only "open" can change, once.
+export interface MailReview {
+  id: string;
+  candidate: string;
+  revision: number;
+  kind: MailReviewKind;
+  targetCalendar: string;
+  eventUid?: string;
+  fieldsDigest: string;
+  route: string;
+  // free, busy, unavailable or not_checked.
+  availability: string;
+  conflicts: MailCandidateConflict[] | null;
+  checkedCalendars: string[] | null;
+  issuedAt: string;
+  expiresAt: string;
+  // open, used, revoked or expired.
+  state: string;
+  stateReason?: string;
+  usedAction?: string;
+  closedAt?: string;
+  actions: MailCandidateAction[] | null;
+}
+
+// A calendar write a review authorized, and what became of it.
+export interface MailEffect {
+  seq: number;
+  candidate: string;
+  revision: number;
+  review: string;
+  kind: MailReviewKind;
+  // dispatching, confirmed, reconciled, returned or failed.
+  state: string;
+  calendar: string;
+  attempts: number;
+  startedAt: string;
+  finishedAt?: string;
+  detail?: string;
+}
+
+// GET /mail/candidates: each candidate with its latest review, if any.
+export type MailCandidateRow = MailCandidate & { review?: MailReview };
+
+// GET /mail/candidates/{id}. tokens are returned only to the Person's
+// own Console, CLI or Homepage session, one per action the open review
+// offers; each approves exactly that action on exactly that revision.
+export interface MailCandidateDetail {
+  candidate: MailCandidate;
+  review?: MailReview;
+  tokens?: Partial<Record<MailCandidateAction, string>>;
+  excerpt?: string;
+  effects: MailEffect[] | null;
+}
+
+export type MailActOutcome =
+  | "added"
+  | "updated"
+  | "cancelled"
+  | "dismissed"
+  | "kept"
+  | "revised"
+  | "returned_to_review"
+  | "pending_reconciliation";
+
+export interface MailActResult {
+  outcome: MailActOutcome;
+  candidate: MailCandidate;
+  // The fresh review an Edit or a returned Add opened.
+  review?: MailReview;
+  effect?: MailEffect;
+  message: string;
+}
+
+// The edits a Person may make to a candidate. Edit sends the whole
+// event: what it names is what the new revision holds.
 export type MailCandidateEdit = Pick<
   MailCandidateFields,
-  "title" | "start" | "end" | "allDay" | "location" | "notes"
+  "title" | "start" | "end" | "allDay" | "location" | "notes" | "tz"
 >;
+
+// How an action names what it approves: the review's token for that
+// action (preferred), or the exact revision the Person was shown.
+export type MailActBy = { token: string } | { revision: number };
 
 const integrationPath = (name: string, rest: string) =>
   `/api/v1/integrations/${encodeURIComponent(name)}/${rest}`;
@@ -2717,15 +2810,15 @@ export const mailApi = {
     extra: { reason?: string; cadence?: string } = {},
   ) => call<AgentSubscription>("POST", `/api/v1/agent-subscriptions/${id}/control`, { action, ...extra }),
 
-  // S06's Person-scoped review. Kept to these three calls so the
-  // contract is adjusted in one place.
-  candidates: () => call<{ candidates: MailCandidate[] | null }>("GET", MAIL_CANDIDATES_PATH),
+  // S06's Person-scoped review. Kept to these calls so the contract is
+  // adjusted in one place. 404: not yours (or no such candidate); 409:
+  // stale or refused, and nothing changed; 403: an Agent never acts.
+  candidates: () => call<{ candidates: MailCandidateRow[] | null }>("GET", MAIL_CANDIDATES_PATH),
   candidate: (id: string) =>
-    call<MailCandidate>("GET", `${MAIL_CANDIDATES_PATH}/${encodeURIComponent(id)}`),
-  actOnCandidate: (id: string, revision: number, action: MailCandidateAction, fields?: MailCandidateEdit) =>
-    call<MailCandidate>("POST", `${MAIL_CANDIDATES_PATH}/${encodeURIComponent(id)}/act`, {
-      revision,
-      action,
+    call<MailCandidateDetail>("GET", `${MAIL_CANDIDATES_PATH}/${encodeURIComponent(id)}`),
+  actOnCandidate: (id: string, by: MailActBy, action: MailCandidateAction, fields?: MailCandidateEdit) =>
+    call<MailActResult>("POST", `${MAIL_CANDIDATES_PATH}/${encodeURIComponent(id)}/act`, {
+      ...("token" in by ? { token: by.token } : { revision: by.revision, action }),
       ...(fields ? { fields } : {}),
     }),
 };
