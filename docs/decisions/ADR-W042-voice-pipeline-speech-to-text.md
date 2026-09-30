@@ -149,7 +149,7 @@ Deployment flags, the same shape as `-ntfy-url` and `-calendar-url`. No flag eve
 |---|---|---|
 | `-speech-mode` | `off` | `off`, `local`, `local-then-cloud` or `cloud`. `local-then-cloud` still obeys §2.2 step 4 on every turn. Not given, it is `off` until `speech-speaches` is installed on Keystone's node, then `local` (§3.4). |
 | `-speech-url` | empty | The local engine, e.g. `http://127.0.0.1:18000/v1`. Empty means the installed `speech-speaches` engine, if any (§3.4). |
-| `-node-id` | short host name | The Wardstone node Keystone runs on, the installer's `--node-id`. Used to check where `speech-speaches` is installed. |
+| `-node-id` | short host name | The Wardstone node Keystone runs on. The installer sets it to its `--node-id`. Used to check where `speech-speaches` is installed. |
 | `-speech-model` | `Systran/faster-whisper-small` | The local model. `Systran/faster-distil-whisper-small.en` suits an English-only house. |
 | `-speech-cloud-model` | `gpt-4o-mini-transcribe` | The OpenAI model. |
 | `-speech-language` | `auto` | Two-letter hint, e.g. `en`. |

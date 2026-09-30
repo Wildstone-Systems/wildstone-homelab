@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { DirectoryPicker } from "../ui/DirectoryPicker";
 import {
   ArrowCircleUp,
@@ -38,6 +38,15 @@ export function Services() {
   // Removing a capability proposes deleting everything it owns, and
   // only the statefile knows what that is.
   const resources = useLoad(() => api.resources(), []);
+  // A speech model downloads for minutes after the install that started
+  // it; keep asking until it settles, so the callout moves on its own.
+  const speechSettling = (list.data ?? []).some((p) => p.speech?.state && p.speech.state !== "ready");
+  const reloadList = list.reload;
+  useEffect(() => {
+    if (!speechSettling) return;
+    const t = window.setInterval(reloadList, 5000);
+    return () => window.clearInterval(t);
+  }, [speechSettling, reloadList]);
   if (list.error) return <ErrorLine error={list.error} />;
   return (
     <ServicesView
