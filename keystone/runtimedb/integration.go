@@ -22,6 +22,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/chickenrat17/wildstone-homelab/keystone/integration"
 )
 
 // Connection ownership and the defaults it decides (A5).
@@ -258,6 +260,16 @@ func (db *DB) BumpConnectionEpoch(name string) (int64, error) {
 // is what makes "an adapter cannot claim another connection's work"
 // structural: the claim query joins through this table.
 func (db *DB) BindAdapterPrincipal(principal, connection, boundBy string) error {
+	return db.BindAdapterPrincipalOnNode(principal, connection, "", boundBy)
+}
+
+// BindAdapterPrincipalOnNode binds an adapter credential to a connection
+// AND to the placement node its container runs on (migration 0097). Such
+// a principal claims only while that node holds the connection's lease,
+// so a prepared fallback stays ready but inactive until failover moves
+// the lease to it (ADR-W030 A5). An empty node is the unplaced binding
+// BindAdapterPrincipal makes.
+func (db *DB) BindAdapterPrincipalOnNode(principal, connection, node, boundBy string) error {
 	if principal == "" || boundBy == "" {
 		return fmt.Errorf("runtimedb: binding an adapter needs the principal and who bound it")
 	}
@@ -265,9 +277,23 @@ func (db *DB) BindAdapterPrincipal(principal, connection, boundBy string) error 
 	if err != nil {
 		return err
 	}
+	var existing string
+	err = db.sql.QueryRow(`SELECT node FROM integration_principals WHERE principal = ? AND connection = ?`,
+		principal, c.Seq).Scan(&existing)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+	case err != nil:
+		return fmt.Errorf("runtimedb: binding adapter principal: %w", err)
+	case existing != node:
+		// Moving a credential between nodes is a removal and a new
+		// placement, each proven; it is never a quiet rebind.
+		return fmt.Errorf("runtimedb: adapter %q is already bound to %q on node %q", principal, connection, existing)
+	default:
+		return nil
+	}
 	_, err = db.sql.Exec(
-		`INSERT INTO integration_principals (principal, connection, bound_at, bound_by)
-		 VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING`, principal, c.Seq, now(), boundBy)
+		`INSERT INTO integration_principals (principal, connection, bound_at, bound_by, node)
+		 VALUES (?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`, principal, c.Seq, now(), boundBy, node)
 	if err != nil {
 		return fmt.Errorf("runtimedb: binding adapter principal: %w", err)
 	}
@@ -393,6 +419,20 @@ func (db *DB) EnqueueIntegrationWork(connection string, w IntegrationWork, deadl
 	if w.Capability == "" {
 		return 0, fmt.Errorf("runtimedb: queued work must name a capability")
 	}
+	// Inside a declared integration domain the vocabulary is closed
+	// (keystone/integration), and it is closed at DISPATCH as well as at
+	// declaration: a query must be a declared query and an action a
+	// declared action. A read-only domain such as mail declares no action
+	// at all, so no mutating mail work can be queued, whatever a caller
+	// or a connection's switches say.
+	if domain, known := integration.DomainOf(w.Capability); known {
+		switch {
+		case w.Kind == WorkQuery && !integration.IsQuery(w.Capability):
+			return 0, fmt.Errorf("runtimedb: %q is not a %s query, so it was not queued", w.Capability, domain.Name)
+		case w.Kind == WorkAction && !integration.IsAction(w.Capability):
+			return 0, fmt.Errorf("runtimedb: %q is not a %s action, so it was not queued", w.Capability, domain.Name)
+		}
+	}
 	conn, err := db.GetConnection(connection)
 	if err != nil {
 		return 0, err
@@ -468,6 +508,10 @@ func (db *DB) ClaimIntegrationWork(principal string) (IntegrationWork, bool, err
 		 JOIN integration_connections c ON c.seq = w.connection
 		 JOIN integration_principals p ON p.connection = w.connection
 		 WHERE p.principal = ? AND w.state = ? AND w.epoch = c.lease_epoch
+		   AND (p.node = '' OR EXISTS (
+		         SELECT 1 FROM integration_placements pl
+		          WHERE pl.connection = w.connection AND pl.node = p.node
+		            AND pl.holder = 1 AND pl.removing_at = ''))
 		 ORDER BY w.seq LIMIT 1`, principal, WorkQueued).
 		Scan(&w.Seq, &w.Connection, &w.Kind, &w.Capability, &w.CorrelationID, &w.RequestJSON,
 			&w.EnvelopeVersion, &w.Epoch, &created, &deadline)

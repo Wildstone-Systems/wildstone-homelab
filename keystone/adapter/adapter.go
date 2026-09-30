@@ -31,6 +31,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -106,6 +107,13 @@ type Capability struct {
 // today are the same situation.
 var ErrNoSuchCapability = errors.New("adapter: this upstream does not implement that capability")
 
+// ErrFenced is what Report returns when Keystone refused a result because
+// the connection's lease moved on (a newer epoch, a failover, a removal).
+// It is not a failure of this adapter and not a reason to retry: the
+// work belongs to whoever holds the lease now (ADR-W030 A5.1, contract
+// §6.5 "stay fenced").
+var ErrFenced = errors.New("adapter: fenced — the connection's lease has moved to a newer epoch")
+
 // Client is the Keystone side: claim, report, and nothing else.
 type Client struct {
 	BaseURL string
@@ -122,6 +130,37 @@ type Work struct {
 	CorrelationID string          `json:"correlationId"`
 	RequestJSON   json.RawMessage `json:"requestJson"`
 	DeadlineAt    time.Time       `json:"deadlineAt"`
+	// Epoch is the lease epoch the work was queued under. The adapter
+	// does not enforce it — Keystone does, refusing a result from a
+	// superseded epoch — but it is logged so a fenced answer can be
+	// traced to the lease that lost it.
+	Epoch int64 `json:"epoch"`
+}
+
+// UnmarshalJSON accepts requestJson both as a JSON object and as a
+// string holding one. Keystone's work envelope carries the request as a
+// string (runtimedb.IntegrationWork.RequestJSON), so an adapter reading
+// it as raw JSON would hand every Upstream a quoted string instead of
+// the request — which is what the first run against a real Keystone,
+// rather than a fake that answered in the other shape, showed.
+func (w *Work) UnmarshalJSON(data []byte) error {
+	type plain Work
+	var out plain
+	if err := json.Unmarshal(data, &out); err != nil {
+		return err
+	}
+	if raw := bytes.TrimSpace(out.RequestJSON); len(raw) > 0 && raw[0] == '"' {
+		var s string
+		if err := json.Unmarshal(raw, &s); err != nil {
+			return fmt.Errorf("adapter: requestJson: %w", err)
+		}
+		if s != "" && !json.Valid([]byte(s)) {
+			return fmt.Errorf("adapter: requestJson is not JSON")
+		}
+		out.RequestJSON = json.RawMessage(s)
+	}
+	*w = Work(out)
+	return nil
 }
 
 func (c *Client) httpClient() *http.Client {
@@ -150,6 +189,10 @@ func (c *Client) post(ctx context.Context, path string, body, into any) error {
 		return err
 	}
 	defer res.Body.Close()
+	if res.StatusCode == http.StatusConflict {
+		msg, _ := io.ReadAll(io.LimitReader(res.Body, 2048))
+		return fmt.Errorf("%w: %s", ErrFenced, strings.TrimSpace(string(msg)))
+	}
 	if res.StatusCode != http.StatusOK {
 		msg, _ := io.ReadAll(io.LimitReader(res.Body, 2048))
 		return fmt.Errorf("adapter: %s answered %s: %s", path, res.Status, strings.TrimSpace(string(msg)))
@@ -202,7 +245,26 @@ type Runner struct {
 	PollWait time.Duration
 	// Log, when set, receives one line per handled item.
 	Log func(string, ...any)
+
+	// lastContact is the last time Keystone answered a claim, in Unix
+	// nanoseconds. It is what a health probe reads: an adapter that
+	// cannot reach its control plane is not ready to hold a lease.
+	lastContact atomic.Int64
 }
+
+// LastContact reports when Keystone last answered a claim, or the zero
+// time if it never has.
+func (r *Runner) LastContact() time.Time {
+	if n := r.lastContact.Load(); n != 0 {
+		return time.Unix(0, n)
+	}
+	return time.Time{}
+}
+
+// reportTimeout bounds a report made after shutdown began. An answer the
+// adapter already has is worth delivering — otherwise the work waits out
+// its deadline for nothing — but not worth holding shutdown open for.
+const reportTimeout = 5 * time.Second
 
 func (r *Runner) log(format string, args ...any) {
 	if r.Log != nil {
@@ -229,8 +291,22 @@ func (r *Runner) RunOnce(ctx context.Context) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	r.lastContact.Store(time.Now().UnixNano())
 	if work == nil {
 		return false, nil
+	}
+	// Graceful shutdown: a cancelled ctx stops the NEXT claim, but an
+	// answer to work already claimed is still delivered, briefly.
+	reportCtx, cancelReport := context.WithTimeout(context.WithoutCancel(ctx), reportTimeout)
+	defer cancelReport()
+	report := func(resultType string, data any, observedAt time.Time, errText string) error {
+		err := r.Client.Report(reportCtx, work.Seq, resultType, data, observedAt, errText)
+		if errors.Is(err, ErrFenced) {
+			// Keystone already knows; the lease is someone else's now.
+			r.log("work %d (epoch %d): fenced, result dropped: %v", work.Seq, work.Epoch, err)
+			return nil
+		}
+		return err
 	}
 
 	callCtx := ctx
@@ -244,7 +320,7 @@ func (r *Runner) RunOnce(ctx context.Context) (bool, error) {
 	switch {
 	case errors.Is(err, ErrNoSuchCapability), errors.Is(err, ErrUnavailable):
 		r.log("work %d: %s is unavailable: %v", work.Seq, work.Capability, err)
-		return true, r.Client.Report(ctx, work.Seq, ResultUnavailable, nil, time.Time{}, err.Error())
+		return true, report(ResultUnavailable, nil, time.Time{}, err.Error())
 	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
 		// The deadline passed while we were asking. Keystone has already
 		// expired it; reporting would be refused and would say nothing
@@ -253,7 +329,7 @@ func (r *Runner) RunOnce(ctx context.Context) (bool, error) {
 		return true, nil
 	case err != nil:
 		r.log("work %d: %s failed: %v", work.Seq, work.Capability, err)
-		return true, r.Client.Report(ctx, work.Seq, ResultUnavailable, nil, time.Time{}, err.Error())
+		return true, report(ResultUnavailable, nil, time.Time{}, err.Error())
 	}
 
 	resultType := ResultOK
@@ -264,7 +340,7 @@ func (r *Runner) RunOnce(ctx context.Context) (bool, error) {
 		resultType = ResultEmpty
 	}
 	r.log("work %d: %s → %s", work.Seq, work.Capability, resultType)
-	return true, r.Client.Report(ctx, work.Seq, resultType, answer.Data, answer.ObservedAt, "")
+	return true, report(resultType, answer.Data, answer.ObservedAt, "")
 }
 
 func (r *Runner) ask(ctx context.Context, work Work) (Answer, error) {

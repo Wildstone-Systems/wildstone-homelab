@@ -105,7 +105,11 @@ func (s *Server) bindIntegrationAdapter(r *http.Request, id principal.Identity) 
 	name := r.PathValue("name")
 	var req struct {
 		Principal string `json:"principal"`
-		Unbind    bool   `json:"unbind"`
+		// Node binds the credential to one placement: it claims only
+		// while that node holds the lease (ADR-W030 A5). Empty binds it
+		// to the connection wherever it runs.
+		Node   string `json:"node"`
+		Unbind bool   `json:"unbind"`
 	}
 	if code, err := decodeStrict(r, &req); err != nil {
 		return nil, code, err
@@ -119,13 +123,17 @@ func (s *Server) bindIntegrationAdapter(r *http.Request, id principal.Identity) 
 		return map[string]any{"unbound": req.Principal, "note": "the connection lease moved; " +
 			"work claimed by the old adapter will be refused when it answers"}, http.StatusOK, nil
 	}
-	if err := s.DB.BindAdapterPrincipal(req.Principal, name, actingMember(id)); err != nil {
+	if err := s.DB.BindAdapterPrincipalOnNode(req.Principal, name, req.Node, actingMember(id)); err != nil {
 		if errors.Is(err, runtimedb.ErrNotFound) {
 			return nil, http.StatusNotFound, fmt.Errorf("no connection named %q", name)
 		}
 		return nil, http.StatusBadRequest, err
 	}
-	return map[string]any{"bound": req.Principal}, http.StatusOK, nil
+	out := map[string]any{"bound": req.Principal}
+	if req.Node != "" {
+		out["node"] = req.Node
+	}
+	return out, http.StatusOK, nil
 }
 
 // recordIntegrationCapability stores what a connection was VERIFIED to
