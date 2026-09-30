@@ -102,3 +102,49 @@ func TestWorkspaceTaskAuthorityRefusesRoutineAndUntrustedOrigin(t *testing.T) {
 		})
 	}
 }
+
+func TestWorkspaceAuthorityMemberPortalAndOwnerIsolation(t *testing.T) {
+	db := agentFixture(t)
+	member, err := db.GetButlerMember("sam")
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent, err := db.GetButler("hobson")
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := Workspace{ID: "member-workspace", PersonID: member.PersonID, AgentID: agent.Seq}
+	if err = db.CreateWorkspace(w); err != nil {
+		t.Fatal(err)
+	}
+	createTask := func(person string) string {
+		t.Helper()
+		id, err := db.InsertButlerTask(ButlerTask{Kind: ButlerTaskConversation, Author: person, Owner: person, AgentClass: AgentClassMember, Surface: ButlerSurfaceFamily, Audience: ButlerAudiencePrivate, OriginConnection: "household_portal", Objective: "read own files"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = db.SetTaskButler(id, agent.Name); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	memberTask := createTask("sam")
+	if err = db.CheckWorkspaceTask("sam", agent.Name, memberTask, "household_portal", w.ID); !errors.Is(err, ErrWorkspaceDenied) {
+		t.Fatalf("ungranted Agent admitted: %v", err)
+	}
+	if err = db.GrantButlerAccess(agent.Name, "sam", "root-admin"); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.CheckWorkspaceTask("sam", agent.Name, memberTask, "household_portal", w.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.GrantButlerAccess(agent.Name, "mika", "root-admin"); err != nil {
+		t.Fatal(err)
+	}
+	ownerTask := createTask("mika")
+	for _, id := range []string{w.ID, "absent"} {
+		if err = db.CheckWorkspaceTask("mika", agent.Name, ownerTask, "household_portal", id); !errors.Is(err, ErrWorkspaceDenied) {
+			t.Fatalf("Owner learned another Person's resource: %v", err)
+		}
+	}
+}
