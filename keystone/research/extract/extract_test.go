@@ -351,3 +351,15 @@ func TestNonVoidSelfClosingSyntaxStillSuppressesContent(t *testing.T) {
 		}
 	}
 }
+
+func TestRawTextTagsDoNotNestAcrossMarkdownSpans(t *testing.T) {
+	for _, media := range []string{"text/html", "text/markdown"} {
+		for _, tag := range []string{"script", "style", "iframe", "noscript", "title"} {
+			body := "before <" + tag + "><" + tag + ">hidden</" + tag + "> after"
+			d, err := Extract(input(media, body))
+			if err != nil || strings.Join(strings.Fields(d.Text), " ") != "before after" {
+				t.Fatalf("%s %s lost raw-text suffix: %q %v", media, tag, d.Text, err)
+			}
+		}
+	}
+}

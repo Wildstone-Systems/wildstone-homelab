@@ -185,8 +185,14 @@ func (f *markupFilter) feed(input string, preserve bool) error {
 			}
 		}
 		if f.suppressed != "" {
-			if (kind == html.StartTagToken || (kind == html.SelfClosingTagToken && t.Data != "svg" && t.Data != "math")) && t.Data == f.suppressed {
-				f.depth++
+			// Markdown may present raw-text tags as separate spans. A fresh
+			// tokenizer sees their inner opening tags, but HTML treats those
+			// as text, not nesting. Only normal/foreign containers nest.
+			switch f.suppressed {
+			case "object", "template", "svg", "math":
+				if (kind == html.StartTagToken || (kind == html.SelfClosingTagToken && t.Data != "svg" && t.Data != "math")) && t.Data == f.suppressed {
+					f.depth++
+				}
 			}
 			if kind == html.EndTagToken && t.Data == f.suppressed {
 				f.depth--
