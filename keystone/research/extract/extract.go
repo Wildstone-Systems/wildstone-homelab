@@ -375,7 +375,7 @@ var literalPrefixPattern = regexp.MustCompile(`WS_MD_LITERAL_[0-9]+_`)
 // Choose a deterministic prefix absent from both raw and entity-decoded HTML.
 // Occupancy scanning is linear in bounded input; trying every prefix against
 // the entire input would let crafted examples force quadratic work.
-func prepareMarkdown(parts []markdownPart, filter *markupFilter) string {
+func prepareMarkdown(parts []markdownPart, filter *markupFilter) (preparedHTML, logicalHTML string) {
 	occupied := map[string]bool{}
 	for _, part := range parts {
 		if !part.literal {
@@ -440,7 +440,7 @@ func prepareMarkdown(parts []markdownPart, filter *markupFilter) string {
 		position = gap.offset
 	}
 	prepared.WriteString(logical[position:])
-	return prepared.String()
+	return prepared.String(), logical
 }
 
 // Markdown parsing identifies actual raw HTML spans. Autolinks, escaped angle
@@ -501,7 +501,17 @@ func extractMarkup(input string, base *url.URL, markdown bool) (string, bool, er
 		return "", false, err
 	}
 	parts = append(parts, markdownPart{literal: true, text: input[position:]})
-	if err := filter.feed(prepareMarkdown(parts, &filter), true); err != nil {
+	prepared, logical := prepareMarkdown(parts, &filter)
+	// Validate the logical HTML before reinserting source-formatting gaps.
+	// Its tree has authoritative namespace/integration-point semantics;
+	// formatting markers must never rewrite an active input's attributes.
+	// Retain no output in this pass, but still inspect all decoded literals.
+	validation := filter
+	validation.out = &limitedText{count: MaxCharacters + 1}
+	if err := validation.feed(logical, true); err != nil {
+		return "", false, err
+	}
+	if err := filter.feed(prepared, true); err != nil {
 		return "", false, err
 	}
 	return out.String(), out.count > MaxCharacters, nil

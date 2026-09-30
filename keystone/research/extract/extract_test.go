@@ -683,3 +683,27 @@ func TestMarkdownContainerGapsRespectRawTextState(t *testing.T) {
 		}
 	}
 }
+
+func TestMarkdownFormattingGapsCannotChangeActiveControls(t *testing.T) {
+	for _, wrappers := range [][2]string{
+		{"<svg><title>", "</title></svg>"},
+		{"<svg><desc>", "</desc></svg>"},
+		{"<svg><foreignObject>", "</foreignObject></svg>"},
+		{"<math><mtext>", "</mtext></math>"},
+		{"<math><annotation-xml encoding='text/html'>", "</annotation-xml></math>"},
+		{"<svg><script></svg><p>", "</p>"},
+	} {
+		body := "> " + wrappers[0] + "\n> <input\n> type=password>\n> " + wrappers[1]
+		if _, err := Extract(input("text/markdown", body)); err != publicfetch.ErrBlocked {
+			t.Fatalf("active integration point %q: %v", body, err)
+		}
+		inert := "> <template>" + wrappers[0] + "\n> <input\n> type=password>\n> " + wrappers[1] + "</template>"
+		if _, err := Extract(input("text/markdown", inert)); err != nil {
+			t.Fatalf("inert template %q: %v", inert, err)
+		}
+	}
+	body := "> <svg><foreignObject><textarea>\n> <input\n> type=password>\n> </textarea></foreignObject></svg>"
+	if _, err := Extract(input("text/markdown", body)); err != nil {
+		t.Fatalf("inert RCDATA inside integration point: %v", err)
+	}
+}
