@@ -239,6 +239,226 @@ export interface ProbeResult {
   detail?: string;
 }
 
+// Home-automation aggregate (GET /api/v1/home-automation, #446). The
+// server is the authority for dependencies, radio suitability, blockers
+// and remedies; render these, never re-derive them. Query goals
+// (select/topology/node/bluetooth) shape one answer and are never stored.
+export type HomeAutomationComponentId =
+  | "mqtt"
+  | "home-assistant"
+  | "home-automation"
+  | "zigbee"
+  | "zwave"
+  | "matter"
+  | "thread"
+  | "bluetooth";
+
+export type HomeAutomationState =
+  | "not_selected"
+  | "blocked"
+  | "ready_to_propose"
+  | "awaiting_approval"
+  | "applying"
+  | "external_step"
+  | "ready"
+  | "degraded"
+  | "unavailable";
+
+export type HomeAutomationTopology = "managed" | "external";
+export type HomeAutomationSelection = "installed" | "pending" | "requested" | "dependency" | "none";
+export type BluetoothMode = "host-bluez" | "proxy";
+
+export type HomeAutomationActionKind =
+  | "retry_probe"
+  | "install_package"
+  | "reconfigure_package"
+  | "upgrade_package"
+  | "open_plan"
+  | "open_service"
+  | "select_radio"
+  | "manual_step"
+  | "mint_publisher"
+  | "open_backups"
+  | "choose_node"
+  | "pair_node"
+  | "resolve_dependency";
+
+export interface HomeAutomationEvidence {
+  // node, readiness, radios, observed, plan, catalog, statefile, backup,
+  // principal, component
+  source: string;
+  subject?: string;
+  state?: string;
+  value?: string;
+  detail?: string;
+  observedAt?: string;
+}
+
+export interface HomeAutomationAction {
+  kind: HomeAutomationActionKind;
+  label: string;
+  component?: HomeAutomationComponentId;
+  package?: string;
+  capability?: string;
+  node?: string;
+  planId?: string;
+  radioIds?: string[];
+  params?: Record<string, string>;
+  instructions?: string[];
+}
+
+export interface HomeAutomationBlocker {
+  // Stable codes: package_unavailable, mode_unavailable, catalog_unavailable,
+  // no_node, choose_node, node_offline, agent_plane_unavailable,
+  // agent_outdated, probe_failed, platform_unsupported,
+  // <check>_<missing|unsupported|unknown> (e.g. ipv6_forwarding_missing),
+  // dependency_not_ready, dependency_unavailable, no_radio, radio_in_use,
+  // radio_conflict, radio_missing, unhealthy, app_unhealthy, plan_failed,
+  // stale_package, backup_missing, backup_failed, service_blocker.
+  code: string;
+  severity: "blocking" | "warning";
+  message: string;
+  evidence: HomeAutomationEvidence[];
+  actions: HomeAutomationAction[];
+}
+
+export interface HomeAutomationExternalStep {
+  id: string;
+  title: string;
+  instructions: string[];
+  // unverified: Wildstone cannot observe it; offer a recheck/tick.
+  status: "done" | "pending" | "unverified";
+  evidence?: HomeAutomationEvidence[];
+  action?: HomeAutomationAction;
+}
+
+export interface HomeAutomationResource {
+  kind: string;
+  name: string;
+  node?: string;
+  observed: boolean;
+  healthy: boolean;
+  awaitingApproval?: boolean;
+  appHealth?: string;
+  detail?: string;
+  observedAt?: string;
+}
+
+export interface HomeAutomationPlanRef {
+  id: string;
+  state: string;
+  summary: string;
+  package?: string;
+}
+
+export interface HomeAutomationBackup {
+  plans: string[];
+  volumes: string[];
+  uncovered: string[];
+  lastSuccessAt?: string;
+  lastRunStatus?: string;
+  lastRunFinishedAt?: string;
+}
+
+export interface HomeAutomationRadioOwner {
+  device: string;
+  radioId?: string;
+  container: string;
+  package?: string;
+  capability?: string;
+  component?: HomeAutomationComponentId;
+  source: string;
+}
+
+export interface HomeAutomationComponent {
+  id: HomeAutomationComponentId;
+  title: string;
+  capability: string;
+  topology: "managed" | "external" | "shared";
+  protocol: boolean;
+  requires: HomeAutomationComponentId[];
+  packages: string[];
+  package?: string;
+  version?: string;
+  installedVersion?: string;
+  stale?: boolean;
+  mode?: string;
+  modes?: string[];
+  selection: HomeAutomationSelection;
+  state: HomeAutomationState;
+  reason: string;
+  node?: string;
+  radios?: HomeAutomationRadioOwner[];
+  radioCandidates?: string[];
+  addresses?: ServiceAddress[];
+  resources?: HomeAutomationResource[];
+  pendingPlan?: HomeAutomationPlanRef;
+  failedPlan?: HomeAutomationPlanRef;
+  backup?: HomeAutomationBackup;
+  blockers: HomeAutomationBlocker[];
+  actions: HomeAutomationAction[];
+  externalSteps: HomeAutomationExternalStep[];
+}
+
+export type HomeAutomationProbeState = "ok" | "offline" | "agent_outdated" | "failed" | "not_wired";
+
+export interface HomeAutomationRadio extends Radio {
+  owners: HomeAutomationRadioOwner[];
+  suitableFor: { component: HomeAutomationComponentId; fit: "detected" | "possible" }[];
+}
+
+export interface HomeAutomationNode {
+  id: string;
+  connected: boolean;
+  agentVersion?: string;
+  protocolMinor?: number;
+  lastSeenAt?: string;
+  selected: boolean;
+  hostAddress?: string;
+  readiness?: {
+    probe: HomeAutomationProbeState;
+    detail?: string;
+    platformSupported: boolean;
+    interfaces: NodeInterface[];
+    checks: ReadinessCheck[];
+  };
+  radioInventory?: {
+    probe: HomeAutomationProbeState;
+    detail?: string;
+    platformSupported: boolean;
+    radios: HomeAutomationRadio[];
+    unresolvedClaims: HomeAutomationRadioOwner[];
+  };
+  blockers: HomeAutomationBlocker[];
+}
+
+export interface HomeAutomationStatus {
+  generatedAt: string;
+  topology: "none" | "external" | "managed" | "both";
+  requestedTopology?: HomeAutomationTopology;
+  node?: string;
+  nodes: HomeAutomationNode[];
+  components: HomeAutomationComponent[];
+  blockers: HomeAutomationBlocker[];
+}
+
+export interface HomeAutomationQuery {
+  topology?: HomeAutomationTopology;
+  select?: HomeAutomationComponentId[];
+  node?: string;
+  bluetooth?: BluetoothMode;
+}
+
+function homeAutomationPath(q: HomeAutomationQuery = {}): string {
+  const p = new URLSearchParams();
+  if (q.topology) p.set("topology", q.topology);
+  if (q.select && q.select.length > 0) p.set("select", q.select.join(","));
+  if (q.node) p.set("node", q.node);
+  if (q.bluetooth) p.set("bluetooth", q.bluetooth);
+  const qs = p.toString();
+  return "/api/v1/home-automation" + (qs ? "?" + qs : "");
+}
+
 export interface JoinTokenResponse {
   joinToken: string;
   caFingerprint?: string;
@@ -2386,6 +2606,8 @@ export const api = {
       "GET",
       `/api/v1/nodes/${encodeURIComponent(node)}/probes/home-automation`,
     ),
+  homeAutomation: (q?: HomeAutomationQuery) =>
+    call<HomeAutomationStatus>("GET", homeAutomationPath(q)),
   probeHttp: (node: string, url: string) =>
     call<ProbeResult>(
       "GET",

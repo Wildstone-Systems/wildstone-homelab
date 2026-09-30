@@ -444,6 +444,9 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/nodes/{node}/probes/smb", s.handle(principal.VerbRead, s.probeDial("smb")))
 	mux.Handle("GET /api/v1/nodes/{node}/probes/radios", s.handle(principal.VerbRead, s.probeRadios))
 	mux.Handle("GET /api/v1/nodes/{node}/probes/home-automation", s.handle(principal.VerbRead, s.probeHomeAutomation))
+	// The home-automation aggregate (#446): a read joining the probes
+	// above with catalog, desired/observed state, plans and backups.
+	mux.Handle("GET /api/v1/home-automation", s.handle(principal.VerbRead, s.homeAutomationStatus))
 
 	// Container logs (ADR-W015 A2): read verb; the response passes the
 	// redacting encoder like everything else.
