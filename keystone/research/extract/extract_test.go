@@ -329,3 +329,25 @@ func TestOptionalHTMLHeadAndBodyTags(t *testing.T) {
 		}
 	}
 }
+
+func TestNonVoidSelfClosingSyntaxStillSuppressesContent(t *testing.T) {
+	for _, media := range []string{"text/html", "text/markdown"} {
+		for _, tag := range []string{"script", "style", "title", "iframe", "object", "template", "noscript"} {
+			body := "<" + tag + "/>hidden</" + tag + ">\n\nVisible"
+			d, err := Extract(input(media, body))
+			if err != nil || d.Text != "Visible" {
+				t.Fatalf("%s %s leaked: %q %v", media, tag, d.Text, err)
+			}
+		}
+		for _, tag := range []string{"svg", "math"} {
+			d, err := Extract(input(media, "<"+tag+"/>\n\nVisible"))
+			if err != nil || d.Text != "Visible" {
+				t.Fatalf("%s %s swallowed following text: %q %v", media, tag, d.Text, err)
+			}
+		}
+		d, err := Extract(input(media, "<template><template/>hidden</template>hidden</template>\n\nVisible"))
+		if err != nil || d.Text != "Visible" {
+			t.Fatalf("nested non-void slash: %q %v", d.Text, err)
+		}
+	}
+}

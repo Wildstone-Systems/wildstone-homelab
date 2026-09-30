@@ -185,7 +185,7 @@ func (f *markupFilter) feed(input string, preserve bool) error {
 			}
 		}
 		if f.suppressed != "" {
-			if kind == html.StartTagToken && t.Data == f.suppressed {
+			if (kind == html.StartTagToken || (kind == html.SelfClosingTagToken && t.Data != "svg" && t.Data != "math")) && t.Data == f.suppressed {
 				f.depth++
 			}
 			if kind == html.EndTagToken && t.Data == f.suppressed {
@@ -202,7 +202,9 @@ func (f *markupFilter) feed(input string, preserve bool) error {
 			// their tags, but suppress only actual metadata elements (title,
 			// script, style, etc.), allowing implicit body content through.
 			case "script", "style", "iframe", "object", "svg", "math", "template", "noscript", "title":
-				if kind != html.SelfClosingTagToken {
+				// HTML ignores the slash on non-void elements. Only foreign
+				// SVG/MathML elements here can actually self-close.
+				if kind != html.SelfClosingTagToken || (t.Data != "svg" && t.Data != "math") {
 					f.suppressed = t.Data
 					f.depth = 1
 				}
