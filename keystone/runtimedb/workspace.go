@@ -118,11 +118,38 @@ func (db *DB) advanceWorkspacePublication(workspaceID, id, from, to string) erro
 // revision current, converts reserved bytes to retained usage and records a
 // receipt. It never destroys the old revision. An exact settled retry succeeds.
 func (db *DB) CommitWorkspacePublication(workspaceID, id, receiptID string) error {
+	var session int
+	if err := db.sql.QueryRow(`SELECT COUNT(*) FROM workspace_write_sessions WHERE workspace_id=? AND id=?`, workspaceID, id).Scan(&session); err != nil {
+		return err
+	}
+	if session != 0 {
+		if receiptID != id {
+			return ErrWorkspaceConflict
+		}
+		return db.CommitWorkspaceWrite(workspaceID, id)
+	}
+	return db.commitWorkspacePublication(workspaceID, id, receiptID, false)
+}
+
+// CommitWorkspaceWrite settles the S05 session and original receipt in the
+// same metadata transaction. The coordinator verifies durable bytes first.
+func (db *DB) CommitWorkspaceWrite(workspaceID, id string) error {
+	if err := db.CheckHouseholdExecution(); err != nil {
+		return err
+	}
+	return db.commitWorkspacePublication(workspaceID, id, id, true)
+}
+func (db *DB) commitWorkspacePublication(workspaceID, id, receiptID string, fenced bool) error {
 	tx, err := db.sql.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
+	if fenced {
+		if err := db.checkWorkspaceExecutionTx(tx); err != nil {
+			return err
+		}
+	}
 	var existing string
 	err = tx.QueryRow(`SELECT r.id FROM workspace_receipts r JOIN workspace_publications p ON p.id=r.publication_id WHERE p.workspace_id=? AND p.id=?`, workspaceID, id).Scan(&existing)
 	if err == nil {
@@ -149,6 +176,12 @@ func (db *DB) CommitWorkspacePublication(workspaceID, id, receiptID string) erro
 	_, err = tx.Exec(`INSERT INTO workspace_receipts(id,publication_id,recorded_at) VALUES(?,?,?)`, receiptID, id, now())
 	if err != nil {
 		return err
+	}
+	if fenced {
+		result, err = tx.Exec(`UPDATE workspace_write_sessions SET state='committed' WHERE workspace_id=? AND id=? AND state='sealed'`, workspaceID, id)
+		if err = workspaceChanged(result, err); err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
 }

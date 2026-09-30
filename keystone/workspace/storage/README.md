@@ -64,5 +64,5 @@ stage link. An exact retry uses the same tuple; collisions never replace bytes.
 hash/size, pinning and comparing inode identity, syncing file and directory,
 and rechecking current storage. An ordinary successful read is not evidence
 that a previously uncertain directory entry is durable. These helpers alone
-neither commit metadata nor return artifact receipts; session/coordinator and
-startup-recovery wiring remain pending in #478.
+neither commit metadata nor return artifact receipts; the S05 coordinator in
+`../publication` owns those transitions and documents startup rollback.
