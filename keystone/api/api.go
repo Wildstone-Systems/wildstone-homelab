@@ -677,6 +677,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("DELETE /api/v1/research/providers/{provider}", s.handle(principal.VerbManage, s.proposeResearchProvider))
 	mux.Handle("POST /api/v1/research/providers/{provider}/test", s.handle(principal.VerbManage, s.testResearchProvider))
 	mux.Handle("PUT /api/v1/research/default-provider", s.handle(principal.VerbManage, s.selectResearchProvider))
+	mux.Handle("GET /api/v1/agents/{agent}/research-provider", s.handle(principal.VerbManage, s.getResearchSelection))
 	mux.Handle("PUT /api/v1/agents/{agent}/research-provider", s.handle(principal.VerbManage, s.selectResearchProvider))
 	mux.Handle("GET /api/v1/butler/models", s.handle(principal.VerbRead, s.listModels))
 	mux.Handle("PUT /api/v1/butler/models", s.handle(principal.VerbManage, s.upsertModel))

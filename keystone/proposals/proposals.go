@@ -37,6 +37,7 @@ import (
 	"github.com/chickenrat17/wildstone-homelab/keystone/policy"
 	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
 	"github.com/chickenrat17/wildstone-homelab/keystone/reconcile"
+	"github.com/chickenrat17/wildstone-homelab/keystone/research"
 	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 	"github.com/chickenrat17/wildstone-homelab/keystone/statefile"
@@ -114,7 +115,8 @@ func (d Deps) event(typ, planID string, id principal.Identity, msg string) {
 // a JSON string, so this parses it once and returns the plan the way
 // every other field already reads.
 type PlanView struct {
-	AuditOnly bool `json:"auditOnly,omitempty"`
+	Research  *research.Change `json:"research,omitempty"`
+	AuditOnly bool             `json:"auditOnly,omitempty"`
 	runtimedb.PlanRecord
 	// PlanJSON must compete for the embedded field's NAME to suppress
 	// it. `json:"-"` does not shadow — it removes this field from
@@ -152,6 +154,7 @@ func ViewPlan(rec runtimedb.PlanRecord) PlanView {
 	}
 	v.BasedOnHead, v.Plan, v.Put, v.Delete = stored.BasedOnHead, stored.Plan, stored.Put, stored.Delete
 	v.Origin = stored.Origin
+	v.Research = stored.Research
 	v.Setting = stored.Setting
 	v.Routine = stored.Routine
 	v.AuditOnly = stored.AuditOnly

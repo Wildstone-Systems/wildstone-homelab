@@ -160,7 +160,7 @@ func (s *Server) approvePlan(r *http.Request, id principal.Identity) (any, int, 
 		if stored.AuditOnly || stored.Routine != nil || stored.Setting != nil || stored.Subscription != nil || stored.Plan != nil || len(stored.Put) > 0 || len(stored.Delete) > 0 {
 			return nil, http.StatusBadRequest, fmt.Errorf("research Plans cannot include other changes")
 		}
-		if body, code, err := s.freshOwnerReview(r, id); err != nil {
+		if body, code, err := s.freshResearchOwner(r, id); err != nil {
 			return body, code, err
 		}
 		if err := s.DB.ApproveResearchPlan(planID, actingMember(id)); err != nil {

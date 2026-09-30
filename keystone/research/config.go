@@ -72,7 +72,9 @@ func NewID() string {
 	if _, err := rand.Read(b[:]); err != nil {
 		panic(err)
 	}
-	return hex.EncodeToString(b[:])
+	// Dotted groups preserve opaque 128-bit identity through the existing
+	// public-plane secret redactor without exempting secret-shaped values.
+	return "sr." + hex.EncodeToString(b[0:4]) + "." + hex.EncodeToString(b[4:8]) + "." + hex.EncodeToString(b[8:12]) + "." + hex.EncodeToString(b[12:16])
 }
 
 // Normalize admits only the backend supported by the pinned DDGS worker.

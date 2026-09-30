@@ -22,6 +22,26 @@ func (s *Server) researchOwner(id principal.Identity) error {
 	}
 	return nil
 }
+func (s *Server) freshResearchOwner(r *http.Request, id principal.Identity) (any, int, error) {
+	if err := sameSiteWrite(r); err != nil {
+		return nil, http.StatusForbidden, errors.New("research configuration requires a same-origin request")
+	}
+	return s.freshOwnerReview(r, id)
+}
+func (s *Server) getResearchSelection(r *http.Request, id principal.Identity) (any, int, error) {
+	if err := s.researchOwner(id); err != nil {
+		return nil, http.StatusForbidden, err
+	}
+	b, err := s.DB.GetButler(r.PathValue("agent"))
+	if err != nil {
+		return researchError(err)
+	}
+	selection, err := s.DB.ResearchSelection(b.Seq)
+	if err != nil {
+		return researchError(err)
+	}
+	return selection, http.StatusOK, nil
+}
 func researchError(err error) (any, int, error) {
 	if errors.Is(err, runtimedb.ErrNotFound) {
 		return nil, http.StatusNotFound, errors.New("research resource not found")
@@ -60,7 +80,7 @@ func (s *Server) getResearchProvider(r *http.Request, id principal.Identity) (an
 // cannot accidentally survive a change. Resource/service provisioning remains
 // in S20's desired-state Plan; this Plan changes registry metadata only.
 func (s *Server) proposeResearchProvider(r *http.Request, id principal.Identity) (any, int, error) {
-	if body, code, err := s.freshOwnerReview(r, id); err != nil {
+	if body, code, err := s.freshResearchOwner(r, id); err != nil {
 		return body, code, err
 	}
 	var req struct {
@@ -116,7 +136,7 @@ func (s *Server) proposeResearchProvider(r *http.Request, id principal.Identity)
 	return map[string]any{"planId": planID, "providerId": c.ProviderID, "state": "awaiting_review"}, http.StatusAccepted, nil
 }
 func (s *Server) testResearchProvider(r *http.Request, id principal.Identity) (any, int, error) {
-	if body, code, err := s.freshOwnerReview(r, id); err != nil {
+	if body, code, err := s.freshResearchOwner(r, id); err != nil {
 		return body, code, err
 	}
 	var req struct {
@@ -162,7 +182,7 @@ func (s *Server) testResearchProvider(r *http.Request, id principal.Identity) (a
 	return p, http.StatusOK, nil
 }
 func (s *Server) selectResearchProvider(r *http.Request, id principal.Identity) (any, int, error) {
-	if body, code, err := s.freshOwnerReview(r, id); err != nil {
+	if body, code, err := s.freshResearchOwner(r, id); err != nil {
 		return body, code, err
 	}
 	var req struct {
