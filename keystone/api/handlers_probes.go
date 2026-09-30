@@ -98,48 +98,8 @@ func (s *Server) probeRadios(r *http.Request, _ principal.Identity) (any, int, e
 	if err != nil {
 		return nil, status, err
 	}
-	type usb struct {
-		VendorID     string `json:"vendorId"`
-		ProductID    string `json:"productId"`
-		Manufacturer string `json:"manufacturer,omitempty"`
-		Product      string `json:"product,omitempty"`
-		Serial       string `json:"serial,omitempty"`
-		Port         string `json:"port,omitempty"`
-	}
-	type radio struct {
-		ID         string   `json:"id"`
-		Kind       string   `json:"kind"`
-		KindReason string   `json:"kindReason"`
-		KernelName string   `json:"kernelName"`
-		DevPath    string   `json:"devPath,omitempty"`
-		ByIDPaths  []string `json:"byIdPaths"`
-		SysfsPath  string   `json:"sysfsPath,omitempty"`
-		Bus        string   `json:"bus,omitempty"`
-		Driver     string   `json:"driver,omitempty"`
-		USB        *usb     `json:"usb,omitempty"`
-	}
 	lr := res.GetListRadios()
-	out := []radio{}
-	for _, d := range lr.GetRadios() {
-		kind, ok := radioKindNames[d.GetKind()]
-		if !ok {
-			kind = "unknown"
-		}
-		rd := radio{
-			ID: d.GetId(), Kind: kind, KindReason: d.GetKindReason(),
-			KernelName: d.GetKernelName(), DevPath: d.GetDevPath(),
-			ByIDPaths: append([]string{}, d.GetByIdPaths()...),
-			SysfsPath: d.GetSysfsPath(), Bus: d.GetBus(), Driver: d.GetDriver(),
-		}
-		if d.GetUsbVendorId() != "" {
-			rd.USB = &usb{
-				VendorID: d.GetUsbVendorId(), ProductID: d.GetUsbProductId(),
-				Manufacturer: d.GetUsbManufacturer(), Product: d.GetUsbProduct(),
-				Serial: d.GetUsbSerial(), Port: d.GetUsbPort(),
-			}
-		}
-		out = append(out, rd)
-	}
+	out := viewRadios(lr)
 	return map[string]any{
 		"node": node, "platformSupported": lr.GetPlatformSupported(), "radios": out,
 	}, http.StatusOK, nil
@@ -211,39 +171,8 @@ func (s *Server) probeHomeAutomation(r *http.Request, _ principal.Identity) (any
 	if err != nil {
 		return nil, status, err
 	}
-	type iface struct {
-		Name         string   `json:"name"`
-		Addresses    []string `json:"addresses"`
-		Up           bool     `json:"up"`
-		Multicast    bool     `json:"multicast"`
-		DefaultRoute bool     `json:"defaultRoute"`
-	}
-	type check struct {
-		Check   string `json:"check"`
-		State   string `json:"state"`
-		Subject string `json:"subject"`
-		Value   string `json:"value,omitempty"`
-		Detail  string `json:"detail,omitempty"`
-	}
 	hr := res.GetHomeAutomationReadiness()
-	ifaces := []iface{}
-	for _, i := range hr.GetInterfaces() {
-		ifaces = append(ifaces, iface{
-			Name: i.GetName(), Addresses: append([]string{}, i.GetAddresses()...),
-			Up: i.GetUp(), Multicast: i.GetMulticast(), DefaultRoute: i.GetDefaultRoute(),
-		})
-	}
-	checks := []check{}
-	for _, c := range hr.GetChecks() {
-		state, ok := readinessStateNames[c.GetState()]
-		if !ok {
-			state = "unknown"
-		}
-		checks = append(checks, check{
-			Check: c.GetCheck(), State: state, Subject: c.GetSubject(),
-			Value: c.GetValue(), Detail: c.GetDetail(),
-		})
-	}
+	ifaces, checks := viewReadiness(hr)
 	return map[string]any{
 		"node": node, "platformSupported": hr.GetPlatformSupported(),
 		"interfaces": ifaces, "checks": checks,
@@ -305,4 +234,108 @@ func (s *Server) probeDial(kind string) handlerFunc {
 			"reachable": reachable, "detail": detail,
 		}, http.StatusOK, nil
 	}
+}
+
+// radioUSBView and radioView are the Console's shape for one ListRadios
+// entry, shared by the probe endpoint and the home-automation aggregate
+// (#446) so the two can never describe the same stick differently.
+type radioUSBView struct {
+	VendorID     string `json:"vendorId"`
+	ProductID    string `json:"productId"`
+	Manufacturer string `json:"manufacturer,omitempty"`
+	Product      string `json:"product,omitempty"`
+	Serial       string `json:"serial,omitempty"`
+	Port         string `json:"port,omitempty"`
+}
+
+type radioView struct {
+	ID         string        `json:"id"`
+	Kind       string        `json:"kind"`
+	KindReason string        `json:"kindReason"`
+	KernelName string        `json:"kernelName"`
+	DevPath    string        `json:"devPath,omitempty"`
+	ByIDPaths  []string      `json:"byIdPaths"`
+	SysfsPath  string        `json:"sysfsPath,omitempty"`
+	Bus        string        `json:"bus,omitempty"`
+	Driver     string        `json:"driver,omitempty"`
+	USB        *radioUSBView `json:"usb,omitempty"`
+}
+
+func viewRadios(lr *wsv1.ListRadiosResult) []radioView {
+	out := []radioView{}
+	for _, d := range lr.GetRadios() {
+		kind, ok := radioKindNames[d.GetKind()]
+		if !ok {
+			kind = "unknown"
+		}
+		rd := radioView{
+			ID: d.GetId(), Kind: kind, KindReason: d.GetKindReason(),
+			KernelName: d.GetKernelName(), DevPath: d.GetDevPath(),
+			ByIDPaths: append([]string{}, d.GetByIdPaths()...),
+			SysfsPath: d.GetSysfsPath(), Bus: d.GetBus(), Driver: d.GetDriver(),
+		}
+		if d.GetUsbVendorId() != "" {
+			rd.USB = &radioUSBView{
+				VendorID: d.GetUsbVendorId(), ProductID: d.GetUsbProductId(),
+				Manufacturer: d.GetUsbManufacturer(), Product: d.GetUsbProduct(),
+				Serial: d.GetUsbSerial(), Port: d.GetUsbPort(),
+			}
+		}
+		out = append(out, rd)
+	}
+	return out
+}
+
+// planRadios folds radio views into what ownership needs: the identity
+// and every host path that reaches the device.
+func planRadios(rs []radioView) []plan.Radio {
+	out := []plan.Radio{}
+	for _, r := range rs {
+		paths := append([]string{}, r.ByIDPaths...)
+		if r.DevPath != "" {
+			paths = append(paths, r.DevPath)
+		}
+		out = append(out, plan.Radio{ID: r.ID, Paths: paths})
+	}
+	return out
+}
+
+// ifaceView and readinessCheckView are the readiness probe's shape, shared
+// with the aggregate for the same reason as radioView.
+type ifaceView struct {
+	Name         string   `json:"name"`
+	Addresses    []string `json:"addresses"`
+	Up           bool     `json:"up"`
+	Multicast    bool     `json:"multicast"`
+	DefaultRoute bool     `json:"defaultRoute"`
+}
+
+type readinessCheckView struct {
+	Check   string `json:"check"`
+	State   string `json:"state"`
+	Subject string `json:"subject"`
+	Value   string `json:"value,omitempty"`
+	Detail  string `json:"detail,omitempty"`
+}
+
+func viewReadiness(hr *wsv1.HomeAutomationReadinessResult) ([]ifaceView, []readinessCheckView) {
+	ifaces := []ifaceView{}
+	for _, i := range hr.GetInterfaces() {
+		ifaces = append(ifaces, ifaceView{
+			Name: i.GetName(), Addresses: append([]string{}, i.GetAddresses()...),
+			Up: i.GetUp(), Multicast: i.GetMulticast(), DefaultRoute: i.GetDefaultRoute(),
+		})
+	}
+	checks := []readinessCheckView{}
+	for _, c := range hr.GetChecks() {
+		state, ok := readinessStateNames[c.GetState()]
+		if !ok {
+			state = "unknown"
+		}
+		checks = append(checks, readinessCheckView{
+			Check: c.GetCheck(), State: state, Subject: c.GetSubject(),
+			Value: c.GetValue(), Detail: c.GetDetail(),
+		})
+	}
+	return ifaces, checks
 }
