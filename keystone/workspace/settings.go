@@ -90,6 +90,11 @@ func Parse(content string) (Settings, error) {
 	}
 	fields := document.Content[0].Content
 	for i := 0; i < len(fields); i += 2 {
+		// No YAML merges or aliases: otherwise an inherited scalar could bypass
+		// the integer check below and be coerced by the typed decoder.
+		if fields[i].Kind != yaml.ScalarNode || fields[i].Tag != "!!str" || fields[i+1].Kind != yaml.ScalarNode {
+			return Settings{}, ErrSettings
+		}
 		switch fields[i].Value {
 		case "quotaBytes", "maxFileBytes", "scratchRetentionDays", "trashRetentionDays":
 			value := fields[i+1]

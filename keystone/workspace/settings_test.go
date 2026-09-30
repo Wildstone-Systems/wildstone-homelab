@@ -59,6 +59,17 @@ func TestReadFailsClosedAndRevisionTracksConfiguration(t *testing.T) {
 		t.Fatal("config revision did not change", err)
 	}
 }
+func TestSettingsRefuseYAMLMergesAndAliases(t *testing.T) {
+	for _, content := range []string{
+		"root: /srv/workspace\n<<: {quotaBytes: 1073741824.5, maxFileBytes: 1024, scratchRetentionDays: 7, trashRetentionDays: 30}\n",
+		"root: /srv/workspace\nquotaBytes: &quota 1073741824\nmaxFileBytes: 1024\nscratchRetentionDays: &days 7\ntrashRetentionDays: *days\n",
+	} {
+		if _, err := Parse(content); !errors.Is(err, ErrSettings) {
+			t.Fatal("accepted indirect YAML settings", err)
+		}
+	}
+}
+
 func TestSettingsBounds(t *testing.T) {
 	for name, change := range map[string]func(*Settings){
 		"relative": func(s *Settings) { s.Root = "relative" }, "filesystem root": func(s *Settings) { s.Root = "/" },
