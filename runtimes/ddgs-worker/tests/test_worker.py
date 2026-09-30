@@ -446,6 +446,9 @@ class WorkerTests(unittest.IsolatedAsyncioTestCase):
         ]
         await wait_for(lambda: (w.active, w.queued) == (2, 1))
         self.assertEqual((w.active, w.queued), (2, 1))
+        # Shut down the server while clients are still connected, exercising
+        # the shutdown hook independently of peer-disconnect cancellation.
+        await client.server.close()
         await client.close()
         await asyncio.gather(*calls, return_exceptions=True)
         self.assertEqual((w.active, w.queued, w.admitted), (0, 0, 0))
