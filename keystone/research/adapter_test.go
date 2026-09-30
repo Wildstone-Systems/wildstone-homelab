@@ -351,3 +351,97 @@ func TestReservedProviderSeams(t *testing.T) {
 		}
 	}
 }
+
+func TestDDGSTransportBoundsAndNormalization(t *testing.T) {
+	t.Run("too many hits", func(t *testing.T) {
+		body := strings.Replace(successWire, `}],"provider"`, `},{"url":"https://example.com/other","snippet":"extra"}],"provider"`, 1)
+		a := adapterServer(t, func(w http.ResponseWriter, r *http.Request) { respond(w, 200, body) })
+		_, err := a.Search(context.Background(), SearchRequest{Query: "example", Limit: 1})
+		assertCode(t, err, ProviderUnavailable)
+	})
+	t.Run("absent source date", func(t *testing.T) {
+		body := strings.Replace(successWire, `,"sourceDate":"2026-09-01T00:00:00Z"`, ``, 1)
+		a := adapterServer(t, func(w http.ResponseWriter, r *http.Request) { respond(w, 200, body) })
+		result, err := a.Search(context.Background(), SearchRequest{Query: "example"})
+		if err != nil || result.Items[0].SourceDate != nil {
+			t.Fatalf("invented source date: %+v %v", result, err)
+		}
+	})
+	for _, header := range []string{"Content-Type", "Content-Encoding"} {
+		t.Run(header, func(t *testing.T) {
+			a := adapterServer(t, func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.Header().Set(header, "unexpected")
+				fmt.Fprint(w, successWire)
+			})
+			_, err := a.Search(context.Background(), SearchRequest{Query: "example"})
+			assertCode(t, err, ProviderUnavailable)
+		})
+	}
+	t.Run("no environment proxy", func(t *testing.T) {
+		proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { t.Error("ambient proxy used") }))
+		defer proxy.Close()
+		t.Setenv("HTTP_PROXY", proxy.URL)
+		t.Setenv("HTTPS_PROXY", proxy.URL)
+		a := adapterServer(t, func(w http.ResponseWriter, r *http.Request) { respond(w, 200, emptyWire) })
+		// Check the transport too: Go itself bypasses proxies for loopback tests.
+		if a.client.Transport.(*http.Transport).Proxy != nil {
+			t.Fatal("proxy configured")
+		}
+		if _, err := a.Search(context.Background(), SearchRequest{Query: "example"}); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Run("connection refused", func(t *testing.T) {
+		s := httptest.NewServer(http.NotFoundHandler())
+		s.Close()
+		a, err := newDDGS(s.URL, time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		result, err := a.Search(context.Background(), SearchRequest{Query: "example"})
+		assertCode(t, err, ProviderUnavailable)
+		if len(result.Attempts) != 1 {
+			t.Fatal("missing failed attempt")
+		}
+	})
+}
+
+func TestFactoryResolutionCancellation(t *testing.T) {
+	started := make(chan struct{})
+	f := Factory{ResolveEndpoint: func(ctx context.Context, ref string) (string, error) {
+		close(started)
+		<-ctx.Done()
+		return "", ctx.Err()
+	}}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { _, err := f.NewSearch(ctx, readyProvider()); done <- err }()
+	<-started
+	cancel()
+	select {
+	case err := <-done:
+		assertCode(t, err, Cancelled)
+	case <-time.After(time.Second):
+		t.Fatal("resolver not cancelled")
+	}
+	ctx, cancelDeadline := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancelDeadline()
+	_, err := f.NewSearch(ctx, readyProvider())
+	assertCode(t, err, Timeout)
+	f.ResolveEndpoint = func(context.Context, string) (string, error) { return "", errors.New("private resolver detail") }
+	_, err = f.NewSearch(context.Background(), readyProvider())
+	assertCode(t, err, ProviderUnavailable)
+	if strings.Contains(err.Error(), "private") {
+		t.Fatal("resolver leaked")
+	}
+}
+
+func TestDDGSCallerDeadlineWins(t *testing.T) {
+	a := adapterServer(t, func(w http.ResponseWriter, r *http.Request) { io.Copy(io.Discard, r.Body); <-r.Context().Done() })
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	_, err := a.Search(ctx, SearchRequest{Query: "example"})
+	assertCode(t, err, Timeout)
+}
