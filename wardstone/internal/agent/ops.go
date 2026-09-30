@@ -430,20 +430,28 @@ func (a *Agent) writeManagedFile(op *wsv1.WriteManagedFile) (*wsv1.OpResult_Writ
 	// its 0600 files rely on, and chmod on a directory another uid owns
 	// would fail a write that would otherwise have succeeded.
 	dir := filepath.Dir(path)
-	var created []string
+	// Directories are created one component at a time, shallowest first,
+	// and only those whose Mkdir actually succeeded are widened. A
+	// Stat-then-MkdirAll pair would misattribute a directory that another
+	// operation or host process created in between, and widen it.
+	var missing []string
 	for d := dir; ; d = filepath.Dir(d) {
 		if _, err := os.Stat(d); !os.IsNotExist(err) {
 			break
 		}
-		created = append(created, d)
+		missing = append(missing, d)
 		if filepath.Dir(d) == d {
 			break
 		}
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return nil, opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "mkdir: %v", err)
-	}
-	for _, d := range created {
+	for i := len(missing) - 1; i >= 0; i-- {
+		d := missing[i]
+		if err := os.Mkdir(d, 0o755); err != nil {
+			if os.IsExist(err) {
+				continue // created concurrently: not ours, left alone
+			}
+			return nil, opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "mkdir: %v", err)
+		}
 		if err := os.Chmod(d, 0o755); err != nil {
 			return nil, opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "chmod dir: %v", err)
 		}
