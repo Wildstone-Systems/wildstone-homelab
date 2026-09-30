@@ -740,7 +740,7 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	// Startup has no fresh per-task resource authorization, so it never invents
 	// publication success. Bytes/reservations and prior revisions remain intact.
 	if coordinating {
-		if err := recoverWorkspaceAtStartup(db.RecoverWorkspaceWrites, log); err != nil {
+		if err := recoverWorkspaceAtStartup(db, log); err != nil {
 			return err
 		}
 	}
