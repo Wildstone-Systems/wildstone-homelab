@@ -10,6 +10,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/chickenrat17/wildstone-homelab/keystone/redact"
 	"github.com/chickenrat17/wildstone-homelab/keystone/research/publicfetch"
 )
 
@@ -90,7 +91,7 @@ func TestPagesUnicodeEscapingAndImmutableSources(t *testing.T) {
 		var combined strings.Builder
 		for {
 			encoded, _ := p.Encode()
-			if len(p.Text) > PageBytes || len(encoded) > BodyBytes || !utf8.ValidString(p.Text) || !json.Valid(encoded) {
+			if len(p.Text) > PageBytes || len(encoded) > BodyBytes || len(redact.Envelope(string(encoded))) > 4000 || !utf8.ValidString(p.Text) || !json.Valid(encoded) {
 				t.Fatalf("invalid page %d/%d", len(p.Text), len(encoded))
 			}
 			combined.WriteString(p.Text)
