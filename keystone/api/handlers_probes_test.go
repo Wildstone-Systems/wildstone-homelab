@@ -92,3 +92,138 @@ func TestProbeEndpoints(t *testing.T) {
 		t.Fatalf("missing host = %d, want 400", resp.StatusCode)
 	}
 }
+
+// TestProbeRadios maps ListRadios (#434) to the Console's shape: kinds as
+// closed lower-case names (an unrecognised enum is "unknown", never a
+// guess), USB identity nested and omitted when absent, and an agent
+// error relayed through the family's status model.
+func TestProbeRadios(t *testing.T) {
+	h := newHarness(t)
+	var agentErr *wsv1.OpError
+	h.s.Agents = applierFunc(func(_ context.Context, node string, op *wsv1.Operation) (*wsv1.OpResult, error) {
+		if _, ok := op.GetOp().(*wsv1.Operation_ListRadios); !ok || node != "n1" {
+			t.Fatalf("dispatched %v to %q", op, node)
+		}
+		if agentErr != nil {
+			return &wsv1.OpResult{Result: &wsv1.OpResult_Error{Error: agentErr}}, nil
+		}
+		return &wsv1.OpResult{Result: &wsv1.OpResult_ListRadios{ListRadios: &wsv1.ListRadiosResult{
+			PlatformSupported: true,
+			Radios: []*wsv1.Radio{
+				{
+					Id: "serial-by-id:usb-Vendor_Stick_01-if00-port0", Kind: wsv1.RadioKind_RADIO_KIND_UNKNOWN,
+					KindReason: "usb id 10c4:ea60 does not identify a single radio protocol",
+					KernelName: "ttyUSB0", DevPath: "/dev/ttyUSB0",
+					ByIdPaths: []string{"/dev/serial/by-id/usb-Vendor_Stick_01-if00-port0"},
+					Bus:       "usb", Driver: "cp210x", UsbVendorId: "10c4", UsbProductId: "ea60", UsbSerial: "01", UsbPort: "1-1.3",
+				},
+				{Id: "sysfs:/sys/devices/platform/soc/bt", Kind: wsv1.RadioKind_RADIO_KIND_BLUETOOTH, KernelName: "hci0", Bus: "platform"},
+				{Id: "sysfs:/sys/devices/x", Kind: wsv1.RadioKind(99), KernelName: "ttyACM0"},
+			},
+		}}}, nil
+	})
+
+	type radio struct {
+		ID        string   `json:"id"`
+		Kind      string   `json:"kind"`
+		DevPath   string   `json:"devPath"`
+		ByIDPaths []string `json:"byIdPaths"`
+		USB       *struct {
+			VendorID  string `json:"vendorId"`
+			ProductID string `json:"productId"`
+			Serial    string `json:"serial"`
+			Port      string `json:"port"`
+		} `json:"usb"`
+	}
+	var out struct {
+		Node              string  `json:"node"`
+		PlatformSupported bool    `json:"platformSupported"`
+		Radios            []radio `json:"radios"`
+	}
+	if resp := h.do(runtimedb.RoleOperator, http.MethodGet, "/api/v1/nodes/n1/probes/radios", nil, &out); resp.StatusCode != http.StatusOK {
+		t.Fatalf("radios = %d", resp.StatusCode)
+	}
+	if out.Node != "n1" || !out.PlatformSupported || len(out.Radios) != 3 {
+		t.Fatalf("radios = %+v", out)
+	}
+	stick := out.Radios[0]
+	if stick.Kind != "unknown" || stick.DevPath != "/dev/ttyUSB0" || len(stick.ByIDPaths) != 1 ||
+		stick.USB == nil || stick.USB.VendorID != "10c4" || stick.USB.Port != "1-1.3" {
+		t.Fatalf("stick = %+v", stick)
+	}
+	if bt := out.Radios[1]; bt.Kind != "bluetooth" || bt.USB != nil || bt.ByIDPaths == nil {
+		t.Fatalf("bluetooth = %+v (byIdPaths must be [] not null)", bt)
+	}
+	if out.Radios[2].Kind != "unknown" {
+		t.Fatalf("future kind = %q, want unknown", out.Radios[2].Kind)
+	}
+
+	// An agent below minor 24 answers INVALID (unknown operation).
+	agentErr = &wsv1.OpError{Code: wsv1.ErrorCode_ERROR_CODE_INVALID, Message: "unknown operation"}
+	if resp := h.do(runtimedb.RoleOperator, http.MethodGet, "/api/v1/nodes/n1/probes/radios", nil, nil); resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("old agent = %d, want 400", resp.StatusCode)
+	}
+}
+
+// TestProbeHomeAutomation maps HomeAutomationReadiness (#436): every
+// state reaches the Console as a closed lower-case name with its
+// evidence, a future state reads as "unknown", and empty lists are []
+// rather than null.
+func TestProbeHomeAutomation(t *testing.T) {
+	h := newHarness(t)
+	h.s.Agents = applierFunc(func(_ context.Context, node string, op *wsv1.Operation) (*wsv1.OpResult, error) {
+		if _, ok := op.GetOp().(*wsv1.Operation_HomeAutomationReadiness); !ok || node != "n1" {
+			t.Fatalf("dispatched %v to %q", op, node)
+		}
+		return &wsv1.OpResult{Result: &wsv1.OpResult_HomeAutomationReadiness{HomeAutomationReadiness: &wsv1.HomeAutomationReadinessResult{
+			PlatformSupported: true,
+			Interfaces: []*wsv1.NodeInterface{
+				{Name: "eth0", Addresses: []string{"192.0.2.10/24"}, Up: true, Multicast: true, DefaultRoute: true},
+			},
+			Checks: []*wsv1.ReadinessCheck{
+				{Check: "ipv6", State: wsv1.ReadinessState_READINESS_STATE_READY, Subject: "/proc/sys/net/ipv6/conf/all/disable_ipv6", Value: "0"},
+				{Check: "ipv6_forwarding", State: wsv1.ReadinessState_READINESS_STATE_MISSING, Subject: "/proc/sys/net/ipv6/conf/all/forwarding", Value: "0"},
+				{Check: "multicast", State: wsv1.ReadinessState_READINESS_STATE_UNSUPPORTED, Subject: "eth0"},
+				{Check: "bluez_service", State: wsv1.ReadinessState_READINESS_STATE_UNKNOWN, Subject: "bluetooth.service", Detail: "connect to systemd: refused"},
+				{Check: "tun", State: wsv1.ReadinessState(42), Subject: "/dev/net/tun"},
+			},
+		}}}, nil
+	})
+
+	var out struct {
+		PlatformSupported bool `json:"platformSupported"`
+		Interfaces        []struct {
+			Name         string   `json:"name"`
+			Addresses    []string `json:"addresses"`
+			DefaultRoute bool     `json:"defaultRoute"`
+		} `json:"interfaces"`
+		Checks []struct {
+			Check   string `json:"check"`
+			State   string `json:"state"`
+			Subject string `json:"subject"`
+			Value   string `json:"value"`
+			Detail  string `json:"detail"`
+		} `json:"checks"`
+	}
+	if resp := h.do(runtimedb.RoleButler, http.MethodGet, "/api/v1/nodes/n1/probes/home-automation", nil, &out); resp.StatusCode != http.StatusOK {
+		t.Fatalf("home-automation = %d", resp.StatusCode)
+	}
+	if !out.PlatformSupported || len(out.Interfaces) != 1 || out.Interfaces[0].Name != "eth0" || !out.Interfaces[0].DefaultRoute {
+		t.Fatalf("interfaces = %+v", out)
+	}
+	want := []string{"ready", "missing", "unsupported", "unknown", "unknown"}
+	if len(out.Checks) != len(want) {
+		t.Fatalf("checks = %+v", out.Checks)
+	}
+	for i, w := range want {
+		if out.Checks[i].State != w {
+			t.Fatalf("check %d (%s) state = %q, want %q", i, out.Checks[i].Check, out.Checks[i].State, w)
+		}
+	}
+	if c := out.Checks[1]; c.Subject != "/proc/sys/net/ipv6/conf/all/forwarding" || c.Value != "0" {
+		t.Fatalf("forwarding evidence = %+v", c)
+	}
+	if out.Checks[3].Detail == "" {
+		t.Fatal("unknown state lost its detail")
+	}
+}

@@ -138,6 +138,8 @@ message Operation {
     DiskSpace disk_space = 33;
     ExportSecretBundle export_secret_bundle = 34;
     ImportSecretBundle import_secret_bundle = 35;
+    ListRadios list_radios = 36; // protocol minor 24
+    HomeAutomationReadiness home_automation_readiness = 37; // protocol minor 25
   }
 }
 
@@ -180,6 +182,8 @@ message OpResult {
     DiskSpaceResult disk_space = 35;
     ExportSecretBundleResult export_secret_bundle = 36;
     ImportSecretBundleResult import_secret_bundle = 37;
+    ListRadiosResult list_radios = 38; // protocol minor 24
+    HomeAutomationReadinessResult home_automation_readiness = 39; // protocol minor 25
   }
 }
 
@@ -1057,4 +1061,146 @@ message ImportSecretBundle {
 
 message ImportSecretBundleResult {
   uint32 secret_count = 1;
+}
+
+// ---------------------------------------------------------------- home automation (protocol minor 24)
+
+// ListRadios inventories the device candidates a home-automation app may
+// be handed: USB-backed serial adapters (Zigbee/Z-Wave/Thread coordinators
+// are all serial devices to the kernel) and Bluetooth adapters. Read-only
+// and parameterless: the agent reads fixed locations only
+// (/dev/serial/by-id, /sys/class/tty, /sys/class/bluetooth and the sysfs
+// device directories they link to), so the op cannot be pointed at an
+// arbitrary path. No udevadm, no shell-out (ADR-W003 §A4.5).
+//
+// Classification is deliberately conservative. A serial adapter is
+// RADIO_KIND_UNKNOWN unless its exact USB vendor:product pair names a
+// single-protocol radio; a tty name (ttyUSB0, ttyACM0) or a generic
+// USB-UART bridge chip never implies Zigbee, Z-Wave or Thread, because the
+// same CP210x can carry any of them or none.
+//
+// Non-Linux agents answer platform_supported=false with no radios — an
+// empty, successful result, not an error.
+message ListRadios {}
+
+enum RadioKind {
+  RADIO_KIND_UNSPECIFIED = 0;
+  // A serial device the agent will not guess about.
+  RADIO_KIND_UNKNOWN = 1;
+  // Listed under /sys/class/bluetooth.
+  RADIO_KIND_BLUETOOTH = 2;
+  // Classified by an exact USB vendor:product match only.
+  RADIO_KIND_ZIGBEE = 3;
+  RADIO_KIND_ZWAVE = 4;
+  RADIO_KIND_THREAD = 5;
+}
+
+message Radio {
+  // Stable identity key, deterministic for the same hardware. The prefix
+  // names how stable it is:
+  //   "serial-by-id:<alias>"  udev's /dev/serial/by-id name (vendor,
+  //                           model, serial number, interface) — follows
+  //                           the device to any USB port.
+  //   "usb:<vid>:<pid>:<serial>" a Bluetooth adapter whose USB device
+  //                           reports a serial number.
+  //   "sysfs:<device path>"   the kernel device path — stable while the
+  //                           device stays in the same physical port.
+  string id = 1;
+  RadioKind kind = 2;
+  // Why kind was chosen, e.g. "usb id 1cf1:0030" or "no identifying
+  // usb id; serial adapter".
+  string kind_reason = 3;
+  // Kernel name: ttyUSB0, ttyACM0, hci0. Not stable across reboots.
+  string kernel_name = 4;
+  // /dev/<kernel_name> for a serial device; empty for Bluetooth, which
+  // has no device node.
+  string dev_path = 5;
+  // Every /dev/serial/by-id alias resolving to dev_path, sorted. Empty
+  // when udev is absent or produced no alias.
+  repeated string by_id_paths = 6;
+  // The device's resolved sysfs path, e.g. /sys/devices/.../1-1.3:1.0.
+  // Empty when sysfs has no device link for it.
+  string sysfs_path = 7;
+  // "usb" when a USB device was found above it; otherwise the sysfs
+  // subsystem name (e.g. "platform"), or empty when unknown.
+  string bus = 8;
+  // Kernel driver bound to the device (cp210x, cdc_acm, btusb), or empty.
+  string driver = 9;
+  // USB identity, all empty when bus != "usb" or sysfs lacks the file.
+  // vendor_id/product_id are 4 lowercase hex digits.
+  string usb_vendor_id = 10;
+  string usb_product_id = 11;
+  string usb_manufacturer = 12;
+  string usb_product = 13;
+  string usb_serial = 14;
+  // The USB port path (e.g. "1-1.3"): where it is plugged in.
+  string usb_port = 15;
+}
+
+message ListRadiosResult {
+  // Sorted by id.
+  repeated Radio radios = 1;
+  bool platform_supported = 2;
+}
+
+// ---------------------------------------------------------------- home automation readiness (protocol minor 25)
+
+// HomeAutomationReadiness reports whether a node can host LAN-native home
+// automation. Bounded and read-only: procfs/sysfs values, the kernel's
+// interface list, an Lstat of the D-Bus socket and of /dev/net/tun, and
+// one systemd property query for the fixed unit bluetooth.service. It
+// never writes a sysctl, installs a package or starts a unit, and it
+// takes no parameters, so nothing on the wire chooses what is read.
+//
+// A missing prerequisite is a ReadinessCheck in state MISSING, never an
+// OpError. Non-Linux agents answer platform_supported=false with every
+// check UNSUPPORTED.
+message HomeAutomationReadiness {}
+
+enum ReadinessState {
+  READINESS_STATE_UNSPECIFIED = 0;
+  // The prerequisite is present.
+  READINESS_STATE_READY = 1;
+  // Observed absent, disabled or of the wrong type.
+  READINESS_STATE_MISSING = 2;
+  // This node cannot have it at all (non-Linux, kernel without IPv6).
+  READINESS_STATE_UNSUPPORTED = 3;
+  // The agent could not tell (read error, unreachable systemd,
+  // unexpected value).
+  READINESS_STATE_UNKNOWN = 4;
+}
+
+message ReadinessCheck {
+  // Closed vocabulary: "ipv6", "interface_ipv6", "ipv6_forwarding",
+  // "multicast", "dbus_system_bus", "bluez_service",
+  // "bluetooth_adapter", "tun". Per-interface and per-adapter checks
+  // repeat the name once per subject.
+  string check = 1;
+  ReadinessState state = 2;
+  // What produced the state: a path ("/proc/sys/net/ipv6/conf/all/
+  // forwarding", "/run/dbus/system_bus_socket"), an interface ("eth0"),
+  // a unit ("bluetooth.service") or an adapter ("hci0"). Empty only
+  // when there was nothing to check (no candidate interface).
+  string subject = 3;
+  // The observed raw value ("0", "socket", "char 10:200", flags).
+  string value = 4;
+  // Human-readable evidence.
+  string detail = 5;
+}
+
+// A LAN-facing candidate interface: one holding a default route or, when
+// there is none, an up, addressed, non-loopback, non-container one.
+message NodeInterface {
+  string name = 1;
+  repeated string addresses = 2; // CIDR, sorted
+  bool up = 3;
+  bool multicast = 4;
+  bool default_route = 5;
+}
+
+message HomeAutomationReadinessResult {
+  bool platform_supported = 1;
+  repeated NodeInterface interfaces = 2;
+  // In a fixed order: the check names above, each once per subject.
+  repeated ReadinessCheck checks = 3;
 }

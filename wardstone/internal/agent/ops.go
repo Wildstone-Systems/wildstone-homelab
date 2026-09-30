@@ -218,6 +218,16 @@ func (a *Agent) dispatchOp(ctx context.Context, opID string, op *wsv1.Operation)
 		if r, oerr = a.timeSyncStatus(o.TimeSyncStatus); oerr == nil {
 			res.Result = r
 		}
+	case *wsv1.Operation_ListRadios:
+		var r *wsv1.OpResult_ListRadios
+		if r, oerr = a.listRadios(); oerr == nil {
+			res.Result = r
+		}
+	case *wsv1.Operation_HomeAutomationReadiness:
+		var r *wsv1.OpResult_HomeAutomationReadiness
+		if r, oerr = a.homeAutomationReadiness(ctx); oerr == nil {
+			res.Result = r
+		}
 	default:
 		oerr = opErr(wsv1.ErrorCode_ERROR_CODE_INVALID, "unknown operation — agent too old for this Keystone? (protocol skew)")
 	}

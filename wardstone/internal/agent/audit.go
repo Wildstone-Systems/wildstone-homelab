@@ -159,6 +159,10 @@ func auditFields(op *wsv1.Operation) (arm string, fields []slog.Attr) {
 		return "SystemdUnitStatus", []slog.Attr{slog.String("unit", o.SystemdUnitStatus.GetUnit())}
 	case *wsv1.Operation_TimeSyncStatus:
 		return "TimeSyncStatus", nil
+	case *wsv1.Operation_ListRadios:
+		return "ListRadios", nil
+	case *wsv1.Operation_HomeAutomationReadiness:
+		return "HomeAutomationReadiness", nil
 	default:
 		// Unknown/future op arm (protocol skew, or a new arm someone forgot
 		// to add a case for above): log the fact that something was

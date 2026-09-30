@@ -160,6 +160,80 @@ export interface ListeningPort {
   localIp: string;
 }
 
+// Radio inventory (GET /api/v1/nodes/{node}/probes/radios, #434). `kind`
+// is never guessed from a tty name: a generic USB-serial bridge is
+// "unknown". `id` is the stable identity key — prefix "serial-by-id:"
+// follows the device across ports, "usb:" is a USB serial number,
+// "sysfs:" is bound to the physical port.
+export type RadioKind = "unknown" | "bluetooth" | "zigbee" | "zwave" | "thread";
+
+export interface RadioUsbIdentity {
+  vendorId: string;
+  productId: string;
+  manufacturer?: string;
+  product?: string;
+  serial?: string;
+  port?: string;
+}
+
+export interface Radio {
+  id: string;
+  kind: RadioKind;
+  kindReason: string;
+  kernelName: string;
+  devPath?: string;
+  byIdPaths: string[];
+  sysfsPath?: string;
+  bus?: string;
+  driver?: string;
+  usb?: RadioUsbIdentity;
+}
+
+export interface RadioInventory {
+  node: string;
+  platformSupported: boolean;
+  radios: Radio[];
+}
+
+// Home-automation readiness (GET /api/v1/nodes/{node}/probes/home-automation,
+// #436). A per-interface or per-adapter check repeats `check` once per
+// `subject`; `subject` names the path, interface, unit or adapter that
+// produced `state`.
+export type ReadinessState = "ready" | "missing" | "unsupported" | "unknown";
+
+export type ReadinessCheckName =
+  | "ipv6"
+  | "interface_ipv6"
+  | "ipv6_forwarding"
+  | "multicast"
+  | "dbus_system_bus"
+  | "bluez_service"
+  | "bluetooth_adapter"
+  | "tun";
+
+export interface ReadinessCheck {
+  check: ReadinessCheckName;
+  state: ReadinessState;
+  subject: string;
+  value?: string;
+  detail?: string;
+}
+
+export interface NodeInterface {
+  name: string;
+  addresses: string[];
+  up: boolean;
+  multicast: boolean;
+  defaultRoute: boolean;
+}
+
+export interface HomeAutomationReadiness {
+  node: string;
+  platformSupported: boolean;
+  interfaces: NodeInterface[];
+  checks: ReadinessCheck[];
+}
+
 export interface ProbeResult {
   reachable: boolean;
   detail?: string;
@@ -2301,6 +2375,16 @@ export const api = {
     call<{ ports: ListeningPort[] }>(
       "GET",
       `/api/v1/nodes/${encodeURIComponent(node)}/probes/ports`,
+    ),
+  probeRadios: (node: string) =>
+    call<RadioInventory>(
+      "GET",
+      `/api/v1/nodes/${encodeURIComponent(node)}/probes/radios`,
+    ),
+  probeHomeAutomation: (node: string) =>
+    call<HomeAutomationReadiness>(
+      "GET",
+      `/api/v1/nodes/${encodeURIComponent(node)}/probes/home-automation`,
     ),
   probeHttp: (node: string, url: string) =>
     call<ProbeResult>(

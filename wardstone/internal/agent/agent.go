@@ -124,7 +124,20 @@ import (
 //	touched. A pre-minor-22 agent would ignore the field and start the
 //	container on the bridge with nothing published, so Keystone refuses
 //	to dispatch a host-mode spec to one (resource.HostNetworkProtocolMinor).
-const ProtocolMinor = 22
+//
+// 24: adds ListRadios (#434): a read-only inventory of USB serial and
+//
+//	Bluetooth adapters from /dev/serial/by-id and sysfs, for the device
+//	picker a Zigbee/Z-Wave/Bluetooth app needs. An older agent answers
+//	it as an unknown operation (INVALID), which the probe endpoint
+//	relays as-is.
+//
+// 25: adds HomeAutomationReadiness (#436): typed, evidence-carrying
+//
+//	checks for IPv6, IPv6 forwarding, multicast, the D-Bus system bus,
+//	BlueZ, Bluetooth adapters and /dev/net/tun. Read-only; a missing
+//	prerequisite is a MISSING check, not an OpError.
+const ProtocolMinor = 25
 
 // maxUpdateMsgBytes is the gRPC message size cap on both ends of the
 // session/join connections (ADR-W003 W5). SelfUpdate ships the new binary
