@@ -20,7 +20,7 @@ does not migrate data; migration remains separate work.
 | Parameter | Default | Bounds |
 | --- | --- | --- |
 | `workspace_path` | `/srv/wildstone/agent-workspaces` | Canonical absolute non-root directory; no symlink root |
-| `required_mount` | empty (local disk) | Canonical absolute mount containing the root; filesystem root refused |
+| `required_mount` | empty (local disk) | Canonical absolute mount directly hosting the root; intervening mounts and filesystem root refused |
 | `quota_bytes` | 1 GiB | Positive integer, at most 1 TiB |
 | `max_file_bytes` | 10 MiB | Positive integer, at most 10 MiB and no greater than quota |
 | `scratch_retention_days` | 7 | Integer 1–3650, after completed/failed/cancelled state |
@@ -58,8 +58,11 @@ later consumers to detect a configuration change without treating it as a grant.
 For local storage, readiness checks an existing nonsymlinked directory. For
 required mounts it checks kernel mount metadata without remote I/O: this does
 not claim that an NFS server is reachable or writable. Actual storage operations
-must use `Settings.OpenRoot()`, which pins and verifies the mount's kernel ID
-before opening the existing root and never calls `MkdirAll`. Required-mount
+must use `Settings.OpenRoot()`, which pins and verifies both the required mount
+and the actual root descriptor against the same kernel mount ID and never calls
+`MkdirAll`. Set `required_mount` to the filesystem actually hosting the root:
+intervening mounts are refused, including a nested mount added during open.
+Required-mount
 storage is unavailable where Linux mount metadata cannot be verified. Consumers
 must additionally apply resource authorization, publication/recovery checks and
 execution fences; a ready directory alone grants no access.

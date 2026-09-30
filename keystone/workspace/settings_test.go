@@ -145,27 +145,30 @@ func TestReadinessNeverCreatesOrDeletesStorage(t *testing.T) {
 }
 func TestMountIdentityAndEscapedPaths(t *testing.T) {
 	line := `42 1 0:3 / /mnt/work\040space rw - ext4 /dev/example rw` + "\n"
-	if !mountPresent(strings.NewReader(line), "/mnt/work space", "42") {
+	if !mountHostsRoot(strings.NewReader(line), "/mnt/work space", "/mnt/work space/workspace", "42") {
 		t.Fatal("escaped mount not found")
 	}
-	if mountPresent(strings.NewReader(line), "/mnt/work space", "99") {
+	if mountHostsRoot(strings.NewReader(line), "/mnt/work space", "/mnt/work space/workspace", "99") {
 		t.Fatal("replacement mount ID accepted")
 	}
-	if mountPresent(strings.NewReader(line), "/mnt/work", "42") {
+	if mountHostsRoot(strings.NewReader(line), "/mnt/work", "/mnt/work/workspace", "42") {
 		t.Fatal("prefix accepted")
 	}
 }
 
 func TestPinnedMountRefusesReplacementAndLoss(t *testing.T) {
 	for _, tc := range []struct {
-		name, second, fd string
-		want             bool
+		name, second, fd, rootFD string
+		want                     bool
 	}{
-		{"stable", "42", "mnt_id: 42\n", true},
-		{"disappeared", "", "mnt_id: 42\n", false},
-		{"replaced", "43", "mnt_id: 42\n", false},
-		{"underlying local directory", "42", "mnt_id: 1\n", false},
-		{"missing fd identity", "42", "", false},
+		{"stable", "42", "mnt_id: 42\n", "mnt_id: 42\n", true},
+		{"disappeared", "", "mnt_id: 42\n", "mnt_id: 42\n", false},
+		{"replaced", "43", "mnt_id: 42\n", "mnt_id: 42\n", false},
+		{"underlying local directory", "42", "mnt_id: 1\n", "mnt_id: 1\n", false},
+		{"missing fd identity", "42", "", "", false},
+		{"nested mount added during open", "42", "mnt_id: 42\n", "mnt_id: 43\n", false},
+		{"root fell back to underlying mount", "42", "mnt_id: 42\n", "mnt_id: 1\n", false},
+		{"missing root identity", "42", "mnt_id: 42\n", "", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mount := t.TempDir()
@@ -188,7 +191,14 @@ func TestPinnedMountRefusesReplacementAndLoss(t *testing.T) {
 				}
 				return io.NopCloser(strings.NewReader(line)), nil
 			}
-			opened, err := s.openMountedRootWith(readMount, func(uintptr) ([]byte, error) { return []byte(tc.fd), nil })
+			fdCalls := 0
+			opened, err := s.openMountedRootWith(readMount, func(uintptr) ([]byte, error) {
+				fdCalls++
+				if fdCalls == 1 {
+					return []byte(tc.fd), nil
+				}
+				return []byte(tc.rootFD), nil
+			})
 			if opened != nil {
 				opened.Close()
 			}
@@ -199,5 +209,33 @@ func TestPinnedMountRefusesReplacementAndLoss(t *testing.T) {
 				t.Fatal(err)
 			}
 		})
+	}
+}
+
+func TestRequiredMountMustDirectlyHostWorkspace(t *testing.T) {
+	base := "42 1 0:3 / /mnt/storage rw - ext4 /dev/example rw\n"
+	for _, tc := range []struct {
+		name, nested string
+		want         bool
+	}{
+		{"direct", "", true},
+		{"intervening mount", "/mnt/storage/nas", false},
+		{"root itself mounted", "/mnt/storage/nas/workspace", false},
+		{"unrelated nested mount", "/mnt/storage/other", true},
+		{"path prefix sibling", "/mnt/storage/na", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			metadata := base
+			if tc.nested != "" {
+				metadata += "43 42 0:4 / " + tc.nested + " rw - nfs example:/export rw\n"
+			}
+			if got := mountHostsRoot(strings.NewReader(metadata), "/mnt/storage", "/mnt/storage/nas/workspace", "42"); got != tc.want {
+				t.Fatalf("mount readiness = %v, want %v", got, tc.want)
+			}
+		})
+	}
+	// A truncated kernel snapshot must not hide an intervening mount.
+	if mountHostsRoot(strings.NewReader(base+strings.Repeat("x", 100000)), "/mnt/storage", "/mnt/storage/nas/workspace", "42") {
+		t.Fatal("accepted unreadable mount snapshot")
 	}
 }

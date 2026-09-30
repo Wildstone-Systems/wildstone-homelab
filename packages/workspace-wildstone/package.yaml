@@ -12,7 +12,7 @@ metadata:
 params:
   - { name: node, required: true, source: node, description: "The machine running Keystone." }
   - { name: workspace_path, default: /srv/wildstone/agent-workspaces, source: directory, description: "Existing private workspace folder on the Keystone host. A missing folder is unavailable; installation never creates a replacement." }
-  - { name: required_mount, default: "", source: directory, description: "Required mount containing the workspace, or empty for local disk. Loss of this mount refuses access." }
+  - { name: required_mount, default: "", source: directory, description: "Mount directly hosting the workspace, or empty for local disk. Intervening mounts and loss of this mount refuse access." }
   - { name: quota_bytes, default: "1073741824", description: "Per-Agent quota including revisions, staging, scratch and trash (1 byte to 1 TiB)." }
   - { name: max_file_bytes, default: "10485760", description: "Maximum file size (1 byte to 10 MiB, no greater than the quota)." }
   - { name: scratch_retention_days, default: "7", description: "Days to retain scratch after completed, failed or cancelled tasks (1 to 3650)." }
