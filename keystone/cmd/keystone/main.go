@@ -1251,6 +1251,7 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	// flag (#408). Approvals refresh it at once; the timer catches any
 	// other change to desired state.
 	apiSrv.NodeID = householdCfg.NodeID
+	apiSrv.WireManagedResearch(svc.Rec)
 	apiSrv.RefreshSpeech()
 	go func() {
 		for range time.Tick(time.Minute) {

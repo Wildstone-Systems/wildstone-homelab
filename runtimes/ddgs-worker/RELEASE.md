@@ -28,7 +28,8 @@ reproduction is not claimed until two independent builds have been compared.
 Before treating #493 as complete, retain `build-metadata.json` and `image.json`,
 verify the published digest is pullable on both architectures, run the fake
 upstream worker suite and hardened-container health/shutdown smoke fixtures,
-and add the verified image as the reviewed package default with a version bump.
+and add the verified image as the reviewed package default with a version bump
+and as `research.ManagedReleaseImage`. Both pins must name that same artifact.
 Use the normal `wild pkg` lint/build/sign/verify tooling for distribution.
 Signing fixtures use ephemeral generated keys, not a household signing key.
 No live upstream query is part of these fixtures; S36 owns live conformance.
@@ -56,11 +57,17 @@ Before a Plan changes/removes that container, all provider tests for its referen
 are invalidated, including in-flight receipts. Probe completion is serialized
 with approval writes. Failed applies remain unavailable. This does not select
 providers, grant tools, automatically test upstreams or deploy on upgrade.
-The production `ResearchTest` callback remains nil: endpoint configuration alone
-is not proof of reconciled image/dependency identity. Wiring a test requires
-verified current-revision reconciliation, not merely a reachable old listener.
-This integration is incomplete while release evidence is absent; removal still
-invalidates any persisted successful test immediately on approved desired change.
+Production wires the explicit Owner test through the existing bounded adapter.
+It requires a nonempty verified `research.ManagedReleaseImage`, exact desired
+image equality, and fresh owned-container Wardstone inspection before and after
+the synthetic search. The image and reconcile spec hash (including port/config/
+network/host-alias identity) must match, the container must be running, and any
+reported application health must be healthy. Old agents get no presence-only
+fallback. Changed committed or uncommitted desired state refuses readiness.
+The release pin is currently empty, so production remains unavailable without
+contacting the worker. Neither installation nor startup probes or grants tools.
+Removal invalidates any persisted successful test immediately on approved change.
+These fixtures verify wiring, not an actual published image or live upstream.
 
 Trusted homelab-network access is the accepted #493 boundary. Sibling containers
 and local processes may call the worker directly, bypassing Keystone permissions,

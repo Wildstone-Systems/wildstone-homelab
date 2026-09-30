@@ -11,6 +11,11 @@ const ManagedPackage = "research-ddgs"
 const ManagedContainer = "ddgs"
 const ManagedEndpointRef = "service/ddgs"
 
+// ManagedReleaseImage is deliberately empty until a real worker artifact has
+// passed release verification. A shape-only fixture or Owner-supplied digest
+// must not silently become the supported production release.
+const ManagedReleaseImage = ""
+
 // ManagedEndpoint resolves only the singleton package's desired endpoint on
 // Keystone's own node. This is configuration, not proof of reconciliation or
 // upstream readiness, and does not grant authority to call it.

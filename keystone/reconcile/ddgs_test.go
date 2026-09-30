@@ -35,6 +35,9 @@ func TestDDGSPackageUsesOrdinaryReconcileLifecycle(t *testing.T) {
 	r := newReconciler(&GatewayApplier{Gateway: h.gw})
 	for _, port := range []string{"18080", "18081"} {
 		desired := render(port)
+		if err := r.VerifyRunningContainer(context.Background(), "node-a", research.ManagedContainer, desired); err == nil {
+			t.Fatal("absent or stale dependency passed readiness")
+		}
 		outcome, err := r.Reconcile(context.Background(), "node-a", desired)
 		if port == "18081" {
 			if err != nil || !outcome.PendingApproval {
@@ -49,6 +52,9 @@ func TestDDGSPackageUsesOrdinaryReconcileLifecycle(t *testing.T) {
 		if running, ok := agent.containerExists(research.ManagedContainer); !ok || !running {
 			t.Fatal("worker not running")
 		}
+		if err := r.VerifyRunningContainer(context.Background(), "node-a", research.ManagedContainer, desired); err != nil {
+			t.Fatalf("reconciled dependency refused: %v", err)
+		}
 		before := agent.opCount("EnsureContainer")
 		outcome, err = r.Reconcile(context.Background(), "node-a", desired)
 		if err != nil || len(outcome.Plan.Steps) != 0 || agent.opCount("EnsureContainer") != before {
@@ -61,6 +67,9 @@ func TestDDGSPackageUsesOrdinaryReconcileLifecycle(t *testing.T) {
 	}
 	if _, ok := agent.containerExists(research.ManagedContainer); ok {
 		t.Fatal("worker survived removal")
+	}
+	if err := r.VerifyRunningContainer(context.Background(), "node-a", research.ManagedContainer, render("18081")); err == nil {
+		t.Fatal("removed dependency passed readiness")
 	}
 	if agent.opCount("PullImage") == 0 || agent.opCount("StopContainer") == 0 || agent.opCount("RemoveContainer") == 0 {
 		t.Fatal("ordinary container lifecycle bypassed")
