@@ -838,7 +838,8 @@ func (r *Reconciler) observe(ctx context.Context, nodeID string, desired []resou
 				observed = append(observed, obs)
 			}
 		case resource.KindContainer:
-			res, obs, oerr := r.observeContainer(ctx, nodeID, k, want, isDesired, cfgContents, hostAliases)
+			res, obs, oerr := r.observeContainer(ctx, nodeID, k, want, isDesired, cfgContents,
+				r.containerHostAliases(nodeID, k.Name, hostAliases, desiredByKey))
 			if oerr != nil {
 				return nil, nil, nil, oerr
 			}
@@ -1500,7 +1501,7 @@ func (r *Reconciler) ManagedNodes() []string {
 // ---------------------------------------------------------------- apply: Container
 
 func (r *Reconciler) applyContainerStep(ctx context.Context, nodeID string, step plan.PlanStep, desiredByKey map[resKey]resource.Resource, cfgContents map[string]string) StepResult {
-	hostAliases := r.hostAliasesForNode(nodeID, desiredByKey)
+	hostAliases := r.containerHostAliases(nodeID, step.Name, r.hostAliasesForNode(nodeID, desiredByKey), desiredByKey)
 	sr := StepResult{Step: step}
 	key := resKey{step.Kind, step.Name}
 
@@ -1995,6 +1996,10 @@ func (r *Reconciler) applyRouteStep(ctx context.Context, nodeID string, step pla
 			return sr
 		}
 		wantSpec = want.Route
+		if ne := r.refuseHostRouteIfAgentTooOld(nodeID, step, wantSpec); ne != "" {
+			sr.Error = ne
+			return sr
+		}
 		content = renderRouteFragment(wantSpec, r.autheliaAddr(), r.currentPosture())
 	case plan.ActionDelete:
 		// No delete-file op exists (only WriteManagedFile/ReadManagedFile)
@@ -2080,8 +2085,8 @@ func (r *Reconciler) runReload(ctx context.Context) error {
 }
 
 // probeRoute health-gates a Route Create/Update (ADR-W004 A4 step 5:
-// "Route -> ProbeHttp/ProbeTcp"). Only "ip:port"-shaped upstreams are
-// actually dialed — a "container/<name>:<port>" upstream needs the
+// "Route -> ProbeHttp/ProbeTcp"). Only "ip:port"-shaped and "host/<port>"
+// upstreams are actually dialed — a "container/<name>:<port>" upstream needs the
 // container's Docker-network address, which Keystone has no way to
 // resolve from the op surface available to S2b, so such routes are
 // gate-pass-by-construction (the WriteManagedFile success is the whole
@@ -2150,6 +2155,14 @@ func (r *Reconciler) probeRoute(ctx context.Context, nodeID string, spec *resour
 		return true
 	}
 	url := "http://" + spec.Upstream
+	if port, isHost, _ := resource.ParseHostUpstream(spec.Upstream); isHost {
+		// A host service (#433). The agent runs in the host's own network
+		// namespace, so the service is on its loopback — the same process
+		// the proxy reaches through the host-gateway alias. The literal
+		// upstream is not a URL at all ("http://host/8123" would ask
+		// whatever DNS calls "host" for /8123).
+		url = fmt.Sprintf("http://127.0.0.1:%d/", port)
+	}
 	attempts, backoff := r.healthGateParams()
 	for i := 0; i < attempts; i++ {
 		res, err := r.Applier.Apply(ctx, nodeID, &wsv1.Operation{Op: &wsv1.Operation_ProbeHttp{

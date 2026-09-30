@@ -125,6 +125,16 @@ import (
 //	container on the bridge with nothing published, so Keystone refuses
 //	to dispatch a host-mode spec to one (resource.HostNetworkProtocolMinor).
 //
+// 23: EnsureContainer.host_aliases gives one closed name,
+//
+//	"host.docker.internal", Docker's "host-gateway" value instead of a
+//	node DNS answer (#433), so a bridge-networked proxy can reach a
+//	"host/<port>" Route with no machine-specific address in desired
+//	state. No schema change. An older agent tries to resolve the name,
+//	fails and skips it, leaving the proxy with no route to the host, so
+//	Keystone withholds the alias from and refuses host Routes on one
+//	(resource.HostGatewayProtocolMinor).
+//
 // 24: adds ListRadios (#434): a read-only inventory of USB serial and
 //
 //	Bluetooth adapters from /dev/serial/by-id and sysfs, for the device

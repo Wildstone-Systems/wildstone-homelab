@@ -627,8 +627,8 @@ already declares, by `keystone/reconcile/homepageservices.go`:
 | --- | --- |
 | The link | `Route.host`, resolved to the address a browser actually uses |
 | The group (Household / Admin) | `Route.classification` — `admin_tailscale` is Admin |
-| Status dot | `Route.upstream`, dialled over the Wildstone Docker network |
-| Name, icon, description | The `homepageApps` table, keyed by the upstream container name |
+| Status dot | `Route.upstream`, dialled over the Wildstone Docker network (a `host/<port>` upstream through the host-gateway alias, see [Route upstreams](#route-upstreams)) |
+| Name, icon, description | The `homepageApps` table, keyed by the upstream container name (for `host/<port>`, the package's host-networked container) |
 
 So integrating a new service is: declare a Route (which you must do
 anyway to be reachable), then add **one row** to `homepageApps`:
@@ -662,6 +662,56 @@ app's API key, secrets are write-only (ADR-W012 W2), and only a
 materializing write resolves a `secret/` reference — so `widgets.yaml`
 would need a materialize flag that depends on which apps are installed.
 Tracked as F87.
+
+## Route upstreams
+
+`Route.upstream` has exactly three forms:
+
+| Form | Means | Caddy dials |
+| --- | --- | --- |
+| `container/<name>:<port>` | a container on the Wildstone network | `<name>:<port>`, by Docker DNS |
+| `host/<port>` | a service on the **node host's** network — in practice a container with `networkMode: host` in the same package | `host.docker.internal:<port>` |
+| `<address>:<port>` | something Wildstone does not run (a NAS, a printer, Keystone itself) | the address, verbatim |
+
+```yaml
+spec:
+  host: home.example.internal
+  upstream: host/8123          # Home Assistant, running networkMode: host
+```
+
+`host/<port>` is a closed grammar: `host/` then a decimal port 1–65535,
+no leading zero, nothing else — no host part, no scheme, no path, and the
+prefix is lower-case. Validation refuses anything looser, and also refuses
+the literals `host:<port>`, `host.docker.internal:<port>` and
+`host-gateway:<port>`, which look like they reach the node but bypass the
+wiring below. Policy (`route-upstream-resolvable`) also refuses
+`container/<name>:<port>` when `<name>` runs with `networkMode: host` —
+it has no name on the Wildstone network — and names the `host/<port>`
+to use instead.
+
+How it works: the proxy stays on the Wildstone bridge (it needs Docker
+DNS for every `container/` upstream). While a node has a host Route,
+Keystone adds `host.docker.internal` to the host aliases of the ingress
+proxy and the dashboard container only, and the agent writes it as
+Docker's own `host.docker.internal:host-gateway`, so the daemon fills in
+its bridge gateway on that machine. No gateway IP is ever stored in
+desired state. This needs wardstone protocol minor 23; Keystone refuses a
+host Route on a node with an older agent rather than rendering a site
+that answers 502.
+
+The service must listen on an interface the bridge gateway reaches (all
+interfaces, the usual default for a host-networked hub) — one bound to
+`127.0.0.1` only is reachable from the node but not from the proxy — and
+a host firewall must allow the Docker bridge subnets to that port. The
+apply-time gate probes `http://127.0.0.1:<port>/` from the agent, and
+under the tailnet posture the front door, which exercises the proxy's
+real path.
+
+On the dashboard a host Route is presented as the one host-networked
+container its package runs on that node (its `homepageApps` row, icon and
+status), and its status dot dials `host.docker.internal:<port>` exactly
+as Caddy does. A package with two host-networked containers gets an
+unbranded card rather than a guess.
 
 ## Container-to-container addressing
 

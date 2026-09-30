@@ -40,6 +40,36 @@ var routeFixtures = []struct {
 		Host: "nas.example.internal", Upstream: "10.0.0.4:5000",
 		Auth: "none", Classification: "admin",
 	}},
+	{"host-upstream", resource.RouteSpec{
+		Host: "home.example.internal", Upstream: "host/8123",
+		Auth: "app_oidc", Classification: "family_tailscale",
+	}},
+}
+
+// TestUpstreamForms pins what each upstream form renders to. The two
+// forms that predate host/<port> are byte-for-byte what they were; the
+// host form is the alias and never an address, because the address is
+// the node's bridge gateway and belongs to Docker, not to desired state
+// (#433).
+func TestUpstreamForms(t *testing.T) {
+	for up, want := range map[string]string{
+		"container/immich-server:2283": "immich-server:2283",
+		"10.0.0.4:5000":                "10.0.0.4:5000",
+		"host/8123":                    resource.HostGatewayAlias + ":8123",
+		"host/1":                       resource.HostGatewayAlias + ":1",
+	} {
+		if got := caddyUpstream(up); got != want {
+			t.Errorf("caddyUpstream(%q) = %q, want %q", up, got, want)
+		}
+	}
+	spec := &resource.RouteSpec{Host: "home.example.internal", Upstream: "host/8123", Auth: "none", Classification: "admin"}
+	got := string(renderRouteFragment(spec, DefaultAutheliaAddr, terminatedUpstream))
+	if !strings.Contains(got, "\treverse_proxy "+resource.HostGatewayAlias+":8123\n") {
+		t.Errorf("host upstream not rendered to the host-gateway alias:\n%s", got)
+	}
+	if strings.Contains(got, "host/") || strings.Contains(got, "172.17.") {
+		t.Errorf("host upstream leaked its source form or a literal gateway:\n%s", got)
+	}
 }
 
 // writeRenderedConfig lays out a managed prefix exactly as the reconciler

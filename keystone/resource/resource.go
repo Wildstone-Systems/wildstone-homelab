@@ -304,7 +304,8 @@ type VolumeSpec struct {
 // config fragment via Wardstone WriteManagedFile.
 type RouteSpec struct {
 	Host string `yaml:"host"`
-	// Upstream is "container/<name>:<port>" or "ip:port".
+	// Upstream is "container/<name>:<port>", "host/<port>" (a service on
+	// the node's host network, see routeupstream.go) or "ip:port".
 	Upstream string `yaml:"upstream"`
 	// Auth is one of routeAuthValues: none, authelia_oidc, app_oidc, app_ldap, portal.
 	Auth string `yaml:"auth"`
@@ -1721,6 +1722,9 @@ func validateRoute(r *Resource) error {
 	}
 	if !routeAuthValues[r.Route.Auth] {
 		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.auth", Msg: "must be one of none, authelia_oidc, app_oidc, app_ldap, portal"}
+	}
+	if err := validateRouteUpstream(r.Route.Upstream); err != nil {
+		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.upstream", Msg: err.Error()}
 	}
 	return nil
 }

@@ -150,3 +150,39 @@ func TestAuditRecordsHostNetwork(t *testing.T) {
 		}
 	}
 }
+
+// TestEnsureContainerHostGatewayAlias: the ingress proxy asked for the
+// host-gateway alias reaches Docker with the literal "host-gateway"
+// ExtraHosts entry, on the bridge, with nothing else granted (#433).
+func TestEnsureContainerHostGatewayAlias(t *testing.T) {
+	fake := newFakeDocker(t)
+	fake.addOwnedNetwork("wildstone")
+	h := startGateway(t, []string{"tok"}, "")
+	newTestAgent(t, h, "node-a", "tok", func(c *Config) { c.DockerEndpoint = fake.URL() })
+	if !h.gw.WaitConnected("node-a", 10*time.Second) {
+		t.Fatal("agent never connected")
+	}
+	res := dispatch(t, h, "node-a", &wsv1.Operation{Op: &wsv1.Operation_EnsureContainer{
+		EnsureContainer: &wsv1.EnsureContainer{
+			Name: "caddy", Image: testDigestImage, Network: "wildstone",
+			HostAliases: []string{hostGatewayAlias},
+			Labels:      map[string]string{SpecHashLabel: "gw-v1"},
+		},
+	}})
+	if oe := res.GetError(); oe != nil {
+		t.Fatalf("ensure: %v", oe)
+	}
+	fake.mu.Lock()
+	c := fake.containers["caddy"]
+	host, nets := c.host, c.networks
+	fake.mu.Unlock()
+	if len(host.ExtraHosts) != 1 || host.ExtraHosts[0] != "host.docker.internal:host-gateway" {
+		t.Errorf("ExtraHosts = %v, want [host.docker.internal:host-gateway]", host.ExtraHosts)
+	}
+	if host.NetworkMode != "" || len(nets) != 1 || nets[0] != "wildstone" {
+		t.Errorf("proxy left the bridge: NetworkMode %q, networks %v", host.NetworkMode, nets)
+	}
+	if len(host.CapAdd) != 0 || len(host.Devices) != 0 || len(host.PortBindings) != 0 {
+		t.Errorf("the alias granted something: %+v", host)
+	}
+}

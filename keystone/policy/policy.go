@@ -29,6 +29,7 @@ const (
 	RuleBackupTargetDeclared     = "backup-target-declared"
 	RuleBackupVolumesDeclared    = "backup-volumes-declared"
 	RuleBackupHookDeclared       = "backup-hook-declared"
+	RuleRouteUpstreamResolvable  = "route-upstream-resolvable"
 )
 
 // automationTiers is the closed set of action tiers a household rule may
@@ -160,6 +161,9 @@ func (e *Engine) Validate(ch Change) (violations, exempted []Violation) {
 			}
 			proposedRoutes[r.Metadata.Name] = true
 			all = append(all, routeRules(r, currentRoutes, ch.Role)...)
+			if v, bad := routeUpstreamRule(r, containers); bad {
+				all = append(all, v)
+			}
 		case resource.KindContainer:
 			if r.Container == nil {
 				continue
@@ -273,6 +277,28 @@ func (e *Engine) Validate(ch Change) (violations, exempted []Violation) {
 			all = append(all, v)
 		}
 	}
+	// A Container moved to networkMode: host under an UNTOUCHED Route that
+	// names it by container/<name> would leave that Route dialling a name
+	// Docker DNS no longer has. Same reverse check as for targets above.
+	for _, r := range ch.Proposed {
+		if r.Kind != resource.KindRoute || r.Route == nil {
+			continue
+		}
+		if cur, ok := currentByKey[string(r.Kind)+"/"+r.Metadata.Name]; !ok || !reflect.DeepEqual(cur, r) {
+			continue // touched: the loop above already checked it
+		}
+		name := routeUpstreamContainer(r.Route.Upstream)
+		c, ok := containers[name]
+		if !ok {
+			continue
+		}
+		if cur, was := currentByKey[string(resource.KindContainer)+"/"+name]; was && reflect.DeepEqual(cur, c) {
+			continue // neither side touched: legacy state, not this change
+		}
+		if v, bad := routeUpstreamRule(r, containers); bad {
+			all = append(all, v)
+		}
+	}
 	// Deletions of admin routes by the butler (RuleButlerAdminScope
 	// covers modify/create above; a delete is a route present in current
 	// and absent from proposed).
@@ -295,6 +321,41 @@ func (e *Engine) Validate(ch Change) (violations, exempted []Violation) {
 		}
 	}
 	return violations, exempted
+}
+
+// routeUpstreamContainer is the container half of "container/<name>:<port>",
+// or "" for any other upstream form.
+func routeUpstreamContainer(upstream string) string {
+	rest, ok := strings.CutPrefix(upstream, "container/")
+	if !ok {
+		return ""
+	}
+	name, _, _ := strings.Cut(rest, ":")
+	return name
+}
+
+// routeUpstreamRule refuses a "container/<name>:<port>" Route whose
+// Container runs with networkMode: host (#433). A host-networked
+// container is not on the Wildstone network, so Docker DNS has no entry
+// for its name: the Route would render, validate, and answer 502
+// forever. The working form is "host/<port>", which the proxy reaches
+// through the host-gateway alias.
+func routeUpstreamRule(r resource.Resource, containers map[string]resource.Resource) (Violation, bool) {
+	name := routeUpstreamContainer(r.Route.Upstream)
+	c, ok := containers[name]
+	if !ok || !c.Container.HostNetwork() {
+		return Violation{}, false
+	}
+	port := "<port>"
+	if _, p, found := strings.Cut(strings.TrimPrefix(r.Route.Upstream, "container/"), ":"); found && p != "" {
+		port = p
+	}
+	return Violation{
+		Rule: RuleRouteUpstreamResolvable, Kind: string(r.Kind), Name: r.Metadata.Name,
+		Msg: fmt.Sprintf("upstream %q names Container %q, which runs with networkMode: host and so has no name on the "+
+			"Wildstone network; the proxy could never resolve it. Use upstream %q to reach a service on the node's "+
+			"host network", r.Route.Upstream, name, resource.HostUpstreamPrefix+port),
+	}, true
 }
 
 // backupHookRules keeps a hook inside its package and node. Runtime repeats

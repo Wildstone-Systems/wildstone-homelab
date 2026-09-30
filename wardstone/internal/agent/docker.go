@@ -210,7 +210,9 @@ type hostConfig struct {
 	CapAdd  []string        `json:"CapAdd,omitempty"`
 	// ExtraHosts are "name:ip" entries Docker writes into the
 	// container's /etc/hosts (protocol minor 14). Resolved by the agent
-	// from host_aliases, because the node is where the name resolves.
+	// from host_aliases, because the node is where the name resolves —
+	// except hostGatewayAlias, written as Docker's "host-gateway"
+	// (protocol minor 23).
 	ExtraHosts []string `json:"ExtraHosts,omitempty"`
 
 	// The H1 hardening fields (protocol minor 18). Reached only through

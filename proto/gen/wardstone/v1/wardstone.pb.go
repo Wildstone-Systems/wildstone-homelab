@@ -2223,6 +2223,14 @@ type EnsureContainer struct {
 	//
 	// A pre-minor-14 agent ignores this field, so the container starts
 	// exactly as it does today.
+	//
+	// One name is not resolved (protocol minor 23): "host.docker.internal"
+	// is written as Docker's literal "host-gateway", which the daemon
+	// replaces with its bridge gateway. Keystone sends it only to the
+	// ingress proxy and the dashboard, so a Route upstream "host/<port>"
+	// reaches a host-networked service with no machine-specific address in
+	// desired state. An older agent resolves it like any other name, fails
+	// and skips it, so Keystone withholds it from one.
 	HostAliases []string `protobuf:"bytes,12,rep,name=host_aliases,json=hostAliases,proto3" json:"host_aliases,omitempty"`
 	// Mounts the container's own filesystem read-only, leaving only
 	// declared volumes/binds and tmpfs writable. A coerced shell can still

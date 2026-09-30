@@ -219,7 +219,17 @@ func renderBaseCaddyfile(p ingressPosture) []byte {
 // minor 8 every managed container is attached to a user-defined network
 // where Docker registers its name, so the container name resolves and the
 // prefix is simply dropped. An "ip:port" upstream passes through.
+//
+// "host/<port>" is a service on the node's own network namespace (#433).
+// It renders to resource.HostGatewayAlias, never to an address: the
+// agent writes that name into the proxy container's /etc/hosts as
+// Docker's "host-gateway", so the bridge gateway is looked up by the
+// daemon on the node where it is true, and no machine-specific IP ever
+// reaches desired state or this file.
 func caddyUpstream(upstream string) string {
+	if port, isHost, err := resource.ParseHostUpstream(upstream); isHost && err == nil {
+		return fmt.Sprintf("%s:%d", resource.HostGatewayAlias, port)
+	}
 	return strings.TrimPrefix(upstream, "container/")
 }
 
