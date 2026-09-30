@@ -19,6 +19,18 @@ async function main() {
  await loadReviewPlans({plans:async()=>[summary],ownerReviewQueue:async()=>{throw new ApiError(403,"Owner required")},plan:async()=>{detailRead=true;return full}});
  assert.ok(detailRead,"bootstrap infrastructure Plans require full details despite unavailable Owner queue");
  for(const status of [401,500]) await assert.rejects(loadReviewPlans({plans:async()=>[summary],ownerReviewQueue:async()=>{throw new ApiError(status,"unavailable")},plan:async()=>full}));
+ const config={name:"Review search",kind:"ddgs",endpointRef:"service/review-search",credentialRef:"secret/review-token",backends:["duckduckgo"],fallbackOrder:[],limits:{searchesPerTask:7,fetchesPerTask:11,requestTimeoutSeconds:23,downloadBytes:4096,extractedCharacters:8192,cacheSeconds:313}};
+ for(const operation of ["create","update","delete"] as const) {
+   const record:PlanRecord={...summary,research:{operation,providerId:"sr.review-provider",expectedConfigRevision:operation==="create"?"":"sr.review-revision",...(operation==="delete"?{}:{config})}};
+   const rendered=renderToString(h(PendingPlan,{plan:record,onResolved:()=>{}})).replace(/<!--.*?-->/g, "");
+   for(const text of [operation,"sr.review-provider","No service is provisioned","no Agent tool permissions are granted",...(operation==="delete"?["become unavailable","does not fall back"]:["Review search","service/review-search","secret/review-token","duckduckgo","Fallback order: None","7","11","23","4096","8192","313","must pass a new test"])])assert.ok(rendered.includes(text),`research approval omits ${text}`);
+   assert.ok(!rendered.includes("hands the plan to the reconciler"));
+   assert.ok(!rendered.includes("no expanded steps"));
+   assert.ok(!/btn-primary[^>]*disabled/.test(rendered),"complete research change must be reviewable");
+ }
+ const incomplete:PlanRecord={...summary,research:{operation:"update",providerId:"sr.review-provider",expectedConfigRevision:"sr.review-revision"}};
+ const incompleteHTML=renderToString(h(PendingPlan,{plan:incomplete,onResolved:()=>{}}));
+ assert.match(incompleteHTML,/btn-primary[^>]*disabled/,"missing configuration must not enable approval");
  console.log("Owner review loading and rendering checks passed.");
 }
 main().catch(error=>{console.error(error);process.exitCode=1});
