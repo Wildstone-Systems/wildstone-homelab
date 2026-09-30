@@ -87,6 +87,15 @@ func (s *Server) finishSubscriptionPlan(planID string, stored storedProposal, id
 		return nil, http.StatusInternalServerError, err
 	}
 	s.recordProposalOutcomeDelivery(planID, rec.Principal, "approved", stored.Summary)
+	// A Personal source's adapter runs only under an approved
+	// subscription; this approval may be what it was waiting for.
+	source := stored.Subscription.Source
+	if stored.Subscription.Revises != 0 {
+		if sub, err := s.DB.GetAgentSubscription(stored.Subscription.Revises); err == nil {
+			source = sub.SourceConnection
+		}
+	}
+	s.refileAdapterRender(source, actingMember(id))
 	return viewPlan(rec), http.StatusOK, nil
 }
 
@@ -297,6 +306,11 @@ func (s *Server) controlAgentSubscription(r *http.Request, id principal.Identity
 	}
 	if sub, err = s.DB.GetAgentSubscription(sub.ID); err != nil {
 		return nil, http.StatusInternalServerError, err
+	}
+	if req.Action == "disable" || req.Action == "enable" {
+		// The adapter reading a Personal source runs only while its
+		// subscription is enabled.
+		s.refileAdapterRender(sub.SourceConnection, who)
 	}
 	v, err := s.viewSubscription(sub, true)
 	if err != nil {

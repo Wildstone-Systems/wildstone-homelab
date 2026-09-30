@@ -412,7 +412,7 @@ func (s *Server) placeAndReport(name string) (any, int, error) {
 
 // removeIntegrationPlacement fences a node now and starts the removal it
 // must then prove.
-func (s *Server) removeIntegrationPlacement(r *http.Request, _ principal.Identity) (any, int, error) {
+func (s *Server) removeIntegrationPlacement(r *http.Request, id principal.Identity) (any, int, error) {
 	name := r.PathValue("name")
 	var req struct {
 		Node string `json:"node"`
@@ -437,6 +437,7 @@ func (s *Server) removeIntegrationPlacement(r *http.Request, _ principal.Identit
 	if erasures := s.eraseCredentialCopies(r.Context(), name, false); len(erasures) > 0 {
 		out["credentialErasures"] = erasures
 	}
+	s.refileAdapterRender(name, actingMember(id))
 	return out, http.StatusOK, nil
 }
 

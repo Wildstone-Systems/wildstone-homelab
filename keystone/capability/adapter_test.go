@@ -94,7 +94,7 @@ func TestExpandAdapterRendersOneContainedAdapter(t *testing.T) {
 			secrets[r.Secret.Name] = true
 		}
 	}
-	if c == nil || c.Metadata.Name != "mail-adapter-ada-mailbox" {
+	if c == nil || c.Metadata.Name != "mail-adapter-ada-mailbox-node-b" {
 		t.Fatalf("no adapter container in %+v", out)
 	}
 	if !secrets["mail-adapter-ada-mailbox-token"] || !secrets["mail-ada-mailbox-app-password"] || !secrets["mail-ada-mailbox-fingerprint-key"] || len(secrets) != 3 {
@@ -175,5 +175,41 @@ func TestExpandAdapterRefusesWhatItCannotRender(t *testing.T) {
 	bad.Node = ""
 	if _, err := NewEngine().ExpandAdapter(pkg, mailParams, "mail", bad); err == nil {
 		t.Fatal("rendered an adapter with no node")
+	}
+}
+
+// One container per prepared node: desired state keys a resource by kind
+// and name, so two nodes' renderings of one connection must not share a
+// key — while every node still reads the same node secret names.
+func TestExpandAdapterPerNodeRenderingsDoNotCollide(t *testing.T) {
+	pkg := loadMail(t)
+	seen := map[string]string{}
+	refs := map[string]map[string]bool{}
+	for _, node := range []string{"node-a", "node-b"} {
+		out, err := NewEngine().ExpandAdapter(pkg, mailParams, "mail", AdapterPlacement{
+			Connection: "ada", Node: node, KeystoneURL: "http://192.0.2.10:9441",
+			TokenSecret: AdapterTokenSecretName("mail", "ada", node),
+			Secrets:     map[string]string{"mailbox-app-password": "pc.ada.v1"},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		refs[node] = map[string]bool{}
+		for _, r := range out {
+			key := string(r.Kind) + "/" + r.Metadata.Name
+			if other, dup := seen[key]; dup {
+				t.Fatalf("%s is rendered for both %s and %s", key, other, node)
+			}
+			seen[key] = node
+			if r.Kind == resource.KindSecret {
+				refs[node][r.Secret.Name] = true
+			}
+			if r.Kind == resource.KindContainer && r.Metadata.Name != AdapterContainerName("mail", "ada", node) {
+				t.Fatalf("container %s is not AdapterContainerName", r.Metadata.Name)
+			}
+		}
+	}
+	if !refs["node-a"]["pc.ada.v1"] || !refs["node-b"]["pc.ada.v1"] {
+		t.Fatalf("the node secret names moved: %v", refs)
 	}
 }
