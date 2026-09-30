@@ -1,5 +1,7 @@
 package plan
 
+import "github.com/chickenrat17/wildstone-homelab/keystone/research"
+
 // StoredProposal is what a plan record's plan_json carries: the computed
 // plan plus the exact desired-state documents approval will commit.
 //
@@ -13,6 +15,8 @@ package plan
 // makes that particular mistake a compile-time concern instead of a
 // silent one.
 type StoredProposal struct {
+	// Research is an exact-version, Owner-only registry change. It provisions no host resource.
+	Research *research.Change `json:"research,omitempty"`
 	// AuditOnly records a member's immediate maintenance-tracker edit. It is
 	// history, not a submitted Plan or permission to execute host changes.
 	AuditOnly bool           `json:"auditOnly,omitempty"`
