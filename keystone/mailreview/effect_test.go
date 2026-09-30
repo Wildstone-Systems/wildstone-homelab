@@ -227,4 +227,3 @@ func TestACorrectionIsAnExactUpdateProposalNeverASilentEdit(t *testing.T) {
 		t.Fatalf("correction candidate %s", got.State)
 	}
 }
-

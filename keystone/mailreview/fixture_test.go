@@ -288,7 +288,7 @@ func newEnv(t *testing.T) *env {
 	_, _, err = db.ActivatePersonalCredential(staged.Seq, "sam")
 	must(err)
 	req := runtimedb.BackgroundAuthorizationRequest{Connection: "sam-mail",
-		Scope: runtimedb.BackgroundScope{Folders: []string{"INBOX"}, ConflictCalendars: []string{"household", "bo-private"}},
+		Scope:              runtimedb.BackgroundScope{Folders: []string{"INBOX"}, ConflictCalendars: []string{"household", "bo-private"}},
 		ProcessingLocation: runtimedb.ProcessingLocal, Agent: agent, TargetCalendar: "sam-family"}
 	preview, err := db.PrepareBackgroundAuthorization("sam", req)
 	must(err)
