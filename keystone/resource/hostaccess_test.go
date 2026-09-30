@@ -1,6 +1,9 @@
 package resource
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // deviceExamples is the SAME fixture wardstone/internal/agent's
 // TestDeviceAllowlist runs. Keep them identical: the two allowlists live
@@ -84,7 +87,7 @@ func TestContainerDevicesAreValidated(t *testing.T) {
 			t.Errorf("%s: accepted", name)
 		}
 	}
-	caps := containerWith(func(s *ContainerSpec) { s.CapAdd = []string{"NET_ADMIN", "NET_RAW", "SYS_NICE"} })
+	caps := containerWith(func(s *ContainerSpec) { s.CapAdd = []string{"IPC_LOCK", "NET_ADMIN", "NET_RAW", "SYS_NICE"} })
 	if err := caps.Validate(); err != nil {
 		t.Errorf("allowlisted capabilities refused: %v", err)
 	}
@@ -187,5 +190,22 @@ func TestContainerHardeningFieldsAbsentDoNotChangeValidation(t *testing.T) {
 	plain := containerWith(func(s *ContainerSpec) {})
 	if err := plain.Validate(); err != nil {
 		t.Fatalf("a container with no hardening fields was refused: %v", err)
+	}
+}
+
+// TestContainerCapabilityAllowlistIsPinned fixes the exact set. The agent
+// keeps a mirror (wardstone/internal/agent TestCapabilityAllowlistIsPinned
+// pins the same list), so a change to one side fails a test until the
+// other is changed to match.
+func TestContainerCapabilityAllowlistIsPinned(t *testing.T) {
+	want := []string{"IPC_LOCK", "NET_ADMIN", "NET_RAW", "SYS_NICE"}
+	if got := ContainerCapabilityNames(); strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("allowlist = %v, want %v", got, want)
+	}
+	for _, bad := range []string{"SYS_ADMIN", "ALL", "CAP_IPC_LOCK", "ipc_lock"} {
+		spec := containerWith(func(s *ContainerSpec) { s.CapAdd = []string{bad} })
+		if err := spec.Validate(); err == nil {
+			t.Errorf("%q accepted", bad)
+		}
 	}
 }

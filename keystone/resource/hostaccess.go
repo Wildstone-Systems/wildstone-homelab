@@ -52,6 +52,7 @@ func DeviceAllowed(path string) bool {
 // ContainerCapabilities is the closed set of Linux capabilities a
 // container may add, named without the CAP_ prefix. Mirrors the agent's.
 var ContainerCapabilities = map[string]bool{
+	"IPC_LOCK":  true, // memory locking (mlock) for OpenThread Border Router
 	"NET_ADMIN": true, // VPN clients: create and route through a tunnel interface
 	"NET_RAW":   true, // ICMP and raw sockets, e.g. ping-based monitors
 	"SYS_NICE":  true, // scheduling priority for transcodes

@@ -144,7 +144,8 @@ spec:
 Devices must match one of the classes in `keystone/resource/hostaccess.go`
 (GPU render nodes, `/dev/net/tun`, USB and serial radios, `/dev/bus/usb`,
 Coral TPUs, video devices) — never a block device. Capabilities are
-`NET_ADMIN`, `NET_RAW` and `SYS_NICE`; `SYS_ADMIN` is not on the list and
+`IPC_LOCK` (memory locking, for OpenThread Border Router), `NET_ADMIN`,
+`NET_RAW` and `SYS_NICE`; `SYS_ADMIN` is not on the list and
 will not be. The agent resolves device aliases and refuses one that
 leads outside the list. A node whose agent predates minor 12 ignores all
 three: the port publishes as TCP, the device is absent, the capability
