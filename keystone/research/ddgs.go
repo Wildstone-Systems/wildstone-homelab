@@ -238,7 +238,7 @@ func errorStatus(code Code) int {
 // Reject duplicate keys, nulls, invalid UTF-8 and trailing values before typed
 // decoding. Unknown fields are refused rather than silently changing v1 wire.
 func decodeWorker(raw []byte, dst any) bool {
-	if !utf8.Valid(raw) {
+	if !utf8.Valid(raw) || !validUnicodeEscapes(raw) {
 		return false
 	}
 	d := json.NewDecoder(bytes.NewReader(raw))
@@ -296,3 +296,50 @@ func decodeWorker(raw []byte, dst any) bool {
 }
 
 var workerKeys = map[string]bool{"version": true, "data": true, "error": true, "items": true, "provider": true, "backend": true, "retrievedAt": true, "url": true, "title": true, "snippet": true, "sourceDate": true, "code": true, "message": true}
+
+// encoding/json substitutes U+FFFD for unpaired UTF-16 escapes. Reject that
+// lossy conversion before decoding so source identity/text stays exact. The
+// normal decoder still owns JSON syntax validation. Escaped backslashes and
+// quotes are skipped as a unit; literal text such as "\\\\ud800" is not an escape.
+func validUnicodeEscapes(raw []byte) bool {
+	inString := false
+	for i := 0; i < len(raw); i++ {
+		if raw[i] == '"' {
+			inString = !inString
+			continue
+		}
+		if !inString || raw[i] != '\\' {
+			continue
+		}
+		i++
+		if i >= len(raw) {
+			return false
+		}
+		if raw[i] != 'u' {
+			continue
+		}
+		if i+4 >= len(raw) {
+			return false
+		}
+		unit, err := strconv.ParseUint(string(raw[i+1:i+5]), 16, 16)
+		if err != nil {
+			return false
+		}
+		i += 4
+		if unit >= 0xdc00 && unit <= 0xdfff {
+			return false
+		}
+		if unit < 0xd800 || unit > 0xdbff {
+			continue
+		}
+		if i+6 >= len(raw) || raw[i+1] != '\\' || raw[i+2] != 'u' {
+			return false
+		}
+		low, err := strconv.ParseUint(string(raw[i+3:i+7]), 16, 16)
+		if err != nil || low < 0xdc00 || low > 0xdfff {
+			return false
+		}
+		i += 6
+	}
+	return true
+}

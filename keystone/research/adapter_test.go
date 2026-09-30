@@ -479,3 +479,49 @@ func TestDDGSNormalizedURLBound(t *testing.T) {
 		}
 	})
 }
+
+func TestDDGSUnicodeEscapes(t *testing.T) {
+	for _, escaped := range []string{`\ud800`, `\udfff`, `\ud800x`, `\ud800\u0041`, `\ud800\ud800`, `\ud800\\udc00`} {
+		for _, field := range []string{"title", "snippet", "url"} {
+			t.Run(field+escaped, func(t *testing.T) {
+				var data map[string]any
+				if err := json.Unmarshal([]byte(successWire), &data); err != nil {
+					t.Fatal(err)
+				}
+				row := data["data"].(map[string]any)["items"].([]any)[0].(map[string]any)
+				row[field] = "sentinel"
+				encoded, err := json.Marshal(data)
+				if err != nil {
+					t.Fatal(err)
+				}
+				value := escaped
+				if field == "url" {
+					value = "https://example.com/" + escaped
+				}
+				body := strings.Replace(string(encoded), `"sentinel"`, `"`+value+`"`, 1)
+				a := adapterServer(t, func(w http.ResponseWriter, r *http.Request) { respond(w, 200, body) })
+				result, err := a.Search(context.Background(), SearchRequest{Query: "example"})
+				assertCode(t, err, ProviderUnavailable)
+				if len(result.Items) != 0 {
+					t.Fatal("corrupted unicode returned")
+				}
+			})
+		}
+	}
+	for _, tc := range []struct{ encoded, want string }{
+		{`\ud83d\ude00`, "😀"},
+		{`\\ud800`, `\ud800`},
+		{`\u0041`, "A"},
+		{`\ufffd`, "�"}, // an intentional replacement character is valid data
+		{`quote: \" ok`, `quote: " ok`},
+	} {
+		t.Run(tc.encoded, func(t *testing.T) {
+			body := strings.Replace(successWire, `"Documentation"`, `"`+tc.encoded+`"`, 1)
+			a := adapterServer(t, func(w http.ResponseWriter, r *http.Request) { respond(w, 200, body) })
+			result, err := a.Search(context.Background(), SearchRequest{Query: "example"})
+			if err != nil || len(result.Items) != 1 || result.Items[0].Title != tc.want {
+				t.Fatalf("unicode result: %+v %v", result, err)
+			}
+		})
+	}
+}
