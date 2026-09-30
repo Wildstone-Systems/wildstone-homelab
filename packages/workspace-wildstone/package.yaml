@@ -1,0 +1,42 @@
+# ADR-W047, #476: Keystone-owned private workspace configuration only.
+# No container, Volume, runtime mount, tool grant or backup claim. Removing
+# this ConfigFile disables access and leaves all workspace bytes/metadata.
+apiVersion: wildstone.dev/v1
+kind: Package
+metadata:
+  name: workspace-wildstone
+  version: 1.0.0
+  capability: workspace
+  profile: wildstone
+  exclusive: true
+params:
+  - { name: node, required: true, source: node, description: "The machine running Keystone." }
+  - { name: workspace_path, default: /srv/wildstone/agent-workspaces, source: directory, description: "Existing private workspace folder on the Keystone host. A missing folder is unavailable; installation never creates a replacement." }
+  - { name: required_mount, default: "", source: directory, description: "Required mount containing the workspace, or empty for local disk. Loss of this mount refuses access." }
+  - { name: quota_bytes, default: "1073741824", description: "Per-Agent quota including revisions, staging, scratch and trash (1 byte to 1 TiB)." }
+  - { name: max_file_bytes, default: "10485760", description: "Maximum file size (1 byte to 10 MiB, no greater than the quota)." }
+  - { name: scratch_retention_days, default: "7", description: "Days to retain scratch after completed, failed or cancelled tasks (1 to 3650)." }
+  - { name: trash_retention_days, default: "30", description: "Days to retain trashed files (1 to 3650)." }
+policies:
+  classifications: [family_private]
+  dataSensitivity: high
+externalConfig:
+  - filename: workspace.yaml
+    consumer: Keystone
+    reason: >-
+      This container-free capability supplies current settings to Keystone
+      through desired state. Native runtimes receive no filesystem mount.
+templates:
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: ConfigFile
+    metadata: { name: workspace-settings, node: {{ printf "%q" .Params.node }} }
+    spec:
+      filename: workspace.yaml
+      content: |
+        root: {{ printf "%q" .Params.workspace_path }}
+        requiredMount: {{ printf "%q" .Params.required_mount }}
+        quotaBytes: {{ .Params.quota_bytes }}
+        maxFileBytes: {{ .Params.max_file_bytes }}
+        scratchRetentionDays: {{ .Params.scratch_retention_days }}
+        trashRetentionDays: {{ .Params.trash_retention_days }}
