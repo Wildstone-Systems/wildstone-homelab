@@ -20,14 +20,21 @@
 # UPGRADING FROM 1.x. The free-form mqtt_server param is gone (its
 # default pointed at the container name). Nothing Zigbee2MQTT keeps
 # moves: the zigbee2mqtt-data volume at /app/data (network key, every
-# pairing), usb_device, coordinator_url and coordinator_adapter render
-# exactly as before, and only the MQTT variables change.
+# pairing), usb_device, coordinator_url and coordinator_adapter keep
+# their meaning, and only the MQTT variables change. From 2.0.1 a stick
+# reaches Zigbee2MQTT as /dev/zigbee rather than its host path; the
+# network lives in the volume and on the stick, not in the port name.
 #
 # THE COORDINATOR: a USB stick on this machine, or a coordinator on the
 # network. For a stick, set usb_device to its stable name under
 # /dev/serial/by-id/ (ls that directory with the stick plugged in);
 # the agent hands it to the container (protocol minor 12) and refuses
-# any path outside its device allowlist. For a network coordinator —
+# any path outside its device allowlist. Inside the container the stick
+# is always /dev/zigbee, and ZIGBEE2MQTT_CONFIG_SERIAL_PORT says so: a
+# real by-id name is a long mixed-case run the policy engine reads as
+# secret-shaped, so the host path in env would get every real install
+# refused (secret-values-forbidden). The device mapping carries it
+# instead, where it is a path, not a value. For a network coordinator —
 # an SLZB-06, a Tube's ZB, an ESPHome-flashed stick — set
 # coordinator_url to tcp://<address>:<port> and leave usb_device empty.
 # Either way, choose the adapter type to match the chip: "zstack" for
@@ -50,7 +57,9 @@ metadata:
   name: zigbee-zigbee2mqtt
   # 2.0.0: the broker is a requirement (mqtt:broker) with its own
   # credential, and the mqtt_server param is gone.
-  version: 2.0.0
+  # 2.0.1: a USB stick is /dev/zigbee inside the container, so a real
+  # by-id name no longer sits in env. Params and the volume are unchanged.
+  version: 2.0.1
   capability: zigbee
   profile: zigbee2mqtt
 requires:
@@ -94,7 +103,7 @@ templates:
         ZIGBEE2MQTT_CONFIG_MQTT_SERVER: "{{ .Resolved.MqttURL }}"
         ZIGBEE2MQTT_CONFIG_MQTT_USER: "{{ .Resolved.MqttUsername }}"
         ZIGBEE2MQTT_CONFIG_MQTT_PASSWORD: "{{ .Resolved.MqttPasswordSecretRef }}"
-        ZIGBEE2MQTT_CONFIG_SERIAL_PORT: "{{ or .Params.usb_device .Params.coordinator_url }}"
+        ZIGBEE2MQTT_CONFIG_SERIAL_PORT: "{{ if .Params.usb_device }}/dev/zigbee{{ else }}{{ .Params.coordinator_url }}{{ end }}"
         ZIGBEE2MQTT_CONFIG_SERIAL_ADAPTER: "{{ .Params.coordinator_adapter }}"
         ZIGBEE2MQTT_CONFIG_FRONTEND_ENABLED: "true"
         ZIGBEE2MQTT_CONFIG_FRONTEND_PORT: "8080"
@@ -102,7 +111,7 @@ templates:
         ZIGBEE2MQTT_CONFIG_ADVANCED_LOG_LEVEL: info
       mounts:
         - { source: zigbee2mqtt-data, target: /app/data }
-      devices: {{ with .Params.usb_device }}[{ source: "{{ . }}" }]{{ else }}[]{{ end }}
+      devices: {{ with .Params.usb_device }}[{ source: "{{ . }}", target: /dev/zigbee }]{{ else }}[]{{ end }}
       restart: unless-stopped
   - |
     apiVersion: wildstone.dev/v1

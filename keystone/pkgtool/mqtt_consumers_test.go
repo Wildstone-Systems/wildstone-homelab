@@ -10,6 +10,8 @@ import (
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/capability"
 	"github.com/chickenrat17/wildstone-homelab/keystone/pkgspec"
+	"github.com/chickenrat17/wildstone-homelab/keystone/policy"
+	"github.com/chickenrat17/wildstone-homelab/keystone/redact"
 	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
 )
 
@@ -123,10 +125,13 @@ func TestZigbee2MQTTUpgradeKeepsItsNetworkAndRadio(t *testing.T) {
 	if len(c.Mounts) != 1 || c.Mounts[0].Source != "zigbee2mqtt-data" || c.Mounts[0].Target != "/app/data" || c.Mounts[0].ReadOnly {
 		t.Errorf("mounts = %+v, want zigbee2mqtt-data at /app/data, writable", c.Mounts)
 	}
-	if len(c.Devices) != 1 || c.Devices[0].Source != stick {
-		t.Errorf("devices = %+v, want the stick", c.Devices)
+	// Since 2.0.1 the stick is /dev/zigbee inside the container (see
+	// TestZigbee2MQTTRealByIDStickPassesPolicy): the same host device
+	// under a fixed name, which the network key does not depend on.
+	if len(c.Devices) != 1 || c.Devices[0].Source != stick || c.Devices[0].Target != "/dev/zigbee" {
+		t.Errorf("devices = %+v, want the stick at /dev/zigbee", c.Devices)
 	}
-	if c.Env["ZIGBEE2MQTT_CONFIG_SERIAL_PORT"] != stick || c.Env["ZIGBEE2MQTT_CONFIG_SERIAL_ADAPTER"] != "ember" {
+	if c.Env["ZIGBEE2MQTT_CONFIG_SERIAL_PORT"] != "/dev/zigbee" || c.Env["ZIGBEE2MQTT_CONFIG_SERIAL_ADAPTER"] != "ember" {
 		t.Errorf("serial env = %q/%q", c.Env["ZIGBEE2MQTT_CONFIG_SERIAL_PORT"], c.Env["ZIGBEE2MQTT_CONFIG_SERIAL_ADAPTER"])
 	}
 	// Configuration stays environment, never a managed configuration.yaml
@@ -156,6 +161,45 @@ func TestZigbee2MQTTUpgradeKeepsItsNetworkAndRadio(t *testing.T) {
 	c = findContainer(t, out, "zigbee2mqtt")
 	if c.Env["ZIGBEE2MQTT_CONFIG_SERIAL_PORT"] != "tcp://192.168.1.60:6638" || len(c.Devices) != 0 {
 		t.Errorf("network coordinator: port %q, devices %+v", c.Env["ZIGBEE2MQTT_CONFIG_SERIAL_PORT"], c.Devices)
+	}
+}
+
+// A real stick's by-id name is a long mixed-case run with digits — the
+// shape secret-values-forbidden refuses in env. Zigbee2MQTT is told the
+// fixed in-container /dev/zigbee instead, and the device mapping alone
+// carries the host path, so an operator typing the name ls printed gets
+// a plan rather than a policy refusal. The serial is built at runtime
+// and marked REPLACED: it is a fixture, not anyone's stick.
+func TestZigbee2MQTTRealByIDStickPassesPolicy(t *testing.T) {
+	stick := "/dev/serial/by-id/usb-" + strings.Join([]string{
+		"ITead", "Sonoff", "Zigbee", "3.0", "USB", "Dongle", "Plus", "REPLACED",
+	}, "_") + "-if00-port0"
+	if !redact.SecretShaped(stick) {
+		t.Fatalf("fixture %q is not secret-shaped; it no longer reproduces the refusal", stick)
+	}
+	params := zigbeeParams("n1")
+	params["usb_device"] = stick
+	out, err := capability.NewEngine().Expand(loadShipped(t, "zigbee-zigbee2mqtt"), params, brokerDeployment(t, "n1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := findContainer(t, out, "zigbee2mqtt")
+	if len(c.Devices) != 1 || c.Devices[0].Source != stick || c.Devices[0].Target != "/dev/zigbee" {
+		t.Errorf("devices = %+v, want the stick mapped to /dev/zigbee", c.Devices)
+	}
+	if got := c.Env["ZIGBEE2MQTT_CONFIG_SERIAL_PORT"]; got != "/dev/zigbee" {
+		t.Errorf("ZIGBEE2MQTT_CONFIG_SERIAL_PORT = %q, want the fixed /dev/zigbee", got)
+	}
+	for k, v := range c.Env {
+		if strings.Contains(v, "/dev/serial/") {
+			t.Errorf("env %s carries the host path %q", k, v)
+		}
+	}
+	violations, _ := policy.NewEngine(nil).Validate(policy.Change{Proposed: out})
+	for _, v := range violations {
+		if v.Rule == policy.RuleSecretValuesForbidden {
+			t.Errorf("refused: %v", v)
+		}
 	}
 }
 
