@@ -433,9 +433,8 @@ actually reach; the client code settles it either way.)*
 
 ### F-158-12 — clone is close to right, but it copies integration connection grants
 
-- **Current status:** open
-- **Current evidence:** Current clone behavior needs a negative credential/grant-inheritance test against the post-Connection schema.
-- **Current owner:** chickenrat17
+- **Current status:** implemented
+- **Current evidence:** `DuplicateButler` no longer copies connection grants; `TestACloneInheritsNoCredentialsOrGrants` and `TestADuplicateGetsItsOwnRuntimePrincipal`.
 - **Tracking:** #313
 - **Audit status:** partial
 - **Audit evidence:** `DuplicateButler` (`keystone/runtimedb/butlers.go:556-620`) copies directive, surface, profile, model route, connection grants and tool narrowings, in one transaction. It deliberately copies neither the access list, nor memory, nor sessions (lines 542-554), and it touches `household_routines` and `butler_addresses` not at all — so a clone has no bot identity, no transcripts and no running routines. That is §16's clone requirement, and the API says so honestly (`keystone/api/handlers_butlers.go:610-613`: "Nobody can talk to it, it remembers nothing").

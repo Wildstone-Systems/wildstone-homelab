@@ -830,13 +830,15 @@ func (s *Server) restoreButler(r *http.Request, id principal.Identity) (any, int
 
 // duplicateButler copies a Butler's shape onto a new name.
 //
-// It is one call rather than six from the client for a reason the
-// client cannot fix: creating, then granting each connection, then
-// re-narrowing each tool is a sequence that can half-fail, and the
-// half that fails is the narrowing — leaving a new Butler with its
-// model, its connections, and every tool the profile allows. A copy
-// that is quietly wider than its original is the worst possible
-// outcome of a button labelled "Duplicate".
+// It is one call rather than several from the client for a reason the
+// client cannot fix: creating, then re-narrowing each tool is a
+// sequence that can half-fail, and the half that fails is the
+// narrowing — leaving a new Butler with its model and every tool the
+// profile allows. A copy that is quietly wider than its original is
+// the worst possible outcome of a button labelled "Duplicate".
+//
+// Connections, secret grants and the runtime credential are never
+// copied; the copy gets its own principal and must be granted fresh.
 func (s *Server) duplicateButler(r *http.Request, id principal.Identity) (any, int, error) {
 	name := r.PathValue("name")
 	var req struct {
@@ -876,7 +878,7 @@ func (s *Server) duplicateButler(r *http.Request, id principal.Identity) (any, i
 	}
 	s.event("butler.duplicated", "", id, fmt.Sprintf("butler %s copied from %s", copyName, name))
 	out := butlerView(b)
-	out["note"] = "the copy has its model, connections and tool narrowings. Nobody can talk to it, it remembers nothing, and it has no conversations — those belong to " + name + "."
+	out["note"] = "the copy has its model and tool narrowings. It has no connections or secret grants, nobody can talk to it, it remembers nothing, and it has no conversations — grant those fresh; they belong to " + name + "."
 	return out, http.StatusCreated, nil
 }
 

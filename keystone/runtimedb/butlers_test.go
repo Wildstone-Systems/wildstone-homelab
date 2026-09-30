@@ -7,6 +7,7 @@ package runtimedb
 
 import (
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -322,5 +323,66 @@ func TestAButlerCannotBeAssignedADisabledRoute(t *testing.T) {
 	}
 	if b, _ := db.GetButler("health"); b.Model != "kitchen-box" {
 		t.Fatalf("the refused move still changed the assignment: %q", b.Model)
+	}
+}
+
+// A copy is a shape, not an identity: it must not inherit connection
+// grants, secret-use authority or the access list (F-158-12, design §7
+// and §17.2), and copying must leave the source working.
+func TestACloneInheritsNoCredentialsOrGrants(t *testing.T) {
+	db, v, value := secretFixture(t)
+	if _, err := db.CreateConnection(IntegrationConnection{
+		Name: "family-calendar", Adapter: "caldav", Ownership: OwnershipHousehold,
+		Owner: "household", CreatedBy: "root-admin",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.GrantButlerConnection("shared", "family-calendar", "mika"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.NarrowButlerTool("shared", "calendar.create_event", "read only", "mika"); err != nil {
+		t.Fatal(err)
+	}
+	s, err := v.Create("mika", SecretInput{Scope: "household", Label: "Calendar", Value: value})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, _ := db.GetButlerMember("sam")
+	if err = v.Grant("mika", s.ID, SecretGrant{PersonID: p.PersonID, Verb: "use"}, true); err != nil {
+		t.Fatal(err)
+	}
+	if err = v.AgentGrant("mika", s.ID, "shared", "calendar.get_agenda", true); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err = db.DuplicateButler("shared", "shared copy", "mika"); err != nil {
+		t.Fatal(err)
+	}
+
+	if got, _ := db.ButlerConnections("shared copy"); len(got) != 0 {
+		t.Fatalf("the copy inherited connections %v", got)
+	}
+	if err = db.ButlerMayReadConnection("shared copy", "family-calendar"); !errors.Is(err, ErrNoButlerAccess) {
+		t.Fatalf("the copy may read a source-only connection: %v", err)
+	}
+	want, _ := db.ButlerToolNarrowings("shared")
+	got, _ := db.ButlerToolNarrowings("shared copy")
+	if len(want) == 0 || !reflect.DeepEqual(got, want) {
+		t.Fatalf("narrowings = %v, want %v", got, want)
+	}
+	if acc, _ := db.ListButlerAccess("shared copy"); len(acc) != 0 {
+		t.Fatalf("the copy inherited an access list %v", acc)
+	}
+	called := false
+	use := func([]byte) error { called = true; return nil }
+	if err = v.Use(s.ID, db.BindMemoryRead("sam", "shared copy", MemoryDestination{BuiltIn: true}), "calendar.get_agenda", use); err == nil || called {
+		t.Fatalf("the copy used the source's secret grant: %v", err)
+	}
+
+	if err = db.ButlerMayReadConnection("shared", "family-calendar"); err != nil {
+		t.Fatalf("copying broke the source's connection: %v", err)
+	}
+	if err = v.Use(s.ID, db.BindMemoryRead("sam", "shared", MemoryDestination{BuiltIn: true}), "calendar.get_agenda", use); err != nil || !called {
+		t.Fatalf("copying broke the source's secret use: %v", err)
 	}
 }
