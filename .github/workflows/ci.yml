@@ -161,6 +161,26 @@ jobs:
       - name: contrast check
         run: cd console && npm run contrast-check
 
+  ddgs-worker:
+    name: bounded DDGS worker (ADR-W047, S18)
+    runs-on: [self-hosted, dev-services]
+    # Keep the same fork guard as every job on the household runner.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12.14"
+      - name: pinned dependencies and offline contract fixtures
+        run: |
+          set -euo pipefail
+          ddgs_venv="$(mktemp -d "$RUNNER_TEMP/ddgs-test.XXXXXX")"
+          trap 'rm -rf "$ddgs_venv"' EXIT
+          python -m venv "$ddgs_venv"
+          "$ddgs_venv/bin/python" -m pip install --require-hashes -r runtimes/ddgs-worker/requirements.txt
+          cd runtimes/ddgs-worker
+          "$ddgs_venv/bin/python" -m unittest discover -s tests -v
+
   native-agent:
     name: native agent runtime (OpenAI Agents SDK sidecar, #357)
     runs-on: [self-hosted, dev-services]
