@@ -80,10 +80,10 @@ No content bounds, tool grants or runtime protocol fields are expanded.
 
 ## Migration sequence
 
-The parent reserved 0098 for #490 / PR #519 and 0099 for this slice. The runner
-sorts migration filenames and tracks each full name; it allows gaps and would
-apply a subsequently-added lower-numbered migration. Therefore ordering is a
-merge prerequisite, not a runner-enforced safeguard: **0099 must not land before
-0098**. No placeholder migration is supplied. Candidate-chain checks against
-#490's real migration are integration evidence only; repeat final ordered-chain
-verification against the merged feature tip before declaring readiness.
+Migration 0098 belongs to #490 / PR #519 and 0099 to this slice. PR #519
+merged into the feature branch before 0099; the integration test upgrades from
+0097 and asserts the real 0097 → 0098 → 0099 application order and idempotence.
+The runner sorts filenames and tracks each full name; it permits gaps and can
+apply a subsequently-added lower number. Ordered landing is therefore an
+integration prerequisite, not a safeguard enforced by the runner. No placeholder
+migration is supplied.

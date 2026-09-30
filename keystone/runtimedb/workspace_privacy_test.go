@@ -184,6 +184,13 @@ func TestWorkspacePrivacyMigrationAndRunnerGaps(t *testing.T) {
 	if err = db.sql.QueryRow(`SELECT COUNT(*) FROM schema_migrations WHERE name='migrations/0099_workspace_privacy.sql'`).Scan(&n); err != nil || n != 1 {
 		t.Fatalf("migration count: %d %v", n, err)
 	}
+	var applied string
+	if err = db.sql.QueryRow(`SELECT group_concat(version,',') FROM (
+ SELECT substr(name,12,4) AS version FROM schema_migrations
+ WHERE name IN ('migrations/0097_agent_workspaces.sql','migrations/0098_search_providers.sql','migrations/0099_workspace_privacy.sql')
+ ORDER BY rowid)`).Scan(&applied); err != nil || applied != "0097,0098,0099" {
+		t.Fatalf("real ordered migration chain: %s %v", applied, err)
+	}
 	// Synthetic runner fixtures prove the actual ordering behavior. These are
 	// not a placeholder for #490's real 0098, whose ordered chain must be tested.
 	runner := runnerDB(t)
