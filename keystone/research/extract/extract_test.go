@@ -635,3 +635,37 @@ func TestMarkdownLiteralRestorationHonorsRCDATA(t *testing.T) {
 		t.Fatalf("double-decoded RCDATA: %q %v", d.Text, err)
 	}
 }
+
+func TestSemicolonlessRCDATAReferences(t *testing.T) {
+	for _, media := range []string{"text/html", "text/markdown"} {
+		for _, reference := range []string{"&#1", "&#x1b", "&#27"} {
+			for _, prefix := range []string{"", strings.Repeat("x", MaxCharacters+1)} {
+				body := prefix + "<textarea>" + reference + "</textarea>"
+				if _, err := Extract(input(media, body)); err != publicfetch.ErrUnsupported {
+					t.Fatalf("%s %s prefix=%d: %v", media, reference, len(prefix), err)
+				}
+			}
+		}
+		d, err := Extract(input(media, "<textarea>&#65</textarea>"))
+		if err != nil || d.Text != "A" {
+			t.Fatalf("%s printable reference: %q %v", media, d.Text, err)
+		}
+	}
+}
+
+func TestMarkdownContainerGapsRetainSourceOrdering(t *testing.T) {
+	for _, tc := range []struct{ body, want string }{
+		{"- <div>\n  Visible\n  </div>", "- \n\n  Visible"},
+		{"> <div>\n> First\n> Second\n> </div>", "> \n\n> First\n> Second\n>"},
+		{"- <div>\n  First\n  <em>Second</em>\n  Third\n  </div>", "- \n\n  First\n  Second\n  Third"},
+	} {
+		d, err := Extract(input("text/markdown", tc.body))
+		if err != nil || d.Text != tc.want {
+			t.Fatalf("%q: got %q want %q err=%v", tc.body, d.Text, tc.want, err)
+		}
+	}
+	// Prefixes within tag syntax must still not mask real controls.
+	if _, err := Extract(input("text/markdown", "- <div>\n  <input\n  type=password>\n  </div>")); err != publicfetch.ErrBlocked {
+		t.Fatalf("multiline container challenge: %v", err)
+	}
+}

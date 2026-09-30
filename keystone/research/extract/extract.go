@@ -5,7 +5,6 @@ package extract
 
 import (
 	"bytes"
-	stdhtml "html"
 	"io"
 	"net/url"
 	"regexp"
@@ -297,7 +296,7 @@ func (f *markupFilter) feed(input string, preserve bool) error {
 func (f *markupFilter) writeLiteralText(text string, rcdata, retain bool) error {
 	write := func(value string, literal bool) error {
 		if literal && rcdata {
-			value = stdhtml.UnescapeString(value)
+			value = decodeRCDATA(value)
 		}
 		if hasControls(value) {
 			return publicfetch.ErrUnsupported
@@ -339,9 +338,62 @@ func (f *markupFilter) writeLiteralText(text string, rcdata, retain bool) error 
 	return nil
 }
 
+// Use the same character-reference decoder as the HTML parser, including
+// semicolonless numeric references. Escaping only '<' keeps literal markup
+// inert and prevents a literal closing tag from ending the RCDATA context.
+func decodeRCDATA(value string) string {
+	z := html.NewTokenizerFragment(strings.NewReader(strings.ReplaceAll(value, "<", "&lt;")), "textarea")
+	if z.Next() == html.TextToken {
+		return z.Token().Data
+	}
+	return ""
+}
+
 type markdownPart struct {
 	literal bool
 	text    string
+}
+
+// Reconstruct logical HTML while retaining container gaps near their original
+// source positions. Gaps inside tag syntax move to that tag's start so they
+// cannot become attributes; gaps in text remain exactly where they occurred.
+func appendHTMLParts(parts []markdownPart, segments []mdtext.Segment, source []byte) []markdownPart {
+	type gap struct {
+		offset int
+		text   string
+	}
+	var gaps []gap
+	var raw strings.Builder
+	previous := segments[0].Start
+	for _, segment := range segments {
+		if previous < segment.Start {
+			gaps = append(gaps, gap{raw.Len(), string(source[previous:segment.Start])})
+		}
+		raw.Write(segment.Value(source))
+		previous = segment.Stop
+	}
+	markup := raw.String()
+	z := html.NewTokenizer(strings.NewReader(markup))
+	offset, nextGap := 0, 0
+	for kind := z.Next(); kind != html.ErrorToken; kind = z.Next() {
+		end := offset + len(z.Raw())
+		for nextGap < len(gaps) && gaps[nextGap].offset < end {
+			if gaps[nextGap].offset > offset && kind != html.TextToken {
+				gaps[nextGap].offset = offset
+			}
+			nextGap++
+		}
+		offset = end
+		// This pass locates lexical tag boundaries only; final tree parsing
+		// handles namespaces, raw-text state and implicit closures.
+		z.NextIsNotRawText()
+	}
+	position := 0
+	for _, gap := range gaps {
+		parts = append(parts, markdownPart{false, markup[position:gap.offset]}, markdownPart{true, gap.text})
+		position = gap.offset
+	}
+	return append(parts, markdownPart{false, markup[position:]})
 }
 
 var literalPrefixPattern = regexp.MustCompile(`WS_MD_LITERAL_[0-9]+_`)
@@ -353,7 +405,7 @@ func prepareMarkdown(parts []markdownPart, filter *markupFilter) string {
 	occupied := map[string]bool{}
 	for _, part := range parts {
 		if !part.literal {
-			for _, variant := range []string{part.text, stdhtml.UnescapeString(part.text)} {
+			for _, variant := range []string{part.text, decodeRCDATA(part.text)} {
 				for _, prefix := range literalPrefixPattern.FindAllString(variant, -1) {
 					occupied[prefix] = true
 				}
@@ -433,17 +485,7 @@ func extractMarkup(input string, base *url.URL, markdown bool) (string, bool, er
 			return ast.WalkContinue, nil
 		}
 		parts = append(parts, markdownPart{true, input[position:start]})
-		// Container prefixes (quotes/list indentation) are not HTML. Segment
-		// values reconstruct the logical tag, including parser padding, while
-		// gaps remain inert Markdown outside the HTML tokenizer.
-		var raw strings.Builder
-		previous := start
-		for _, segment := range segments {
-			parts = append(parts, markdownPart{true, input[previous:segment.Start]})
-			raw.Write(segment.Value(source))
-			previous = segment.Stop
-		}
-		parts = append(parts, markdownPart{false, raw.String()})
+		parts = appendHTMLParts(parts, segments, source)
 		position = end
 		return ast.WalkSkipChildren, nil
 	})

@@ -31,7 +31,10 @@ are resolved against the final URL as inert text. Markdown uses pinned Goldmark 
 Markdown-only text with collision-checked literal markers, restored directly
 as data after parsing one continuous HTML stream. Restored textarea/title
 literals receive RCDATA entity decoding and control validation; ordinary
-Markdown and raw-text literals do not decode. Tree construction handles
+Markdown and raw-text literals do not decode. Numeric references use the HTML
+tokenizer, including forms without semicolons. Container indentation/quote
+prefixes keep their source order; prefixes inside split tags are retained at
+the tag boundary so they cannot change attributes. Tree construction handles
 implicit closures and foreign-content exits while preserving HTML
 raw-text/RCDATA state across nodes; autolinks, escaped angle brackets, code
 spans and fenced/indented examples remain literal data. Plain text is
