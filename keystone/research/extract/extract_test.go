@@ -720,7 +720,7 @@ func TestMarkdownTableGapsStayWithTheirRows(t *testing.T) {
 		}
 	}
 	d, err := Extract(input("text/markdown", "> <table>\n> <tr><td>A</td></tr>\n> </table>"))
-	if err != nil || d.Text != "> \n> \nA\n\n>" {
+	if err != nil || d.Text != "> \n\n> \n\nA\n\n>" {
 		t.Fatalf("trailing quote prefix moved before cell: %q %v", d.Text, err)
 	}
 }
@@ -757,6 +757,24 @@ func TestTableCellSeparatorDoesNotDuplicateSourceWhitespace(t *testing.T) {
 		d, err := Extract(input(media, body))
 		if err != nil || d.Source.Truncated || utf8.RuneCountInString(d.Text) != MaxCharacters || !strings.HasSuffix(d.Text, " B") {
 			t.Fatalf("%s normalized table cap: %d %+v %v", media, utf8.RuneCountInString(d.Text), d.Source, err)
+		}
+	}
+}
+
+func TestBlockElementsSeparateTextWithoutSplittingInlineWords(t *testing.T) {
+	for _, tag := range []string{"address", "article", "aside", "blockquote", "center", "details", "dialog", "dir", "dl", "fieldset", "figure", "figcaption", "footer", "form", "header", "hgroup", "legend", "main", "menu", "nav", "ol", "search", "section", "summary", "ul"} {
+		for _, media := range []string{"text/html", "text/markdown"} {
+			body := "<" + tag + ">Fir<em>st</em></" + tag + "><" + tag + ">Second</" + tag + ">"
+			d, err := Extract(input(media, body))
+			if err != nil || strings.Join(strings.Fields(d.Text), " ") != "First Second" || !strings.Contains(d.Text, "\n") {
+				t.Fatalf("%s %s block boundary: %q %v", media, tag, d.Text, err)
+			}
+		}
+	}
+	for _, body := range []string{"before<hr>after", "<dl><dt>First</dt><dd>Second</dd></dl>"} {
+		d, err := Extract(input("text/html", body))
+		if err != nil || !strings.Contains(d.Text, "\n") {
+			t.Fatalf("%q block boundary: %q %v", body, d.Text, err)
 		}
 	}
 }

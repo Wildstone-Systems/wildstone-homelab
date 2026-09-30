@@ -294,7 +294,11 @@ func (f *markupFilter) feed(input string, preserve bool) error {
 					}
 				}
 				switch n.Data {
-				case "p", "div", "br", "li", "pre", "tr", "h1", "h2", "h3", "h4", "h5", "h6":
+				case "address", "article", "aside", "blockquote", "br", "caption", "center",
+					"dd", "details", "dialog", "dir", "div", "dl", "dt", "fieldset", "figcaption", "figure",
+					"footer", "form", "h1", "h2", "h3", "h4", "h5", "h6", "header", "hgroup", "hr",
+					"legend", "li", "main", "menu", "nav", "ol", "p", "pre", "search", "section", "summary",
+					"table", "tbody", "tfoot", "thead", "tr", "ul":
 					f.out.write("\n")
 				}
 			}
