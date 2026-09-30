@@ -70,6 +70,32 @@ func TestSettingsRefuseYAMLMergesAndAliases(t *testing.T) {
 	}
 }
 
+func TestSettingsRequireStringPaths(t *testing.T) {
+	for _, field := range []string{"root", "requiredMount"} {
+		for _, value := range []string{"null", "~", "", "true", "42", "!!null anything"} {
+			t.Run(field+"/"+value, func(t *testing.T) {
+				r := config(DefaultRoot)
+				content := r.ConfigFile.Content
+				if field == "root" {
+					content = strings.Replace(content, fmt.Sprintf("root: %q", DefaultRoot), "root: "+value, 1)
+				} else {
+					content += "requiredMount: " + value + "\n"
+				}
+				if _, err := Parse(content); !errors.Is(err, ErrSettings) {
+					t.Fatal("accepted non-string path", err)
+				}
+			})
+		}
+	}
+	// Explicit empty strings remain the supported local-disk opt-out.
+	for _, value := range []string{`""`, `''`} {
+		settings, err := Parse(config(DefaultRoot).ConfigFile.Content + "requiredMount: " + value + "\n")
+		if err != nil || settings.RequiredMount != "" {
+			t.Fatalf("explicit local disk settings: %+v %v", settings, err)
+		}
+	}
+}
+
 func TestSettingsBounds(t *testing.T) {
 	for name, change := range map[string]func(*Settings){
 		"relative": func(s *Settings) { s.Root = "relative" }, "filesystem root": func(s *Settings) { s.Root = "/" },

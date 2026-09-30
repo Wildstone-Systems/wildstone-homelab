@@ -96,6 +96,12 @@ func Parse(content string) (Settings, error) {
 			return Settings{}, ErrSettings
 		}
 		switch fields[i].Value {
+		case "root", "requiredMount":
+			// In particular, YAML null must not become the empty string and
+			// silently opt a required mount into local-disk mode.
+			if fields[i+1].Tag != "!!str" {
+				return Settings{}, ErrSettings
+			}
 		case "quotaBytes", "maxFileBytes", "scratchRetentionDays", "trashRetentionDays":
 			value := fields[i+1]
 			if value.Tag != "!!int" {

@@ -5,7 +5,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: workspace-wildstone
-  version: 1.0.0
+  version: 1.0.1
   capability: workspace
   profile: wildstone
   exclusive: true
