@@ -92,3 +92,75 @@ func TestProbeEndpoints(t *testing.T) {
 		t.Fatalf("missing host = %d, want 400", resp.StatusCode)
 	}
 }
+
+// TestProbeRadios maps ListRadios (#434) to the Console's shape: kinds as
+// closed lower-case names (an unrecognised enum is "unknown", never a
+// guess), USB identity nested and omitted when absent, and an agent
+// error relayed through the family's status model.
+func TestProbeRadios(t *testing.T) {
+	h := newHarness(t)
+	var agentErr *wsv1.OpError
+	h.s.Agents = applierFunc(func(_ context.Context, node string, op *wsv1.Operation) (*wsv1.OpResult, error) {
+		if _, ok := op.GetOp().(*wsv1.Operation_ListRadios); !ok || node != "n1" {
+			t.Fatalf("dispatched %v to %q", op, node)
+		}
+		if agentErr != nil {
+			return &wsv1.OpResult{Result: &wsv1.OpResult_Error{Error: agentErr}}, nil
+		}
+		return &wsv1.OpResult{Result: &wsv1.OpResult_ListRadios{ListRadios: &wsv1.ListRadiosResult{
+			PlatformSupported: true,
+			Radios: []*wsv1.Radio{
+				{
+					Id: "serial-by-id:usb-Vendor_Stick_01-if00-port0", Kind: wsv1.RadioKind_RADIO_KIND_UNKNOWN,
+					KindReason: "usb id 10c4:ea60 does not identify a single radio protocol",
+					KernelName: "ttyUSB0", DevPath: "/dev/ttyUSB0",
+					ByIdPaths: []string{"/dev/serial/by-id/usb-Vendor_Stick_01-if00-port0"},
+					Bus:       "usb", Driver: "cp210x", UsbVendorId: "10c4", UsbProductId: "ea60", UsbSerial: "01", UsbPort: "1-1.3",
+				},
+				{Id: "sysfs:/sys/devices/platform/soc/bt", Kind: wsv1.RadioKind_RADIO_KIND_BLUETOOTH, KernelName: "hci0", Bus: "platform"},
+				{Id: "sysfs:/sys/devices/x", Kind: wsv1.RadioKind(99), KernelName: "ttyACM0"},
+			},
+		}}}, nil
+	})
+
+	type radio struct {
+		ID        string   `json:"id"`
+		Kind      string   `json:"kind"`
+		DevPath   string   `json:"devPath"`
+		ByIDPaths []string `json:"byIdPaths"`
+		USB       *struct {
+			VendorID  string `json:"vendorId"`
+			ProductID string `json:"productId"`
+			Serial    string `json:"serial"`
+			Port      string `json:"port"`
+		} `json:"usb"`
+	}
+	var out struct {
+		Node              string  `json:"node"`
+		PlatformSupported bool    `json:"platformSupported"`
+		Radios            []radio `json:"radios"`
+	}
+	if resp := h.do(runtimedb.RoleOperator, http.MethodGet, "/api/v1/nodes/n1/probes/radios", nil, &out); resp.StatusCode != http.StatusOK {
+		t.Fatalf("radios = %d", resp.StatusCode)
+	}
+	if out.Node != "n1" || !out.PlatformSupported || len(out.Radios) != 3 {
+		t.Fatalf("radios = %+v", out)
+	}
+	stick := out.Radios[0]
+	if stick.Kind != "unknown" || stick.DevPath != "/dev/ttyUSB0" || len(stick.ByIDPaths) != 1 ||
+		stick.USB == nil || stick.USB.VendorID != "10c4" || stick.USB.Port != "1-1.3" {
+		t.Fatalf("stick = %+v", stick)
+	}
+	if bt := out.Radios[1]; bt.Kind != "bluetooth" || bt.USB != nil || bt.ByIDPaths == nil {
+		t.Fatalf("bluetooth = %+v (byIdPaths must be [] not null)", bt)
+	}
+	if out.Radios[2].Kind != "unknown" {
+		t.Fatalf("future kind = %q, want unknown", out.Radios[2].Kind)
+	}
+
+	// An agent below minor 24 answers INVALID (unknown operation).
+	agentErr = &wsv1.OpError{Code: wsv1.ErrorCode_ERROR_CODE_INVALID, Message: "unknown operation"}
+	if resp := h.do(runtimedb.RoleOperator, http.MethodGet, "/api/v1/nodes/n1/probes/radios", nil, nil); resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("old agent = %d, want 400", resp.StatusCode)
+	}
+}

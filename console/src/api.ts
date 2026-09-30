@@ -160,6 +160,41 @@ export interface ListeningPort {
   localIp: string;
 }
 
+// Radio inventory (GET /api/v1/nodes/{node}/probes/radios, #434). `kind`
+// is never guessed from a tty name: a generic USB-serial bridge is
+// "unknown". `id` is the stable identity key — prefix "serial-by-id:"
+// follows the device across ports, "usb:" is a USB serial number,
+// "sysfs:" is bound to the physical port.
+export type RadioKind = "unknown" | "bluetooth" | "zigbee" | "zwave" | "thread";
+
+export interface RadioUsbIdentity {
+  vendorId: string;
+  productId: string;
+  manufacturer?: string;
+  product?: string;
+  serial?: string;
+  port?: string;
+}
+
+export interface Radio {
+  id: string;
+  kind: RadioKind;
+  kindReason: string;
+  kernelName: string;
+  devPath?: string;
+  byIdPaths: string[];
+  sysfsPath?: string;
+  bus?: string;
+  driver?: string;
+  usb?: RadioUsbIdentity;
+}
+
+export interface RadioInventory {
+  node: string;
+  platformSupported: boolean;
+  radios: Radio[];
+}
+
 export interface ProbeResult {
   reachable: boolean;
   detail?: string;
@@ -2301,6 +2336,11 @@ export const api = {
     call<{ ports: ListeningPort[] }>(
       "GET",
       `/api/v1/nodes/${encodeURIComponent(node)}/probes/ports`,
+    ),
+  probeRadios: (node: string) =>
+    call<RadioInventory>(
+      "GET",
+      `/api/v1/nodes/${encodeURIComponent(node)}/probes/radios`,
     ),
   probeHttp: (node: string, url: string) =>
     call<ProbeResult>(

@@ -6,6 +6,8 @@ package api
 // reachability probes for DNS/tunnel/NAS targets. Every underlying op
 // is dial-or-read only (TestNfs/TestSmb dial TCP, no mount is ever
 // performed — see the proto), so the whole family carries the read verb.
+// The home-automation probes (radio inventory, #434) join the family on
+// the same terms: parameterless reads of fixed host locations.
 
 import (
 	"fmt"
@@ -70,6 +72,74 @@ func (s *Server) probePorts(r *http.Request, _ principal.Identity) (any, int, er
 		out = append(out, port{Proto: p.GetProto(), Port: p.GetPort(), LocalIP: p.GetLocalIp()})
 	}
 	return map[string]any{"node": node, "ports": out}, http.StatusOK, nil
+}
+
+// radioKindNames is the closed vocabulary the radio probe answers with.
+// An unspecified or future kind reads as "unknown": the Console must
+// never present a guess the agent did not make.
+var radioKindNames = map[wsv1.RadioKind]string{
+	wsv1.RadioKind_RADIO_KIND_UNKNOWN:   "unknown",
+	wsv1.RadioKind_RADIO_KIND_BLUETOOTH: "bluetooth",
+	wsv1.RadioKind_RADIO_KIND_ZIGBEE:    "zigbee",
+	wsv1.RadioKind_RADIO_KIND_ZWAVE:     "zwave",
+	wsv1.RadioKind_RADIO_KIND_THREAD:    "thread",
+}
+
+// probeRadios inventories a node's serial and Bluetooth adapters
+// (ListRadios, protocol minor 24, #434). The op is parameterless, so the
+// endpoint takes no query: nothing here can steer what the agent reads.
+func (s *Server) probeRadios(r *http.Request, _ principal.Identity) (any, int, error) {
+	res, node, status, err := s.probeDispatch(r, &wsv1.Operation{Op: &wsv1.Operation_ListRadios{
+		ListRadios: &wsv1.ListRadios{},
+	}})
+	if err != nil {
+		return nil, status, err
+	}
+	type usb struct {
+		VendorID     string `json:"vendorId"`
+		ProductID    string `json:"productId"`
+		Manufacturer string `json:"manufacturer,omitempty"`
+		Product      string `json:"product,omitempty"`
+		Serial       string `json:"serial,omitempty"`
+		Port         string `json:"port,omitempty"`
+	}
+	type radio struct {
+		ID         string   `json:"id"`
+		Kind       string   `json:"kind"`
+		KindReason string   `json:"kindReason"`
+		KernelName string   `json:"kernelName"`
+		DevPath    string   `json:"devPath,omitempty"`
+		ByIDPaths  []string `json:"byIdPaths"`
+		SysfsPath  string   `json:"sysfsPath,omitempty"`
+		Bus        string   `json:"bus,omitempty"`
+		Driver     string   `json:"driver,omitempty"`
+		USB        *usb     `json:"usb,omitempty"`
+	}
+	lr := res.GetListRadios()
+	out := []radio{}
+	for _, d := range lr.GetRadios() {
+		kind, ok := radioKindNames[d.GetKind()]
+		if !ok {
+			kind = "unknown"
+		}
+		rd := radio{
+			ID: d.GetId(), Kind: kind, KindReason: d.GetKindReason(),
+			KernelName: d.GetKernelName(), DevPath: d.GetDevPath(),
+			ByIDPaths: append([]string{}, d.GetByIdPaths()...),
+			SysfsPath: d.GetSysfsPath(), Bus: d.GetBus(), Driver: d.GetDriver(),
+		}
+		if d.GetUsbVendorId() != "" {
+			rd.USB = &usb{
+				VendorID: d.GetUsbVendorId(), ProductID: d.GetUsbProductId(),
+				Manufacturer: d.GetUsbManufacturer(), Product: d.GetUsbProduct(),
+				Serial: d.GetUsbSerial(), Port: d.GetUsbPort(),
+			}
+		}
+		out = append(out, rd)
+	}
+	return map[string]any{
+		"node": node, "platformSupported": lr.GetPlatformSupported(), "radios": out,
+	}, http.StatusOK, nil
 }
 
 func (s *Server) probeHttp(r *http.Request, _ principal.Identity) (any, int, error) {
