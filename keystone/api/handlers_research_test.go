@@ -57,6 +57,13 @@ func TestResearchOwnerPlanLifecycle(t *testing.T) {
 		t.Fatalf("proposal mutated registry: %v %v", ps, err)
 	}
 	for _, role := range []runtimedb.Role{runtimedb.RoleButler, runtimedb.RoleOperator, runtimedb.RoleAdmin} {
+		var detail map[string]any
+		if resp := h.do(role, "GET", "/api/v1/plans/"+planID, nil, &detail); resp.StatusCode != http.StatusForbidden || detail["research"] != nil {
+			t.Fatalf("non-Owner %s read research Plan: %d %v", role, resp.StatusCode, detail)
+		}
+		if resp := h.do(role, "POST", "/api/v1/plans/"+planID+"/reject", nil, &detail); resp.StatusCode != http.StatusForbidden || detail["research"] != nil {
+			t.Fatalf("non-Owner %s rejected/read research Plan: %d %v", role, resp.StatusCode, detail)
+		}
 		if resp := h.do(role, "POST", "/api/v1/plans/"+planID+"/approve", nil, nil); resp.StatusCode != http.StatusForbidden {
 			t.Fatalf("bearer %s approved: %d", role, resp.StatusCode)
 		}
@@ -66,6 +73,11 @@ func TestResearchOwnerPlanLifecycle(t *testing.T) {
 		t.Fatal("Plan review omitted configuration")
 	}
 	call("POST", "/api/v1/plans/"+planID+"/approve", map[string]any{})
+	for _, role := range []runtimedb.Role{runtimedb.RoleButler, runtimedb.RoleOperator, runtimedb.RoleAdmin} {
+		if resp := h.do(role, "GET", "/api/v1/plans/"+planID, nil, nil); resp.StatusCode != http.StatusForbidden {
+			t.Fatalf("non-Owner read applied research Plan: %d", resp.StatusCode)
+		}
+	}
 	p, err := h.s.DB.SearchProvider(provider)
 	if err != nil {
 		t.Fatal(err)

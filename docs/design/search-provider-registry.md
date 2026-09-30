@@ -8,8 +8,8 @@ It neither starts services nor registers, assigns, or grants research tools.
 ## Owner API
 
 All routes use the public API's authentication, RBAC and redacted audit/response
-path. Registry reads require an active Owner. Writes and configuration Plan
-approval require a fresh Owner Console session and the existing same-origin
+path. Registry reads and research details on generic Plan reads require an active Owner. Writes and configuration Plan
+approval/rejection require a fresh Owner Console session and the existing same-origin
 write check. Runtime, Member and machine-only bearer credentials cannot configure
 or test providers. No request accepts secret values.
 

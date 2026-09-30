@@ -74,7 +74,13 @@ func (s *Server) getPlan(r *http.Request, id principal.Identity) (any, int, erro
 	if err := s.DB.CheckPlanPrivacy(rec.ID, runtimedb.ModelLocal, apiMemoryDestination(id)); err != nil {
 		return nil, http.StatusForbidden, err
 	}
-	return viewPlan(rec), http.StatusOK, nil
+	view := viewPlan(rec)
+	if view.Research != nil {
+		if err := s.researchOwner(id); err != nil {
+			return nil, http.StatusForbidden, err
+		}
+	}
+	return view, http.StatusOK, nil
 }
 
 func (s *Server) proposePlan(r *http.Request, id principal.Identity) (any, int, error) {
@@ -317,6 +323,12 @@ func (s *Server) rejectPlan(r *http.Request, id principal.Identity) (any, int, e
 	if err := json.Unmarshal([]byte(rec.PlanJSON), &stored); err != nil {
 		return nil, http.StatusBadRequest, err
 	}
+	if stored.Research != nil {
+		if body, code, err := s.freshResearchOwner(r, id); err != nil {
+			return body, code, err
+		}
+	}
+
 	if stored.Routine != nil {
 		if body, code, err := s.freshOwnerReview(r, id); err != nil {
 			return body, code, err
