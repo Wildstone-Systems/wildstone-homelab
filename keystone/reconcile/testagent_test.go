@@ -82,6 +82,11 @@ type fakeContainer struct {
 	// reports "exited" and a code.
 	status   string
 	exitCode int32
+	// network/networkMode are what the container was created with, so a
+	// test can see a move between the managed bridge and the host's
+	// namespace (protocol minor 19).
+	network     string
+	networkMode wsv1.ContainerNetworkMode
 }
 
 // dockerStatus is what the real agent reads off Docker's State.Status.
@@ -402,6 +407,13 @@ func (a *testAgent) handleOp(opID string, op *wsv1.Operation) *wsv1.OpResult {
 func (a *testAgent) ensureContainer(opID string, op *wsv1.EnsureContainer) *wsv1.OpResult {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	// Host networking's exclusions, checked before the replace below as
+	// the real agent does (ops.go), so a refused spec leaves the old
+	// container in place.
+	if op.GetNetworkMode() == wsv1.ContainerNetworkMode_CONTAINER_NETWORK_MODE_HOST &&
+		(len(op.GetPorts()) > 0 || op.GetNetwork() != "") {
+		return opErrResult(opID, wsv1.ErrorCode_ERROR_CODE_INVALID, "host network mode excludes ports and network")
+	}
 	existing, ok := a.containers[op.GetName()]
 	if ok {
 		if !existing.owned {
@@ -427,7 +439,8 @@ func (a *testAgent) ensureContainer(opID string, op *wsv1.EnsureContainer) *wsv1
 		// spec changed: replace, same as the real agent (ops.go).
 		delete(a.containers, op.GetName())
 	}
-	created := &fakeContainer{image: op.GetImage(), labels: op.GetLabels(), running: true, owned: true}
+	created := &fakeContainer{image: op.GetImage(), labels: op.GetLabels(), running: true, owned: true,
+		network: op.GetNetwork(), networkMode: op.GetNetworkMode()}
 	a.containers[op.GetName()] = created
 	a.runJobLocked(op.GetName(), created)
 	return &wsv1.OpResult{OpId: opID, Result: &wsv1.OpResult_EnsureContainer{EnsureContainer: &wsv1.EnsureContainerResult{
@@ -699,4 +712,15 @@ func (a *testAgent) secretKind(name string) (wsv1.SecretKind, bool) {
 	defer a.mu.Unlock()
 	k, ok := a.secrets[name]
 	return k, ok
+}
+
+// containerNetworking reports what the named container was created with.
+func (a *testAgent) containerNetworking(name string) (network string, mode wsv1.ContainerNetworkMode, ok bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	c, ok := a.containers[name]
+	if !ok {
+		return "", 0, false
+	}
+	return c.network, c.networkMode, true
 }

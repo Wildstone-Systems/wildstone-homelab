@@ -361,7 +361,14 @@ func newStep(action Action, want, have resource.Resource) PlanStep {
 }
 
 func describe(action Action, r resource.Resource) string {
-	return fmt.Sprintf("%s %s/%s", action, r.Kind, r.Metadata.Name)
+	d := fmt.Sprintf("%s %s/%s", action, r.Kind, r.Metadata.Name)
+	// Host networking is said in the one line an approver always reads:
+	// the container shares the node's own interfaces, which is a
+	// different thing to approve than one more container on the bridge.
+	if r.Kind == resource.KindContainer && r.Container.HostNetwork() {
+		d += " (host network)"
+	}
+	return d
 }
 
 // specEqual reports whether two resources sharing a (kind, name) have an
@@ -551,7 +558,7 @@ func containerEqual(a, b *resource.ContainerSpec) bool {
 	if a == nil || b == nil {
 		return a == b
 	}
-	if a.Image != b.Image || a.Restart != b.Restart {
+	if a.Image != b.Image || a.Restart != b.Restart || a.NetworkMode != b.NetworkMode {
 		return false
 	}
 	if len(a.Env) != len(b.Env) {
@@ -631,8 +638,16 @@ func grade(action Action, want, have resource.Resource) (RiskGrade, string) {
 			if mountsChanged(want.Container, have.Container) {
 				return RiskHigh, "mount configuration changed: data-affecting"
 			}
+			if want.Container.HostNetwork() {
+				return RiskMedium, "container replaced into the host's network namespace: it listens on the node's own " +
+					"interfaces and is no longer reachable by name on the managed bridge"
+			}
 			return RiskMedium, "container updated (image/env/restart): brief service interruption, no data affected"
 		default:
+			if r.Container.HostNetwork() {
+				return RiskLow, "new container in the host's network namespace: no existing service affected, " +
+					"but it listens on the node's own interfaces"
+			}
 			return RiskLow, "new container, no existing service affected"
 		}
 	case resource.KindRoute:

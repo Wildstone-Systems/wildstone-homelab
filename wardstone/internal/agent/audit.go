@@ -45,6 +45,11 @@ func auditFields(op *wsv1.Operation) (arm string, fields []slog.Attr) {
 		if caps := o.EnsureContainer.GetCapAdd(); len(caps) > 0 {
 			attrs = append(attrs, slog.String("cap_add", strings.Join(caps, ",")))
 		}
+		// Host networking (protocol minor 22) is host access in the same
+		// sense: the container listens on the node's own interfaces.
+		if o.EnsureContainer.GetNetworkMode() == wsv1.ContainerNetworkMode_CONTAINER_NETWORK_MODE_HOST {
+			attrs = append(attrs, slog.String("network_mode", "host"))
+		}
 		return "EnsureContainer", attrs
 	case *wsv1.Operation_StopContainer:
 		return "StopContainer", []slog.Attr{slog.String("name", o.StopContainer.GetName())}

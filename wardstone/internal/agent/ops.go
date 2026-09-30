@@ -590,6 +590,16 @@ func (a *Agent) ensureContainer(ctx context.Context, op *wsv1.EnsureContainer) (
 	if oe != nil {
 		return nil, oe
 	}
+	// Host networking (protocol minor 22), up front for the same reason
+	// as everything above: an incompatible combination must fail with the
+	// OLD container still running. Docker itself would accept host mode
+	// with PortBindings and silently discard them, and would refuse a
+	// NetworkingConfig endpoint only at create — after the replace below
+	// had already removed the container being replaced.
+	networkMode, oe := checkNetworkMode(op)
+	if oe != nil {
+		return nil, oe
+	}
 	// A network must exist and be wildstone-owned before anything is
 	// attached to it (protocol minor 8). Attaching to a foreign network
 	// would join the container to whatever else lives there, so the same
@@ -725,6 +735,7 @@ func (a *Agent) ensureContainer(ctx context.Context, op *wsv1.EnsureContainer) (
 			NanoCpus:       nanoCPUs,
 			PidsLimit:      pidsLimit,
 			ShmSize:        shmBytes,
+			NetworkMode:    networkMode,
 		},
 		NetworkingConfig: netCfg,
 	})
@@ -753,6 +764,32 @@ func (a *Agent) ensureContainer(ctx context.Context, op *wsv1.EnsureContainer) (
 	return &wsv1.OpResult_EnsureContainer{EnsureContainer: &wsv1.EnsureContainerResult{
 		ContainerId: id, Created: true, Started: true,
 	}}, nil
+}
+
+// checkNetworkMode maps the op's network mode to Docker's
+// HostConfig.NetworkMode, refusing host mode combined with published
+// ports or a network attachment, and any value this agent does not know.
+// An unknown value is refused rather than read as the default: a newer
+// Keystone asking for a mode this agent cannot honour must not get a
+// bridge container that merely looks converged.
+func checkNetworkMode(op *wsv1.EnsureContainer) (string, *wsv1.OpError) {
+	switch op.GetNetworkMode() {
+	case wsv1.ContainerNetworkMode_CONTAINER_NETWORK_MODE_UNSPECIFIED:
+		return "", nil
+	case wsv1.ContainerNetworkMode_CONTAINER_NETWORK_MODE_HOST:
+		if len(op.GetPorts()) > 0 {
+			return "", opErr(wsv1.ErrorCode_ERROR_CODE_INVALID,
+				"host network mode cannot publish ports: the container already listens on the host's interfaces")
+		}
+		if op.GetNetwork() != "" {
+			return "", opErr(wsv1.ErrorCode_ERROR_CODE_INVALID,
+				"host network mode cannot also attach to network %q", op.GetNetwork())
+		}
+		return "host", nil
+	default:
+		return "", opErr(wsv1.ErrorCode_ERROR_CODE_INVALID,
+			"unknown network mode %d: this agent speaks protocol minor %d", op.GetNetworkMode(), ProtocolMinor)
+	}
 }
 
 // missingPublishedPort compares Docker's effective mappings with the bindings
@@ -930,6 +967,7 @@ func (a *Agent) inspectContainer(ctx context.Context, op *wsv1.InspectContainer)
 			sort.Strings(out)
 			return out
 		}(),
+		NetworkMode: ci.HostConfig.NetworkMode,
 	}}, nil
 }
 

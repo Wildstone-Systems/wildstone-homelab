@@ -89,6 +89,13 @@ const HardeningProtocolMinor = 18
 // minor rather than on HostAccessProtocolMinor.
 const IPCLockProtocolMinor = 21
 
+// HostNetworkProtocolMinor is the wardstone protocol minor that first
+// carried EnsureContainer.network_mode. An older agent ignores the field
+// and starts the container on the bridge with nothing published — up,
+// green, and deaf to every discovery packet it was moved to hear — so a
+// host-mode spec is refused rather than dispatched to one.
+const HostNetworkProtocolMinor = 22
+
 // RequiredProtocolMinor reports the lowest agent protocol minor that can
 // honour this spec in full, or 0 when any agent can. An agent below it
 // does not fail: it IGNORES the fields it cannot read, which is the
@@ -103,6 +110,9 @@ const IPCLockProtocolMinor = 21
 func (s *ContainerSpec) RequiredProtocolMinor() uint32 {
 	if s == nil {
 		return 0
+	}
+	if s.HostNetwork() {
+		return HostNetworkProtocolMinor
 	}
 	for _, c := range s.CapAdd {
 		if c == "IPC_LOCK" {
@@ -126,7 +136,8 @@ func (s *ContainerSpec) RequiredProtocolMinor() uint32 {
 // usesHardeningFields reports whether the spec sets any H1 field, so
 // RequiredProtocolMinor can gate on the HIGHEST minor a spec actually
 // needs: a plan that uses hardening AND a device still needs only minor
-// 18, since 18 is defined to also carry everything minor 12 did (v1
+// 18 (and host networking plus either needs only 19), since each minor is
+// defined to also carry everything earlier ones did (v1
 // evolves additively, ADR-W003) and an agent new enough for hardening is
 // new enough for devices too.
 func (s *ContainerSpec) usesHardeningFields() bool {
