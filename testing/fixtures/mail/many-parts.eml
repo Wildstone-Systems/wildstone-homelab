@@ -1,0 +1,611 @@
+From: many@example.internal
+Subject: Many parts
+Message-ID: <many-1@example.internal>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="m"
+
+--m
+Content-Type: text/plain
+
+lots of parts follow
+--m
+Content-Type: application/octet-stream; name="p0.bin"
+
+x0
+--m
+Content-Type: application/octet-stream; name="p1.bin"
+
+x1
+--m
+Content-Type: application/octet-stream; name="p2.bin"
+
+x2
+--m
+Content-Type: application/octet-stream; name="p3.bin"
+
+x3
+--m
+Content-Type: application/octet-stream; name="p4.bin"
+
+x4
+--m
+Content-Type: application/octet-stream; name="p5.bin"
+
+x5
+--m
+Content-Type: application/octet-stream; name="p6.bin"
+
+x6
+--m
+Content-Type: application/octet-stream; name="p7.bin"
+
+x7
+--m
+Content-Type: application/octet-stream; name="p8.bin"
+
+x8
+--m
+Content-Type: application/octet-stream; name="p9.bin"
+
+x9
+--m
+Content-Type: application/octet-stream; name="p10.bin"
+
+x10
+--m
+Content-Type: application/octet-stream; name="p11.bin"
+
+x11
+--m
+Content-Type: application/octet-stream; name="p12.bin"
+
+x12
+--m
+Content-Type: application/octet-stream; name="p13.bin"
+
+x13
+--m
+Content-Type: application/octet-stream; name="p14.bin"
+
+x14
+--m
+Content-Type: application/octet-stream; name="p15.bin"
+
+x15
+--m
+Content-Type: application/octet-stream; name="p16.bin"
+
+x16
+--m
+Content-Type: application/octet-stream; name="p17.bin"
+
+x17
+--m
+Content-Type: application/octet-stream; name="p18.bin"
+
+x18
+--m
+Content-Type: application/octet-stream; name="p19.bin"
+
+x19
+--m
+Content-Type: application/octet-stream; name="p20.bin"
+
+x20
+--m
+Content-Type: application/octet-stream; name="p21.bin"
+
+x21
+--m
+Content-Type: application/octet-stream; name="p22.bin"
+
+x22
+--m
+Content-Type: application/octet-stream; name="p23.bin"
+
+x23
+--m
+Content-Type: application/octet-stream; name="p24.bin"
+
+x24
+--m
+Content-Type: application/octet-stream; name="p25.bin"
+
+x25
+--m
+Content-Type: application/octet-stream; name="p26.bin"
+
+x26
+--m
+Content-Type: application/octet-stream; name="p27.bin"
+
+x27
+--m
+Content-Type: application/octet-stream; name="p28.bin"
+
+x28
+--m
+Content-Type: application/octet-stream; name="p29.bin"
+
+x29
+--m
+Content-Type: application/octet-stream; name="p30.bin"
+
+x30
+--m
+Content-Type: application/octet-stream; name="p31.bin"
+
+x31
+--m
+Content-Type: application/octet-stream; name="p32.bin"
+
+x32
+--m
+Content-Type: application/octet-stream; name="p33.bin"
+
+x33
+--m
+Content-Type: application/octet-stream; name="p34.bin"
+
+x34
+--m
+Content-Type: application/octet-stream; name="p35.bin"
+
+x35
+--m
+Content-Type: application/octet-stream; name="p36.bin"
+
+x36
+--m
+Content-Type: application/octet-stream; name="p37.bin"
+
+x37
+--m
+Content-Type: application/octet-stream; name="p38.bin"
+
+x38
+--m
+Content-Type: application/octet-stream; name="p39.bin"
+
+x39
+--m
+Content-Type: application/octet-stream; name="p40.bin"
+
+x40
+--m
+Content-Type: application/octet-stream; name="p41.bin"
+
+x41
+--m
+Content-Type: application/octet-stream; name="p42.bin"
+
+x42
+--m
+Content-Type: application/octet-stream; name="p43.bin"
+
+x43
+--m
+Content-Type: application/octet-stream; name="p44.bin"
+
+x44
+--m
+Content-Type: application/octet-stream; name="p45.bin"
+
+x45
+--m
+Content-Type: application/octet-stream; name="p46.bin"
+
+x46
+--m
+Content-Type: application/octet-stream; name="p47.bin"
+
+x47
+--m
+Content-Type: application/octet-stream; name="p48.bin"
+
+x48
+--m
+Content-Type: application/octet-stream; name="p49.bin"
+
+x49
+--m
+Content-Type: application/octet-stream; name="p50.bin"
+
+x50
+--m
+Content-Type: application/octet-stream; name="p51.bin"
+
+x51
+--m
+Content-Type: application/octet-stream; name="p52.bin"
+
+x52
+--m
+Content-Type: application/octet-stream; name="p53.bin"
+
+x53
+--m
+Content-Type: application/octet-stream; name="p54.bin"
+
+x54
+--m
+Content-Type: application/octet-stream; name="p55.bin"
+
+x55
+--m
+Content-Type: application/octet-stream; name="p56.bin"
+
+x56
+--m
+Content-Type: application/octet-stream; name="p57.bin"
+
+x57
+--m
+Content-Type: application/octet-stream; name="p58.bin"
+
+x58
+--m
+Content-Type: application/octet-stream; name="p59.bin"
+
+x59
+--m
+Content-Type: application/octet-stream; name="p60.bin"
+
+x60
+--m
+Content-Type: application/octet-stream; name="p61.bin"
+
+x61
+--m
+Content-Type: application/octet-stream; name="p62.bin"
+
+x62
+--m
+Content-Type: application/octet-stream; name="p63.bin"
+
+x63
+--m
+Content-Type: application/octet-stream; name="p64.bin"
+
+x64
+--m
+Content-Type: application/octet-stream; name="p65.bin"
+
+x65
+--m
+Content-Type: application/octet-stream; name="p66.bin"
+
+x66
+--m
+Content-Type: application/octet-stream; name="p67.bin"
+
+x67
+--m
+Content-Type: application/octet-stream; name="p68.bin"
+
+x68
+--m
+Content-Type: application/octet-stream; name="p69.bin"
+
+x69
+--m
+Content-Type: application/octet-stream; name="p70.bin"
+
+x70
+--m
+Content-Type: application/octet-stream; name="p71.bin"
+
+x71
+--m
+Content-Type: application/octet-stream; name="p72.bin"
+
+x72
+--m
+Content-Type: application/octet-stream; name="p73.bin"
+
+x73
+--m
+Content-Type: application/octet-stream; name="p74.bin"
+
+x74
+--m
+Content-Type: application/octet-stream; name="p75.bin"
+
+x75
+--m
+Content-Type: application/octet-stream; name="p76.bin"
+
+x76
+--m
+Content-Type: application/octet-stream; name="p77.bin"
+
+x77
+--m
+Content-Type: application/octet-stream; name="p78.bin"
+
+x78
+--m
+Content-Type: application/octet-stream; name="p79.bin"
+
+x79
+--m
+Content-Type: application/octet-stream; name="p80.bin"
+
+x80
+--m
+Content-Type: application/octet-stream; name="p81.bin"
+
+x81
+--m
+Content-Type: application/octet-stream; name="p82.bin"
+
+x82
+--m
+Content-Type: application/octet-stream; name="p83.bin"
+
+x83
+--m
+Content-Type: application/octet-stream; name="p84.bin"
+
+x84
+--m
+Content-Type: application/octet-stream; name="p85.bin"
+
+x85
+--m
+Content-Type: application/octet-stream; name="p86.bin"
+
+x86
+--m
+Content-Type: application/octet-stream; name="p87.bin"
+
+x87
+--m
+Content-Type: application/octet-stream; name="p88.bin"
+
+x88
+--m
+Content-Type: application/octet-stream; name="p89.bin"
+
+x89
+--m
+Content-Type: application/octet-stream; name="p90.bin"
+
+x90
+--m
+Content-Type: application/octet-stream; name="p91.bin"
+
+x91
+--m
+Content-Type: application/octet-stream; name="p92.bin"
+
+x92
+--m
+Content-Type: application/octet-stream; name="p93.bin"
+
+x93
+--m
+Content-Type: application/octet-stream; name="p94.bin"
+
+x94
+--m
+Content-Type: application/octet-stream; name="p95.bin"
+
+x95
+--m
+Content-Type: application/octet-stream; name="p96.bin"
+
+x96
+--m
+Content-Type: application/octet-stream; name="p97.bin"
+
+x97
+--m
+Content-Type: application/octet-stream; name="p98.bin"
+
+x98
+--m
+Content-Type: application/octet-stream; name="p99.bin"
+
+x99
+--m
+Content-Type: application/octet-stream; name="p100.bin"
+
+x100
+--m
+Content-Type: application/octet-stream; name="p101.bin"
+
+x101
+--m
+Content-Type: application/octet-stream; name="p102.bin"
+
+x102
+--m
+Content-Type: application/octet-stream; name="p103.bin"
+
+x103
+--m
+Content-Type: application/octet-stream; name="p104.bin"
+
+x104
+--m
+Content-Type: application/octet-stream; name="p105.bin"
+
+x105
+--m
+Content-Type: application/octet-stream; name="p106.bin"
+
+x106
+--m
+Content-Type: application/octet-stream; name="p107.bin"
+
+x107
+--m
+Content-Type: application/octet-stream; name="p108.bin"
+
+x108
+--m
+Content-Type: application/octet-stream; name="p109.bin"
+
+x109
+--m
+Content-Type: application/octet-stream; name="p110.bin"
+
+x110
+--m
+Content-Type: application/octet-stream; name="p111.bin"
+
+x111
+--m
+Content-Type: application/octet-stream; name="p112.bin"
+
+x112
+--m
+Content-Type: application/octet-stream; name="p113.bin"
+
+x113
+--m
+Content-Type: application/octet-stream; name="p114.bin"
+
+x114
+--m
+Content-Type: application/octet-stream; name="p115.bin"
+
+x115
+--m
+Content-Type: application/octet-stream; name="p116.bin"
+
+x116
+--m
+Content-Type: application/octet-stream; name="p117.bin"
+
+x117
+--m
+Content-Type: application/octet-stream; name="p118.bin"
+
+x118
+--m
+Content-Type: application/octet-stream; name="p119.bin"
+
+x119
+--m
+Content-Type: application/octet-stream; name="p120.bin"
+
+x120
+--m
+Content-Type: application/octet-stream; name="p121.bin"
+
+x121
+--m
+Content-Type: application/octet-stream; name="p122.bin"
+
+x122
+--m
+Content-Type: application/octet-stream; name="p123.bin"
+
+x123
+--m
+Content-Type: application/octet-stream; name="p124.bin"
+
+x124
+--m
+Content-Type: application/octet-stream; name="p125.bin"
+
+x125
+--m
+Content-Type: application/octet-stream; name="p126.bin"
+
+x126
+--m
+Content-Type: application/octet-stream; name="p127.bin"
+
+x127
+--m
+Content-Type: application/octet-stream; name="p128.bin"
+
+x128
+--m
+Content-Type: application/octet-stream; name="p129.bin"
+
+x129
+--m
+Content-Type: application/octet-stream; name="p130.bin"
+
+x130
+--m
+Content-Type: application/octet-stream; name="p131.bin"
+
+x131
+--m
+Content-Type: application/octet-stream; name="p132.bin"
+
+x132
+--m
+Content-Type: application/octet-stream; name="p133.bin"
+
+x133
+--m
+Content-Type: application/octet-stream; name="p134.bin"
+
+x134
+--m
+Content-Type: application/octet-stream; name="p135.bin"
+
+x135
+--m
+Content-Type: application/octet-stream; name="p136.bin"
+
+x136
+--m
+Content-Type: application/octet-stream; name="p137.bin"
+
+x137
+--m
+Content-Type: application/octet-stream; name="p138.bin"
+
+x138
+--m
+Content-Type: application/octet-stream; name="p139.bin"
+
+x139
+--m
+Content-Type: application/octet-stream; name="p140.bin"
+
+x140
+--m
+Content-Type: application/octet-stream; name="p141.bin"
+
+x141
+--m
+Content-Type: application/octet-stream; name="p142.bin"
+
+x142
+--m
+Content-Type: application/octet-stream; name="p143.bin"
+
+x143
+--m
+Content-Type: application/octet-stream; name="p144.bin"
+
+x144
+--m
+Content-Type: application/octet-stream; name="p145.bin"
+
+x145
+--m
+Content-Type: application/octet-stream; name="p146.bin"
+
+x146
+--m
+Content-Type: application/octet-stream; name="p147.bin"
+
+x147
+--m
+Content-Type: application/octet-stream; name="p148.bin"
+
+x148
+--m
+Content-Type: application/octet-stream; name="p149.bin"
+
+x149
+--m--
