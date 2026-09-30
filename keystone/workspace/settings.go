@@ -1,5 +1,6 @@
 // Package workspace owns the private workspace configuration/readiness seam
-// (ADR-W047). Artifact storage, metadata and tool grants are separate slices.
+// (ADR-W047). Confined byte storage lives in workspace/storage; metadata and
+// tool grants are independent authority boundaries.
 package workspace
 
 import (
@@ -28,6 +29,7 @@ const (
 
 // Errors carry no host paths or private data and may be used in tool reasons.
 var (
+	ErrFilesystem  = errors.New("unsupported: workspace requires Linux openat2 filesystem confinement")
 	ErrUnavailable = errors.New("storage_unavailable: workspace storage is unavailable")
 	ErrDisabled    = errors.New("storage_unavailable: workspace capability is not installed")
 	ErrSettings    = errors.New("storage_unavailable: workspace settings are invalid; ask the Owner to reconfigure")
