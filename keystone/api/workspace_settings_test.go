@@ -34,8 +34,34 @@ func workspaceProposal(t *testing.T, h *harness, params map[string]string) runti
 	}
 	return rec
 }
+
+// Exercise the public catalog response consumed by the Console Install button.
+func assertWorkspaceCatalog(t *testing.T, h *harness, enabled bool, blockers ...string) {
+	t.Helper()
+	var all []packageView
+	if r := h.do(runtimedb.RoleAdmin, "GET", "/api/v1/packages", nil, &all); r.StatusCode != 200 {
+		t.Fatalf("catalog status = %d", r.StatusCode)
+	}
+	for _, p := range all {
+		if p.Name != workspace.Package {
+			continue
+		}
+		if p.Enabled != enabled || len(p.Blockers) != len(blockers) {
+			t.Fatalf("workspace catalog: enabled=%v blockers=%v; want enabled=%v blockers=%v", p.Enabled, p.Blockers, enabled, blockers)
+		}
+		for i, want := range blockers {
+			if p.Blockers[i] != want {
+				t.Fatalf("workspace blocker = %q, want %q", p.Blockers[i], want)
+			}
+		}
+		return
+	}
+	t.Fatal("workspace missing from catalog")
+}
+
 func TestWorkspacePlansFreshnessReconfigurationAndRemoval(t *testing.T) {
 	h := workspaceHarness(t)
+	assertWorkspaceCatalog(t, h, false)
 	root := t.TempDir()
 	retained := filepath.Join(root, "retained.txt")
 	if err := os.WriteFile(retained, []byte("private fixture"), 0600); err != nil {
@@ -43,6 +69,7 @@ func TestWorkspacePlansFreshnessReconfigurationAndRemoval(t *testing.T) {
 	}
 	params := map[string]string{"node": "n1", "workspace_path": root}
 	rec := workspaceProposal(t, h, params)
+	assertWorkspaceCatalog(t, h, false)
 	if _, err := h.s.WorkspaceSettings(); !errors.Is(err, workspace.ErrDisabled) {
 		t.Fatal("proposal activated storage", err)
 	}
@@ -61,6 +88,7 @@ func TestWorkspacePlansFreshnessReconfigurationAndRemoval(t *testing.T) {
 		}
 	}
 	approve(rec.ID, 200)
+	assertWorkspaceCatalog(t, h, true)
 	settings, err := h.s.WorkspaceSettings()
 	if err != nil || settings.Root != root {
 		t.Fatalf("%+v %v", settings, err)
@@ -84,6 +112,7 @@ func TestWorkspacePlansFreshnessReconfigurationAndRemoval(t *testing.T) {
 		t.Fatalf("disable = %d", r.StatusCode)
 	}
 	approve(removed.ID, 200)
+	assertWorkspaceCatalog(t, h, false)
 	if _, err := h.s.WorkspaceSettings(); !errors.Is(err, workspace.ErrDisabled) {
 		t.Fatal("removal did not disable seam", err)
 	}
@@ -93,6 +122,7 @@ func TestWorkspacePlansFreshnessReconfigurationAndRemoval(t *testing.T) {
 	params["quota_bytes"] = "1073741824"
 	reinstall := workspaceProposal(t, h, params)
 	approve(reinstall.ID, 200)
+	assertWorkspaceCatalog(t, h, true)
 	if _, err := h.s.WorkspaceSettings(); err != nil {
 		t.Fatal("reinstall unavailable", err)
 	}
@@ -116,6 +146,7 @@ func TestWorkspaceBadSettingsAndMissingStorage(t *testing.T) {
 	if _, err := h.s.WorkspaceSettings(); !errors.Is(err, workspace.ErrMount) {
 		t.Fatal("missing mount ready", err)
 	}
+	assertWorkspaceCatalog(t, h, true, workspace.ErrMount.Error())
 	current, err := h.s.State.Load()
 	if err != nil {
 		t.Fatal(err)

@@ -323,7 +323,9 @@ func (s *Server) describeCapability(pkg *pkgspec.Package, current []resource.Res
 	})
 	sort.Slice(d.Addresses, func(i, j int) bool { return d.Addresses[i].Route < d.Addresses[j].Route })
 	d.Blockers = capabilityBlockers(pkg, posture)
-	if pkg.Metadata.Name == workspace.Package {
+	// Catalog entries must remain installable before their configuration
+	// exists. Runtime storage readiness only applies to installed workspaces.
+	if pkg.Metadata.Name == workspace.Package && packageIsInstalled(pkg, current) {
 		d.Blockers = append(d.Blockers, s.workspaceBlockers(current)...)
 	}
 	if pkg.Metadata.Name == speechEnginePackage {
