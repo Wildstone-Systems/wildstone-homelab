@@ -350,7 +350,7 @@ var Columns = []Column{
 	{"notices", "recipient_person_id", PersonID,
 		"the person the notice is for. Repointed by 0043 from recipient; answered_by is an actor and stayed text"},
 	{"household_banner", "set_by", Human,
-		"SetHouseholdBanner(image, mediaType, by) and SetHouseholdBannerPosition(x, y, by); both call sites pass the portal's `member`, which the door has already resolved to the household's own spelling. A `_by` name that is NOT the actor family: the banner has no machine writer — the portal is the only surface that sets it, and a household member is the only caller it admits (#238). Still a handle: no migration repoints it, so slice 2b leaves it as recorded text"},
+		"SetHouseholdBanner(image, mediaType, by) and SetHouseholdBannerPosition(x, y, by); both call sites pass the portal's `member`, which the door has already resolved to the household's own spelling. A `_by` name that is NOT the actor family: the banner has no machine writer — the portal is the only surface that sets it, and a household member is the only caller it admits (#238). Held by TestTheBannerHasNoMachineWriter: a new writer fails the build and has to argue with this verdict. Still a handle: no migration repoints it, so slice 2b leaves it as recorded text"},
 	// ---- Actor: person OR machine principal; left as recorded text ----
 	// The three Connection identity columns, repointed by 0044. They
 	// were classified actor until slice 2b, from a write path that was

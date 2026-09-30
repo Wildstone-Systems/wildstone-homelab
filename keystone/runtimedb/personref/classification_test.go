@@ -7,6 +7,10 @@ package personref_test
 
 import (
 	"database/sql"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"io/fs"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -456,5 +460,112 @@ func TestConnectionIdentityColumnsNameAPerson(t *testing.T) {
 	}
 	for key := range want {
 		t.Errorf("%s has no verdict at all", key)
+	}
+}
+
+// household_banner.set_by is classified Human because the portal is its
+// only writer, and the portal passes the person it resolved. That is a
+// property of the call sites, not of the column, and nothing else holds
+// it: TestEveryCandidateColumnHasAVerdict only notices new columns. This
+// reads the source so a new writer — a Console endpoint, a routine —
+// has to come and argue with the verdict instead of landing a machine
+// principal such as root-admin in a Human column (#243, #240).
+func TestTheBannerHasNoMachineWriter(t *testing.T) {
+	const keystone = "../.."
+	writers := map[string]bool{"SetHouseholdBanner": true, "SetHouseholdBannerPosition": true}
+	allowedFile := filepath.ToSlash(filepath.Join(keystone, "api", "handlers_portal_banner.go"))
+	allowedFunc := map[string]bool{"homeBannerSet": true, "homeBannerFrame": true}
+	sqlFile := filepath.ToSlash(filepath.Join(keystone, "runtimedb", "householdbanner.go"))
+	classFile := filepath.ToSlash(filepath.Join(keystone, "runtimedb", "personref", "classification.go"))
+
+	found := 0
+	err := filepath.WalkDir(keystone, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if n := d.Name(); n == "testdata" || n == "vendor" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		file, perr := parser.ParseFile(token.NewFileSet(), path, nil, 0)
+		if perr != nil {
+			return perr
+		}
+		slash := filepath.ToSlash(path)
+		// SQL that touches the table is confined to its one file, so a
+		// routine cannot write the column without going through the two
+		// methods below.
+		ast.Inspect(file, func(n ast.Node) bool {
+			lit, ok := n.(*ast.BasicLit)
+			if ok && lit.Kind == token.STRING && strings.Contains(lit.Value, "household_banner") &&
+				slash != sqlFile && slash != classFile {
+				t.Errorf("%s mentions household_banner outside %s: a second SQL writer would "+
+					"bypass the Human verdict on set_by (#243, #240)", slash, sqlFile)
+			}
+			return true
+		})
+		for _, decl := range file.Decls {
+			fn, isFunc := decl.(*ast.FuncDecl)
+			if !isFunc || fn.Body == nil {
+				continue
+			}
+			// Every selector naming a writer is either the callee of a
+			// call (checked below) or a method value, which could be
+			// invoked with anything and is refused outright.
+			callees := map[*ast.SelectorExpr]bool{}
+			ast.Inspect(fn.Body, func(n ast.Node) bool {
+				if call, ok := n.(*ast.CallExpr); ok {
+					if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
+						callees[sel] = true
+					}
+				}
+				return true
+			})
+			ast.Inspect(fn.Body, func(n ast.Node) bool {
+				sel, ok := n.(*ast.SelectorExpr)
+				if !ok || !writers[sel.Sel.Name] {
+					return true
+				}
+				found++
+				if !callees[sel] {
+					t.Errorf("%s: %s in %s is used as a method value; call it directly so the "+
+						"writer can be checked (#243, #240)", slash, sel.Sel.Name, fn.Name.Name)
+					return true
+				}
+				return true
+			})
+			ast.Inspect(fn.Body, func(n ast.Node) bool {
+				call, ok := n.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				sel, ok := call.Fun.(*ast.SelectorExpr)
+				if !ok || !writers[sel.Sel.Name] {
+					return true
+				}
+				last := call.Args[len(call.Args)-1]
+				id, isIdent := last.(*ast.Ident)
+				if slash != allowedFile || !allowedFunc[fn.Name.Name] || !isIdent || id.Name != "member" {
+					t.Errorf("%s: %s in %s is a new writer of household_banner.set_by, or passes something "+
+						"other than the portal's `member`. The column is classified Human because the portal "+
+						"is its only writer; a new writer must re-argue that verdict (#243, #240)",
+						slash, sel.Sel.Name, fn.Name.Name)
+				}
+				return true
+			})
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walking keystone: %v", err)
+	}
+	if found != 2 {
+		t.Errorf("found %d writers of household_banner.set_by, want exactly 2 "+
+			"(homeBannerSet, homeBannerFrame); if a method was renamed, update this test", found)
 	}
 }
