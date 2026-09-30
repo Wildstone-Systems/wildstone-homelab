@@ -20,8 +20,9 @@ request is attempted.
 HTML uses a tolerant tokenizer and caps retained output during construction,
 so repeated links cannot amplify a bounded response into unbounded text. Executable/embedded subtrees, comments and
 attributes are discarded; headings retain line boundaries and HTTP/S links
-are resolved against the final URL as inert text. Markdown uses pinned Goldmark v1.7.13 to identify actual HTML spans. It escapes
-Markdown-only text and filters one continuous token stream, preserving HTML
+are resolved against the final URL as inert text. Markdown uses pinned Goldmark v1.7.13 to identify actual HTML spans. It replaces
+Markdown-only text with collision-checked literal markers, restored directly
+as data after filtering one continuous token stream. This preserves HTML
 raw-text/RCDATA state across nodes; autolinks, escaped angle brackets, code
 spans and fenced/indented examples remain literal data. Plain text is
 literal data. Prompt-injection prose remains untrusted data: extraction never

@@ -383,3 +383,34 @@ func TestMarkdownRetainsContinuousTextareaAndRawTextState(t *testing.T) {
 		t.Fatal("real challenge after textarea", err)
 	}
 }
+
+func TestMarkdownRawTextPreservesCharactersWithoutEntityExpansion(t *testing.T) {
+	for _, tag := range []string{"xmp", "noembed", "noframes"} {
+		body := "before <" + tag + ">A & B \"quoted\" 'single' <https://example.com> &amp;</" + tag + "> after"
+		d, err := Extract(input("text/markdown", body))
+		if err != nil || d.Text != "before A & B \"quoted\" 'single' <https://example.com> &amp; after" {
+			t.Fatalf("%s escaped literal: %q %v", tag, d.Text, err)
+		}
+	}
+	d, err := Extract(input("text/markdown", "before <plaintext>A & B \"quoted\" <https://example.com>"))
+	if err != nil || d.Text != "before A & B \"quoted\" <https://example.com>" {
+		t.Fatalf("plaintext escaped literal: %q %v", d.Text, err)
+	}
+}
+
+func TestMarkdownLiteralMarkersCannotBeForgedOrExpandedRecursively(t *testing.T) {
+	body := "<div>\nWS_MD_LITERAL_0_0_ WS_MD_LITERAL_&#49;_0_\n</div>\n\nWS_MD_LITERAL_2_0_ <xmp>A & B</xmp>"
+	d, err := Extract(input("text/markdown", body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"WS_MD_LITERAL_0_0_", "WS_MD_LITERAL_1_0_", "WS_MD_LITERAL_2_0_", "A & B"} {
+		if !strings.Contains(d.Text, want) {
+			t.Fatalf("marker collision/lost data %q: %q", want, d.Text)
+		}
+	}
+	again, err := Extract(input("text/markdown", body))
+	if err != nil || again != d {
+		t.Fatal("non-deterministic extraction")
+	}
+}

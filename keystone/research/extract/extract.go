@@ -8,6 +8,8 @@ import (
 	stdhtml "html"
 	"io"
 	"net/url"
+	"regexp"
+	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -157,10 +159,12 @@ func (b *limitedText) write(s string) {
 }
 
 type markupFilter struct {
-	out        *limitedText
-	base       *url.URL
-	suppressed string
-	depth      int
+	out           *limitedText
+	base          *url.URL
+	suppressed    string
+	depth         int
+	literalPrefix string
+	literals      []string
 }
 
 func (f *markupFilter) feed(input string, preserve bool) error {
@@ -238,7 +242,7 @@ func (f *markupFilter) feed(input string, preserve bool) error {
 		}
 		if kind == html.TextToken {
 			if preserve {
-				f.out.write(t.Data)
+				f.writeLiteralText(t.Data)
 			} else {
 				f.out.write(strings.Join(strings.Fields(t.Data), " "))
 				f.out.write(" ")
@@ -252,10 +256,86 @@ func (f *markupFilter) feed(input string, preserve bool) error {
 	}
 }
 
+// Literal markers are restored directly into the bounded text builder, never
+// re-tokenized or recursively expanded. This works in both decoded RCDATA and
+// undecoded raw-text modes without changing the original Markdown data.
+func (f *markupFilter) writeLiteralText(text string) {
+	if f.literalPrefix == "" {
+		f.out.write(text)
+		return
+	}
+	for len(text) > 0 && f.out.count <= MaxCharacters {
+		at := strings.Index(text, f.literalPrefix)
+		if at < 0 {
+			f.out.write(text)
+			return
+		}
+		f.out.write(text[:at])
+		rest := text[at+len(f.literalPrefix):]
+		end := strings.IndexByte(rest, '_')
+		if end < 0 {
+			f.out.write(text[at:])
+			return
+		}
+		index, err := strconv.Atoi(rest[:end])
+		if err != nil || index < 0 || index >= len(f.literals) {
+			f.out.write(f.literalPrefix)
+			text = rest
+			continue
+		}
+		f.out.write(f.literals[index])
+		text = rest[end+1:]
+	}
+}
+
+type markdownPart struct {
+	literal bool
+	text    string
+}
+
+var literalPrefixPattern = regexp.MustCompile(`WS_MD_LITERAL_[0-9]+_`)
+
+// Choose a deterministic prefix absent from both raw and entity-decoded HTML.
+// Occupancy scanning is linear in bounded input; trying every prefix against
+// the entire input would let crafted examples force quadratic work.
+func prepareMarkdown(parts []markdownPart, filter *markupFilter) string {
+	occupied := map[string]bool{}
+	for _, part := range parts {
+		if !part.literal {
+			for _, variant := range []string{part.text, stdhtml.UnescapeString(part.text)} {
+				for _, prefix := range literalPrefixPattern.FindAllString(variant, -1) {
+					occupied[prefix] = true
+				}
+			}
+		}
+	}
+	for n := 0; ; n++ {
+		prefix := "WS_MD_LITERAL_" + strconv.Itoa(n) + "_"
+		if !occupied[prefix] {
+			filter.literalPrefix = prefix
+			break
+		}
+	}
+	var markup strings.Builder
+	for _, part := range parts {
+		if part.text == "" {
+			continue
+		}
+		if !part.literal {
+			markup.WriteString(part.text)
+			continue
+		}
+		index := len(filter.literals)
+		filter.literals = append(filter.literals, part.text)
+		markup.WriteString(filter.literalPrefix + strconv.Itoa(index) + "_")
+	}
+	return markup.String()
+}
+
 // Markdown parsing identifies actual raw HTML spans. Autolinks, escaped angle
-// brackets and code examples remain literal Markdown data. Escaping those
-// literal spans lets one continuous tokenizer retain HTML raw-text/RCDATA
-// state across all inline nodes, including non-suppressed textarea contents.
+// brackets and code examples remain literal Markdown data. State-safe literal
+// markers let one tokenizer retain HTML raw-text/RCDATA state across all nodes,
+// including non-suppressed textarea and xmp contents.
 func extractMarkup(input string, base *url.URL, markdown bool) (string, bool, error) {
 	out := limitedText{normalize: !markdown}
 	filter := markupFilter{out: &out, base: base}
@@ -275,7 +355,7 @@ func extractMarkup(input string, base *url.URL, markdown bool) (string, bool, er
 	source := []byte(input)
 	root := goldmark.DefaultParser().Parse(mdtext.NewReader(source))
 	position := 0
-	var markup strings.Builder
+	var parts []markdownPart
 	err := ast.Walk(root, func(node ast.Node, entering bool) (ast.WalkStatus, error) {
 		if !entering {
 			return ast.WalkContinue, nil
@@ -301,28 +381,26 @@ func extractMarkup(input string, base *url.URL, markdown bool) (string, bool, er
 		if start < position {
 			return ast.WalkContinue, nil
 		}
-		markup.WriteString(stdhtml.EscapeString(input[position:start]))
+		parts = append(parts, markdownPart{true, input[position:start]})
 		// Container prefixes (quotes/list indentation) are not HTML. Segment
 		// values reconstruct the logical tag, including parser padding, while
 		// gaps remain inert Markdown outside the HTML tokenizer.
 		var raw strings.Builder
 		previous := start
 		for _, segment := range segments {
-			markup.WriteString(stdhtml.EscapeString(input[previous:segment.Start]))
+			parts = append(parts, markdownPart{true, input[previous:segment.Start]})
 			raw.Write(segment.Value(source))
 			previous = segment.Stop
 		}
-		markup.WriteString(raw.String())
+		parts = append(parts, markdownPart{false, raw.String()})
 		position = end
 		return ast.WalkSkipChildren, nil
 	})
 	if err != nil {
 		return "", false, err
 	}
-	markup.WriteString(stdhtml.EscapeString(input[position:]))
-	// Escaping has a fixed expansion bound from the already byte-bounded
-	// input. Link expansion happens only inside the capped output builder.
-	if err := filter.feed(markup.String(), true); err != nil {
+	parts = append(parts, markdownPart{true, input[position:]})
+	if err := filter.feed(prepareMarkdown(parts, &filter), true); err != nil {
 		return "", false, err
 	}
 	return out.String(), out.count > MaxCharacters, nil
