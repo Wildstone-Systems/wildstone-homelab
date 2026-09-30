@@ -137,8 +137,11 @@ type ReadArgs = ArtifactRef & { cursor?: string };
 type FindArgs = {
   scope: Scope; query: string; path?: string; cursor?: string;
 };
+type DirectoryRef = {
+  scope: Scope; path: string; directoryRevision: string;
+};
 type Entry = { kind: "file"; file: FileInfo }
-  | { kind: "directory"; path: string };
+  | { kind: "directory"; directory: DirectoryRef };
 type FindHit = { file: FileInfo; snippet: string };
 ```
 
@@ -152,6 +155,9 @@ type FindHit = { file: FileInfo; snippet: string };
 
 ```typescript
 type MkdirArgs = { scope: Scope; path: string };
+type RmdirArgs = {
+  scope: Scope; path: string; expectedDirectoryRevision: string;
+};
 type BeginArgs = {
   scope: Scope; path: string; expectedRevision: string | null;
   artifactId?: string;
@@ -171,7 +177,8 @@ type WriteSession = {
 
 | Tool | Input -> result | Rules |
 | --- | --- | --- |
-| `workspace_mkdir` | `MkdirArgs -> Receipt` | Non-root path; existing directory may return verified idempotent receipt, never replace a file. |
+| `workspace_mkdir` | `MkdirArgs -> {receipt: Receipt; directory: DirectoryRef}` | Non-root path; existing directory may return verified idempotent receipt, never replace a file. |
+| `workspace_rmdir` | `RmdirArgs -> Receipt` | Remove only the selected empty, non-root directory at the expected directory revision. Refuse nonempty targets; no recursive traversal, file deletion or trash purge. |
 | `workspace_write_begin` | `BeginArgs -> WriteSession` | Create: null expectedRevision, no artifactId, path must be free. Edit: artifactId and current expectedRevision required, same scope/path. Derive allowed format from extension. |
 | `workspace_write_chunk` | `ChunkArgs -> {writeId: string; nextIndex: number}` | Consecutive zero-based index, text at most 1,024 UTF-8 bytes/chunk. Same index+same bytes retry succeeds; different bytes conflict. |
 | `workspace_write_commit` | `CommitArgs -> {receipt: Receipt; file: FileInfo}` | Recheck base revision, grants, privacy, fence and quota; publish complete immutable revision once. Commit empty text is permitted. |
@@ -183,8 +190,9 @@ type WriteSession = {
 Write sessions bind trusted Person, Agent, scope, task, target and base
 revision at creation. Changing those through later args is impossible.
 Chunks live in quota-accounted task scratch; incomplete sessions never appear
-as artifacts. Active/waiting tasks retain staging; terminal cleanup removes
-eligible abandoned sessions after seven days. Resumed task handles may access
+as artifacts. Pending/running/waiting/paused-offboarded tasks retain staging; cleanup removes
+eligible abandoned sessions seven days after entering completed, failed or
+cancelled. Unknown states are protected, not assumed terminal. Resumed task handles may access
 the same session only after current authority/provenance checks.
 
 Mutation retries use existing Invoke idempotency keys (required, max 128
@@ -193,6 +201,17 @@ bytes) plus durable effect receipts. A key reused for different arguments is
 namespace. Chunk replay is additionally checked by stored index/hash.
 An already committed write session returns its original receipt after
 reauthorization; an expired/unavailable session returns `not_found`.
+
+Directory revisions are opaque server-owned identity/generation tokens, not
+path hashes. List and mkdir return them; removal requires the current token
+so a removed/recreated directory cannot be deleted using a stale selector.
+Authorize the current Person/Agent/scope and pin validated parent descriptors,
+then serialize namespace mutations, compare the revision and use atomic
+empty-directory removal at the execution fence. Concurrent create/recreate or
+unsupported storage guarantees must refuse safely. Successful removal is
+reversible by mkdir; it never deletes artifact revisions/history. Like mkdir,
+rmdir is mutating, individually grantable, quota-safe and refused in QA-only
+mode. Normal idempotency/receipt checks apply. Files still use trash/restore.
 
 ### Artifact export (mutating tool)
 
@@ -352,6 +371,7 @@ and surface checks. Members have no Console configuration access.
 | `GET /api/v1/agents/{agent}/artifacts/{artifact}/revisions/{revision}` | Inert preview metadata/text. |
 | `GET /api/v1/agents/{agent}/artifacts/{artifact}/revisions/{revision}/download` | Authenticated attachment stream; nosniff. |
 | `POST /api/v1/agents/{agent}/artifacts/{artifact}/{move,trash,restore,purge}` | Human commands with expected revision; purge confirmed. Brace notation names four concrete suffixes. |
+| `POST /api/v1/agents/{agent}/workspace/directories/remove` | Human empty-directory removal with `RmdirArgs`; same authority, revision, fence and nonrecursive semantics as the tool. |
 | `PUT /api/v1/agents/{agent}/artifacts/{artifact}/grants` | Human sharing; expected grant revision, preserve source audience. |
 | `GET, POST /api/v1/research/providers` | Owner registry listing/create; POST configuration invokes normal Plan path when resource-changing. |
 | `GET, PATCH, DELETE /api/v1/research/providers/{provider}` | Owner configuration lifecycle; expected config revision and applicable Plans. |
@@ -399,9 +419,13 @@ No lock spans an unbounded model/network wait. Unsupported storage guarantees
 fail visibly. Exact table layout and lock implementation belong to S02/S05.
 
 Sharing creates a checked grant/derived revision scope with source edges;
-ordinary move cannot change visibility. On retirement files persist. Scratch
-expires seven days after completed/cancelled task, active/waiting protected;
-file trash expires after 30 days under configured retention. Only this file
+ordinary move cannot change visibility. On retirement files persist. Scratch,
+including abandoned staging, expires seven days after entry into completed,
+failed or cancelled. Pending, running, waiting and paused-offboarded states
+are protected; unknown states fail closed. Cleanup rechecks the state,
+terminal timestamp, execution fence and unresolved-publication pins immediately
+before deletion; it never discards data needed to recover uncertain effects.
+File trash expires after 30 days under configured retention. Only this file
 retention exception amends W033 F6. Permanent model purge is absent.
 
 Backup manifest schema v1 names snapshot ID/time, runtime-DB snapshot hash,
