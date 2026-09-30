@@ -1,6 +1,6 @@
 -- 0098: Personal mailbox credentials materialized on nodes, their
 -- verified erasure, and the Person's authorization for unattended use
--- (epic #326 S02; ADR-W030 A5.1/A5.3, ADR-W033 D1 amendment).
+-- (epic #326 S02; ADR-W030 A5.1/A5.4, ADR-W033 D1 amendment).
 --
 -- Three things this migration adds, and one it deliberately does not.
 --

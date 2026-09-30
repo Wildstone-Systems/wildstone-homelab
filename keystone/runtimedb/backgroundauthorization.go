@@ -3,7 +3,7 @@ package runtimedb
 // A Person's authorization for UNATTENDED use of their own Personal
 // credential, and the evaluator that intersects it with the Owner's
 // approval of the exact subscription version (epic #326 S02; ADR-W033
-// D1 amendment, ADR-W030 A5.3).
+// D1 amendment, ADR-W030 A5.4).
 //
 // ADR-W033 D1 says an unattended run cannot use a Personal secret, and
 // that the only way that could ever change is "explicit Person-authorized
@@ -86,8 +86,7 @@ type BackgroundScope struct {
 // BackgroundAuthorizationRequest is what a Person authorizes.
 type BackgroundAuthorizationRequest struct {
 	Connection string `json:"connection"`
-	// Need names the credential; empty means the connection's only
-	// active one.
+	// Need names the credential; empty means the mailbox app password.
 	Need               string          `json:"need,omitempty"`
 	Scope              BackgroundScope `json:"scope"`
 	ProcessingLocation string          `json:"processingLocation"`
@@ -263,7 +262,11 @@ func (db *DB) PrepareBackgroundAuthorization(actor string, req BackgroundAuthori
 	if err := db.requireCredentialOwner(conn, actor); err != nil {
 		return BackgroundAuthorization{}, err
 	}
-	cred, err := db.ActivePersonalCredential(req.Connection, req.Need)
+	need := req.Need
+	if need == "" {
+		need = MailboxCredentialNeed
+	}
+	cred, err := db.ActivePersonalCredential(req.Connection, need)
 	if err != nil {
 		return BackgroundAuthorization{}, err
 	}

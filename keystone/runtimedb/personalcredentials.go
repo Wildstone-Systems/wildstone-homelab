@@ -27,6 +27,7 @@ package runtimedb
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
@@ -69,6 +70,14 @@ const ErasureUnverifiedReason = "erasure_unverified"
 // declares (packages/mail-roundcube, integrates.adapter.needs).
 const MailboxCredentialNeed = "mailbox-app-password"
 
+// MailboxFingerprintKeyNeed is the adapter's per-connection key for
+// keyed message fingerprints. Keystone generates it (never a Person),
+// sends it to every placement node like the app password so fingerprints
+// survive failover, and revokes and erases it with the rest. It is kept
+// across app-password replacement: rotating it would make every message
+// the monitor has already seen look new.
+const MailboxFingerprintKeyNeed = "mailbox-fingerprint-key"
+
 // personalCredentialDisclosure is recorded with every Personal
 // credential onboarded through the intake. An IMAP app password is not
 // read-only upstream — the provider grants it the whole mailbox — so
@@ -91,17 +100,30 @@ var ErrNoActiveCredential = errors.New("runtimedb: this connection has no active
 var credentialConnectionName = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)
 
 // PersonalCredentialRef is the node secret name of one credential
-// version: "pc.<connection>.v<version>". The prefix is shared with
-// Wardstone (secreterase.PersonalPrefix), which keeps these names out
-// of the household recovery bundle.
-func PersonalCredentialRef(connection string, version int) (string, error) {
+// version: "pc.<connection>.v<version>" for the mailbox app password and
+// "pc.<connection>.<tag>.v<version>" for any other need (the fingerprint
+// key's tag is "fk"). The prefix is shared with Wardstone
+// (secreterase.PersonalPrefix), which keeps these names out of the
+// household recovery bundle.
+func PersonalCredentialRef(connection, need string, version int) (string, error) {
 	if !credentialConnectionName.MatchString(connection) {
 		return "", fmt.Errorf("runtimedb: connection %q cannot name a node secret (lowercase letters, digits, inner dashes)", connection)
 	}
 	if version < 1 {
 		return "", fmt.Errorf("runtimedb: a credential version starts at 1")
 	}
-	ref := fmt.Sprintf("%s%s.v%d", secreterase.PersonalPrefix, connection, version)
+	tag := ""
+	switch need {
+	case "", MailboxCredentialNeed:
+	case MailboxFingerprintKeyNeed:
+		tag = "fk."
+	default:
+		if !credentialConnectionName.MatchString(need) {
+			return "", fmt.Errorf("runtimedb: credential need %q cannot name a node secret", need)
+		}
+		tag = need + "."
+	}
+	ref := fmt.Sprintf("%s%s.%sv%d", secreterase.PersonalPrefix, connection, tag, version)
 	if len(ref) > 64 {
 		return "", fmt.Errorf("runtimedb: connection %q is too long to name its credential on a node", connection)
 	}
@@ -109,10 +131,11 @@ func PersonalCredentialRef(connection string, version int) (string, error) {
 }
 
 // PersonalCredentialPrefix is the node-secret name prefix every version
-// of connection's credential shares. The orphan sweep erases a name
+// of every one of connection's credentials shares (connection names
+// hold no dot, so it is unambiguous). The orphan sweep erases a name
 // under it that Keystone does not know as live.
 func PersonalCredentialPrefix(connection string) string {
-	return secreterase.PersonalPrefix + connection + ".v"
+	return secreterase.PersonalPrefix + connection + "."
 }
 
 // PersonalCredential is one credential version and where it went. Login
@@ -187,7 +210,7 @@ func (db *DB) StagePersonalCredential(connection, need, login, actor string, nod
 		need = MailboxCredentialNeed
 	}
 	login = strings.TrimSpace(login)
-	if login == "" || len(login) > 320 || strings.ContainsAny(login, " \t\r\n") {
+	if (login == "" && need == MailboxCredentialNeed) || len(login) > 320 || strings.ContainsAny(login, " \t\r\n") {
 		return PersonalCredential{}, fmt.Errorf("runtimedb: a mailbox login is one account name of at most 320 characters")
 	}
 	if len(nodes) == 0 {
@@ -205,7 +228,7 @@ func (db *DB) StagePersonalCredential(connection, need, login, actor string, nod
 		conn.Seq, need).Scan(&version); err != nil {
 		return PersonalCredential{}, fmt.Errorf("runtimedb: staging credential: %w", err)
 	}
-	ref, err := PersonalCredentialRef(connection, version)
+	ref, err := PersonalCredentialRef(connection, need, version)
 	if err != nil {
 		return PersonalCredential{}, err
 	}
@@ -743,7 +766,7 @@ func (db *DB) settleCredentialState(connection string) error {
 		return db.SetConnectionState(connection, ConnectionUnavailable,
 			fmt.Sprintf("%s is no longer an active member; this was their personal connection", conn.Owner))
 	}
-	if _, err := db.ActivePersonalCredential(connection, ""); err == nil {
+	if _, err := db.ActivePersonalCredential(connection, MailboxCredentialNeed); err == nil {
 		placements, err := db.ListPlacements(connection)
 		if err != nil {
 			return err
@@ -895,3 +918,49 @@ func (db *DB) MarkPlacementContainerStopped(connection, node string) error {
 	}
 	return nil
 }
+
+// AdapterPlacementEnv is what a placement renderer passes to
+// capability.Engine.ExpandAdapter for a Personal mail connection: the
+// non-secret per-connection environment (the login and the authorized
+// source scope) and each credential need's node secret name. Neither
+// carries a value. The filters come from the LIVE background
+// authorization, so an adapter is only ever rendered with the scope its
+// Person authorized; with none live, the filters are absent and the
+// adapter has nothing it may read.
+func (db *DB) AdapterPlacementEnv(connection string) (env, secrets map[string]string, err error) {
+	creds, err := db.ListPersonalCredentials(connection)
+	if err != nil {
+		return nil, nil, err
+	}
+	env, secrets = map[string]string{}, map[string]string{}
+	for _, c := range creds {
+		if c.State != CredentialActive {
+			continue
+		}
+		secrets[c.Need] = c.SecretRef
+		if c.Need == MailboxCredentialNeed {
+			env[AdapterEnvMailboxUsername] = c.Login
+		}
+	}
+	if a, err := db.LiveBackgroundAuthorization(connection); err == nil {
+		filters, err := json.Marshal(struct {
+			Folders         []string `json:"folders"`
+			Senders         []string `json:"senders,omitempty"`
+			SubjectContains []string `json:"subjectContains,omitempty"`
+		}{a.Scope.Folders, a.Scope.Senders, a.Scope.Subjects})
+		if err != nil {
+			return nil, nil, err
+		}
+		env[AdapterEnvMailboxFilters] = string(filters)
+	} else if !errors.Is(err, ErrNotFound) {
+		return nil, nil, err
+	}
+	return env, secrets, nil
+}
+
+// The per-connection adapter environment the mail adapter reads
+// (keystone/cmd/wild-mail-adapter). Not secret; never a credential.
+const (
+	AdapterEnvMailboxUsername = "WILD_MAILBOX_USERNAME"
+	AdapterEnvMailboxFilters  = "WILD_MAILBOX_FILTERS"
+)

@@ -624,3 +624,27 @@ func TestNoCredentialValueColumn(t *testing.T) {
 		rows.Close()
 	}
 }
+
+// The placement renderer's inputs: the login and the LIVE authorized
+// scope as env, and credential names (never values) per need.
+func TestAdapterPlacementEnvFollowsTheLiveAuthorization(t *testing.T) {
+	f := newMailFixture(t)
+	env, secrets, err := f.db.AdapterPlacementEnv("sam-mail")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if env[AdapterEnvMailboxUsername] != "sam@example.internal" || secrets[MailboxCredentialNeed] != f.credV1.SecretRef {
+		t.Fatalf("env = %v secrets = %v", env, secrets)
+	}
+	if _, ok := env[AdapterEnvMailboxFilters]; ok {
+		t.Fatal("filters rendered with no authorization live")
+	}
+	f.authorize(t)
+	env, _, _ = f.db.AdapterPlacementEnv("sam-mail")
+	if env[AdapterEnvMailboxFilters] != `{"folders":["INBOX","School"]}` {
+		t.Fatalf("filters = %q", env[AdapterEnvMailboxFilters])
+	}
+	if ref, _ := PersonalCredentialRef("sam-mail", MailboxFingerprintKeyNeed, 1); ref != "pc.sam-mail.fk.v1" {
+		t.Fatalf("fingerprint key ref = %q", ref)
+	}
+}

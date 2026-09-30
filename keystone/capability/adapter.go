@@ -65,6 +65,12 @@ type AdapterPlacement struct {
 	// holds it for THIS connection. A need with no entry is left out, and
 	// the adapter reports itself not configured rather than guessing.
 	Secrets map[string]string
+	// Env is the connection's own non-secret environment — for mail, the
+	// Person's login and their authorized source filters
+	// (runtimedb.AdapterPlacementEnv). Keys must begin WILD_ and may not
+	// shadow the contract's own names or prefixes; a value may not be a
+	// secret reference, because credentials travel only through Secrets.
+	Env map[string]string
 }
 
 var adapterConnectionRegexp = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)
@@ -120,6 +126,15 @@ func (e *Engine) ExpandAdapter(pkg *pkgspec.Package, params map[string]string, d
 	for _, p := range a.Inherits {
 		env[AdapterEnvParamPrefix+envName(p)] = merged[p]
 	}
+	for k, v := range pl.Env {
+		if err := checkPlacementEnv(k, v); err != nil {
+			return nil, err
+		}
+		if _, taken := env[k]; taken {
+			return nil, fmt.Errorf("capability: placement env %s shadows the adapter contract's own", k)
+		}
+		env[k] = v
+	}
 	out := []resource.Resource{{
 		ApiVersion: resource.ApiVersion, Kind: resource.KindSecret, Metadata: meta(pl.TokenSecret),
 		Secret: &resource.SecretSpec{Name: pl.TokenSecret, Provided: true,
@@ -172,4 +187,22 @@ func (e *Engine) ExpandAdapter(pkg *pkgspec.Package, params map[string]string, d
 
 func envName(s string) string {
 	return strings.ToUpper(strings.NewReplacer("-", "_", ".", "_").Replace(s))
+}
+
+var placementEnvKey = regexp.MustCompile(`^WILD_[A-Z0-9_]{1,60}$`)
+
+// checkPlacementEnv refuses a per-connection env entry that could pass
+// for part of the contract or carry a credential.
+func checkPlacementEnv(k, v string) error {
+	if !placementEnvKey.MatchString(k) || strings.HasPrefix(k, AdapterEnvParamPrefix) ||
+		strings.HasPrefix(k, AdapterEnvSecretPrefix) {
+		return fmt.Errorf("capability: placement env key %q must be WILD_<NAME> outside the param and secret prefixes", k)
+	}
+	if strings.HasPrefix(v, "secret/") {
+		return fmt.Errorf("capability: placement env %s may not reference a secret; credentials go through Secrets", k)
+	}
+	if len(v) > 16<<10 {
+		return fmt.Errorf("capability: placement env %s is too large", k)
+	}
+	return nil
 }
