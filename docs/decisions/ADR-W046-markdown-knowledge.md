@@ -111,13 +111,15 @@ so an agent can build a longer note in steps.
 - **Active content.** Some clients run parts of a note: SilverBullet runs
   `space-lua`, `space-script` and `space-style` blocks and `${...}`
   expressions in the reader's browser. Agent-written text containing any
-  of them is refused. So are the files a client treats as configuration
+  of them is refused. A fence opener is refused anywhere in a line, so a
+  block nested in a quote or list is caught too. The refusal does not
+  quote the text, because it lands in the audit stream. So are the files a client treats as configuration
   or runs (`CONTAINER_BOOT.md`, `CONFIG.md`, `SETTINGS.md`, `PLUGS.md` at
   the top level) and any path component starting with `_`.
 - **Credentials.** Agent writes that name a credential are refused, as
   `remember` refuses them.
-- **Untrusted reads.** Note text reaches the model inside the
-  `<untrusted_data>` envelope, because anyone with the UI open can write
+- **Untrusted reads.** Note text, and a note's path (people name notes
+  in the UI), reach the model inside the `<untrusted_data>` envelope, because anyone with the UI open can write
   a line that reads like an instruction.
 - **Audit.** Each household action already writes one operator event.
   Knowledge tools set `Result.AuditSummary`, so that event (and a

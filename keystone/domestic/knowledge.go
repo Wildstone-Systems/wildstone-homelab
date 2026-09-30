@@ -296,7 +296,10 @@ func (k *Knowledge) read(store *knowledge.Store, c Call) (Result, error) {
 		head += fmt.Sprintf(", showing bytes %d-%d", offset, end)
 	}
 	head += "):\n"
-	summary := head + ksredact.Envelope(string(content[offset:end]))
+	// The path is inside the envelope with the text: a person names a
+	// note in the web UI, so a filename can be phrased as an instruction
+	// just as a line of the note can.
+	summary := ksredact.Envelope(head + string(content[offset:end]))
 	if end < len(content) {
 		summary += fmt.Sprintf("\nMore follows: read again with offset=%d.", end)
 	}

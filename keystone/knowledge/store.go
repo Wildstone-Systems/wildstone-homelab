@@ -258,22 +258,40 @@ func CheckContent(content string) error {
 	if strings.Contains(content, "${") {
 		return fmt.Errorf("%w: \"${\" starts an expression some note apps run as code", ErrContent)
 	}
-	for _, line := range strings.Split(content, "\n") {
-		t := strings.TrimSpace(line)
-		var info string
-		switch {
-		case strings.HasPrefix(t, "```"):
-			info = strings.TrimLeft(t, "`")
-		case strings.HasPrefix(t, "~~~"):
-			info = strings.TrimLeft(t, "~")
-		default:
-			continue
-		}
-		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(info)), "space-") {
-			return fmt.Errorf("%w: a %q block is code some note apps run", ErrContent, strings.Fields(info)[0])
-		}
+	// Anywhere in a line, not only at its start: a fence inside a block
+	// quote ("> ```space-lua") or a list item ("- ```space-lua") is still
+	// a fenced block to a Markdown parser. Refusing a mention of one in
+	// running text too is the price of not parsing Markdown here.
+	if opensActiveFence(content) {
+		// Generic on purpose: the refusal ends up in the operator's audit
+		// stream, and echoing the fence would copy note text into it.
+		return fmt.Errorf("%w: it contains a space-* code block, which some note apps run", ErrContent)
 	}
 	return nil
+}
+
+// opensActiveFence reports whether content contains a run of three or
+// more backticks or tildes followed, after optional spaces, by "space-".
+func opensActiveFence(content string) bool {
+	lower := strings.ToLower(content)
+	for i := 0; i+3 <= len(lower); i++ {
+		c := lower[i]
+		if c != '`' && c != '~' || lower[i+1] != c || lower[i+2] != c {
+			continue
+		}
+		j := i + 3
+		for j < len(lower) && lower[j] == c {
+			j++
+		}
+		for j < len(lower) && (lower[j] == ' ' || lower[j] == '\t') {
+			j++
+		}
+		if strings.HasPrefix(lower[j:], "space-") {
+			return true
+		}
+		i = j - 1
+	}
+	return false
 }
 
 // checkNoLinks refuses a path any of whose existing components is not a

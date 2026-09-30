@@ -150,6 +150,10 @@ func TestAgentsCannotWriteWhatANoteAppRuns(t *testing.T) {
 		"```space-lua\nprint(1)\n```",
 		"  ~~~ Space-Script\nx\n~~~",
 		"```space-style\nbody{}\n```",
+		"> ```space-lua\n> print(1)\n> ```",
+		"> > ```SPACE-LUA\n> > x\n> > ```",
+		"- ```space-lua\n  x\n  ```",
+		"1. ~~~~ space-style\n   x\n   ~~~~",
 		"Total: ${1+1}",
 		"nul\x00byte",
 		string([]byte{0xff, 0xfe}),
@@ -162,6 +166,18 @@ func TestAgentsCannotWriteWhatANoteAppRuns(t *testing.T) {
 	// Ordinary code blocks are fine.
 	if _, err := s.Create("ok", "```go\nfmt.Println(1)\n```\n$5 and {braces}"); err != nil {
 		t.Errorf("an ordinary code block was refused: %v", err)
+	}
+}
+
+// A refusal reaches the operator's audit stream, so it must not quote
+// the text it refused.
+func TestARefusalDoesNotQuoteTheNote(t *testing.T) {
+	err := CheckContent("> ```space-privatephrase\n> x\n> ```")
+	if !errors.Is(err, ErrContent) {
+		t.Fatalf("err = %v", err)
+	}
+	if strings.Contains(err.Error(), "privatephrase") {
+		t.Fatalf("the refusal quotes the note: %v", err)
 	}
 }
 
