@@ -437,6 +437,9 @@ func isYAMLHostileRune(r rune) bool {
 //   - PublisherSecretRef: "secret/<capability>-publisher", the token a
 //     package that publishes household events presents to the intake
 //     (ADR-W024 A10); put it in the shim's env.
+//   - ProxyTrustCIDRs / HostNetworkProxyTrustCIDRs: whose X-Forwarded-For
+//     an app behind the proxy may believe, on the bridge and on the
+//     host's network respectively (see the constants below).
 //   - TailnetHost: the node's MagicDNS name under the tailnet posture,
 //     empty otherwise. Always present, so a template may test it without
 //     tripping missingkey=error. It exists for the packages that must
@@ -494,6 +497,8 @@ func buildResolved(pkg *pkgspec.Package, params map[string]string, consumer stri
 		"PublisherSecretRef": "secret/" + PublisherSecretName(pkg.Metadata.Capability),
 		"TailnetHost":        posture.TailnetName,
 		"ProxyTrustCIDRs":    proxyTrustCIDRs,
+
+		"HostNetworkProxyTrustCIDRs": hostNetworkProxyTrustCIDRs,
 	}
 
 	exportedBy := map[string]*pkgspec.Package{}
@@ -547,6 +552,32 @@ func buildResolved(pkg *pkgspec.Package, params map[string]string, consumer stri
 // cannot silently differ between the plan a person approved and the file
 // that lands.
 const proxyTrustCIDRs = `["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.1/32"]`
+
+// hostNetworkProxyTrustCIDRs is proxyTrustCIDRs for an app that runs
+// with networkMode: host and is reached through a "host/<port>" Route
+// (#433, #440).
+//
+// The proxy stays on the Wildstone bridge and dials the host gateway, so
+// the peer such an app sees is the proxy's own bridge address, unchanged:
+// Docker routes bridge-to-host traffic without masquerading it. That
+// address is in Docker's default bridge pool, 172.16.0.0/12 (172.17 to
+// 172.31, one /16 per network).
+//
+// Narrower than proxyTrustCIDRs because the reason that list may be
+// broad no longer holds. On a bridge, the peers able to reach the app's
+// port at all are containers on this host, so trusting all of them costs
+// nothing. On the host's network the LAN reaches the port directly, and
+// a household LAN is usually 192.168.0.0/16 or 10.0.0.0/8: trusting
+// those would let any device on it — a guest phone, an IoT plug — set
+// X-Forwarded-For and be believed about its own address.
+//
+// The cost is stated rather than hidden: a daemon configured with
+// default-address-pools outside 172.16.0.0/12, or one that has used up
+// that pool and allocated Wildstone's network from 192.168.0.0/16, sees
+// its proxied requests refused by the app. That is a loud failure an
+// operator can fix in the app's own settings, which is the right side to
+// fail on for a trust boundary.
+const hostNetworkProxyTrustCIDRs = `["172.16.0.0/12", "127.0.0.1/32"]`
 
 // exportContext is what an export template renders over (trait.
 // ExportContext). An export answers "what do I hand my consumers", and

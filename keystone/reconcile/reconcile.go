@@ -1525,6 +1525,10 @@ func (r *Reconciler) applyContainerStep(ctx context.Context, nodeID string, step
 			sr.Error = ne
 			return sr
 		}
+		if ne := r.refuseIfHostPortTaken(ctx, nodeID, want, desiredByKey); ne != "" {
+			sr.Error = ne
+			return sr
+		}
 		if ne := r.ensureNodePrereqs(ctx, nodeID); ne != "" {
 			sr.Error = ne
 			return sr

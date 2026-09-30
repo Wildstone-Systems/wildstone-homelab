@@ -5,24 +5,72 @@
 # and the two are separate capabilities on purpose, so installing one
 # never replaces the other's resources.
 #
-# WHAT WORKS, AND WHAT NEEDS THE HOST. Home Assistant runs happily on
-# the Wildstone Docker network: the dashboard, automations, cloud
-# integrations, MQTT (see mqtt-mosquitto), and Zigbee over the network
-# (see zigbee-zigbee2mqtt) all work as shipped. Two things do not,
-# and are recorded here rather than left for the operator to discover:
+# LAN-NATIVE (2.0.0). Home Assistant runs with networkMode: host, in
+# the node's own network namespace, because most of what it is for
+# lives on the LAN: mDNS/SSDP/HomeKit discovery (Chromecast, Sonos,
+# HomeKit bridges) is multicast that never crosses into a Docker
+# bridge, and integrations that expect replies on the sender's address
+# break behind NAT. On the host's network all of that works as it does
+# on a bare install.
 #
-#   - USB radios (Zigbee/Z-Wave sticks) need a ContainerSpec.devices
-#     field that does not exist yet (the same gap ADR-W013 A2 records
-#     for Jellyfin's /dev/dri). Use a network coordinator instead.
-#   - mDNS/SSDP discovery of LAN devices (Chromecast, HomeKit, Sonos)
-#     needs host networking, which the protocol deliberately does not
-#     offer. Most such integrations accept an IP address when asked.
+# What that means, stated plainly:
+#
+#   - Home Assistant listens on port 8123 of EVERY address the machine
+#     has, LAN included. http://<machine's LAN address>:8123 reaches it
+#     directly: plain HTTP, Home Assistant's own login, and nothing of
+#     Wildstone in the path. The Wildstone URL below is the other door —
+#     HTTPS through the household proxy under the family_private class —
+#     and the one the household should bookmark. The companion app may
+#     find the direct one by itself (zeroconf); both reach the same app
+#     and the same accounts.
+#   - Port 8123 must be free on the machine. If anything else already
+#     listens there, the install or upgrade is refused BEFORE the running
+#     container is touched (Keystone checks the node's listening ports
+#     for the port this package's host/8123 Route names), rather than
+#     starting a Home Assistant that cannot bind its port.
+#   - USB/serial radios: the recommended path is still a protocol
+#     package (zigbee-zigbee2mqtt, a Z-Wave package) that owns the stick
+#     and talks MQTT, so Home Assistant restarts never drop the radio.
+#     For ZHA or a direct Z-Wave stick, set serial_device (advanced): one
+#     device node, on the same closed allowlist every package's devices
+#     are held to (serial/USB radios, never a block device).
+#   - Bluetooth is not wired here: it needs the host's D-Bus, which is a
+#     separate change.
+#
+# MQTT. Optional, behind mqtt_enabled (default off, so an existing
+# install upgrades without needing a broker). With it on, the package
+# requires mqtt:broker (mqtt-mosquitto) on THIS machine and hands the
+# container the broker's address and Home Assistant's own credential as
+# WILDSTONE_MQTT_* env — the password by reference, substituted by the
+# node, never written here or into a plan. Home Assistant does not read
+# its broker from YAML or env (the MQTT integration is configured only
+# through its UI, as a config entry), and a seeded config entry would
+# have to hold the password in plain text in the settings store, which
+# nothing on the node substitutes. So connecting it is one step in Home
+# Assistant: Settings > Devices & services > Add integration > MQTT,
+# with broker WILDSTONE_MQTT_HOST, port WILDSTONE_MQTT_PORT, username
+# home-assistant and the password WILDSTONE_MQTT_PASSWORD, read on this
+# machine with `docker exec home-assistant printenv`. The broker refuses
+# anonymous clients, so a wrong or missing credential fails at that
+# form, not later.
+#
+# UPGRADING FROM 1.x. The container is replaced (bridge -> host), and
+# nothing it keeps moves: the same home-assistant-config volume at
+# /config, the same BackupPlan, the same Route name and hostname. The
+# seeded files are never rewritten (a SeedFile is the app's once it
+# lands), so an upgraded install keeps the proxy trust it was seeded
+# with — the broader list, which also covers the proxy's new path, so
+# the Wildstone URL keeps working. To narrow it to what a fresh 2.x
+# install trusts, see the note on .storage/http below.
 #
 # THE ROUTE. Home Assistant runs its own login and its mobile app talks
 # to the same URL, so the proxy passes through (auth: none) and the
 # Route is family_private — the same posture as ntfy: reachable by the
 # household's own devices, with the app's own access control at the
-# app layer, and policy-clean off the public class (ADR-W009).
+# app layer, and policy-clean off the public class (ADR-W009). The
+# upstream is host/8123: the proxy stays on the Wildstone bridge and
+# reaches the host through Docker's host gateway, since a host-networked
+# container has no name there.
 #
 # TRUSTING THE PROXY, AND WHY IT IS SEEDED INTO THE SETTINGS STORE.
 # Home Assistant refuses a proxied request unless it has been told which
@@ -58,7 +106,12 @@
 # household discovering it as a 400.
 #
 # Nothing here asks the operator to do anything, and nothing is guessed:
-# the proxy ranges come from .Resolved.ProxyTrustCIDRs.
+# the proxy ranges come from .Resolved.HostNetworkProxyTrustCIDRs. On
+# the host's network, Home Assistant sees the proxy at the proxy's own
+# address on the Wildstone bridge (Docker does not masquerade bridge-to-
+# host traffic), which is in Docker's bridge pool; the LAN ranges are
+# deliberately NOT trusted, because the LAN now reaches port 8123
+# directly and must not be believed about X-Forwarded-For.
 #
 # Image digest is REAL, resolved 2026-09-07 via the OCI registry API:
 #   ghcr.io/home-assistant/home-assistant:stable -> sha256:612d7676...2918
@@ -66,16 +119,21 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: home-assistant
-  version: 1.1.2
+  # 2.0.0: host networking (port 8123 on the machine's LAN), Route to
+  # host/8123, and optional authenticated MQTT (mqtt_enabled).
+  version: 2.0.0
   capability: home-assistant
   profile: container
 requires:
   - { trait: ingress, mode: private }
+  - { trait: mqtt, mode: broker, when: mqtt_enabled }
 params:
   - { name: public_domain, required: true, description: "The domain your services are named under, e.g. home.example.com. Under a tailnet this is a label rather than an address you type.", source: domain }
   - { name: hass_subdomain, default: hass, description: "The name this service appears under, e.g. hass." }
-  - { name: node, required: true, description: "Which machine to install this on.", source: node }
+  - { name: node, required: true, description: "Which machine to install this on. Home Assistant uses this machine's network directly, so port 8123 on it must be free. With MQTT on, it must be the machine the MQTT broker (mqtt-mosquitto) is on.", source: node }
   - { name: timezone, default: UTC, source: timezone, validate: iana_timezone, description: "Your timezone, e.g. Europe/London." }
+  - { name: mqtt_enabled, default: "false", validate: "enum:true|false", description: "Give Home Assistant its own login on the MQTT broker (mqtt-mosquitto), for Zigbee2MQTT, Frigate and other MQTT devices. Needs the broker installed on this same machine first; you then add the MQTT integration in Home Assistant once, with the details this provides. Leave false for none." }
+  - { name: serial_device, default: "", example: "/dev/serial/by-id/usb-Nabu_Casa_ZBT-1_0001-if00-port0", description: "Advanced: a USB/serial radio handed straight to Home Assistant (ZHA or Z-Wave JS inside Home Assistant), by its name under /dev/serial/by-id/. Leave empty and use a Zigbee2MQTT or Z-Wave package instead unless you know you want this." }
 policies:
   classifications: [family_private]
   dataSensitivity: high
@@ -143,6 +201,14 @@ templates:
       # there is no trial to promote and nothing to auto-revert.
       # "yaml_migration_done" is already true so the first boot does not
       # try to migrate YAML that deliberately has no http: block.
+      #
+      # Seeded once: an install from 1.x keeps the list it was seeded
+      # with (Docker's bridge ranges AND 10/8 and 192.168/16). That list
+      # still covers the proxy, so nothing breaks on upgrade; it also
+      # believes X-Forwarded-For from the LAN, which on host networking
+      # can now reach port 8123. To narrow it, stop Home Assistant and set
+      # trusted_proxies in /config/.storage/http to what a fresh install
+      # gets: ["172.16.0.0/12", "127.0.0.1/32"].
       content: |
         {
           "version": 2,
@@ -153,7 +219,7 @@ templates:
               "server_port": 8123,
               "cors_allowed_origins": ["https://cast.home-assistant.io"],
               "use_x_forwarded_for": true,
-              "trusted_proxies": {{ .Resolved.ProxyTrustCIDRs }},
+              "trusted_proxies": {{ .Resolved.HostNetworkProxyTrustCIDRs }},
               "login_attempts_threshold": -1,
               "ip_ban_enabled": true,
               "ssl_profile": "modern",
@@ -213,10 +279,23 @@ templates:
     metadata: { name: home-assistant, node: "{{ .Params.node }}" }
     spec:
       image: "ghcr.io/home-assistant/home-assistant@sha256:612d76760b544cb40b7ba01387fdac964c59a6a550a50a4d30b4773c822d2918"
+      # The machine's own network namespace: LAN discovery reaches Home
+      # Assistant, and it listens on 8123 of every address (see header).
+      networkMode: host
       env:
         TZ: "{{ .Params.timezone }}"
+        {{- if eq .Params.mqtt_enabled "true" }}
+        # For the one-time MQTT integration form; Home Assistant itself
+        # does not read these (see header). The password is a reference
+        # the node substitutes at start.
+        WILDSTONE_MQTT_HOST: "{{ .Resolved.MqttHost }}"
+        WILDSTONE_MQTT_PORT: "{{ .Resolved.MqttPort }}"
+        WILDSTONE_MQTT_USERNAME: "{{ .Resolved.MqttUsername }}"
+        WILDSTONE_MQTT_PASSWORD: "{{ .Resolved.MqttPasswordSecretRef }}"
+        {{- end }}
       mounts:
         - { source: home-assistant-config, target: /config }
+      devices: {{ with .Params.serial_device }}[{ source: "{{ . }}" }]{{ else }}[]{{ end }}
       restart: unless-stopped
   - |
     apiVersion: wildstone.dev/v1
@@ -224,7 +303,7 @@ templates:
     metadata: { name: hass, node: "{{ .Params.node }}" }
     spec:
       host: "{{ .Params.hass_subdomain }}.{{ .Params.public_domain }}"
-      upstream: "container/home-assistant:8123"
+      upstream: "host/8123"
       auth: none
       classification: family_private
   # Backup: the config volume holds every automation, dashboard and
