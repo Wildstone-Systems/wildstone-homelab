@@ -77,6 +77,8 @@ var operatorOnly = map[string]bool{
 	"agent-hermes": true,
 	// Private workspace storage configuration belongs to the Owner (W047).
 	"workspace": true,
+	// Managed search-provider installation is Owner administration (W047).
+	"web-research": true,
 	// Wildstone's own surfaces. A member cannot request the dashboard
 	// they are standing on, or the drop box behind its Files card.
 	"dashboard": true,
