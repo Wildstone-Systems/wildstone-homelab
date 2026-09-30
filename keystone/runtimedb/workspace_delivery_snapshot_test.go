@@ -3,6 +3,7 @@ package runtimedb
 import (
 	"database/sql"
 	"database/sql/driver"
+	"errors"
 	"fmt"
 	"sync/atomic"
 	"testing"
@@ -81,5 +82,49 @@ func TestWorkspaceDeliveryAdmissionUsesOneSnapshot(t *testing.T) {
 	}
 	if live, err := db.HasLivePersonChatBinding(at.Seq, "sam"); err != nil || live {
 		t.Fatalf("final denied state: %v %v", live, err)
+	}
+}
+
+// Deterministically interleave room discovery between the earlier gateway
+// lookup and the delivery transaction. The supplied destination is deliberately
+// stale; both workspace-only and memory-derived history must be withheld.
+func TestWorkspaceDeliveryRechecksRoomInTransaction(t *testing.T) {
+	for _, memorySource := range []bool{false, true} {
+		t.Run(fmt.Sprintf("memory=%v", memorySource), func(t *testing.T) {
+			db, w, id := workspaceAuthorityFixture(t)
+			at := connect(t, db, "alfred", "telegram", ButlerSurfaceAdmin)
+			bind(t, db, at, "mika", "synthetic-account")
+			ctx, _, access := workspacePrivacyTurn(t, db, id, ModelLocal, MemoryDestination{BuiltIn: true})
+			if memorySource {
+				memory, err := db.RecordMemory(MemoryRecord{Scope: MemoryScopePersonal, Kind: MemoryFact, Content: "synthetic source", Owner: "mika", Author: "mika", Butler: "alfred", Audience: ButlerAudiencePrivate, PermissionLabel: "household", SourceKind: "conversation", SourceID: id})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err = TrackMemoryPrivacy(ctx, memory, nil); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := db.CreateWorkspaceArtifact(WorkspaceArtifact{ID: "output", WorkspaceID: w.ID, Path: "output.txt"}); err != nil {
+				t.Fatal(err)
+			}
+			if err := db.CreateWorkspaceRevisionForTask(ctx, access, w.ID, "", workspaceNewRevision("output-r1", "output")); err != nil {
+				t.Fatal(err)
+			}
+			seq, _ := parseButlerTaskID(id)
+			workspaceFinishRevision(t, db, w, seq, "output", "output-r1", "")
+			destination := MemoryDestination{ConnectionRef: at.Seq, Group: db.IsChatRoom(at.Seq, at.ExternalID)}
+			if destination.Group {
+				t.Fatal("initial destination is a group")
+			}
+			if err := db.CheckTaskDeliveryPrivacy(id, ModelLocal, destination); err != nil {
+				t.Fatalf("initial delivery: %v", err)
+			}
+			if err := db.NoteChatRoom(at.Seq, at.ExternalID); err != nil {
+				t.Fatal(err)
+			}
+			if err := db.CheckTaskDeliveryPrivacy(id, ModelLocal, destination); !errors.Is(err, ErrPrivacy) {
+				t.Fatalf("stale direct-chat result authorized delivery after room discovery: %v", err)
+			}
+		})
 	}
 }

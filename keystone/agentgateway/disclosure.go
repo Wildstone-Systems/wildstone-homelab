@@ -241,7 +241,6 @@ func deliveryPrivacyCheck(db *runtimedb.DB, row runtimedb.AgentDelivery, model s
 			if err != nil || !bound {
 				return runtimedb.ErrPrivacy
 			}
-			destination.Group = destination.Group || db.IsChatRoom(at.Seq, at.ExternalID)
 		}
 		// Workspace reads can precede the first session. A resolved task
 		// must carry its own provenance through delivery, and a failed

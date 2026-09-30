@@ -317,6 +317,15 @@ func (db *DB) checkHistoryPrivacy(object string, task, session int64, model stri
 		if err = tx.QueryRow(`SELECT p.member FROM butler_tasks t JOIN butler_members p ON p.person_id=t.owner_person_id WHERE t.seq=?`, task).Scan(&owner); err != nil {
 			return ErrPrivacy
 		}
+		// Re-read room discovery inside this transaction. An earlier gateway
+		// lookup can become stale before this snapshot starts; source type
+		// must not determine whether a known shared destination is refused.
+		var room bool
+		if err = tx.QueryRow(`SELECT EXISTS (
+ SELECT 1 FROM chat_rooms r JOIN butler_addresses a ON a.seq=r.connection
+ WHERE a.seq=? AND r.conversation=a.external_id)`, d.ConnectionRef).Scan(&room); err != nil || room || d.Group {
+			return ErrPrivacy
+		}
 		admitted, err := hasLivePersonChatBinding(tx, d.ConnectionRef, owner)
 		if err != nil || !admitted {
 			return ErrPrivacy
