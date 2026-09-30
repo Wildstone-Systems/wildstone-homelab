@@ -10,7 +10,7 @@ func TestManagedEndpointConfinesConfiguration(t *testing.T) {
 	valid := func() resource.Resource {
 		r, err := resource.Unmarshal([]byte(`apiVersion: wildstone.dev/v1
 kind: Container
-metadata: {name: ddgs, node: n1, package: research-ddgs}
+metadata: {name: ddgs, node: n1, package: research-ddgs, owner: capability/web-research}
 spec:
   image: "registry.example.internal/ddgs@sha256:` + strings.Repeat("1", 64) + `"
   ports: ["127.0.0.1:18081:8080"]

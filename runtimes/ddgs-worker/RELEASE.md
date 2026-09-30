@@ -15,7 +15,8 @@ Do not add a Docker socket or new workflow secret to obtain image evidence.
 An authorized publisher with registry access, a buildx multi-platform builder
 and push rights can run `scripts/build-ddgs-worker.sh` with three arguments:
 a verified `python:3.12.14-slim-bookworm@sha256:<digest>` base, an explicit
-registry/repository:tag, and an output directory outside the source tree.
+registry/repository:tag, and a new output directory outside the source tree. Existing evidence directories
+are refused so a failed build cannot be confused with an old successful pin.
 The helper builds linux/amd64 and linux/arm64 from hash-locked requirements,
 records source revision/base/digest and emits provenance/SBOM metadata.
 It performs an explicit registry push, never installation or deployment.

@@ -14,7 +14,7 @@ root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 # Only committed source is eligible for provenance; do not silently publish
 # local edits or secrets as part of a build context.
 [[ -z $(git -C "$root" status --porcelain --untracked-files=all -- runtimes/ddgs-worker) ]] || { echo 'worker source must be committed and clean' >&2; exit 2; }
-mkdir -p "$out"
+mkdir "$out" # refuse existing evidence directories, including stale successful pins
 out=$(cd "$out" && pwd)
 source_revision=$(git -C "$root" rev-parse HEAD)
 source_epoch=$(git -C "$root" show -s --format=%ct HEAD)
