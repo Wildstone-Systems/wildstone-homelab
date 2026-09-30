@@ -11,6 +11,8 @@ this package does not replace #475's resolver. Missing authority fails closed.
 base revision and configuration revision. Begin keys are scoped to task and
 operation; changed arguments conflict. Chunks are consecutive, at most 1,024
 UTF-8 bytes each, no NUL, at most 10,240 chunks and the snapshotted file ceiling.
+Invoke keys for chunks are scoped to task and operation, durably bound to the
+session/index; different arguments or targets conflict even on retries.
 A SQLite transaction reserves scratch bytes and journals each chunk's random
 object identity/hash/size before `StageObject` writes it. Exact retries verify
 the original object. Pending chunks cannot be skipped or committed. Session
@@ -49,6 +51,8 @@ unsettled S05 metadata. It never claims recovered publication success, emits a
 notification, or creates a receipt. Already committed writes and original
 receipts remain settled. Incomplete open sessions remain resumable scratch.
 Quarantine/coordinator fences refuse recovery just as they refuse execution.
+Unexpected startup recovery errors fail startup before durable dispatch;
+explicit restore/household-stop gates retain the administrative recovery surface.
 
 Rollback marks unsettled publication/session rows aborted. It preserves prior
 committed revisions, all byte objects and held reservations, including an

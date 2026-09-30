@@ -174,8 +174,8 @@ func (c *Coordinator) session(ctx context.Context, workspaceID, id string) (Sess
 func object(ch runtimedb.WorkspaceWriteChunk) storage.Object {
 	return storage.Object{ID: ch.ObjectID, SHA256: ch.Hash, Size: ch.SizeBytes}
 }
-func (c *Coordinator) Chunk(ctx context.Context, workspaceID, id string, index int, text string) (int, error) {
-	if index < 0 || index >= 10240 || len(text) > 1024 || !utf8.ValidString(text) || strings.IndexByte(text, 0) >= 0 {
+func (c *Coordinator) Chunk(ctx context.Context, workspaceID, id string, index int, text, key string) (int, error) {
+	if !validKey(key) || index < 0 || index >= 10240 || len(text) > 1024 || !utf8.ValidString(text) || strings.IndexByte(text, 0) >= 0 {
 		return 0, ErrInput
 	}
 	unlock := c.lock(id)
@@ -184,14 +184,11 @@ func (c *Coordinator) Chunk(ctx context.Context, workspaceID, id string, index i
 	if err != nil {
 		return 0, err
 	}
-	if s.State != "open" {
-		return 0, runtimedb.ErrWorkspaceConflict
-	}
 	oid, err := randomID()
 	if err != nil {
 		return 0, err
 	}
-	ch, err := c.DB.JournalWorkspaceChunk(s, runtimedb.WorkspaceWriteChunk{Index: index, ObjectID: oid, Hash: hash([]byte(text)), SizeBytes: int64(len(text)), ReservationID: oid})
+	ch, err := c.DB.JournalWorkspaceChunk(s, runtimedb.WorkspaceWriteChunk{Index: index, ObjectID: oid, Hash: hash([]byte(text)), SizeBytes: int64(len(text)), ReservationID: oid}, key)
 	if err != nil {
 		return 0, err
 	}

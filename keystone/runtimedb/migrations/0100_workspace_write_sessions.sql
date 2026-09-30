@@ -68,3 +68,17 @@ BEGIN SELECT RAISE(ABORT,'unresolved write session pins scratch reservation'); E
 CREATE TRIGGER workspace_write_commit_keys_scope BEFORE INSERT ON workspace_write_commit_keys
 WHEN NOT EXISTS(SELECT 1 FROM workspace_write_sessions WHERE id=NEW.session_id AND task_id=NEW.task_id)
 BEGIN SELECT RAISE(ABORT,'commit key task does not own write session'); END;
+
+CREATE TABLE workspace_write_chunk_keys (
+ task_id INTEGER NOT NULL REFERENCES butler_tasks(seq),
+ effect_key TEXT NOT NULL CHECK(length(CAST(effect_key AS BLOB)) BETWEEN 1 AND 128),
+ session_id TEXT NOT NULL,
+ chunk_index INTEGER NOT NULL,
+ PRIMARY KEY(task_id,effect_key),
+ FOREIGN KEY(session_id,chunk_index) REFERENCES workspace_write_chunks(session_id,chunk_index)
+);
+CREATE TRIGGER workspace_write_chunk_keys_immutable BEFORE UPDATE ON workspace_write_chunk_keys
+BEGIN SELECT RAISE(ABORT,'write chunk key is immutable'); END;
+CREATE TRIGGER workspace_write_chunk_keys_scope BEFORE INSERT ON workspace_write_chunk_keys
+WHEN NOT EXISTS(SELECT 1 FROM workspace_write_sessions WHERE id=NEW.session_id AND task_id=NEW.task_id)
+BEGIN SELECT RAISE(ABORT,'chunk key task does not own write session'); END;

@@ -796,4 +796,8 @@ var Columns = []Column{
 		"0100: write-session journal identity or policy metadata, not a Person selector"},
 	{"workspace_write_commit_keys", "session_id", NotAPerson,
 		"0100: write-session journal identity or policy metadata, not a Person selector"},
+	{"workspace_write_chunk_keys", "effect_key", NotAPerson,
+		"0100: task-scoped workspace_write_chunk Invoke idempotency key"},
+	{"workspace_write_chunk_keys", "session_id", NotAPerson,
+		"0100: FK to the write session of the indexed immutable chunk"},
 }

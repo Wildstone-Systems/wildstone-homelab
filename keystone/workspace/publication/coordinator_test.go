@@ -10,10 +10,12 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/internal/dbtemplate"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 	"github.com/chickenrat17/wildstone-homelab/keystone/workspace"
+	"github.com/chickenrat17/wildstone-homelab/keystone/workspace/storage"
 )
 
 var template = dbtemplate.New(func(p string) error {
@@ -93,7 +95,7 @@ func begin(t *testing.T, f fixture, key, text string) Session {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = f.c.Chunk(context.Background(), s.WorkspaceID, s.ID, 0, text); err != nil {
+	if _, err = f.c.Chunk(context.Background(), s.WorkspaceID, s.ID, 0, text, s.ID+":"+strconv.Itoa(0)); err != nil {
 		t.Fatal(err)
 	}
 	return s
@@ -135,10 +137,10 @@ func TestWriteRetryReceiptVisibilityAndAuthority(t *testing.T) {
 	if _, err = f.c.Begin(ctx, changed); !errors.Is(err, runtimedb.ErrWorkspaceConflict) {
 		t.Fatalf("reused begin key: %v", err)
 	}
-	if _, err = f.c.Chunk(ctx, s.WorkspaceID, s.ID, 0, "changed"); !errors.Is(err, runtimedb.ErrWorkspaceConflict) {
+	if _, err = f.c.Chunk(ctx, s.WorkspaceID, s.ID, 0, "changed", s.ID+":"+strconv.Itoa(0)); !errors.Is(err, runtimedb.ErrWorkspaceConflict) {
 		t.Fatalf("chunk mismatch: %v", err)
 	}
-	if n, err := f.c.Chunk(ctx, s.WorkspaceID, s.ID, 0, "complete"); err != nil || n != 1 {
+	if n, err := f.c.Chunk(ctx, s.WorkspaceID, s.ID, 0, "complete", s.ID+":"+strconv.Itoa(0)); err != nil || n != 1 {
 		t.Fatalf("chunk retry: %d %v", n, err)
 	}
 	if _, err = f.c.DB.WorkspaceArtifact(s.WorkspaceID, s.ArtifactID); !errors.Is(err, sql.ErrNoRows) {
@@ -246,8 +248,33 @@ func TestConcurrentSameBaseOneCommit(t *testing.T) {
 	if success != 1 || conflict != 1 {
 		t.Fatalf("success=%d conflicts=%d", success, conflict)
 	}
-	if _, err := f.c.DB.WorkspaceRevision(old.WorkspaceID, r.Revision); err != nil {
-		t.Fatal("prior revision lost", err)
+	current, err := f.c.DB.WorkspaceArtifact(old.WorkspaceID, old.ArtifactID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := f.c.store(old, f.settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{r.Revision, current.CurrentRevision} {
+		revision, err := f.c.DB.WorkspaceRevision(old.WorkspaceID, id)
+		if err != nil {
+			t.Fatal("retained revision lost", err)
+		}
+		bytes, err := st.Read(storage.Object{ID: revision.ID, SHA256: revision.Hash, Size: revision.SizeBytes})
+		if err != nil {
+			t.Fatal("retained bytes lost", err)
+		}
+		expected := "old"
+		if id == a.ID {
+			expected = "first"
+		}
+		if id == b.ID {
+			expected = "second"
+		}
+		if string(bytes) != expected {
+			t.Fatalf("metadata/byte mismatch: %q != %q", bytes, expected)
+		}
 	}
 }
 func TestStartupRollsBackUnsettledAndKeepsAccounting(t *testing.T) {
@@ -319,7 +346,7 @@ func TestInterruptedChunksBoundsAndScratch(t *testing.T) {
 				}
 				return nil
 			}
-			if _, err = f.c.Chunk(ctx, s.WorkspaceID, s.ID, 0, "part"); err == nil {
+			if _, err = f.c.Chunk(ctx, s.WorkspaceID, s.ID, 0, "part", s.ID+":"+strconv.Itoa(0)); err == nil {
 				t.Fatal("missing fault")
 			}
 			chunks, err := f.c.DB.WorkspaceWriteChunks(s.ID)
@@ -337,13 +364,13 @@ func TestInterruptedChunksBoundsAndScratch(t *testing.T) {
 			if _, err = f.c.Commit(ctx, s.WorkspaceID, s.ID, "commit"); err == nil {
 				t.Fatal("partial chunk published")
 			}
-			if _, err = f.c.Chunk(ctx, s.WorkspaceID, s.ID, 1, "skip"); err == nil {
+			if _, err = f.c.Chunk(ctx, s.WorkspaceID, s.ID, 1, "skip", s.ID+":"+strconv.Itoa(1)); err == nil {
 				t.Fatal("pending chunk bypassed")
 			}
-			if _, err = f.c.Chunk(ctx, s.WorkspaceID, s.ID, 0, "part"); err != nil {
+			if _, err = f.c.Chunk(ctx, s.WorkspaceID, s.ID, 0, "part", s.ID+":"+strconv.Itoa(0)); err != nil {
 				t.Fatal(err)
 			}
-			if _, err = f.c.Chunk(ctx, s.WorkspaceID, s.ID, 1, strings.Repeat("x", 1025)); !errors.Is(err, ErrInput) {
+			if _, err = f.c.Chunk(ctx, s.WorkspaceID, s.ID, 1, strings.Repeat("x", 1025), s.ID+":"+strconv.Itoa(1)); !errors.Is(err, ErrInput) {
 				t.Fatalf("oversize chunk: %v", err)
 			}
 			commit(t, f.c, s, "commit")
@@ -445,11 +472,11 @@ func TestScratchPinsAndFileCeiling(t *testing.T) {
 		t.Fatal("unresolved scratch reservation released")
 	}
 	for i := 1; i < 4; i++ {
-		if _, err = f.c.Chunk(ctx, s.WorkspaceID, s.ID, i, strings.Repeat("b", 1024)); err != nil {
+		if _, err = f.c.Chunk(ctx, s.WorkspaceID, s.ID, i, strings.Repeat("b", 1024), s.ID+":"+strconv.Itoa(i)); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if _, err = f.c.Chunk(ctx, s.WorkspaceID, s.ID, 4, "x"); err == nil {
+	if _, err = f.c.Chunk(ctx, s.WorkspaceID, s.ID, 4, "x", s.ID+":"+strconv.Itoa(4)); err == nil {
 		t.Fatal("file ceiling bypassed")
 	}
 	chunks, err = f.c.DB.WorkspaceWriteChunks(s.ID)
@@ -498,5 +525,63 @@ func TestMissingOrCorruptPublishedBytesCannotCommit(t *testing.T) {
 				t.Fatal(err)
 			}
 		})
+	}
+}
+
+func TestStartupRecoveryRespectsQuarantineAndHouseholdStop(t *testing.T) {
+	for _, kind := range []string{"quarantine", "stop"} {
+		t.Run(kind, func(t *testing.T) {
+			f := setup(t)
+			s := begin(t, f, "begin", "report")
+			f.c.fault = func(point string) error {
+				if point == "after_publish" {
+					return errors.New("crash")
+				}
+				return nil
+			}
+			if _, err := f.c.Commit(context.Background(), s.WorkspaceID, s.ID, "commit"); err == nil {
+				t.Fatal("missing fault")
+			}
+			var err error
+			if kind == "quarantine" {
+				err = f.c.DB.EnterRestoreQuarantine("test restore", time.Now())
+			} else {
+				err = f.c.DB.StopHouseholdExecution("writer", "test stop")
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = f.c.DB.RecoverWorkspaceWrites(); err == nil {
+				t.Fatal("recovery bypassed execution gate")
+			}
+			p, err := f.c.DB.WorkspacePublication(s.WorkspaceID, s.ID)
+			if err != nil || p.State != "prepared" {
+				t.Fatal("gated recovery changed journal", p, err)
+			}
+		})
+	}
+}
+
+func TestChunkInvokeKeyBindingAndSettledReplay(t *testing.T) {
+	f := setup(t)
+	ctx := context.Background()
+	s := begin(t, f, "begin", "chunk")
+	if _, err := f.c.Chunk(ctx, s.WorkspaceID, s.ID, 1, "next", s.ID+":0"); !errors.Is(err, runtimedb.ErrWorkspaceConflict) {
+		t.Fatalf("chunk key reused for different index: %v", err)
+	}
+	f.request.Path = "other.md"
+	other := begin(t, f, "other", "other")
+	if _, err := f.c.Chunk(ctx, other.WorkspaceID, other.ID, 0, "other", s.ID+":0"); !errors.Is(err, runtimedb.ErrWorkspaceConflict) {
+		t.Fatalf("chunk key reused for another session: %v", err)
+	}
+	if _, err := f.c.Chunk(ctx, s.WorkspaceID, s.ID, 1, "next", ""); !errors.Is(err, ErrInput) {
+		t.Fatalf("missing chunk key: %v", err)
+	}
+	commit(t, f.c, s, "commit")
+	if next, err := f.c.Chunk(ctx, s.WorkspaceID, s.ID, 0, "chunk", s.ID+":0"); err != nil || next != 1 {
+		t.Fatalf("settled chunk replay: %d %v", next, err)
+	}
+	if _, err := f.c.Chunk(ctx, s.WorkspaceID, s.ID, 1, "next", "new-key"); !errors.Is(err, runtimedb.ErrWorkspaceConflict) {
+		t.Fatalf("append to settled session: %v", err)
 	}
 }

@@ -139,7 +139,7 @@ func (db *DB) WorkspaceWriteChunks(id string) ([]WorkspaceWriteChunk, error) {
 
 // JournalWorkspaceChunk reserves bytes and records their identity atomically,
 // before any filesystem write. Exact retries reuse this original object.
-func (db *DB) JournalWorkspaceChunk(s WorkspaceWriteSession, c WorkspaceWriteChunk) (WorkspaceWriteChunk, error) {
+func (db *DB) JournalWorkspaceChunk(s WorkspaceWriteSession, c WorkspaceWriteChunk, key string) (WorkspaceWriteChunk, error) {
 	if err := db.CheckHouseholdExecution(); err != nil {
 		return c, err
 	}
@@ -155,7 +155,7 @@ func (db *DB) JournalWorkspaceChunk(s WorkspaceWriteSession, c WorkspaceWriteChu
 	if err != nil {
 		return c, err
 	}
-	if current.State != "open" || current.TaskID != s.TaskID {
+	if current.State == "aborted" || current.TaskID != s.TaskID {
 		return c, ErrWorkspaceConflict
 	}
 	existing, err := scanChunk(tx.QueryRow(`SELECT `+chunkColumns+` FROM workspace_write_chunks WHERE session_id=? AND chunk_index=?`, s.ID, c.Index))
@@ -163,10 +163,16 @@ func (db *DB) JournalWorkspaceChunk(s WorkspaceWriteSession, c WorkspaceWriteChu
 		if existing.Hash != c.Hash || existing.SizeBytes != c.SizeBytes {
 			return c, ErrWorkspaceConflict
 		}
-		return existing, nil
+		if err = bindWorkspaceChunkKey(tx, s.TaskID, key, s.ID, c.Index); err != nil {
+			return c, err
+		}
+		return existing, tx.Commit()
 	}
 	if err != sql.ErrNoRows {
 		return c, err
+	}
+	if current.State != "open" {
+		return c, ErrWorkspaceConflict
 	}
 	var count, pending int
 	var size int64
@@ -190,8 +196,28 @@ func (db *DB) JournalWorkspaceChunk(s WorkspaceWriteSession, c WorkspaceWriteChu
 	}
 	c.SessionID = s.ID
 	c.State = "pending"
+	if err = bindWorkspaceChunkKey(tx, s.TaskID, key, s.ID, c.Index); err != nil {
+		return c, err
+	}
 	return c, tx.Commit()
 }
+func bindWorkspaceChunkKey(tx *sql.Tx, task int64, key, session string, index int) error {
+	var oldSession string
+	var oldIndex int
+	err := tx.QueryRow(`SELECT session_id,chunk_index FROM workspace_write_chunk_keys WHERE task_id=? AND effect_key=?`, task, key).Scan(&oldSession, &oldIndex)
+	if err == nil {
+		if oldSession != session || oldIndex != index {
+			return ErrWorkspaceConflict
+		}
+		return nil
+	}
+	if err != sql.ErrNoRows {
+		return err
+	}
+	_, err = tx.Exec(`INSERT INTO workspace_write_chunk_keys(task_id,effect_key,session_id,chunk_index) VALUES(?,?,?,?)`, task, key, session, index)
+	return err
+}
+
 func (db *DB) MarkWorkspaceChunkDurable(id string, index int) error {
 	if err := db.CheckHouseholdExecution(); err != nil {
 		return err
@@ -392,6 +418,19 @@ func (db *DB) checkWorkspaceExecutionTx(tx *sql.Tx) error {
 	}
 	if current.Holder != lease.Holder || current.Epoch != lease.Epoch {
 		return ErrCoordinatorFenced
+	}
+	var quarantined, stopped int
+	if err := tx.QueryRow(`SELECT COALESCE((SELECT quarantined FROM restore_state WHERE id=1),0)`).Scan(&quarantined); err != nil {
+		return err
+	}
+	if quarantined != 0 {
+		return ErrQuarantined
+	}
+	if err := tx.QueryRow(`SELECT active FROM household_execution_stop WHERE singleton=1`).Scan(&stopped); err != nil {
+		return err
+	}
+	if stopped != 0 {
+		return ErrHouseholdStopped
 	}
 	return nil
 }

@@ -740,12 +740,8 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	// Startup has no fresh per-task resource authorization, so it never invents
 	// publication success. Bytes/reservations and prior revisions remain intact.
 	if coordinating {
-		if n, err := db.RecoverWorkspaceWrites(); err != nil {
-			// Restore quarantine must retain its administrative recovery surface.
-			// The same execution gate continues refusing workspace writes.
-			log.Warn("workspace publication recovery deferred by execution or database gate")
-		} else if n > 0 {
-			log.Info("unsettled workspace publications rolled back; recovery bytes retained", "count", n)
+		if err := recoverWorkspaceAtStartup(db.RecoverWorkspaceWrites, log); err != nil {
+			return err
 		}
 	}
 
