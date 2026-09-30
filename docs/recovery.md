@@ -583,6 +583,16 @@ application container stopped until the import finishes:
 | Mealie / `recipes` | `backup/mealie-db-backup/mealie.sqlite3` | Stop Mealie, replace `/app/data/mealie.db`, remove stale `-wal`/`-shm` files, preserve ownership, then start Mealie. |
 | Roundcube + Davis / `mail` | `backup/mail-db-backup/{roundcube,davis}.sqlite3` | Stop both apps; replace `/var/roundcube/db/sqlite.db` and `/data/davis.db` respectively, remove stale sidecars, preserve ownership, then restart. |
 
+#### Restoring the household's notes
+
+The `knowledge` plan backs up a host folder (default
+`/srv/wildstone/knowledge`), not a volume. Its snapshot appears under
+`backup/` in `knowledge-restore`, with the folder's full path. Stop
+`silverbullet` if it is installed, copy that tree over the live folder,
+`chown -R` it back to the folder's owner, then start `silverbullet`
+again. `.history` comes back with the notes: it holds every version an
+agent's update replaced (ADR-W046 A5).
+
 For PostgreSQL, feed the dump file to `pg_restore` as a single file—not to
 `psql`, because the hook writes PostgreSQL custom format. Run the package's
 normal health check and sign in before deleting the alongside restore volume.

@@ -115,6 +115,8 @@ one mechanism, which is worth deciding before any of them individually.
 | `matrix-synapse` | matrix-homeserver | Synapse — a private Matrix homeserver with PostgreSQL and household OIDC sign-in | app OIDC |
 | `matrix-element` | matrix-client | Element Web — the browser client for `matrix-synapse`, locked to it and signing in through it | proxy |
 | `bookmarks-linkding` | bookmarks | linkding, signed in by the proxy's header | proxy |
+| `knowledge-wildstone` | knowledge | The household's Markdown notes folder, served to agents by Keystone itself; installs no container; ships six agent tools (ADR-W046) | — |
+| `notes-silverbullet` | notes | SilverBullet — a browser UI over the `knowledge-wildstone` folder; removing it leaves the notes | proxy |
 | `sync-syncthing` | file-sync | Syncthing | proxy |
 | `files-filebrowser` | files | File Browser | own |
 | `code-gitea` | code | Gitea | own |
@@ -144,11 +146,13 @@ spec:
 Devices must match one of the classes in `keystone/resource/hostaccess.go`
 (GPU render nodes, `/dev/net/tun`, USB and serial radios, `/dev/bus/usb`,
 Coral TPUs, video devices) — never a block device. Capabilities are
-`NET_ADMIN`, `NET_RAW` and `SYS_NICE`; `SYS_ADMIN` is not on the list and
+`IPC_LOCK` (memory locking, for OpenThread Border Router), `NET_ADMIN`,
+`NET_RAW` and `SYS_NICE`; `SYS_ADMIN` is not on the list and
 will not be. The agent resolves device aliases and refuses one that
 leads outside the list. A node whose agent predates minor 12 ignores all
 three: the port publishes as TCP, the device is absent, the capability
-is not granted, and the app says what it is missing.
+is not granted, and the app says what it is missing. `IPC_LOCK` needs
+minor 21: Keystone refuses to dispatch a spec adding it to an older agent.
 
 ### Not shipped, and why
 

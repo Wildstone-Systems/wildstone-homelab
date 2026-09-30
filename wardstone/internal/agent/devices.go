@@ -64,6 +64,10 @@ var devicePatterns = []*regexp.Regexp{
 // host", and the answer to a package that needs one is a schema
 // discussion, not an entry here.
 var capabilities = map[string]string{
+	// Locking memory with mlock, which the OpenThread Border Router
+	// uses to keep its keys and state out of swap. Grants no access to
+	// the host beyond the container's own memory accounting limits.
+	"IPC_LOCK": "memory locking (mlock), e.g. OpenThread Border Router",
 	// Creating a tunnel interface and routing through it (Gluetun,
 	// WireGuard). Grants control of the container's OWN network
 	// namespace, not the host's.

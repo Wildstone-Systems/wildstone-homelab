@@ -1,0 +1,131 @@
+# The knowledge capability, profile "wildstone": the household's notes,
+# decisions and project context as a folder of plain Markdown files
+# (ADR-W046, #367).
+#
+# THE FOLDER IS THE CONTRACT. A note is a UTF-8 .md file at a relative
+# path under the folder below, and nothing else: no database row, no
+# index and no sidecar file a note depends on. People edit it with any
+# Markdown client — notes-silverbullet is the one the catalog ships —
+# and agents reach it through the six tools declared at the bottom,
+# which Keystone serves itself. Search indexes and embeddings, if a
+# later package adds them, are derived from the folder and can be
+# thrown away and rebuilt.
+#
+# IT INSTALLS NOTHING THAT RUNS. There is no Container: the tools are
+# served by Keystone, which reads the folder's path out of the
+# ConfigFile below. So `node` is the machine the control plane runs on,
+# and the folder must be on that machine's disk (or a mount it has).
+#
+# REMOVING IT LEAVES THE NOTES. Keystone never deletes a host folder it
+# did not create a resource for, and the folder here is a parameter,
+# not a Volume. Removing this package stops the agent tools at once;
+# the files stay exactly where they are, and reinstalling it pointed at
+# the same folder picks them back up. Removing or replacing the web UI
+# package touches the folder even less.
+#
+# ADR-W029: configured entirely by the ConfigFile below; refuses nothing
+# at start because nothing starts; no image, so no HEALTHCHECK; needs no
+# address of its own and no identity-provider claims — the tools act for
+# the household member of the session that calls them.
+apiVersion: wildstone.dev/v1
+kind: Package
+metadata:
+  name: knowledge-wildstone
+  version: 1.0.0
+  capability: knowledge
+  profile: wildstone
+  # One knowledge folder per household. A second would split the
+  # household's notes in two, and an agent asked "what did we decide
+  # about the roof" would have to guess which one to look in.
+  exclusive: true
+params:
+  - { name: node, required: true, description: "Which machine runs the control plane.", source: node }
+  # WHERE THE NOTES LIVE. Its own folder rather than a subfolder of the
+  # drop box: the drop box deliberately never hands a file's contents to
+  # an agent (packages/filedrop-wildstone), and this folder exists so
+  # that one can. Keeping them apart keeps both promises.
+  - { name: knowledge_path, default: /srv/wildstone/knowledge, description: "Folder on this machine to keep the household's notes in. Created if it does not exist.", source: directory }
+policies:
+  # Household material, readable by every household agent and member
+  # with the web UI. Not the place for secrets, and the write tools
+  # refuse anything that names a credential.
+  classifications: [family_private]
+  dataSensitivity: medium
+externalConfig:
+  - filename: knowledge.yaml
+    consumer: Keystone
+    reason: >-
+      This capability installs no container: the agent tools are served
+      by the control plane itself, so there is nothing in this package
+      for the file to be mounted into. Keystone reads the ConfigFile
+      RESOURCE out of desired state, which is the only way the folder's
+      path reaches it. It is written to the node all the same, so an
+      operator asking "where are the household's notes" can answer it
+      by reading a file.
+templates:
+  # The folder, as desired state. The only carrier a containerless
+  # package has for a path the control plane needs weeks after install.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: ConfigFile
+    metadata: { name: knowledge-settings, node: "{{ .Params.node }}" }
+    spec:
+      filename: knowledge.yaml
+      content: |
+        # managed by wildstone-keystone — do not edit
+        root: {{ .Params.knowledge_path }}
+  # Backups. The folder is a host path rather than a Volume, so the
+  # plan names it under `paths` (ADR-W045 A4). Critical: notes are the
+  # one thing here nothing can rebuild. The .history folder, where every
+  # agent update keeps the version it replaced, is backed up with the
+  # notes, so a restore brings the undo trail back too.
+  #
+  # RESTORE: stop anything editing the folder (remove notes-silverbullet
+  # or stop its container), restore the snapshot into the folder, start
+  # it again. Any search index a UI keeps rebuilds itself from the files.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: restic-knowledge, node: "{{ .Params.node }}" }
+    spec: { name: restic-knowledge }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: knowledge-backup-repo, node: "{{ .Params.node }}" }
+    spec: { name: knowledge-backup-repo }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: BackupPlan
+    metadata: { name: knowledge, node: "{{ .Params.node }}" }
+    spec:
+      paths: ["{{ .Params.knowledge_path }}"]
+      exclude: [".wildstone-tmp-*"]
+      repository: knowledge-backup-repo
+      passwordSecret: secret/restic-knowledge
+      schedule: daily
+      class: critical
+      retention: { keepDaily: 7, keepWeekly: 4, keepMonthly: 6 }
+# The household actions this capability offers (ADR-W024 A5).
+# keystone/domestic.KnowledgeTools is the other half of this list, and
+# TestKnowledgeToolsAreDeclaredByThePackage fails if the two drift.
+#
+# Reads are `read`. Writes are `domestic` rather than `confirm` because
+# none of them can lose anything: write_note never overwrites,
+# append_note keeps what was there, and update_note must name the
+# revision it read and keeps the version it replaced under .history.
+# There is deliberately no delete, move or rename: tidying the folder
+# is a person's job, in the web UI.
+#
+# Every write refuses content a Markdown client runs as code
+# (SilverBullet's space-lua/space-script/space-style blocks and ${...}
+# expressions), the files a client treats as configuration, and text
+# that names a credential. Every read comes back wrapped as untrusted
+# data, because anyone with the web UI open can write a line that
+# reads like an instruction.
+agentTools:
+  - { name: list_notes, risk: read }
+  - { name: search_notes, risk: read }
+  - { name: read_note, risk: read }
+  - { name: write_note, risk: domestic }
+  - { name: append_note, risk: domestic }
+  - { name: update_note, risk: domestic }

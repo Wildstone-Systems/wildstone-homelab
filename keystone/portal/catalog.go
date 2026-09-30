@@ -131,6 +131,11 @@ var categoryOf = map[string]string{
 	"feeds":     "reading",
 	"bookmarks": "reading",
 	"documents": "reading",
+	// The household's notes (ADR-W046): the folder, and the web UI a
+	// person reads it in. Beside documents and bookmarks, because that
+	// is where "somewhere to keep what we decided" gets looked for.
+	"knowledge": "reading",
+	"notes":     "reading",
 	// Running the house.
 	"recipes":         "house",
 	"pantry":          "house",

@@ -42,8 +42,9 @@ indexers-prowlarr 1.0.3 7cd42be5106f7470
 ingress 1.0.2 4bbd2bd5e6db1d92
 ingress-tailnet 1.0.1 59e7276e5bb0a51c
 ingress-tailnet-public 1.0.1 16dea82d8a073bdf
-ingress-tailnet-ts 1.1.1 61c1e5cfa0848b4b
+ingress-tailnet-ts 1.1.2 8c527da33c6f53ca
 inventory-homebox 1.1.1 e41d648d88be7ac2
+knowledge-wildstone 1.0.0 b5a489b55e24c813
 lists-wildstone 1.0.0 0d908ac2d2b01860
 mail-roundcube 1.0.5 37527182b65e8639
 matrix-element 1.0.0 38ed3c2159679e0e
@@ -58,6 +59,7 @@ movies-radarr 1.0.3 db51c7b2106e8f62
 mqtt-mosquitto 1.0.0 655714a2a046b37b
 music-lidarr 1.0.3 b656f45aa361283a
 music-navidrome 1.0.2 b7f6ae0e347c9a99
+notes-silverbullet 1.0.0 c12937ca3ca144d0
 notifications 1.0.1 3a33ed5c22f13118
 pantry-pantryos 0.3.0 da4284bf373553e0
 passwords-vaultwarden 1.0.2 c4f9be5c8e875544

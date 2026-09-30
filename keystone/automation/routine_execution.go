@@ -262,7 +262,13 @@ func (e *Engine) executeReviewed(ctx context.Context, version runtimedb.RoutineE
 	} else if result.EffectPending {
 		outcome = "pending"
 	}
-	if err := e.DB.RecordRoutineEffect(run.ID, outcome, result.Summary); err != nil {
+	// The record says what was done, never household content the
+	// executor handed back (domestic.Result.AuditSummary).
+	effect := result.Summary
+	if result.AuditSummary != "" {
+		effect = result.AuditSummary
+	}
+	if err := e.DB.RecordRoutineEffect(run.ID, outcome, effect); err != nil {
 		return err
 	}
 	if err := e.DB.CheckRoutineRunBoundary(run.ID); err != nil {
