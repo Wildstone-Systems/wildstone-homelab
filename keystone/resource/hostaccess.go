@@ -52,6 +52,7 @@ func DeviceAllowed(path string) bool {
 // ContainerCapabilities is the closed set of Linux capabilities a
 // container may add, named without the CAP_ prefix. Mirrors the agent's.
 var ContainerCapabilities = map[string]bool{
+	"IPC_LOCK":  true, // memory locking (mlock) for OpenThread Border Router
 	"NET_ADMIN": true, // VPN clients: create and route through a tunnel interface
 	"NET_RAW":   true, // ICMP and raw sockets, e.g. ping-based monitors
 	"SYS_NICE":  true, // scheduling priority for transcodes
@@ -82,6 +83,12 @@ const HostAccessProtocolMinor = 12
 // cannot honour it, exactly as HostAccessProtocolMinor already is.
 const HardeningProtocolMinor = 18
 
+// IPCLockProtocolMinor is the wardstone protocol minor whose closed
+// capability allowlist first admits IPC_LOCK. An older agent still
+// refuses it as FORBIDDEN, so a spec asking for it is gated on this
+// minor rather than on HostAccessProtocolMinor.
+const IPCLockProtocolMinor = 21
+
 // RequiredProtocolMinor reports the lowest agent protocol minor that can
 // honour this spec in full, or 0 when any agent can. An agent below it
 // does not fail: it IGNORES the fields it cannot read, which is the
@@ -96,6 +103,11 @@ const HardeningProtocolMinor = 18
 func (s *ContainerSpec) RequiredProtocolMinor() uint32 {
 	if s == nil {
 		return 0
+	}
+	for _, c := range s.CapAdd {
+		if c == "IPC_LOCK" {
+			return IPCLockProtocolMinor
+		}
 	}
 	if s.usesHardeningFields() {
 		return HardeningProtocolMinor

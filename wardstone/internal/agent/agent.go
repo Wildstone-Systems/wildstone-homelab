@@ -110,7 +110,11 @@ import (
 //
 // 20: adds recovery-key-sealed node secret export/import. Export never
 // returns plaintext; import is restricted to an empty fresh-node store.
-const ProtocolMinor = 20
+//
+// 21: adds IPC_LOCK to the closed capability allowlist (#441). An older
+// agent refuses it as FORBIDDEN, so Keystone gates a spec adding it on
+// this minor (resource.IPCLockProtocolMinor).
+const ProtocolMinor = 21
 
 // maxUpdateMsgBytes is the gRPC message size cap on both ends of the
 // session/join connections (ADR-W003 W5). SelfUpdate ships the new binary
