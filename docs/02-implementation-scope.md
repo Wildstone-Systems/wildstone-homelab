@@ -316,10 +316,10 @@ artifact (E3) gate everything. Two practical rules fall out:
 
 ## 7. Butler and concierge mode — phased scope (ADR-W001, ADR-W030)
 
-The W030 changes in this section are conditional and become authoritative only
-if ADR-W030 is accepted. Until then, the existing C1–C5 scope remains in force.
+ADR-W030 is accepted and largely implemented, so the W030 changes in this
+section are authoritative.
 
-If accepted, ADR-W030 will supersede the rule that the family-facing product
+ADR-W030 supersedes the rule that the family-facing product
 ships only as one v2 block after M5. Its v1 pulls forward a narrow text-based
 path across the
 existing Household and Operator bots/Console: explicit identity linkage and
