@@ -472,6 +472,8 @@ func TestTheBannerHasNoMachineWriter(t *testing.T) {
 	writers := map[string]bool{"SetHouseholdBanner": true, "SetHouseholdBannerPosition": true}
 	allowedFile := filepath.ToSlash(filepath.Join(keystone, "api", "handlers_portal_banner.go"))
 	allowedFunc := map[string]bool{"homeBannerSet": true, "homeBannerFrame": true}
+	sqlFile := filepath.ToSlash(filepath.Join(keystone, "runtimedb", "householdbanner.go"))
+	classFile := filepath.ToSlash(filepath.Join(keystone, "runtimedb", "personref", "classification.go"))
 
 	found := 0
 	err := filepath.WalkDir(keystone, func(path string, d fs.DirEntry, err error) error {
@@ -492,11 +494,48 @@ func TestTheBannerHasNoMachineWriter(t *testing.T) {
 			return perr
 		}
 		slash := filepath.ToSlash(path)
+		// SQL that touches the table is confined to its one file, so a
+		// routine cannot write the column without going through the two
+		// methods below.
+		ast.Inspect(file, func(n ast.Node) bool {
+			lit, ok := n.(*ast.BasicLit)
+			if ok && lit.Kind == token.STRING && strings.Contains(lit.Value, "household_banner") &&
+				slash != sqlFile && slash != classFile {
+				t.Errorf("%s mentions household_banner outside %s: a second SQL writer would "+
+					"bypass the Human verdict on set_by (#243, #240)", slash, sqlFile)
+			}
+			return true
+		})
 		for _, decl := range file.Decls {
 			fn, isFunc := decl.(*ast.FuncDecl)
 			if !isFunc || fn.Body == nil {
 				continue
 			}
+			// Every selector naming a writer is either the callee of a
+			// call (checked below) or a method value, which could be
+			// invoked with anything and is refused outright.
+			callees := map[*ast.SelectorExpr]bool{}
+			ast.Inspect(fn.Body, func(n ast.Node) bool {
+				if call, ok := n.(*ast.CallExpr); ok {
+					if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
+						callees[sel] = true
+					}
+				}
+				return true
+			})
+			ast.Inspect(fn.Body, func(n ast.Node) bool {
+				sel, ok := n.(*ast.SelectorExpr)
+				if !ok || !writers[sel.Sel.Name] {
+					return true
+				}
+				found++
+				if !callees[sel] {
+					t.Errorf("%s: %s in %s is used as a method value; call it directly so the "+
+						"writer can be checked (#243, #240)", slash, sel.Sel.Name, fn.Name.Name)
+					return true
+				}
+				return true
+			})
 			ast.Inspect(fn.Body, func(n ast.Node) bool {
 				call, ok := n.(*ast.CallExpr)
 				if !ok {
@@ -506,7 +545,6 @@ func TestTheBannerHasNoMachineWriter(t *testing.T) {
 				if !ok || !writers[sel.Sel.Name] {
 					return true
 				}
-				found++
 				last := call.Args[len(call.Args)-1]
 				id, isIdent := last.(*ast.Ident)
 				if slash != allowedFile || !allowedFunc[fn.Name.Name] || !isIdent || id.Name != "member" {
