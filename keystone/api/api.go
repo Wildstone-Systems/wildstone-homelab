@@ -69,6 +69,10 @@ type Server struct {
 	// (ADR-W042). nil, or a Router whose Mode is off, means voice is
 	// refused with a "please type" answer.
 	Speech *speech.Router
+	// NodeID is the Wardstone node Keystone runs on. An installed speech
+	// engine is reachable only there (#408). Empty means unknown, and
+	// nothing is refused on a guess.
+	NodeID string
 
 	// trustedIngress is the exact set of remote addresses the identity
 	// proxy speaks from (ADR-W030 A8.1). It gates the household portal

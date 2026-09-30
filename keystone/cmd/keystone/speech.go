@@ -16,7 +16,11 @@ import (
 // is OpenAI's, from OPENAI_API_KEY or the Console, exactly as a Butler
 // on an OpenAI route gets it.
 type speechConfig struct {
-	Mode       string
+	Mode string
+	// ModeSet is whether -speech-mode was given. When it was not, an
+	// installed speech-speaches engine turns local transcription on by
+	// itself (#408); an explicit mode, "off" included, is kept.
+	ModeSet    bool
 	URL        string
 	Model      string
 	CloudModel string
@@ -37,14 +41,14 @@ type speechConfig struct {
 // enough to answer a voice note in seconds on a CPU; an English-only
 // house can choose Systran/faster-distil-whisper-small.en instead.
 const (
-	defaultSpeechModel      = "Systran/faster-whisper-small"
+	defaultSpeechModel      = speech.DefaultLocalModel
 	defaultSpeechCloudModel = "gpt-4o-mini-transcribe"
 
 	// Kokoro, the project's stated text-to-speech preference: small,
 	// natural, and fast on a CPU. af_heart is its best-rated English
 	// voice; Speaches lists the others at GET /v1/audio/speech/voices.
-	defaultReplyModel      = "speaches-ai/Kokoro-82M-v1.0-ONNX"
-	defaultReplyVoice      = "af_heart"
+	defaultReplyModel      = speech.DefaultLocalVoiceModel
+	defaultReplyVoice      = speech.DefaultLocalVoiceName
 	defaultReplyCloudModel = "gpt-4o-mini-tts"
 	defaultReplyCloudVoice = "coral"
 )
@@ -78,7 +82,8 @@ func speechRouter(c speechConfig) (*speech.Router, []string, error) {
 		return nil, nil, fmt.Errorf("-speech-replies: %w", err)
 	}
 
-	r := &speech.Router{Mode: mode, Language: lang, MaxSeconds: c.MaxSeconds, Timeout: c.Timeout, ReplyMode: replyMode}
+	r := &speech.Router{Mode: mode, Language: lang, MaxSeconds: c.MaxSeconds, Timeout: c.Timeout, ReplyMode: replyMode,
+		AutoLocal: !c.ModeSet, LocalModel: c.Model, LocalVoiceModel: c.ReplyModel, LocalVoiceName: c.ReplyVoice}
 	var warnings []string
 	url := strings.TrimRight(strings.TrimSpace(c.URL), "/")
 	usesLocal := func(m speech.Mode) bool { return m == speech.ModeLocal || m == speech.ModeLocalThenCloud }
@@ -89,7 +94,7 @@ func speechRouter(c speechConfig) (*speech.Router, []string, error) {
 		if url != "" {
 			r.Local = &speech.Client{BaseURL: url, Model: orDefault(c.Model, defaultSpeechModel), Where: speech.Local, DownloadsModels: true}
 		} else {
-			warnings = append(warnings, "no -speech-url is set, so there is no local speech engine; install the speech-speaches package on this node and set -speech-url http://127.0.0.1:18000/v1")
+			warnings = append(warnings, "no -speech-url is set, so the local speech engine is the speech-speaches package, once it is installed on this node")
 		}
 	}
 	if usesCloud(mode) {
@@ -101,7 +106,7 @@ func speechRouter(c speechConfig) (*speech.Router, []string, error) {
 			r.LocalVoice = &speech.Client{BaseURL: url, Model: orDefault(c.ReplyModel, defaultReplyModel),
 				Voice: orDefault(c.ReplyVoice, defaultReplyVoice), Where: speech.Local, DownloadsModels: true}
 		} else {
-			warnings = append(warnings, "no -speech-url is set, so there is no local voice to read replies aloud; install the speech-speaches package on this node and set -speech-url http://127.0.0.1:18000/v1")
+			warnings = append(warnings, "no -speech-url is set, so the local voice that reads replies aloud is the speech-speaches package, once it is installed on this node")
 		}
 	}
 	if usesCloud(replyMode) {
@@ -123,4 +128,16 @@ func orDefault(v, def string) string {
 		return v
 	}
 	return def
+}
+
+// shortHostname is -node-id's default: the installer names a node
+// `hostname -s` unless told otherwise, so on a default install this is
+// Keystone's own node id. "" when the host name cannot be read.
+func shortHostname() string {
+	h, err := os.Hostname()
+	if err != nil {
+		return ""
+	}
+	h, _, _ = strings.Cut(h, ".")
+	return h
 }

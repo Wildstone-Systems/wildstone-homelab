@@ -51,6 +51,17 @@ type Router struct {
 	// ReplyTimeout bounds one synthesis; <= 0 means DefaultReplyTimeout.
 	ReplyTimeout time.Duration
 
+	// AutoLocal lets an installed engine (SetInstalled) turn local
+	// transcription on. Keystone sets it when no -speech-mode was given;
+	// an explicit mode, "off" included, is kept (#408).
+	AutoLocal bool
+	// LocalModel, LocalVoiceModel and LocalVoiceName are the models an
+	// installed engine is asked for; empty means the defaults.
+	LocalModel, LocalVoiceModel, LocalVoiceName string
+
+	mu        sync.RWMutex
+	installed *installedEngine
+
 	once sync.Once
 	// slot serialises transcriptions: one at a time per Keystone. On a
 	// CPU engine two at once each take twice as long, and a queue is
@@ -61,18 +72,22 @@ type Router struct {
 // Enabled reports whether voice is on and any engine is configured. A
 // caller uses it to decide whether to show a mic button at all.
 func (r *Router) Enabled() bool {
-	return r != nil && r.Mode != ModeOff && len(r.engines(true)) > 0
+	return r.Available(true)
 }
 
 // Available reports whether a turn with this permission could be
 // transcribed.
 func (r *Router) Available(allowCloud bool) bool {
-	return r != nil && r.Mode != ModeOff && len(r.engines(allowCloud)) > 0
+	if r == nil {
+		return false
+	}
+	v := r.current()
+	return v.mode != ModeOff && len(r.engines(v, allowCloud)) > 0
 }
 
 // engines lists, in order of preference, the engines a turn may use.
 // Local first, always: a house that has one prefers it.
-func (r *Router) engines(allowCloud bool) []Transcriber {
+func (r *Router) engines(v view, allowCloud bool) []Transcriber {
 	var out []Transcriber
 	add := func(t Transcriber) {
 		if t == nil {
@@ -83,10 +98,10 @@ func (r *Router) engines(allowCloud bool) []Transcriber {
 		}
 		out = append(out, t)
 	}
-	if r.Mode.usesLocal() {
-		add(r.Local)
+	if v.mode.usesLocal() {
+		add(v.local)
 	}
-	if r.Mode.usesCloud() {
+	if v.mode.usesCloud() {
 		add(r.Cloud)
 	}
 	return out
@@ -100,7 +115,11 @@ func (r *Router) engines(allowCloud bool) []Transcriber {
 // A turn that may not leave the house and has no local engine gets
 // ErrUnavailable, never a quiet cloud fallback (AC12).
 func (r *Router) Transcribe(ctx context.Context, allowCloud bool, audio []byte, mimeType string, seconds float64) (Result, error) {
-	if r == nil || r.Mode == ModeOff {
+	if r == nil {
+		return Result{}, ErrOff
+	}
+	v := r.current()
+	if v.mode == ModeOff {
 		return Result{}, ErrOff
 	}
 	mt, err := NormalizeMIME(mimeType)
@@ -110,7 +129,7 @@ func (r *Router) Transcribe(ctx context.Context, allowCloud bool, audio []byte, 
 	if err := CheckSize(len(audio), seconds, r.MaxSeconds); err != nil {
 		return Result{}, err
 	}
-	engines := r.engines(allowCloud)
+	engines := r.engines(v, allowCloud)
 	if len(engines) == 0 {
 		return Result{}, ErrUnavailable
 	}
@@ -171,6 +190,8 @@ func (r *Router) Warm(ctx context.Context, log *slog.Logger) {
 	if r == nil {
 		return
 	}
+	// Only the flags' engines: an installed one is warmed by
+	// SetInstalled, which can stop it when the engine is replaced.
 	if r.Mode.usesLocal() {
 		if c, ok := r.Local.(*Client); ok && c.DownloadsModels {
 			warmClient(ctx, log, c, "speech")
