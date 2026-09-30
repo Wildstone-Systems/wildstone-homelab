@@ -912,6 +912,9 @@ func (s *Server) Handler() http.Handler {
 	// database is how two cards end up telling different stories about
 	// one event.
 	mux.Handle("GET /home/secrets/{$}", s.portal(surfaceHome, s.portalPage("secrets")))
+	// Watch this mailbox for a Person who is not an Owner (epic #326 S07):
+	// the page over the /api/v1/home/mail and integrations routes below.
+	mux.Handle("GET /home/mail/{$}", s.portal(surfaceHome, s.portalPage("mail")))
 	mux.Handle("GET /home/{$}", s.portal(surfaceHome, s.portalPage("home")))
 	mux.Handle("GET /api/v1/home/summary", s.portal(surfaceHome, s.homeSummary))
 	// The one write the page has: a member answering the question they
