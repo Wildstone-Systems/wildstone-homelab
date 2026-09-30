@@ -212,27 +212,50 @@ func (s *Store) page(c cached, offset int) (Page, error) {
 	for end < len(text) && !utf8.RuneStart(text[end]) {
 		end--
 	}
-	for {
+	build := func(end int) (Page, int, error) {
 		p := Page{Text: text[offset:end], Truncated: c.doc.Source.Truncated, Source: c.doc.Source}
 		if end < len(text) {
 			p.NextCursor = s.cursor(c, end)
 		}
 		encoded, err := p.Encode()
-		if err != nil {
-			return Page{}, err
+		return p, len(encoded), err
+	}
+	p, size, err := build(end)
+	if err != nil {
+		return Page{}, err
+	}
+	if size <= BodyBytes {
+		return p, nil
+	}
+	// The full candidate did not fit. All shorter candidates have a cursor,
+	// making encoded size monotonic. Search rune boundaries in logarithmic time
+	// rather than repeatedly encoding an adversarial escaping-heavy page.
+	boundaries := []int{offset}
+	for i := offset; i < end; {
+		_, n := utf8.DecodeRuneInString(text[i:end])
+		i += n
+		boundaries = append(boundaries, i)
+	}
+	low, high := 0, len(boundaries)-2
+	best := -1
+	for low <= high {
+		mid := low + (high-low)/2
+		candidate, n, e := build(boundaries[mid])
+		if e != nil {
+			return Page{}, e
 		}
-		if len(encoded) <= BodyBytes {
-			return p, nil
-		}
-		if end == offset {
-			return Page{}, publicfetch.ErrSize
-		}
-		_, size := utf8.DecodeLastRuneInString(text[offset:end])
-		end -= size
-		if end == offset && offset < len(text) {
-			return Page{}, publicfetch.ErrSize
+		if n <= BodyBytes {
+			p = candidate
+			best = mid
+			low = mid + 1
+		} else {
+			high = mid - 1
 		}
 	}
+	if best <= 0 {
+		return Page{}, publicfetch.ErrSize
+	}
+	return p, nil
 }
 
 // Continue implements the cursor-only selector without accepting a replacement
