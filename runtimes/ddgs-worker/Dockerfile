@@ -1,5 +1,6 @@
 # Build context: runtimes/ddgs-worker. Deployment/activation belongs to #493.
-FROM python:3.12.14-slim-bookworm
+ARG PYTHON_BASE=python:3.12.14-slim-bookworm
+FROM ${PYTHON_BASE}
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 WORKDIR /app
 COPY requirements.txt ./

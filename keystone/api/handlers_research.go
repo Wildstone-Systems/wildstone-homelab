@@ -136,6 +136,8 @@ func (s *Server) proposeResearchProvider(r *http.Request, id principal.Identity)
 	return map[string]any{"planId": planID, "providerId": c.ProviderID, "state": "awaiting_review"}, http.StatusAccepted, nil
 }
 func (s *Server) testResearchProvider(r *http.Request, id principal.Identity) (any, int, error) {
+	s.researchServiceMu.RLock()
+	defer s.researchServiceMu.RUnlock()
 	if body, code, err := s.freshResearchOwner(r, id); err != nil {
 		return body, code, err
 	}

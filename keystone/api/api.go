@@ -45,6 +45,8 @@ type Server struct {
 	// The adapter must resolve service/secret references and check their current
 	// revisions. Nil is deliberately unavailable until S19/S20 wire the service.
 	ResearchTest func(context.Context, research.Provider) error
+	// Serializes bounded provider probes against infrastructure approval writes.
+	researchServiceMu sync.RWMutex
 
 	SecretVault *runtimedb.SecretVault
 	// PairingHTTP, when set, is the client pairing calls PantryOS with

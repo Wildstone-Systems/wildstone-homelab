@@ -234,6 +234,9 @@ func (s *Server) approvePlan(r *http.Request, id principal.Identity) (any, int, 
 		return s.applySubscriptionPlan(planID, stored, id)
 	}
 
+	s.researchServiceMu.Lock()
+	defer s.researchServiceMu.Unlock()
+
 	head, err := s.State.Head()
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
@@ -244,6 +247,10 @@ func (s *Server) approvePlan(r *http.Request, id principal.Identity) (any, int, 
 		}
 		s.event("plan.superseded", planID, id, "statefile moved since proposal")
 		return nil, http.StatusConflict, fmt.Errorf("statefile changed since proposal; plan superseded")
+	}
+
+	if err := s.invalidateResearchServicePlan(stored); err != nil {
+		return nil, http.StatusInternalServerError, err
 	}
 
 	for i, doc := range stored.Put {
