@@ -1302,6 +1302,14 @@ tr.clickable:hover { background: var(--faint); }
   word-break: break-all;
 }
 
+/* A reset link is copied, not read aloud: wrap it so the whole token
+   is visible and selectable rather than clipped. */
+.identity-link {
+  white-space: pre-wrap;
+  word-break: break-all;
+  user-select: all;
+}
+
 details summary { cursor: pointer; }
 details > pre { margin-top: var(--space-2); }
 
