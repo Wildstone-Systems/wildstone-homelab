@@ -442,6 +442,24 @@ func TestWorkspacePrivacyPreservesSourceTaskCeiling(t *testing.T) {
 	if err = db.sql.QueryRow(`SELECT COUNT(*) FROM workspace_revisions WHERE id LIKE '%-edit'`).Scan(&n); err != nil || n != 0 {
 		t.Fatalf("denied ceiling left revision: %d %v", n, err)
 	}
+	// The deliberately forged derivative above now taints its writer too.
+	// Prove the same-ceiling positive case on fresh work with no Owner input.
+	task, err = db.InsertButlerTask(ButlerTask{Kind: ButlerTaskConversation, Author: "mika", Owner: "mika", AgentClass: AgentClassMember, Surface: ButlerSurfaceFamily, Audience: ButlerAudiencePrivate, OriginConnection: "household_portal", Objective: "read fresh member source"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = db.SetTaskButler(task, "alfred"); err != nil {
+		t.Fatal(err)
+	}
+	currentTask, _ = parseButlerTaskID(task)
+	ctx, guard, err = db.BeginPrivacyTurn(context.Background(), ModelLocal, MemoryDestination{BuiltIn: true}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = guard.SetTask(task); err != nil {
+		t.Fatal(err)
+	}
+	access = db.BindWorkspaceAccess("mika", "alfred", task, "household_portal")
 	workspacePublish(t, db, workspaceIntent(t, db, w, currentTask, "member-source", "member-r1", "", 1), "member-receipt")
 	if _, err = db.ReadWorkspaceRevision(ctx, access, w.ID, "member-source", "member-r1"); err != nil {
 		t.Fatalf("same-ceiling source refused: %v", err)
@@ -523,6 +541,7 @@ func TestWorkspacePrivacyMemoryDisclosureAuthority(t *testing.T) {
 				t.Fatal(err)
 			}
 			ctx, _, access := workspacePrivacyTurn(t, db, id, ModelLocal, MemoryDestination{BuiltIn: true})
+			writerCtx := ctx
 			if err = TrackMemoryPrivacy(ctx, memory, nil); err != nil {
 				t.Fatal(err)
 			}
@@ -568,10 +587,12 @@ func TestWorkspacePrivacyMemoryDisclosureAuthority(t *testing.T) {
 			}
 			_, resumed, _ := workspacePrivacyTurn(t, db, history, ModelLocal, d)
 			for name, check := range map[string]func() error{
-				"task":     func() error { return db.CheckTaskPrivacy(history, ModelLocal, d) },
-				"session":  func() error { return db.CheckSessionPrivacy(historySession, ModelLocal, d) },
-				"delivery": func() error { return CheckPrivacyDelivery(historyCtx, d) },
-				"resume":   resumed.Check,
+				"writer task":     func() error { return db.CheckTaskPrivacy(id, ModelLocal, d) },
+				"writer delivery": func() error { return CheckPrivacyDelivery(writerCtx, d) },
+				"task":            func() error { return db.CheckTaskPrivacy(history, ModelLocal, d) },
+				"session":         func() error { return db.CheckSessionPrivacy(historySession, ModelLocal, d) },
+				"delivery":        func() error { return CheckPrivacyDelivery(historyCtx, d) },
+				"resume":          resumed.Check,
 			} {
 				if err := check(); (err == nil) != want {
 					t.Fatalf("%s authority allowed=%v: %v", name, want, err)

@@ -59,6 +59,8 @@ CREATE VIEW workspace_privacy_edges AS
  UNION SELECT 'wr:'||revision_id,'wr:'||base_revision FROM workspace_publications WHERE base_revision IS NOT NULL
  UNION SELECT 'wr:'||id,'wa:'||artifact_id FROM workspace_revisions
  UNION SELECT 'wr:'||id,'t:'||task_id FROM workspace_revisions
+ -- A writer has already used its revision's sources even without a read.
+ UNION SELECT 't:'||task_id,'wr:'||id FROM workspace_revisions
  UNION SELECT 'wr:'||revision,'s:'||session FROM workspace_revision_sessions
  UNION SELECT 't:'||task,'wr:'||revision FROM workspace_task_sources
  UNION SELECT 's:'||session,'wr:'||revision FROM workspace_session_sources

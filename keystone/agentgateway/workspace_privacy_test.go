@@ -76,7 +76,7 @@ func TestWorkspaceTaintBlocksGatewayLedgerReuseAndManifest(t *testing.T) {
 }
 
 func TestWorkspaceMemoryDeliveryUsesRecordedDestination(t *testing.T) {
-	for _, scenario := range []string{"builtin", "verified", "foreign agent", "revoked binding", "revoked connection", "group", "cloud", "trusted external"} {
+	for _, scenario := range []string{"builtin", "verified", "workspace only verified", "workspace only revoked binding", "foreign agent", "revoked binding", "revoked connection", "group", "cloud", "trusted external"} {
 		t.Run(scenario, func(t *testing.T) {
 			f := newFixture(t)
 			must := func(err error) {
@@ -92,8 +92,11 @@ func TestWorkspaceMemoryDeliveryUsesRecordedDestination(t *testing.T) {
 			must(err)
 			agent, err := f.db.GetButler("alfred")
 			must(err)
-			memory, err := f.db.RecordMemory(runtimedb.MemoryRecord{Scope: runtimedb.MemoryScopePersonal, Kind: runtimedb.MemoryFact, Content: "synthetic workspace input", Owner: "mika", Author: "mika", Butler: "alfred", Audience: runtimedb.ButlerAudiencePrivate, PermissionLabel: "household", SourceKind: "conversation", SourceID: origin})
-			must(err)
+			var memory int64
+			if !strings.HasPrefix(scenario, "workspace only") {
+				memory, err = f.db.RecordMemory(runtimedb.MemoryRecord{Scope: runtimedb.MemoryScopePersonal, Kind: runtimedb.MemoryFact, Content: "synthetic workspace input", Owner: "mika", Author: "mika", Butler: "alfred", Audience: runtimedb.ButlerAudiencePrivate, PermissionLabel: "household", SourceKind: "conversation", SourceID: origin})
+				must(err)
+			}
 			w := runtimedb.Workspace{ID: "workspace", PersonID: person.PersonID, AgentID: agent.Seq}
 			must(f.db.CreateWorkspace(w))
 			must(f.db.CreateWorkspaceArtifact(runtimedb.WorkspaceArtifact{ID: "artifact", WorkspaceID: w.ID, Path: "report.txt"}))
@@ -128,8 +131,33 @@ func TestWorkspaceMemoryDeliveryUsesRecordedDestination(t *testing.T) {
 			_, err = f.db.ReadWorkspaceRevision(ctx, f.db.BindWorkspaceAccess("mika", "alfred", id, connectionName), w.ID, "artifact", "revision")
 			must(err)
 			setProcessingClass(t, f, "alfred", agentapi.ProcessingLocalOnly)
+			payload, err := json.Marshal(map[string]any{"handle": string(handle)})
+			must(err)
+			recipient := agent.Seq
+			if scenario == "foreign agent" {
+				other, err := f.db.GetButler("joan")
+				must(err)
+				setProcessingClass(t, f, "joan", agentapi.ProcessingLocalOnly)
+				recipient = other.Seq
+			}
+			for _, kind := range []agentapi.DeliveryKind{agentapi.DeliveryTurn, agentapi.DeliverySubscription, agentapi.DeliveryEscalation} {
+				_, err := f.db.RecordAgentDelivery(recipient, kind, string(payload))
+				must(err)
+			}
+			queued, err := f.db.ListUnackedAgentDeliveries(recipient, 0, 10)
+			must(err)
+			if len(queued) != 3 {
+				t.Fatalf("queued %d deliveries", len(queued))
+			}
+			for _, row := range queued {
+				got := FilterDelivery(f.db, row)
+				if (got.Payload == row.Payload) != (scenario != "foreign agent") {
+					t.Fatalf("initial delivery authority for %s", scenario)
+				}
+			}
+			// Recheck the same queued rows after policy/binding changes.
 			switch scenario {
-			case "revoked binding":
+			case "revoked binding", "workspace only revoked binding":
 				must(f.db.RevokeChatBinding(binding.ID))
 			case "revoked connection":
 				must(f.db.RevokeButlerAddressFor("alfred", "telegram", "synthetic-workspace-chat", "mika"))
@@ -141,20 +169,11 @@ func TestWorkspaceMemoryDeliveryUsesRecordedDestination(t *testing.T) {
 			case "trusted external":
 				must(f.db.SetMemoryPrivacy("mika", memory, runtimedb.PrivacyPolicy{TrustedOnly: true}))
 			}
-			payload, err := json.Marshal(map[string]any{"handle": string(handle)})
-			must(err)
-			for _, kind := range []agentapi.DeliveryKind{agentapi.DeliveryTurn, agentapi.DeliverySubscription, agentapi.DeliveryEscalation} {
-				row := runtimedb.AgentDelivery{ID: 42, Butler: agent.Seq, Kind: kind, Payload: string(payload)}
-				if scenario == "foreign agent" {
-					other, err := f.db.GetButler("joan")
-					must(err)
-					setProcessingClass(t, f, "joan", agentapi.ProcessingLocalOnly)
-					row.Butler = other.Seq
-				}
+			for _, row := range queued {
 				got := FilterDelivery(f.db, row)
-				allowed := scenario == "builtin" || scenario == "verified"
+				allowed := scenario == "builtin" || scenario == "verified" || scenario == "workspace only verified"
 				if (got.Payload == row.Payload) != allowed {
-					t.Fatalf("%s allowed=%v but payload withheld=%v", kind, allowed, got.Payload != row.Payload)
+					t.Fatalf("%s allowed=%v but payload withheld=%v", row.Kind, allowed, got.Payload != row.Payload)
 				}
 				if got.ID != row.ID || got.Kind != row.Kind || got.Cursor != row.Cursor {
 					t.Fatal("filter changed delivery identity")

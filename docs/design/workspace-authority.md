@@ -91,6 +91,8 @@ input snapshots. Foreign keys pin referenced revisions, sessions and memory
 records so deletion cannot silently drop a known restriction. Future lifecycle
 work must coordinate these references; this change does not implement purge.
 The new workspace graph joins the existing memory graph at policy evaluation.
+A writer task also retains its own revisions, so creating a revision without
+subsequently reading it cannot bypass source authority on resume or delivery.
 `wr:` nodes name revisions, `wa:` artifact policy, and `t:` task provenance;
 existing `m:` memory and `s:` session nodes retain their meaning. Traversal uses
 `UNION`, so cycles terminate while preserving the strictest reachable labels.
@@ -106,6 +108,8 @@ Task-backed delivery checks provenance even before the first session exists.
 Gateway Manifest and Invoke restore originating task/session provenance. Invoke
 checks it before dispatch or ledger reuse. Workspace/export calls must re-enter
 their resource/receipt seam instead of returning generic cached tool output.
+Queued external task deliveries also recheck the task owner's live Person
+binding independently of memory provenance, including workspace-only sources.
 No content bounds, tool grants or runtime protocol fields are expanded.
 
 ## Migration sequence

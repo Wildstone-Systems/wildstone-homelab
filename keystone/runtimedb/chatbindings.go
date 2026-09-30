@@ -16,6 +16,19 @@ import (
 	"time"
 )
 
+// HasLivePersonChatBinding checks current Person admission and the existing
+// human-established binding. Source provenance does not substitute for this
+// check when queued private work is delivered back to its originating chat.
+func (db *DB) HasLivePersonChatBinding(connection int64, person string) (bool, error) {
+	var live bool
+	err := db.sql.QueryRow(`SELECT EXISTS (
+ SELECT 1 FROM chat_bindings cb JOIN butler_members p ON p.person_id=cb.person_id
+ WHERE cb.connection=? AND p.member=? AND cb.revoked_at=''
+ AND p.admitted=1 AND p.disabled_at='' AND p.offboarded_at=''
+ )`, connection, person).Scan(&live)
+	return live, err
+}
+
 // ChatBinding is one chat account admitted to one Connection — so to
 // one Agent, on one transport (ADR-W033 B7, B9).
 //

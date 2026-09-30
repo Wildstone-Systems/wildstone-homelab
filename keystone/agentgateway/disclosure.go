@@ -235,6 +235,12 @@ func deliveryPrivacyCheck(db *runtimedb.DB, row runtimedb.AgentDelivery, model s
 			if err != nil || at.Butler != agentName || at.Name() != task.OriginConnection {
 				return runtimedb.ErrPrivacy
 			}
+			// Binding is a delivery admission gate for every source type, not
+			// merely a disclosure-profile exception for recalled memories.
+			bound, err := db.HasLivePersonChatBinding(at.Seq, task.Owner)
+			if err != nil || !bound {
+				return runtimedb.ErrPrivacy
+			}
 			destination.Group = destination.Group || db.IsChatRoom(at.Seq, at.ExternalID)
 		}
 		// Workspace reads can precede the first session. A resolved task
