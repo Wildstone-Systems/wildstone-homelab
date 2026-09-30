@@ -305,3 +305,27 @@ func TestMarkdownHTMLSegmentsInContainers(t *testing.T) {
 		t.Fatalf("active block: %q %v", d.Text, err)
 	}
 }
+
+func TestDecodedControlsAreRefusedEvenPastTextCap(t *testing.T) {
+	for _, media := range []string{"text/html", "text/markdown"} {
+		for _, body := range []string{"<p>before &#x1b; after</p>", "<a href=\"/&#x1b;\">link</a>", "<p>" + strings.Repeat("x", MaxCharacters+1) + "&#27;</p>"} {
+			if _, err := Extract(input(media, body)); err != publicfetch.ErrUnsupported {
+				t.Fatalf("decoded control accepted %s: %v", media, err)
+			}
+		}
+	}
+}
+
+func TestOptionalHTMLHeadAndBodyTags(t *testing.T) {
+	for _, body := range []string{
+		"<head><title>T</title><body><p>Visible</p>",
+		"<head><title>T</title><p>Visible</p>",
+		"<head><title>T</title><meta charset=utf-8><style>hidden</style><script>hidden()</script></head><body><p>Visible</p>",
+		"<title>T</title><p>Visible</p>",
+	} {
+		d, err := Extract(input("text/html", body))
+		if err != nil || d.Text != "Visible" {
+			t.Fatalf("implicit head/body %q: %q %v", body, d.Text, err)
+		}
+	}
+}

@@ -75,10 +75,8 @@ func Extract(p publicfetch.Page) (Document, error) {
 		return Document{}, publicfetch.ErrUnsupported
 	}
 	text := strings.TrimPrefix(string(body), "\ufeff")
-	for _, r := range text {
-		if unicode.IsControl(r) && r != '\n' && r != '\r' && r != '\t' {
-			return Document{}, publicfetch.ErrUnsupported
-		}
+	if hasControls(text) {
+		return Document{}, publicfetch.ErrUnsupported
 	}
 	text = strings.ReplaceAll(strings.ReplaceAll(text, "\r\n", "\n"), "\r", "\n")
 	bounded := false
@@ -87,6 +85,9 @@ func Extract(p publicfetch.Page) (Document, error) {
 		if err != nil {
 			return Document{}, err
 		}
+	}
+	if hasControls(text) {
+		return Document{}, publicfetch.ErrUnsupported
 	}
 	text = strings.TrimSpace(text)
 	runes := []rune(text)
@@ -99,6 +100,15 @@ func Extract(p publicfetch.Page) (Document, error) {
 		source.SourceDate = p.SourceDate.UTC().Format("2006-01-02T15:04:05Z07:00")
 	}
 	return Document{Source: source, Text: text}, nil
+}
+
+func hasControls(text string) bool {
+	for _, r := range text {
+		if unicode.IsControl(r) && r != '\n' && r != '\r' && r != '\t' {
+			return true
+		}
+	}
+	return false
 }
 
 // limitedText caps retained output during extraction, before links can expand
@@ -163,6 +173,17 @@ func (f *markupFilter) feed(input string, preserve bool) error {
 			return nil
 		}
 		t := z.Token()
+		// Character references are decoded by the tokenizer, after the raw
+		// response check. Check every token even after the output cap so a
+		// discarded suffix cannot conceal a forbidden decoded control.
+		if hasControls(t.Data) {
+			return publicfetch.ErrUnsupported
+		}
+		for _, attr := range t.Attr {
+			if hasControls(attr.Val) {
+				return publicfetch.ErrUnsupported
+			}
+		}
 		if f.suppressed != "" {
 			if kind == html.StartTagToken && t.Data == f.suppressed {
 				f.depth++
@@ -177,7 +198,10 @@ func (f *markupFilter) feed(input string, preserve bool) error {
 		}
 		if kind == html.StartTagToken || kind == html.SelfClosingTagToken {
 			switch t.Data {
-			case "script", "style", "iframe", "object", "svg", "math", "template", "noscript", "head":
+			// Head/body wrappers have optional end/start tags in HTML. Drop
+			// their tags, but suppress only actual metadata elements (title,
+			// script, style, etc.), allowing implicit body content through.
+			case "script", "style", "iframe", "object", "svg", "math", "template", "noscript", "title":
 				if kind != html.SelfClosingTagToken {
 					f.suppressed = t.Data
 					f.depth = 1
