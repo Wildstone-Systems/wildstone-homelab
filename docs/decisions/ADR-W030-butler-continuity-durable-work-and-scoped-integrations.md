@@ -195,7 +195,7 @@ A candidate becomes a calendar effect only through a **review** (`keystone/mailr
 - **API.** `GET /api/v1/mail/candidates`, `GET /api/v1/mail/candidates/{id}`, `POST /api/v1/mail/candidates/{id}/act` (`{token}` or `{revision, action, fields?}`), `POST /api/v1/mail/act` (`{token}`), and the same under `/api/v1/home/`, plus `POST /api/v1/home/agent-subscriptions/{id}/control` (pause, resume, disable, cadence on the Person's own subscription; never enable). One Person-scoped surface for Console, CLI, Homepage and (read-only) an Agent acting for its Person; review tokens — the one narrow redaction carve-out — and the excerpt go only to the Person's own identity. Chat's text fallback is the deterministic `/mail <add|apply|dismiss> <id> <revision>` command, answered before any model.
 
 
-### A5.7 Amendment (epic #326 S07): Watch this mailbox
+### A5.8 Amendment (epic #326 S07): Watch this mailbox
 
 The Console's Mailbox screen (reached from the installed email capability, Home and the rail) is the setup and health surface for a Person's own monitor. Two API additions close gaps S02–S05 left for it (`keystone/api/handlers_mail_setup.go`):
 
