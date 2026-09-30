@@ -871,3 +871,29 @@ The architecture intentionally does not freeze every implementation detail. Stil
 - exact soft-delete purge UX
 
 Those choices must preserve the decisions above and may be made during implementation without reopening this ADR unless they change an architectural boundary.
+
+## Proposed W047 companion amendment: capability defaults and file retention
+
+Pending acceptance of [ADR-W047](ADR-W047-native-agent-research-and-workspaces.md),
+with the [v1 contract](../design/native-agent-capability-contract-v1.md).
+This proposal does not claim the tools are implemented.
+
+- **B5:** workspace/research/export tools are registered opt-in so generic
+  default seeding and broad/dynamic bundles cannot grant them on upgrade.
+  New native Agents alone receive an explicit bounded workspace set after
+  storage readiness. Existing Agents and runtime switches retain current
+  grants. Research needs a tested selected provider plus explicit assignment;
+  export is separately assigned. Classes, narrowing and resource grants stand.
+- **C5/C7, E6:** scoped artifacts inherit their source audience/privacy and
+  class/surface restrictions. Other people/Agents gain no automatic access.
+  Owner administrative access does not confer normal-product access to another
+  Person's private files. Unattended work cannot borrow a Person's private
+  workspace; future shared routine access requires exact-version authority.
+- **Privacy:** artifact sources join the existing provenance graph. Local
+  inference approval is insufficient for external search/fetch egress;
+  check full trusted task/session sources before network effects and on resume.
+- **F6:** only configured workspace scratch/file-trash expiry is an exception
+  to indefinite soft deletion: seven days after terminal task for scratch,
+  30 days for file trash by default. Active/waiting scratch is protected.
+  People, Agents, Connections, routines and other durable entities stay
+  recoverable until explicit purge. Retirement does not remove artifacts.
