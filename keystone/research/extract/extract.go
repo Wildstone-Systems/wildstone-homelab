@@ -272,7 +272,9 @@ func (f *markupFilter) feed(input string, preserve bool) error {
 						// no intervening whitespace. Keep inline text continuous.
 						for previous := n.PrevSibling; previous != nil; previous = previous.PrevSibling {
 							if previous.Type == html.ElementNode && (previous.Data == "td" || previous.Data == "th") {
-								f.out.write(" ")
+								if f.out.pending.Len() == 0 {
+									f.out.write(" ")
+								}
 								break
 							}
 						}

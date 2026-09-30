@@ -740,3 +740,23 @@ func TestAdjacentTableCellsRemainSeparate(t *testing.T) {
 		}
 	}
 }
+
+func TestTableCellSeparatorDoesNotDuplicateSourceWhitespace(t *testing.T) {
+	for _, media := range []string{"text/html", "text/markdown"} {
+		for _, separator := range []string{" ", "\t", "\n"} {
+			d, err := Extract(input(media, "<table><tr><td>A</td>"+separator+"<td>B</td></tr></table>"))
+			want := separator
+			if media == "text/html" && separator == "\t" {
+				want = " "
+			}
+			if err != nil || d.Text != "A"+want+"B" {
+				t.Fatalf("%s separator=%q: %q %v", media, separator, d.Text, err)
+			}
+		}
+		body := "<table><tr><td>" + strings.Repeat("x", MaxCharacters-2) + "</td> <td>B</td></tr></table>"
+		d, err := Extract(input(media, body))
+		if err != nil || d.Source.Truncated || utf8.RuneCountInString(d.Text) != MaxCharacters || !strings.HasSuffix(d.Text, " B") {
+			t.Fatalf("%s normalized table cap: %d %+v %v", media, utf8.RuneCountInString(d.Text), d.Source, err)
+		}
+	}
+}
