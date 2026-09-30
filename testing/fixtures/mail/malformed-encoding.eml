@@ -1,0 +1,18 @@
+From: broken@example.internal
+To: ada@example.internal
+Subject: Unknown transfer encoding
+Message-ID: <broken-2@example.internal>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="z"
+
+--z
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: x-uuencode
+
+begin 644 hello.txt
+end
+--z
+Content-Type: text/plain; charset=utf-8
+
+the readable part survives
+--z--

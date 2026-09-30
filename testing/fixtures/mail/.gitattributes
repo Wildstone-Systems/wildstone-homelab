@@ -1,0 +1,2 @@
+# Raw RFC 5322 fixtures: keep CRLF line endings and non-UTF-8 bytes exactly.
+*.eml -text

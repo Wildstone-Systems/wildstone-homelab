@@ -1,0 +1,35 @@
+From: Ada Example <ada@example.internal>
+To: grace@example.internal
+Subject: Fwd: Invitation: School family night
+Date: Fri, 02 Oct 2026 08:00:00 +0000
+Message-ID: <fwd-1@example.internal>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="fwd"
+
+--fwd
+Content-Type: text/plain; charset=utf-8
+
+Forwarding this one.
+--fwd
+Content-Type: message/rfc822
+
+From: Front Office <office@school.example.internal>
+Subject: Invitation: School family night
+Message-ID: <invite-inner@school.example.internal>
+Content-Type: text/calendar; method=REQUEST; charset=utf-8
+
+BEGIN:VCALENDAR
+PRODID:-//Example//Fixture//EN
+VERSION:2.0
+METHOD:REQUEST
+BEGIN:VEVENT
+UID:fixture-invite-1@example.internal
+DTSTAMP:20261001T120000Z
+DTSTART;TZID=America/New_York:20261015T180000
+DTEND;TZID=America/New_York:20261015T193000
+SUMMARY:School family night
+LOCATION:School gym
+ORGANIZER;CN=Front Office:mailto:office@school.example.internal
+END:VEVENT
+END:VCALENDAR
+--fwd--
