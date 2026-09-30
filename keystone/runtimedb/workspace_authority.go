@@ -1,10 +1,47 @@
 package runtimedb
 
-import "errors"
+import (
+	"database/sql"
+	"errors"
+)
 
 // ErrWorkspaceDenied deliberately does not distinguish missing from hidden
 // resources. Neither resource selectors nor Owner administration grant access.
 var ErrWorkspaceDenied = errors.New("permission_denied: workspace access refused")
+
+// ResolvePrivateWorkspaceTask normalizes the kind-only resource reference
+// canonical gateways send for manifests and dispatch. It never creates a
+// workspace or infers a grant. Identity comes from the bound task, not args.
+func (db *DB) ResolvePrivateWorkspaceTask(person, agent, taskID, connection string) (string, error) {
+	if db == nil {
+		return "", ErrWorkspaceDenied
+	}
+	seq, err := parseButlerTaskID(taskID)
+	if err != nil {
+		return "", ErrWorkspaceDenied
+	}
+	tx, err := db.sql.Begin()
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback()
+	var id string
+	err = tx.QueryRow(`SELECT w.id FROM agent_workspaces w
+ JOIN butler_members person ON person.person_id=w.person_id
+ JOIN butlers agent ON agent.seq=w.agent_id
+ JOIN butler_tasks task ON task.seq=? AND task.owner_person_id=person.person_id AND task.butler=agent.name
+ WHERE person.member=? AND agent.name=? AND w.visibility='private'`, seq, person, agent).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", ErrWorkspaceDenied
+	}
+	if err != nil {
+		return "", err
+	}
+	if err = checkWorkspaceTask(tx, person, agent, taskID, connection, id); err != nil {
+		return "", err
+	}
+	return id, nil
+}
 
 // CheckWorkspaceTask is the private workspace resource rule (ADR-W047).
 // Its identity arguments come from the authenticated task handle, never tool

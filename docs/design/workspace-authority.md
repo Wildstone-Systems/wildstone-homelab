@@ -10,7 +10,10 @@ must use these checks and repeat them at their execution fences.
 ## Resource authority
 
 The existing `butlerstore.Authority` recognizes resource kind `workspace`.
-The resource ID is the server-resolved workspace ID, not an ownership claim.
+Canonical gateways provide a kind-only reference. `ResolvePrivateWorkspaceTask`
+resolves its private workspace ID from trusted Person/Agent/task identity, then
+checks current authority. Explicit IDs remain selectors, not ownership claims.
+Resolution never creates a workspace or grants access.
 `CheckWorkspaceTask` requires a live Person, the owning Agent, current Agent
 access, a private conversation task belonging to that same Person and Agent,
 and matching current class, surface and originating Connection. Missing and
@@ -68,6 +71,7 @@ labels are combined with current `content_privacy` marks. No human policy-edit
 endpoint is introduced here. Trusted-only restrictions remain independent of
 local model processing; local inference does not authorize external disclosure.
 
+Task-backed delivery checks provenance even before the first session exists.
 Gateway Manifest and Invoke restore originating task/session provenance. Invoke
 checks it before dispatch or ledger reuse. Workspace/export calls must re-enter
 their resource/receipt seam instead of returning generic cached tool output.

@@ -282,6 +282,16 @@ func (a *Authority) AdmitResource(q butler.ToolAuthorityQuery) (butler.ToolDecis
 		if a == nil || a.DB == nil || q.Caller != butler.CallerPersonFacing || q.RoutinePlanID != "" || q.RoutineName != "" {
 			return denied, nil
 		}
+		if q.Resource.ID == "" {
+			_, err := a.DB.ResolvePrivateWorkspaceTask(q.Person, a.Butler, q.TaskID, q.Connection)
+			if errors.Is(err, runtimedb.ErrWorkspaceDenied) {
+				return denied, nil
+			}
+			if err != nil {
+				return denied, err
+			}
+			return butler.ToolDecision{Allowed: true}, nil
+		}
 		if err := a.DB.CheckWorkspaceTask(q.Person, a.Butler, q.TaskID, q.Connection, q.Resource.ID); err != nil {
 			if errors.Is(err, runtimedb.ErrWorkspaceDenied) {
 				return denied, nil
