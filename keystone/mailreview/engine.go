@@ -32,6 +32,7 @@ package mailreview
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -250,13 +251,41 @@ func (e *Engine) availability(ctx context.Context, handle string, g runtimedb.Ba
 	if !ok {
 		return runtimedb.MailAvailabilityNotChecked, nil, nil
 	}
-	calendars := []string{target}
-	for _, id := range g.Scope.ConflictCalendars {
-		if id != target {
-			calendars = append(calendars, id)
+	calendars := e.conflictCalendars(g, target)
+	return e.check(ctx, handle, calendars, start, end, map[string]bool{uid: uid != "", runtimedb.MailEventUID(c.ID): true})
+}
+
+// maxCheckedCalendars bounds how many calendars one review reads.
+const maxCheckedCalendars = 17
+
+// conflictCalendars is the target calendar plus the calendars the
+// authorization lets a review check: the Person's authorized scope, and
+// the conflictCalendars the approved subscription's match names (S07
+// files them there; the subscription's content is digested into the
+// Person's authorization, so both are what the Person agreed to). Each
+// is still read only if the Person can read it now.
+func (e *Engine) conflictCalendars(g runtimedb.BackgroundGrant, target string) []string {
+	out := []string{target}
+	seen := map[string]bool{target: true}
+	add := func(ids []string) {
+		for _, id := range ids {
+			id = strings.TrimSpace(id)
+			if id != "" && !seen[id] && len(out) < maxCheckedCalendars {
+				seen[id] = true
+				out = append(out, id)
+			}
 		}
 	}
-	return e.check(ctx, handle, calendars, start, end, map[string]bool{uid: uid != "", runtimedb.MailEventUID(c.ID): true})
+	add(g.Scope.ConflictCalendars)
+	if sub, err := e.DB.GetAgentSubscription(g.Subscription); err == nil {
+		var match struct {
+			ConflictCalendars []string `json:"conflictCalendars"`
+		}
+		if json.Unmarshal([]byte(sub.MatchJSON), &match) == nil {
+			add(match.ConflictCalendars)
+		}
+	}
+	return out
 }
 
 func (e *Engine) check(ctx context.Context, handle string, calendars []string, start, end time.Time,

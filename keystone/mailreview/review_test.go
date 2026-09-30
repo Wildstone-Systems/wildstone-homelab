@@ -410,3 +410,19 @@ func TestConcurrentDuplicateApprovalsCreateOneEvent(t *testing.T) {
 }
 
 func itoa(n int64) string { return strconv.FormatInt(n, 10) }
+
+func TestConflictCalendarsComeFromTheScopeAndTheApprovedMatch(t *testing.T) {
+	e := newEnv(t)
+	sub, err := e.db.ProposeAgentSubscription(runtimedb.AgentSubscriptionSpec{Butler: e.agent,
+		TriggerKind: runtimedb.SubscriptionTriggerSchedule, MatchKind: "mail.changes",
+		MatchJSON: `{"conflictCalendars":["school","household"," "]}`, Audience: runtimedb.AudienceOwner,
+		Capabilities: []string{"mail.changes"}, SourceConnection: "sam-mail", Cadence: 15 * time.Minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := e.eng.conflictCalendars(runtimedb.BackgroundGrant{Subscription: sub,
+		Scope: runtimedb.BackgroundScope{ConflictCalendars: []string{"household", "bo-private", "sam-family"}}}, "sam-family")
+	if strings.Join(got, ",") != "sam-family,household,bo-private,school" {
+		t.Fatalf("calendars checked: %v", got)
+	}
+}

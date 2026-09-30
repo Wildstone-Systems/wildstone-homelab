@@ -641,6 +641,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/agent-subscriptions/{id}", s.handle(principal.VerbRead, s.getAgentSubscription))
 	mux.Handle("PUT /api/v1/agent-subscriptions/{id}", s.handle(principal.VerbPropose, s.reviseAgentSubscription))
 	mux.Handle("POST /api/v1/agent-subscriptions/{id}/control", s.handle(principal.VerbPropose, s.controlAgentSubscription))
+	mux.Handle("POST /api/v1/home/agent-subscriptions/{id}/control", s.portal(surfaceHome, s.homeControlAgentSubscription))
 	mux.Handle("GET /api/v1/butler/tools", s.handle(principal.VerbRead, s.listButlerToolControls))
 	mux.Handle("PUT /api/v1/butler/tools", s.handle(principal.VerbManage, s.setButlerToolControl))
 	mux.Handle("GET /api/v1/butler/grants", s.handle(principal.VerbRead, s.listButlerGrants))

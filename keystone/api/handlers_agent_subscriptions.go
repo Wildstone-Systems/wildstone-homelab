@@ -26,6 +26,7 @@ import (
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
 	"github.com/chickenrat17/wildstone-homelab/keystone/proposals"
+	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 )
 
@@ -254,6 +255,37 @@ func (s *Server) controlAgentSubscription(r *http.Request, id principal.Identity
 	if err != nil {
 		return nil, code, err
 	}
+	return s.controlSubscription(r, sub, reader, principal.Allowed(id.Role, principal.VerbApprove), id.Name, id.ActingFor)
+}
+
+// homeControlAgentSubscription: POST
+// /api/v1/home/agent-subscriptions/{id}/control — the Homepage
+// Person's own session (epic #326 S07). Only a subscription that runs
+// for them, whatever their role: the Homepage is not an Owner surface,
+// so enable (an Owner's) is refused here. It is a person's own
+// credential, so resume and cadence are allowed.
+func (s *Server) homeControlAgentSubscription(_ http.ResponseWriter, r *http.Request, member string, _ []resource.Resource) (any, int, error) {
+	m, err := s.DB.GetButlerMember(member)
+	if err != nil || !m.Active() {
+		return nil, http.StatusForbidden, fmt.Errorf("subscriptions are shown to an admitted household member")
+	}
+	reader := subscriptionReader{member: m}
+	subID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		return nil, http.StatusBadRequest, fmt.Errorf("subscription id must be a number")
+	}
+	sub, err := s.DB.GetAgentSubscription(subID)
+	if err != nil || !reader.mayRead(sub) {
+		return nil, http.StatusNotFound, fmt.Errorf("no such subscription")
+	}
+	return s.controlSubscription(r, sub, reader, true, member, member)
+}
+
+// controlSubscription applies one control action for reader. human is
+// whether the credential is a person's own (not an Agent's).
+func (s *Server) controlSubscription(r *http.Request, sub runtimedb.AgentSubscription, reader subscriptionReader, human bool,
+	principalName, actingFor string) (any, int, error) {
+	var err error
 	var req struct {
 		Action  string `json:"action"`
 		Reason  string `json:"reason,omitempty"`
@@ -266,10 +298,10 @@ func (s *Server) controlAgentSubscription(r *http.Request, id principal.Identity
 		return nil, http.StatusForbidden, fmt.Errorf("only the Person this subscription runs for, or an Owner, may change it")
 	}
 	widening := req.Action == "resume" || req.Action == "enable" || req.Action == "cadence"
-	if widening && !principal.Allowed(id.Role, principal.VerbApprove) {
+	if widening && !human {
 		return nil, http.StatusForbidden, fmt.Errorf("%s needs a person's own credential, not an Agent's", req.Action)
 	}
-	who := actingMember(id)
+	who := reader.member.Member
 	at := time.Now().UTC()
 	switch req.Action {
 	case "pause":
@@ -300,7 +332,7 @@ func (s *Server) controlAgentSubscription(r *http.Request, id principal.Identity
 	}
 	if _, err := s.DB.AppendEvent(runtimedb.Event{
 		Type: "agent-subscription." + req.Action, Message: req.Reason,
-		Attrs: map[string]string{"subscription": strconv.FormatInt(sub.ID, 10), "principal": id.Name, "actingFor": id.ActingFor},
+		Attrs: map[string]string{"subscription": strconv.FormatInt(sub.ID, 10), "principal": principalName, "actingFor": actingFor},
 	}); err != nil {
 		s.Log.Error("event append failed", "type", "agent-subscription."+req.Action, "err", err)
 	}

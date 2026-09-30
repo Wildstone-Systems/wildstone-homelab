@@ -84,6 +84,7 @@ type mailAPIHarness struct {
 	cal    *memCalendar
 	engine *mailreview.Engine
 	vault  *runtimedb.MailExcerptVault
+	sub    int64
 }
 
 func newMailAPIHarness(t *testing.T) *mailAPIHarness {
@@ -102,7 +103,10 @@ func newMailAPIHarness(t *testing.T) *mailAPIHarness {
 		t.Fatalf("preview = %d %s", code, body)
 	}
 	match, _ := json.Marshal(preview.SubscriptionMatch)
-	sub, err := c.s.DB.InsertAgentSubscription(c.agent, "schedule", string(match), runtimedb.AudienceOwner, []string{"mail.changes"}, "")
+	sub, err := c.s.DB.ProposeAgentSubscription(runtimedb.AgentSubscriptionSpec{Butler: c.agent,
+		TriggerKind: runtimedb.SubscriptionTriggerSchedule, MatchKind: "mail.changes", MatchJSON: string(match),
+		Audience: runtimedb.AudienceOwner, Capabilities: []string{"mail.changes"}, SourceConnection: "sam-mail",
+		Cadence: 15 * time.Minute})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +127,7 @@ func newMailAPIHarness(t *testing.T) *mailAPIHarness {
 	cal := &memCalendar{events: map[string]caldav.EventWrite{}}
 	engine := &mailreview.Engine{DB: c.s.DB, Vault: vault, Calendar: cal}
 	c.s.MailReview = engine
-	return &mailAPIHarness{credentialHarness: c, cal: cal, engine: engine, vault: vault}
+	return &mailAPIHarness{credentialHarness: c, cal: cal, engine: engine, vault: vault, sub: sub}
 }
 
 // candidate records a school-night candidate for sam and offers it.
@@ -270,5 +274,26 @@ func TestMailChatCommandIsExactAndDirectOnly(t *testing.T) {
 		At: runtimedb.Connection{Surface: runtimedb.ButlerSurfaceFamily}}, "/mail add "+id+" 1")
 	if m.cal.writes != 1 || !strings.Contains(body, "Added") {
 		t.Fatalf("sam's own web chat: %s (writes %d)", body, m.cal.writes)
+	}
+}
+
+func TestHomeSubscriptionControlIsThePersonsOwn(t *testing.T) {
+	m := newMailAPIHarness(t)
+	path := fmt.Sprintf("/api/v1/home/agent-subscriptions/%d/control", m.sub)
+	if code, body := m.homeCall("bo", http.MethodPost, path, map[string]any{"action": "pause"}, nil); code != http.StatusNotFound {
+		t.Fatalf("bo paused sam's monitor: %d %s", code, body)
+	}
+	for _, step := range []map[string]any{{"action": "pause", "reason": "away"}, {"action": "resume"},
+		{"action": "cadence", "cadence": "30m"}, {"action": "disable"}} {
+		if code, body := m.homeCall("sam", http.MethodPost, path, step, nil); code != http.StatusOK {
+			t.Fatalf("sam %v: %d %s", step, code, body)
+		}
+	}
+	if code, _ := m.homeCall("sam", http.MethodPost, path, map[string]any{"action": "enable"}, nil); code != http.StatusForbidden {
+		t.Fatalf("a Person re-enabled from the Homepage: %d", code)
+	}
+	sub, err := m.s.DB.GetAgentSubscription(m.sub)
+	if err != nil || sub.Enabled || sub.Cadence != 30*time.Minute {
+		t.Fatalf("subscription after sam's controls: %+v %v", sub, err)
 	}
 }
