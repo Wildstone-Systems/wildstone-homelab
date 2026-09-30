@@ -30,7 +30,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: ingress-tailnet-ts
-  version: 1.1.1
+  version: 1.1.2
   capability: ingress
   profile: caddy-tailnet-ts
   exclusive: true
@@ -129,6 +129,7 @@ templates:
         - "{{ .Params.listen_addr }}:51443:51443"
         - "{{ .Params.listen_addr }}:52443:52443"
         - "{{ .Params.listen_addr }}:53443:53443"
+        - "{{ .Params.listen_addr }}:54443:54443"
       mounts:
         - { source: caddy-tailnet-ts-data, target: /data }
         - { source: /etc/wildstone, target: /etc/wildstone, readOnly: true }

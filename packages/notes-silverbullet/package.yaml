@@ -1,0 +1,95 @@
+# Notes capability, profile "silverbullet": a web UI for reading and
+# editing the household's knowledge folder in the browser (ADR-W046,
+# #367).
+#
+# A WINDOW ONTO THE FOLDER, NOT ITS OWNER. The notes belong to
+# knowledge-wildstone: this package mounts the same host folder and
+# holds nothing of its own beyond the container. Removing it removes
+# the container and the Route; every note stays on disk, the agent
+# tools keep working, and another Markdown client can be pointed at the
+# folder instead. Nothing Wildstone relies on is written in a
+# SilverBullet-only format.
+#
+# ADR-W029, answered:
+# - Configured by environment only. Setting SB_NAME puts SilverBullet in
+#   its single-space mode, where the mounted folder IS the space. Its
+#   default multi-space mode would write accounts and server config
+#   into that folder and ask for a setup wizard, which is the wrong
+#   thing to do to the household's notes.
+# - Refuses to start without nothing; an empty folder becomes a space
+#   with an index page.
+# - The image has a HEALTHCHECK (curl /.instance).
+# - Needs no knowledge of its own address.
+# - No identity-provider claims: single-space mode has no accounts, so
+#   who may open it is decided entirely by the Route's forward-auth and
+#   the `family` access group below. Anyone who can open it can edit
+#   everything in it, which is what ADR-W046 says the shared folder is.
+#
+# RUNS AS WHOEVER OWNS THE FOLDER. The entrypoint drops to the folder
+# owner's uid/gid, and Keystone gives every note it writes the owner of
+# the folder it lands in, so both sides can edit each other's notes.
+#
+# LOCKED DOWN. The shell backend (which would run commands inside the
+# container from the browser) is off, and the -slim image carries no
+# Chromium, so the runtime API is off too. Scripts in notes are still
+# a SilverBullet feature a person can use; the agent tools refuse to
+# write them (keystone/knowledge.CheckContent).
+#
+# OFFLINE/PWA. SilverBullet's docs ask a proxy to let /service_worker.js
+# and /.client/* through unauthenticated. The Route has no per-path
+# bypass, so the app works fully in a signed-in browser tab but may not
+# install as an offline app. The origin is pinned (ingressorigin
+# "notes") so the service worker's cache never moves.
+#
+# Image digest is REAL, resolved 2026-09-30 via the OCI registry API:
+#   ghcr.io/silverbulletmd/silverbullet:2.11.1-slim -> sha256:07dcc90f...8a92
+apiVersion: wildstone.dev/v1
+kind: Package
+metadata:
+  name: notes-silverbullet
+  version: 1.0.0
+  capability: notes
+  profile: silverbullet
+requires:
+  - { trait: identity, mode: oidc }
+  - { trait: ingress, mode: private }
+params:
+  - { name: public_domain, required: true, description: "The domain your services are named under, e.g. home.example.com. Under a tailnet this is a label rather than an address you type.", source: domain }
+  - { name: notes_subdomain, default: notes, description: "The name this service appears under, e.g. notes." }
+  - { name: node, required: true, description: "Which machine to install this on. Pick the one running the control plane, where the knowledge folder is.", source: node }
+  # The SAME folder knowledge-wildstone keeps. The defaults match, so a
+  # household that accepts both gets one set of notes; changing one
+  # without the other gives the UI an empty space.
+  - { name: knowledge_path, default: /srv/wildstone/knowledge, description: "The household knowledge folder to open. Use the same folder the knowledge capability is set to.", source: directory }
+accessGroups: [family]
+policies:
+  classifications: [family_private]
+  dataSensitivity: medium
+templates:
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: silverbullet, node: "{{ .Params.node }}" }
+    spec:
+      image: "ghcr.io/silverbulletmd/silverbullet@sha256:07dcc90f41eaa258814080bc3f9af47854e56b23ad0c8c7ffc2ac4bc98568a92"
+      env:
+        SB_NAME: "Household notes"
+        SB_SHELL_BACKEND: "off"
+        SB_RUNTIME_API: "0"
+        # Keystone keeps the version every agent update replaced under
+        # .history; showing those as pages would fill search with stale
+        # copies.
+        SB_SPACE_IGNORE: ".history/*"
+      mounts:
+        - { source: "{{ .Params.knowledge_path }}", target: /data }
+      restart: unless-stopped
+      resources: { memory: 256m, cpus: "1", pidsLimit: 256 }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Route
+    metadata: { name: notes, node: "{{ .Params.node }}" }
+    spec:
+      host: "{{ .Params.notes_subdomain }}.{{ .Params.public_domain }}"
+      upstream: "container/silverbullet:3000"
+      auth: authelia_oidc
+      classification: family_private
