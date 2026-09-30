@@ -7,8 +7,9 @@ COPY requirements.txt ./
 RUN pip install --no-cache-dir --require-hashes -r requirements.txt
 COPY contract.py engine.py service.py ./
 USER 65532:65532
-# Loopback is the safe standalone default. The managed package must explicitly
-# bind its isolated Keystone-only network; do not publish this port publicly.
+# Loopback is the standalone default. The managed package binds the shared
+# bridge and publishes on host loopback only. Sibling/local callers can bypass
+# Keystone controls (accepted #493 limitation); never expose a public listener.
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
   CMD ["python", "-c", "import json,urllib.request; r=json.load(urllib.request.urlopen('http://127.0.0.1:8080/health',timeout=2)); assert r == {'version':1,'ready':True}"]
