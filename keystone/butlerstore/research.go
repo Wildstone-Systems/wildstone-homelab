@@ -33,7 +33,11 @@ func (r *Research) check(ctx context.Context, task, kind string) (runtimedb.Rese
 	if err := r.Ledger.Authorize(task); err != nil {
 		return runtimedb.ResearchLimits{}, err
 	}
-	return r.Authorize(ctx, task, kind)
+	limits, err := r.Authorize(ctx, task, kind)
+	if err != nil {
+		return limits, err
+	}
+	return limits, ctx.Err()
 }
 
 // Attempt reserves before calling dispatch exactly once. Validation, queueing,
@@ -56,6 +60,9 @@ func (r *Research) Attempt(ctx context.Context, task string, ledgerAttempt int64
 	err = ctx.Err()
 	if err == nil {
 		err = dispatch(ctx)
+	}
+	if err == nil {
+		err = ctx.Err()
 	}
 	state := "succeeded"
 	if err != nil {

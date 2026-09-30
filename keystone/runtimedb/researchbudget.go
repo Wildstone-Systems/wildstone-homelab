@@ -49,6 +49,35 @@ func researchBudgetTx(tx *sql.Tx, task int64) (b ResearchBudget, err error) {
 	return
 }
 
+// Check again after taking SQLite's writer lock: a promotion, stop or restore
+// can commit while admission is waiting for that lock. All three facts must
+// describe the same snapshot as the reservation/checkpoint/continuation.
+func (db *DB) researchFenceTx(tx *sql.Tx) error {
+	lease := db.executionLease.Load()
+	if lease == nil {
+		return ErrCoordinatorFenced
+	}
+	var holder string
+	var epoch int64
+	var quarantine, stopped bool
+	err := tx.QueryRow(`SELECT l.holder,l.epoch,COALESCE((SELECT quarantined FROM restore_state WHERE id=1),0),h.active
+ FROM coordinator_lease l CROSS JOIN household_execution_stop h
+ WHERE l.id=1 AND h.singleton=1`).Scan(&holder, &epoch, &quarantine, &stopped)
+	if err != nil {
+		return err
+	}
+	if holder != lease.Holder || epoch != lease.Epoch {
+		return ErrCoordinatorFenced
+	}
+	if quarantine {
+		return ErrQuarantined
+	}
+	if stopped {
+		return ErrHouseholdStopped
+	}
+	return nil
+}
+
 // ReserveResearchAttempt commits one spend before I/O. Every retry calls this
 // again. A reservation is never refunded or reused to dispatch: a crash between
 // commit and I/O is conservatively spent. Config can narrow existing totals but
@@ -73,6 +102,9 @@ func (db *DB) ReserveResearchAttempt(ctx context.Context, taskID string, ledgerA
 		return 0, empty, err
 	}
 	defer tx.Rollback()
+	if err = db.researchFenceTx(tx); err != nil {
+		return 0, empty, err
+	}
 	var state string
 	var epoch, attemptEpoch int64
 	var attemptState, stepKind string
@@ -87,6 +119,16 @@ func (db *DB) ReserveResearchAttempt(ctx context.Context, taskID string, ledgerA
 	}
 	if state != "running" && state != "waiting" {
 		return 0, empty, ErrResearchConflict
+	}
+	if state == "waiting" {
+		var ownWait int
+		if err = tx.QueryRow(`SELECT count(*) FROM research_budgets b JOIN butler_task_waits w ON w.seq=b.wait_seq
+  WHERE b.task=? AND w.task=b.task AND w.reason='budget-exhausted' AND w.resolved_at=''`, task).Scan(&ownWait); err != nil {
+			return 0, empty, err
+		}
+		if ownWait != 1 {
+			return 0, empty, ErrResearchConflict
+		}
 	}
 	if _, err = tx.Exec(`INSERT INTO research_budgets(task,searches_allowed,fetches_allowed,config_searches,config_fetches) VALUES(?,?,?,?,?) ON CONFLICT(task) DO NOTHING`, task, limits.Searches, limits.Fetches, limits.Searches, limits.Fetches); err != nil {
 		return 0, empty, err
@@ -233,6 +275,9 @@ func (db *DB) SaveResearchCheckpoint(taskID string, epoch int64, c ResearchCheck
 		return err
 	}
 	defer tx.Rollback()
+	if err = db.researchFenceTx(tx); err != nil {
+		return err
+	}
 	var valid int
 	if err = tx.QueryRow(`SELECT count(*) FROM butler_tasks WHERE seq=? AND lease_epoch=? AND state IN ('running','waiting')`, task, epoch).Scan(&valid); err != nil {
 		return err
@@ -299,6 +344,9 @@ func (db *DB) ContinueResearch(taskID, actor string, expected int64, limits Rese
 		return err
 	}
 	defer tx.Rollback()
+	if err = db.researchFenceTx(tx); err != nil {
+		return err
+	}
 	b, err := researchBudgetTx(tx, task)
 	if err != nil {
 		return err

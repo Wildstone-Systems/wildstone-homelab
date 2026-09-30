@@ -3,9 +3,11 @@ package runtimedb
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func researchTask(t *testing.T, db *DB) (string, int64) {
@@ -181,5 +183,183 @@ func TestResearchAccountingAndRollback(t *testing.T) {
 	}
 	if _, _, err := db.ReserveResearchAttempt(ctx, task, a, "search", DefaultResearchLimits()); !errors.Is(err, ErrResearchConflict) {
 		t.Fatalf("cancelled task: %v", err)
+	}
+}
+
+func TestResearchWaitAndContinuationRollback(t *testing.T) {
+	db := openWith(t, "mika")
+	task, a := researchTask(t, db)
+	ctx := context.Background()
+	limits := ResearchLimits{1, 2}
+	if _, _, err := db.ReserveResearchAttempt(ctx, task, a, "search", limits); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.sql.Exec(`CREATE TRIGGER fail_research_wait BEFORE INSERT ON butler_task_waits BEGIN SELECT RAISE(ABORT,'injected failure'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := db.ReserveResearchAttempt(ctx, task, a, "search", limits); err == nil || errors.Is(err, ErrResearchBudgetExhausted) {
+		t.Fatalf("false park: %v", err)
+	}
+	current, err := db.GetButlerTask(task)
+	if err != nil || current.State != ButlerTaskRunning {
+		t.Fatalf("partial park: %+v %v", current, err)
+	}
+	if _, err := db.sql.Exec(`DROP TRIGGER fail_research_wait`); err != nil {
+		t.Fatal(err)
+	}
+	_, b, err := db.ReserveResearchAttempt(ctx, task, a, "search", limits)
+	if !errors.Is(err, ErrResearchBudgetExhausted) {
+		t.Fatal(err)
+	}
+	if _, err := db.sql.Exec(`CREATE TRIGGER fail_research_continue BEFORE INSERT ON research_continuations BEGIN SELECT RAISE(ABORT,'injected failure'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.ContinueResearch(task, "test-human", b.Revision, ResearchLimits{2, 2}); err == nil {
+		t.Fatal("fault ignored")
+	}
+	after, err := db.GetResearchBudget(task)
+	if err != nil || after != b {
+		t.Fatalf("partial continuation: %+v %v", after, err)
+	}
+	current, err = db.GetButlerTask(task)
+	if err != nil || current.State != ButlerTaskWaiting {
+		t.Fatalf("resumed without continuation: %+v %v", current, err)
+	}
+	// Ordinary resume cannot replenish research allowance.
+	if err := db.ResolveButlerTaskWait(task, "test-human", "generic resume"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := db.ReserveResearchAttempt(ctx, task, a, "search", limits); !errors.Is(err, ErrResearchBudgetExhausted) {
+		t.Fatalf("reset through resume: %v", err)
+	}
+}
+
+func TestResearchCheckpointPersistsAndCannotResetBudgetJSON(t *testing.T) {
+	db := openWith(t, "mika")
+	task, a := researchTask(t, db)
+	if _, _, err := db.ReserveResearchAttempt(context.Background(), task, a, "fetch", DefaultResearchLimits()); err != nil {
+		t.Fatal(err)
+	}
+	steps, err := db.ListButlerTaskSteps(task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = db.FinishButlerAttempt(a, ButlerAttemptSucceeded, `{"source":"fixture"}`, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.SetButlerStepState(steps[0].Seq, ButlerStepVerified); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.SaveResearchCheckpoint(task, 0, ResearchCheckpoint{Steps: []int64{steps[0].Seq}, NextAction: "report"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.sql.Exec(`UPDATE butler_tasks SET budget_json='{"searchesUsed":0,"fetchesUsed":0,"searchesAllowed":99999}'`); err != nil {
+		t.Fatal(err)
+	}
+	path := db.path
+	if err = db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, err = Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	c, err := db.LatestResearchCheckpoint(task)
+	if err != nil || c.NextAction != "report" || len(c.Steps) != 1 || c.Steps[0] != steps[0].Seq {
+		t.Fatalf("checkpoint=%+v %v", c, err)
+	}
+	b, err := db.GetResearchBudget(task)
+	if err != nil || b.FetchesUsed != 1 || b.Allowed != DefaultResearchLimits() {
+		t.Fatalf("reset through task JSON: %+v %v", b, err)
+	}
+}
+
+func TestResearchDoesNotResumeUnrelatedWait(t *testing.T) {
+	db := openWith(t, "mika")
+	task, a := researchTask(t, db)
+	if err := db.OpenButlerTaskWait(task, ButlerTaskWait{Reason: ButlerWaitApproval}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := db.ReserveResearchAttempt(context.Background(), task, a, "search", DefaultResearchLimits()); !errors.Is(err, ErrResearchConflict) {
+		t.Fatalf("unrelated wait: %v", err)
+	}
+	if err := db.ContinueResearch(task, "test-human", 1, ResearchLimits{20, 40}); err == nil {
+		t.Fatal("continued unrelated wait")
+	}
+}
+
+func TestResearchMigrationRetainsExistingLedger(t *testing.T) {
+	// Component upgrade evidence only until the parent lands real 0099/0100.
+	db, err := openUnmigrated(filepath.Join(t.TempDir(), "upgrade.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err = db.migrateThrough("migrations/0098_search_providers.sql"); err != nil {
+		t.Fatal(err)
+	}
+	record(t, db, "mika")
+	task, a := researchTask(t, db)
+	before, err := db.GetButlerTask(task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = db.migrate(); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.migrate(); err != nil {
+		t.Fatal(err)
+	}
+	after, err := db.GetButlerTask(task)
+	if err != nil || before.ID != after.ID || before.Objective != after.Objective || before.LeaseEpoch != after.LeaseEpoch {
+		t.Fatalf("task changed: %+v %v", after, err)
+	}
+	if _, _, err = db.ReserveResearchAttempt(context.Background(), task, a, "search", DefaultResearchLimits()); err != nil {
+		t.Fatal(err)
+	}
+	steps, err := db.ListButlerTaskSteps(task)
+	if err != nil || len(steps) != 1 {
+		t.Fatalf("ledger changed: %+v %v", steps, err)
+	}
+}
+
+func TestResearchExecutionGates(t *testing.T) {
+	for _, gate := range []string{"stop", "restore", "promotion"} {
+		t.Run(gate, func(t *testing.T) {
+			db := openWith(t, "mika")
+			task, a := researchTask(t, db)
+			var want error
+			switch gate {
+			case "stop":
+				if _, err := db.sql.Exec(`UPDATE household_execution_stop SET active=1 WHERE singleton=1`); err != nil {
+					t.Fatal(err)
+				}
+				want = ErrHouseholdStopped
+			case "restore":
+				if err := db.EnterRestoreQuarantine("fixture", time.Now()); err != nil {
+					t.Fatal(err)
+				}
+				want = ErrQuarantined
+			case "promotion":
+				if _, err := db.PromoteCoordinator("new-test-coordinator"); err != nil {
+					t.Fatal(err)
+				}
+				want = ErrCoordinatorFenced
+			}
+			if _, _, err := db.ReserveResearchAttempt(context.Background(), task, a, "search", DefaultResearchLimits()); !errors.Is(err, want) {
+				t.Fatalf("gate=%v want=%v", err, want)
+			}
+			// The transaction boundary enforces the same gate even after an earlier
+			// preflight succeeded and was followed by a concurrent stop/promotion.
+			tx, err := db.sql.Begin()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer tx.Rollback()
+			if err = db.researchFenceTx(tx); !errors.Is(err, want) {
+				t.Fatalf("transaction gate=%v want=%v", err, want)
+			}
+		})
 	}
 }
