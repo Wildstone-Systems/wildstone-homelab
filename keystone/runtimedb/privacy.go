@@ -15,13 +15,22 @@ type PrivacyPolicy struct {
 
 var ErrPrivacy = errors.New("privacy restriction: this content needs a local model or a trusted household screen; change the destination or model to continue")
 
-func (db *DB) contentPrivacy(object string) (PrivacyPolicy, error) {
+// privacySources includes durable workspace reads in the same graph as memory.
+// UNION (not UNION ALL) terminates cycles without dropping restrictions.
+const privacySources = `WITH RECURSIVE edges(child,parent) AS (
+ SELECT child,parent FROM privacy_edges UNION SELECT child,parent FROM workspace_privacy_edges
+), sources(object) AS (SELECT ? UNION SELECT e.parent FROM edges e JOIN sources s ON e.child=s.object) `
+
+type privacyReader interface{ QueryRow(string, ...any) *sql.Row }
+
+func contentPrivacy(q privacyReader, object string) (PrivacyPolicy, error) {
 	var p PrivacyPolicy
-	err := db.sql.QueryRow(`WITH RECURSIVE sources(object) AS (
- SELECT ? UNION SELECT e.parent FROM privacy_edges e JOIN sources s ON e.child=s.object
- ) SELECT COALESCE(MAX(p.local_only),0),COALESCE(MAX(p.trusted_only),0)
- FROM sources s LEFT JOIN content_privacy p ON p.object=s.object`, object).Scan(&p.LocalOnly, &p.TrustedOnly)
+	err := q.QueryRow(privacySources+`SELECT COALESCE(MAX(p.local_only),0),COALESCE(MAX(p.trusted_only),0)
+ FROM sources s LEFT JOIN (SELECT * FROM content_privacy UNION ALL SELECT * FROM workspace_content_privacy) p ON p.object=s.object`, object).Scan(&p.LocalOnly, &p.TrustedOnly)
 	return p, err
+}
+func (db *DB) contentPrivacy(object string) (PrivacyPolicy, error) {
+	return contentPrivacy(db.sql, object)
 }
 func (p PrivacyPolicy) Check(model string, d MemoryDestination) error {
 	if p.LocalOnly && model != ModelLocal {
@@ -167,6 +176,15 @@ func (p *PrivacyTurn) Check() error {
 	if p.failure != nil {
 		return p.failure
 	}
+	if p.task != 0 {
+		policy, err := p.db.contentPrivacy(fmt.Sprintf("t:%d", p.task))
+		if err != nil {
+			return err
+		}
+		if err = policy.Check(p.model, p.destination); err != nil {
+			return err
+		}
+	}
 	if p.session != 0 {
 		policy, err := p.db.contentPrivacy(fmt.Sprintf("s:%d", p.session))
 		if err != nil {
@@ -218,6 +236,15 @@ func CheckPrivacyDelivery(ctx context.Context, d MemoryDestination) error {
 	defer p.mu.Unlock()
 	if p.failure != nil {
 		return p.failure
+	}
+	if p.task != 0 {
+		policy, err := p.db.contentPrivacy(fmt.Sprintf("t:%d", p.task))
+		if err != nil {
+			return err
+		}
+		if err = policy.Check(p.model, d); err != nil {
+			return err
+		}
 	}
 	if p.session != 0 {
 		policy, err := p.db.contentPrivacy(fmt.Sprintf("s:%d", p.session))

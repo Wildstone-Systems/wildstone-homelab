@@ -409,7 +409,7 @@ func (g *Gateway) Manifest(ctx context.Context, h agentapi.Handle) (agentapi.Man
 	if err != nil {
 		return agentapi.Manifest{}, fmt.Errorf("agentgateway: resolving the runtime's processing class: %w", err)
 	}
-	dctx, disclosure, err := g.beginDisclosureTurn(ctx, class, s.turn.MemoryDestination())
+	dctx, disclosure, err := g.beginDisclosureTurn(ctx, class, s.turn.MemoryDestination(), s.hc.Task.ID)
 	if err != nil {
 		return agentapi.Manifest{}, fmt.Errorf("agentgateway: opening the disclosure turn: %w", err)
 	}

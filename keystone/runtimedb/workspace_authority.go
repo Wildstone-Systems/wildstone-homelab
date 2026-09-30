@@ -15,12 +15,16 @@ func (db *DB) CheckWorkspaceTask(person, agent, taskID, connection, workspaceID 
 	if db == nil || person == "" || agent == "" || taskID == "" || connection == "" || workspaceID == "" {
 		return ErrWorkspaceDenied
 	}
+	return checkWorkspaceTask(db.sql, person, agent, taskID, connection, workspaceID)
+}
+
+func checkWorkspaceTask(q privacyReader, person, agent, taskID, connection, workspaceID string) error {
 	seq, err := parseButlerTaskID(taskID)
 	if err != nil {
 		return ErrWorkspaceDenied
 	}
 	var allowed bool
-	err = db.sql.QueryRow(`SELECT EXISTS (
+	err = q.QueryRow(`SELECT EXISTS (
  SELECT 1 FROM agent_workspaces w
  JOIN butler_members person ON person.person_id=w.person_id
  JOIN butlers agent ON agent.seq=w.agent_id

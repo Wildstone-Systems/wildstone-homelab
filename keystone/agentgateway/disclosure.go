@@ -97,18 +97,18 @@ func (g *Gateway) disclosureAllowed(seq int64, class agentapi.ProcessingClass, d
 	return g.DB.CheckMemoryPrivacy(seq, disclosureModel(class), d)
 }
 
-// beginDisclosureTurn opens a call-scoped privacy turn for tracking
-// what ONE Manifest or Invoke call discloses, reusing
-// runtimedb.BeginPrivacyTurn/TrackMemoryPrivacy exactly as
-// butlerlive.Serve did for a whole conversation — but scoped to this
-// one call (session and task left unset) rather than the task's whole
-// history, because the gateway boundary is being checked here, not the
-// inference boundary a resumed conversation cares about. Any read a
-// Toolset makes under the returned context — today, butlerstore/
-// memory.go's recall and preamble seams — is tracked; a call that reads
-// nothing privacy-tagged always passes its later Check().
-func (g *Gateway) beginDisclosureTurn(ctx context.Context, class agentapi.ProcessingClass, d runtimedb.MemoryDestination) (context.Context, *runtimedb.PrivacyTurn, error) {
-	return g.DB.BeginPrivacyTurn(ctx, disclosureModel(class), d, "")
+// beginDisclosureTurn restores the originating task/session provenance as well
+// as tracking this call's reads. Call-scoped tracking alone loses workspace
+// source restrictions on retries and resumed tasks (ADR-W047 / #475).
+func (g *Gateway) beginDisclosureTurn(ctx context.Context, class agentapi.ProcessingClass, d runtimedb.MemoryDestination, task string) (context.Context, *runtimedb.PrivacyTurn, error) {
+	ctx, p, err := g.DB.BeginPrivacyTurn(ctx, disclosureModel(class), d, "")
+	if err != nil {
+		return ctx, nil, err
+	}
+	if err = p.SetTask(task); err != nil {
+		return ctx, nil, err
+	}
+	return ctx, p, nil
 }
 
 // disclosureRefusalError wraps a per-record refusal with the calling

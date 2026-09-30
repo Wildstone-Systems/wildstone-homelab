@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/agentapi"
@@ -86,6 +87,19 @@ func (g *Gateway) Invoke(ctx context.Context, req agentapi.InvokeRequest) (agent
 		return agentapi.InvokeResult{Outcome: agentapi.OutcomeDenied, Reason: err.Error()}, nil
 	}
 
+	// Restore and check source taint before effects or cached ledger output.
+	class, err := g.disclosureClass(s.hc.Butler.Seq)
+	if err != nil {
+		return agentapi.InvokeResult{}, fmt.Errorf("agentgateway: resolving the runtime's processing class: %w", err)
+	}
+	dctx, disclosure, err := g.beginDisclosureTurn(ctx, class, s.turn.MemoryDestination(), taskID)
+	if err != nil {
+		return agentapi.InvokeResult{}, fmt.Errorf("agentgateway: opening the disclosure turn: %w", err)
+	}
+	if err := disclosure.Check(); err != nil {
+		return agentapi.InvokeResult{Outcome: agentapi.OutcomeDenied, Reason: "privacy_denied: task source policy refuses this destination"}, nil
+	}
+
 	// Steps 2–5 are one reservation: see Gateway.reserve.
 	g.reserve.Lock()
 	release := sync.OnceFunc(g.reserve.Unlock)
@@ -105,14 +119,16 @@ func (g *Gateway) Invoke(ctx context.Context, req agentapi.InvokeRequest) (agent
 		}, nil
 	}
 
-	// 3. The ledger retrieval (runner.go:706-742).
+	// 3. The ledger retrieval (runner.go:706-742). Workspace resources must
+	// re-enter their resource/receipt seam on every call; tool permission
+	// alone cannot reauthorize cached private content.
 	fp := butler.CallFingerprint(req.Tool, input)
 	steps, err := g.Ledger.Steps(taskID)
 	if err != nil {
 		return agentapi.InvokeResult{}, fmt.Errorf("agentgateway: reading the step ledger: %w", err)
 	}
 	verified := butler.VerifiedResults(steps, g.now(), g.observationTTL())
-	if content, ok := verified[fp]; ok && fp != "" && req.Tool != "recall" {
+	if content, ok := verified[fp]; ok && fp != "" && req.Tool != "recall" && !strings.HasPrefix(req.Tool, "workspace_") && req.Tool != "artifact_export" {
 		if allowed, why := s.toolset.Permits(req.Tool, s.readOnly); !allowed {
 			g.trace(s, butler.LedgerTraceEvent{
 				Type:      butler.TraceDenial,
@@ -165,14 +181,6 @@ func (g *Gateway) Invoke(ctx context.Context, req agentapi.InvokeRequest) (agent
 	// wrapper, but scoped to this one call rather than the task's
 	// history, because it is this call's RESULT that is about to be
 	// handed to the runtime.
-	class, err := g.disclosureClass(s.hc.Butler.Seq)
-	if err != nil {
-		return agentapi.InvokeResult{}, fmt.Errorf("agentgateway: resolving the runtime's processing class: %w", err)
-	}
-	dctx, disclosure, err := g.beginDisclosureTurn(ctx, class, s.turn.MemoryDestination())
-	if err != nil {
-		return agentapi.InvokeResult{}, fmt.Errorf("agentgateway: opening the disclosure turn: %w", err)
-	}
 	id := operation.Identity{TaskID: taskID, Step: step, PermissionLabel: label, Audience: audience}
 	outcome, err := s.toolset.Execute(operation.With(dctx, id), req.Tool, input, s.readOnly)
 	if err != nil {
