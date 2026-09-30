@@ -798,3 +798,58 @@ func TestGeneratedBlockBoundariesCoalesce(t *testing.T) {
 		t.Fatalf("source blank line lost: %q %v", d.Text, err)
 	}
 }
+
+func TestOptionLabelsRemainSeparate(t *testing.T) {
+	for _, media := range []string{"text/html", "text/markdown"} {
+		for _, body := range []string{
+			"<select><option>Allow</option><option>Deny</option></select>",
+			"<select><option>Allow<option>Deny</select>",
+			"<select><optgroup><option>Allow</option></optgroup><optgroup><option>Deny</option></optgroup></select>",
+			"<select><option>Allow</option>\n<option>Deny</option></select>",
+			"<datalist><option>Allow</option><option>Deny</option></datalist>",
+		} {
+			d, err := Extract(input(media, body))
+			if err != nil || d.Text != "Allow\nDeny" {
+				t.Fatalf("%s %q: %q %v", media, body, d.Text, err)
+			}
+			body = strings.Replace(body, "Allow", strings.Repeat("x", MaxCharacters-5), 1)
+			d, err = Extract(input(media, body))
+			if err != nil || d.Source.Truncated || utf8.RuneCountInString(d.Text) != MaxCharacters || !strings.HasSuffix(d.Text, "\nDeny") {
+				t.Fatalf("%s option cap: %d %+v %v", media, utf8.RuneCountInString(d.Text), d.Source, err)
+			}
+		}
+	}
+}
+
+func TestCacheTTLStartsAtPublicationAfterAuthorization(t *testing.T) {
+	s := newStore(t)
+	ctx := context.Background()
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	s.now = func() time.Time { return now }
+	calls := 0
+	s.authorize = func(context.Context, Scope) error {
+		calls++
+		if calls == 2 {
+			now = now.Add(2 * cacheTTL)
+		}
+		return nil
+	}
+	p, err := s.Put(ctx, scope(), input("text/plain", strings.Repeat("x", 6000)))
+	if err != nil || p.NextCursor == "" {
+		t.Fatalf("publish: %+v %v", p, err)
+	}
+	publishedAt := now
+	for _, elapsed := range []time.Duration{0, cacheTTL - time.Nanosecond} {
+		now = publishedAt.Add(elapsed)
+		if first, err := s.Read(ctx, scope(), p.Source.SourceRef, ""); err != nil || first != p {
+			t.Fatalf("read at %v: %+v %v", elapsed, first, err)
+		}
+		if _, err := s.Continue(ctx, scope(), p.NextCursor); err != nil {
+			t.Fatalf("continue at %v: %v", elapsed, err)
+		}
+	}
+	now = publishedAt.Add(cacheTTL)
+	if _, err := s.Continue(ctx, scope(), p.NextCursor); err != ErrStale {
+		t.Fatalf("expiry boundary: %v", err)
+	}
+}

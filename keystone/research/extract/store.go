@@ -134,7 +134,7 @@ func (s *Store) Put(ctx context.Context, scope Scope, input publicfetch.Page) (P
 	}{scope, doc})
 	digest := sha256.Sum256(provenance)
 	doc.Source.Revision = hex.EncodeToString(digest[:])
-	c := cached{scope: scope, doc: doc, expires: s.now().Add(cacheTTL)}
+	c := cached{scope: scope, doc: doc}
 	first, err := s.page(c, 0)
 	if err != nil {
 		return Page{}, err
@@ -144,14 +144,17 @@ func (s *Store) Put(ctx context.Context, scope Scope, input publicfetch.Page) (P
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	publishedAt := s.now()
 	for key, c := range s.sources {
-		if !s.now().Before(c.expires) {
+		if !publishedAt.Before(c.expires) {
 			delete(s.sources, key)
 		}
 	}
 	if len(s.sources) >= maxSources {
 		return Page{}, ErrCapacity
 	}
+	// TTL starts at publication, after authorization and lock acquisition.
+	c.expires = publishedAt.Add(cacheTTL)
 	s.sources[doc.Source.SourceID] = c
 	return first, nil
 }
