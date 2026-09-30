@@ -75,6 +75,8 @@ var operatorOnly = map[string]bool{
 	// nothing here a member could usefully ask for either (ADR-W039
 	// Phase 6/H5, #351).
 	"agent-hermes": true,
+	// Private workspace storage configuration belongs to the Owner (W047).
+	"workspace": true,
 	// Wildstone's own surfaces. A member cannot request the dashboard
 	// they are standing on, or the drop box behind its Files card.
 	"dashboard": true,
