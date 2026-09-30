@@ -51,10 +51,10 @@ are not endpoint configuration. A syntactically valid service reference is not
 proof of a deployed service. It cannot become ready without a tester resolving
 and validating it. Missing endpoint references produce `unconfigured`.
 
-Omitted/zero limits use the contract defaults: 10 searches, 20 fetches,
+Omitted limits use the contract defaults: 10 searches, 20 fetches,
 30 seconds/request, 5 MiB download, 50,000 extracted characters, 900 seconds cache.
 Configurable bounds are 1–100 searches, 1–200 fetches, 1–30 seconds, 1–5 MiB,
-1–50,000 characters, and 0–900 cache seconds. These values are persisted policy,
+1–50,000 characters, and 1–900 cache seconds. Explicit zero or null values are refused. These values are persisted policy,
 not task admission/accounting; S24 and the adapters enforce actual usage.
 
 ## Readiness and handoff

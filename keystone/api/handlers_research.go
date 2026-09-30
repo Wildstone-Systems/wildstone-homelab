@@ -84,13 +84,13 @@ func (s *Server) proposeResearchProvider(r *http.Request, id principal.Identity)
 		return body, code, err
 	}
 	var req struct {
-		Config   *research.Config `json:"config"`
-		Expected string           `json:"expectedConfigRevision"`
+		Config   json.RawMessage `json:"config"`
+		Expected string          `json:"expectedConfigRevision"`
 	}
 	if code, err := decodeStrict(r, &req); err != nil {
 		return nil, code, errors.New("invalid research configuration request")
 	}
-	c := research.Change{ProviderID: r.PathValue("provider"), ExpectedRevision: req.Expected, Config: req.Config}
+	c := research.Change{ProviderID: r.PathValue("provider"), ExpectedRevision: req.Expected}
 	if r.Method == http.MethodPost {
 		c.Operation = "create"
 		c.ProviderID = research.NewID()
@@ -111,14 +111,14 @@ func (s *Server) proposeResearchProvider(r *http.Request, id principal.Identity)
 		}
 	}
 	if c.Operation == "delete" {
-		if req.Config != nil {
+		if len(req.Config) != 0 {
 			return nil, http.StatusBadRequest, errors.New("delete cannot include configuration")
 		}
 	} else {
-		if req.Config == nil {
+		if len(req.Config) == 0 {
 			return nil, http.StatusBadRequest, errors.New("configuration required")
 		}
-		normalized, err := req.Config.Normalize()
+		normalized, err := research.DecodeConfig(req.Config)
 		if err != nil {
 			return nil, http.StatusBadRequest, err
 		}

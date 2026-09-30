@@ -3,8 +3,10 @@
 package research
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"regexp"
 	"strings"
@@ -39,8 +41,33 @@ type Config struct {
 	CredentialRef string       `json:"credentialRef,omitempty"`
 	Backends      []string     `json:"backends"`
 	FallbackOrder []string     `json:"fallbackOrder"`
-	Limits        Limits       `json:"limits"`
+	Limits        *Limits      `json:"limits"`
 }
+
+// DecodeConfig is the strict Owner-input boundary. Omission selects defaults;
+// explicit null, unknown properties and nonpositive configured limits refuse.
+func DecodeConfig(raw []byte) (Config, error) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return Config{}, errors.New("invalid search provider configuration")
+	}
+	if fields == nil {
+		return Config{}, errors.New("configuration must be an object")
+	}
+	for _, value := range fields {
+		if bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+			return Config{}, errors.New("configuration properties cannot be null")
+		}
+	}
+	var config Config
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&config); err != nil {
+		return Config{}, errors.New("invalid search provider configuration")
+	}
+	return config.Normalize()
+}
+
 type Provider struct {
 	Config
 	ID                   string `json:"id"`
@@ -106,11 +133,12 @@ func (c Config) Normalize() (Config, error) {
 	if len(c.FallbackOrder) != 0 {
 		return Config{}, errors.New("no additional fallback backend is supported by the pinned worker")
 	}
-	if c.Limits == (Limits{}) {
-		c.Limits = DefaultLimits()
+	if c.Limits == nil {
+		defaults := DefaultLimits()
+		c.Limits = &defaults
 	}
 	l := c.Limits
-	if l.SearchesPerTask < 1 || l.SearchesPerTask > 100 || l.FetchesPerTask < 1 || l.FetchesPerTask > 200 || l.RequestTimeoutSeconds < 1 || l.RequestTimeoutSeconds > 30 || l.DownloadBytes < 1 || l.DownloadBytes > 5*1024*1024 || l.ExtractedCharacters < 1 || l.ExtractedCharacters > 50000 || l.CacheSeconds < 0 || l.CacheSeconds > 900 {
+	if l.SearchesPerTask < 1 || l.SearchesPerTask > 100 || l.FetchesPerTask < 1 || l.FetchesPerTask > 200 || l.RequestTimeoutSeconds < 1 || l.RequestTimeoutSeconds > 30 || l.DownloadBytes < 1 || l.DownloadBytes > 5*1024*1024 || l.ExtractedCharacters < 1 || l.ExtractedCharacters > 50000 || l.CacheSeconds < 1 || l.CacheSeconds > 900 {
 		return fail()
 	}
 	return c, nil

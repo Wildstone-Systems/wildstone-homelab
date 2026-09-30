@@ -171,7 +171,10 @@ func TestResearchInFlightProbeCannotBlessEditedConfiguration(t *testing.T) {
 	call := func(method, path string, body any) (int, map[string]any) {
 		return researchRequest(t, h, method, path, body, "mika", time.Now(), "same-origin")
 	}
-	config := research.Config{Name: "Public", Kind: research.DDGS, EndpointRef: "service/ddgs"}
+	config, err := (research.Config{Name: "Public", Kind: research.DDGS, EndpointRef: "service/ddgs"}).Normalize()
+	if err != nil {
+		t.Fatal(err)
+	}
 	code, out := call("POST", "/api/v1/research/providers", map[string]any{"config": config})
 	if code != 202 {
 		t.Fatal(code, out)
