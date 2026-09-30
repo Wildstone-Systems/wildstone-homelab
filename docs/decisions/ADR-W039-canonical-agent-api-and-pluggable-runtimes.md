@@ -266,3 +266,24 @@ This ADR amends ADR-W033 B6, ADR-W024 A5 and ADR-W026 A10 as listed below and ke
 | `packages/agent-hermes` | The Hermes capability package |
 | `domestic/hostops.go` + `butler/tools_hostops.go` | `host.*` executors behind `-hostops-enabled` (default off) and Owner-class opt-in; `host.upgrade_package` and `host.snapshot_dir` are not built |
 | `resource.go` `ContainerSpec` hardening fields; `pkgspec.go` `enum:` shape | Container hardening (protocol minor 18) and closed-choice params for the Hermes package |
+
+## Proposed W047 companion extension: research and workspace capabilities
+
+Pending acceptance of [ADR-W047](ADR-W047-native-agent-research-and-workspaces.md)
+and the [v1 interface contract](../design/native-agent-capability-contract-v1.md).
+This is capability extension work, not a completed API/runtime implementation.
+
+New individually grantable `web_*`, `workspace_*` and `artifact_export`
+tools use the existing Manifest/Invoke envelopes. Keystone owns networking,
+storage, current authority, budgets, privacy, publication and effect receipts.
+Native sidecars receive no workspace mount, provider credential or local
+filesystem/network authority. New tools do not add another runtime API.
+
+Artifact reads extend resource authorization and processing-class disclosure.
+Derived artifact sources retain source audience/privacy across tasks. Outbound
+queries/URLs and export additionally check full task/session/workspace
+provenance at the external-egress boundary, including resume and ledger/cache
+reuse; an isolated call-scoped disclosure turn cannot replace that check.
+Human preview/download uses current Person authorization. The existing
+closed Invoke outcomes, untrusted/redacted/bounded content and structural
+no-self-grant rule remain unchanged.
