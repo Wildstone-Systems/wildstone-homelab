@@ -84,6 +84,13 @@ func auditFields(op *wsv1.Operation) (arm string, fields []slog.Attr) {
 		return "PutSecret", []slog.Attr{slog.String("name", o.PutSecret.GetName())}
 	case *wsv1.Operation_ListSecrets:
 		return "ListSecrets", nil
+	case *wsv1.Operation_EraseSecret:
+		// Name and fence only; the nonce is harmless but belongs to the
+		// evidence, not the log.
+		return "EraseSecret", []slog.Attr{
+			slog.String("name", o.EraseSecret.GetName()),
+			slog.Uint64("max_version", uint64(o.EraseSecret.GetMaxVersion())),
+		}
 	case *wsv1.Operation_ExportSecretBundle:
 		// The public key is not confidential, but omitting it keeps recovery
 		// material out of routine logs and makes this arm safe by construction.

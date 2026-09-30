@@ -567,7 +567,9 @@ type KeystoneMessage struct {
 	// pinned from JoinResponse.op_signing_public_key.
 	//
 	// Signed payload:
-	//   sha256("wardstone-op-v1" || op_id || deterministic-marshal(op))
+	//
+	//	sha256("wardstone-op-v1" || op_id || deterministic-marshal(op))
+	//
 	// where deterministic-marshal uses
 	// proto.MarshalOptions{Deterministic: true} over the Operation message,
 	// op_id is the raw (unterminated) string bytes, and "wardstone-op-v1"
@@ -669,6 +671,7 @@ type Operation struct {
 	//	*Operation_DiskSpace
 	//	*Operation_ExportSecretBundle
 	//	*Operation_ImportSecretBundle
+	//	*Operation_EraseSecret
 	Op            isOperation_Op `protobuf_oneof:"op"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1026,6 +1029,15 @@ func (x *Operation) GetImportSecretBundle() *ImportSecretBundle {
 	return nil
 }
 
+func (x *Operation) GetEraseSecret() *EraseSecret {
+	if x != nil {
+		if x, ok := x.Op.(*Operation_EraseSecret); ok {
+			return x.EraseSecret
+		}
+	}
+	return nil
+}
+
 type isOperation_Op interface {
 	isOperation_Op()
 }
@@ -1170,6 +1182,10 @@ type Operation_ImportSecretBundle struct {
 	ImportSecretBundle *ImportSecretBundle `protobuf:"bytes,35,opt,name=import_secret_bundle,json=importSecretBundle,proto3,oneof"`
 }
 
+type Operation_EraseSecret struct {
+	EraseSecret *EraseSecret `protobuf:"bytes,36,opt,name=erase_secret,json=eraseSecret,proto3,oneof"`
+}
+
 func (*Operation_EnsureContainer) isOperation_Op() {}
 
 func (*Operation_StopContainer) isOperation_Op() {}
@@ -1240,6 +1256,8 @@ func (*Operation_ExportSecretBundle) isOperation_Op() {}
 
 func (*Operation_ImportSecretBundle) isOperation_Op() {}
 
+func (*Operation_EraseSecret) isOperation_Op() {}
+
 type OpResult struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	OpId  string                 `protobuf:"bytes,1,opt,name=op_id,json=opId,proto3" json:"op_id,omitempty"`
@@ -1281,6 +1299,7 @@ type OpResult struct {
 	//	*OpResult_DiskSpace
 	//	*OpResult_ExportSecretBundle
 	//	*OpResult_ImportSecretBundle
+	//	*OpResult_EraseSecret
 	Result        isOpResult_Result `protobuf_oneof:"result"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1654,6 +1673,15 @@ func (x *OpResult) GetImportSecretBundle() *ImportSecretBundleResult {
 	return nil
 }
 
+func (x *OpResult) GetEraseSecret() *EraseSecretResult {
+	if x != nil {
+		if x, ok := x.Result.(*OpResult_EraseSecret); ok {
+			return x.EraseSecret
+		}
+	}
+	return nil
+}
+
 type isOpResult_Result interface {
 	isOpResult_Result()
 }
@@ -1802,6 +1830,10 @@ type OpResult_ImportSecretBundle struct {
 	ImportSecretBundle *ImportSecretBundleResult `protobuf:"bytes,37,opt,name=import_secret_bundle,json=importSecretBundle,proto3,oneof"`
 }
 
+type OpResult_EraseSecret struct {
+	EraseSecret *EraseSecretResult `protobuf:"bytes,38,opt,name=erase_secret,json=eraseSecret,proto3,oneof"`
+}
+
 func (*OpResult_Error) isOpResult_Result() {}
 
 func (*OpResult_EnsureContainer) isOpResult_Result() {}
@@ -1873,6 +1905,8 @@ func (*OpResult_DiskSpace) isOpResult_Result() {}
 func (*OpResult_ExportSecretBundle) isOpResult_Result() {}
 
 func (*OpResult_ImportSecretBundle) isOpResult_Result() {}
+
+func (*OpResult_EraseSecret) isOpResult_Result() {}
 
 type OpError struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -3767,8 +3801,8 @@ type WriteManagedFile struct {
 	// writing (protocol minor 9). Keystone never holds secret values, so a
 	// rendered config carries references and the node substitutes them:
 	//
-	//   secret/<name>        -> the stored value
-	//   pbkdf2:secret/<name> -> $pbkdf2-sha512$... of the stored value
+	//	secret/<name>        -> the stored value
+	//	pbkdf2:secret/<name> -> $pbkdf2-sha512$... of the stored value
 	//
 	// Off by default and per-write, because a file may legitimately contain
 	// that text without meaning it — an agent that rewrote every managed
@@ -6491,6 +6525,157 @@ func (x *ImportSecretBundleResult) GetSecretCount() uint32 {
 	return 0
 }
 
+// EraseSecret removes one secret from the node's store and proves it is
+// gone (protocol minor 22, ADR-W030 A5.1, epic #326 S02). It is the
+// erase half of the write-only path: there is still no arm that reads a
+// value back, and this one returns nothing about the value either.
+//
+// It is VERSION-FENCED. max_version names the newest version the caller
+// means to erase; a store holding a NEWER version under the same name
+// (a later PutSecret the caller has not seen) is refused as FORBIDDEN
+// rather than erased, so a stale erase can never destroy a credential
+// that replaced the one it was aimed at. 0 means "any version".
+//
+// It is idempotent: erasing an absent secret succeeds with existed =
+// false and absent = true, which is what a retry after a lost answer
+// must see.
+//
+// The result is EVIDENCE, not an acknowledgement. After unlinking, the
+// agent re-checks that neither the sealed value nor its sidecar exists
+// and reports that as absent. evidence binds the answer to this request:
+// sha256("wardstone-erase-v1" || name || 0x00 || nonce || 0x00 ||
+// decimal(erased_version) || 0x00 || ("absent"|"present")), so a replayed
+// or reordered answer for another erase does not verify. The channel is
+// the mTLS session; evidence is what makes the answer specific.
+type EraseSecret struct {
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	Name       string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	MaxVersion uint32                 `protobuf:"varint,2,opt,name=max_version,json=maxVersion,proto3" json:"max_version,omitempty"`
+	// A caller-chosen random value echoed into the evidence. Required.
+	Nonce         string `protobuf:"bytes,3,opt,name=nonce,proto3" json:"nonce,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *EraseSecret) Reset() {
+	*x = EraseSecret{}
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[87]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EraseSecret) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EraseSecret) ProtoMessage() {}
+
+func (x *EraseSecret) ProtoReflect() protoreflect.Message {
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[87]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EraseSecret.ProtoReflect.Descriptor instead.
+func (*EraseSecret) Descriptor() ([]byte, []int) {
+	return file_wardstone_v1_wardstone_proto_rawDescGZIP(), []int{87}
+}
+
+func (x *EraseSecret) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *EraseSecret) GetMaxVersion() uint32 {
+	if x != nil {
+		return x.MaxVersion
+	}
+	return 0
+}
+
+func (x *EraseSecret) GetNonce() string {
+	if x != nil {
+		return x.Nonce
+	}
+	return ""
+}
+
+type EraseSecretResult struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Existed       bool                   `protobuf:"varint,1,opt,name=existed,proto3" json:"existed,omitempty"`
+	ErasedVersion uint32                 `protobuf:"varint,2,opt,name=erased_version,json=erasedVersion,proto3" json:"erased_version,omitempty"`
+	Absent        bool                   `protobuf:"varint,3,opt,name=absent,proto3" json:"absent,omitempty"`
+	Evidence      []byte                 `protobuf:"bytes,4,opt,name=evidence,proto3" json:"evidence,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *EraseSecretResult) Reset() {
+	*x = EraseSecretResult{}
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[88]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EraseSecretResult) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EraseSecretResult) ProtoMessage() {}
+
+func (x *EraseSecretResult) ProtoReflect() protoreflect.Message {
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[88]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EraseSecretResult.ProtoReflect.Descriptor instead.
+func (*EraseSecretResult) Descriptor() ([]byte, []int) {
+	return file_wardstone_v1_wardstone_proto_rawDescGZIP(), []int{88}
+}
+
+func (x *EraseSecretResult) GetExisted() bool {
+	if x != nil {
+		return x.Existed
+	}
+	return false
+}
+
+func (x *EraseSecretResult) GetErasedVersion() uint32 {
+	if x != nil {
+		return x.ErasedVersion
+	}
+	return 0
+}
+
+func (x *EraseSecretResult) GetAbsent() bool {
+	if x != nil {
+		return x.Absent
+	}
+	return false
+}
+
+func (x *EraseSecretResult) GetEvidence() []byte {
+	if x != nil {
+		return x.Evidence
+	}
+	return nil
+}
+
 var File_wardstone_v1_wardstone_proto protoreflect.FileDescriptor
 
 const file_wardstone_v1_wardstone_proto_rawDesc = "" +
@@ -6520,7 +6705,7 @@ const file_wardstone_v1_wardstone_proto_rawDesc = "" +
 	"\x0fKeystoneMessage\x12\x13\n" +
 	"\x05op_id\x18\x01 \x01(\tR\x04opId\x12'\n" +
 	"\x02op\x18\x02 \x01(\v2\x17.wardstone.v1.OperationR\x02op\x12!\n" +
-	"\fop_signature\x18\x03 \x01(\fR\vopSignature\"\xe7\x12\n" +
+	"\fop_signature\x18\x03 \x01(\fR\vopSignature\"\xa7\x13\n" +
 	"\tOperation\x12J\n" +
 	"\x10ensure_container\x18\x01 \x01(\v2\x1d.wardstone.v1.EnsureContainerH\x00R\x0fensureContainer\x12D\n" +
 	"\x0estop_container\x18\x02 \x01(\v2\x1b.wardstone.v1.StopContainerH\x00R\rstopContainer\x12D\n" +
@@ -6564,8 +6749,9 @@ const file_wardstone_v1_wardstone_proto_rawDesc = "" +
 	"\n" +
 	"disk_space\x18! \x01(\v2\x17.wardstone.v1.DiskSpaceH\x00R\tdiskSpace\x12T\n" +
 	"\x14export_secret_bundle\x18\" \x01(\v2 .wardstone.v1.ExportSecretBundleH\x00R\x12exportSecretBundle\x12T\n" +
-	"\x14import_secret_bundle\x18# \x01(\v2 .wardstone.v1.ImportSecretBundleH\x00R\x12importSecretBundleB\x04\n" +
-	"\x02op\"\x80\x15\n" +
+	"\x14import_secret_bundle\x18# \x01(\v2 .wardstone.v1.ImportSecretBundleH\x00R\x12importSecretBundle\x12>\n" +
+	"\ferase_secret\x18$ \x01(\v2\x19.wardstone.v1.EraseSecretH\x00R\veraseSecretB\x04\n" +
+	"\x02op\"\xc6\x15\n" +
 	"\bOpResult\x12\x13\n" +
 	"\x05op_id\x18\x01 \x01(\tR\x04opId\x12-\n" +
 	"\x05error\x18\x02 \x01(\v2\x15.wardstone.v1.OpErrorH\x00R\x05error\x12P\n" +
@@ -6611,7 +6797,8 @@ const file_wardstone_v1_wardstone_proto_rawDesc = "" +
 	"\n" +
 	"disk_space\x18# \x01(\v2\x1d.wardstone.v1.DiskSpaceResultH\x00R\tdiskSpace\x12Z\n" +
 	"\x14export_secret_bundle\x18$ \x01(\v2&.wardstone.v1.ExportSecretBundleResultH\x00R\x12exportSecretBundle\x12Z\n" +
-	"\x14import_secret_bundle\x18% \x01(\v2&.wardstone.v1.ImportSecretBundleResultH\x00R\x12importSecretBundleB\b\n" +
+	"\x14import_secret_bundle\x18% \x01(\v2&.wardstone.v1.ImportSecretBundleResultH\x00R\x12importSecretBundle\x12D\n" +
+	"\ferase_secret\x18& \x01(\v2\x1f.wardstone.v1.EraseSecretResultH\x00R\veraseSecretB\b\n" +
 	"\x06result\"P\n" +
 	"\aOpError\x12+\n" +
 	"\x04code\x18\x01 \x01(\x0e2\x17.wardstone.v1.ErrorCodeR\x04code\x12\x18\n" +
@@ -6905,7 +7092,17 @@ const file_wardstone_v1_wardstone_proto_rawDesc = "" +
 	"\x14recovery_private_key\x18\x01 \x01(\tR\x12recoveryPrivateKey\x12#\n" +
 	"\rsealed_bundle\x18\x02 \x01(\fR\fsealedBundle\"=\n" +
 	"\x18ImportSecretBundleResult\x12!\n" +
-	"\fsecret_count\x18\x01 \x01(\rR\vsecretCount*\xa8\x01\n" +
+	"\fsecret_count\x18\x01 \x01(\rR\vsecretCount\"X\n" +
+	"\vEraseSecret\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1f\n" +
+	"\vmax_version\x18\x02 \x01(\rR\n" +
+	"maxVersion\x12\x14\n" +
+	"\x05nonce\x18\x03 \x01(\tR\x05nonce\"\x88\x01\n" +
+	"\x11EraseSecretResult\x12\x18\n" +
+	"\aexisted\x18\x01 \x01(\bR\aexisted\x12%\n" +
+	"\x0eerased_version\x18\x02 \x01(\rR\rerasedVersion\x12\x16\n" +
+	"\x06absent\x18\x03 \x01(\bR\x06absent\x12\x1a\n" +
+	"\bevidence\x18\x04 \x01(\fR\bevidence*\xa8\x01\n" +
 	"\tErrorCode\x12\x1a\n" +
 	"\x16ERROR_CODE_UNSPECIFIED\x10\x00\x12\x16\n" +
 	"\x12ERROR_CODE_INVALID\x10\x01\x12\x18\n" +
@@ -6940,7 +7137,7 @@ func file_wardstone_v1_wardstone_proto_rawDescGZIP() []byte {
 }
 
 var file_wardstone_v1_wardstone_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_wardstone_v1_wardstone_proto_msgTypes = make([]protoimpl.MessageInfo, 90)
+var file_wardstone_v1_wardstone_proto_msgTypes = make([]protoimpl.MessageInfo, 92)
 var file_wardstone_v1_wardstone_proto_goTypes = []any{
 	(ErrorCode)(0),                    // 0: wardstone.v1.ErrorCode
 	(PortProtocol)(0),                 // 1: wardstone.v1.PortProtocol
@@ -7032,9 +7229,11 @@ var file_wardstone_v1_wardstone_proto_goTypes = []any{
 	(*ExportSecretBundleResult)(nil),  // 87: wardstone.v1.ExportSecretBundleResult
 	(*ImportSecretBundle)(nil),        // 88: wardstone.v1.ImportSecretBundle
 	(*ImportSecretBundleResult)(nil),  // 89: wardstone.v1.ImportSecretBundleResult
-	nil,                               // 90: wardstone.v1.EnsureContainer.EnvEntry
-	nil,                               // 91: wardstone.v1.EnsureContainer.LabelsEntry
-	nil,                               // 92: wardstone.v1.InspectContainerResult.LabelsEntry
+	(*EraseSecret)(nil),               // 90: wardstone.v1.EraseSecret
+	(*EraseSecretResult)(nil),         // 91: wardstone.v1.EraseSecretResult
+	nil,                               // 92: wardstone.v1.EnsureContainer.EnvEntry
+	nil,                               // 93: wardstone.v1.EnsureContainer.LabelsEntry
+	nil,                               // 94: wardstone.v1.InspectContainerResult.LabelsEntry
 }
 var file_wardstone_v1_wardstone_proto_depIdxs = []int32{
 	8,  // 0: wardstone.v1.AgentMessage.hello:type_name -> wardstone.v1.Hello
@@ -7075,66 +7274,68 @@ var file_wardstone_v1_wardstone_proto_depIdxs = []int32{
 	39, // 35: wardstone.v1.Operation.disk_space:type_name -> wardstone.v1.DiskSpace
 	86, // 36: wardstone.v1.Operation.export_secret_bundle:type_name -> wardstone.v1.ExportSecretBundle
 	88, // 37: wardstone.v1.Operation.import_secret_bundle:type_name -> wardstone.v1.ImportSecretBundle
-	12, // 38: wardstone.v1.OpResult.error:type_name -> wardstone.v1.OpError
-	18, // 39: wardstone.v1.OpResult.ensure_container:type_name -> wardstone.v1.EnsureContainerResult
-	20, // 40: wardstone.v1.OpResult.stop_container:type_name -> wardstone.v1.StopContainerResult
-	22, // 41: wardstone.v1.OpResult.container_logs:type_name -> wardstone.v1.ContainerLogsResult
-	24, // 42: wardstone.v1.OpResult.pull_image:type_name -> wardstone.v1.PullImageResult
-	42, // 43: wardstone.v1.OpResult.write_managed_file:type_name -> wardstone.v1.WriteManagedFileResult
-	50, // 44: wardstone.v1.OpResult.read_managed_file:type_name -> wardstone.v1.ReadManagedFileResult
-	52, // 45: wardstone.v1.OpResult.host_facts:type_name -> wardstone.v1.HostFactsResult
-	54, // 46: wardstone.v1.OpResult.health:type_name -> wardstone.v1.HealthResult
-	56, // 47: wardstone.v1.OpResult.self_update:type_name -> wardstone.v1.SelfUpdateResult
-	26, // 48: wardstone.v1.OpResult.remove_container:type_name -> wardstone.v1.RemoveContainerResult
-	28, // 49: wardstone.v1.OpResult.container_stats:type_name -> wardstone.v1.ContainerStatsResult
-	32, // 50: wardstone.v1.OpResult.prune_images:type_name -> wardstone.v1.PruneImagesResult
-	34, // 51: wardstone.v1.OpResult.ensure_volume:type_name -> wardstone.v1.EnsureVolumeResult
-	36, // 52: wardstone.v1.OpResult.snapshot_dir:type_name -> wardstone.v1.SnapshotDirResult
-	38, // 53: wardstone.v1.OpResult.measure_usage:type_name -> wardstone.v1.MeasureUsageResult
-	59, // 54: wardstone.v1.OpResult.list_block_devices:type_name -> wardstone.v1.ListBlockDevicesResult
-	61, // 55: wardstone.v1.OpResult.ensure_mount:type_name -> wardstone.v1.EnsureMountResult
-	63, // 56: wardstone.v1.OpResult.test_nfs:type_name -> wardstone.v1.TestNfsResult
-	65, // 57: wardstone.v1.OpResult.test_smb:type_name -> wardstone.v1.TestSmbResult
-	68, // 58: wardstone.v1.OpResult.list_ports:type_name -> wardstone.v1.ListPortsResult
-	70, // 59: wardstone.v1.OpResult.probe_tcp:type_name -> wardstone.v1.ProbeTcpResult
-	72, // 60: wardstone.v1.OpResult.probe_http:type_name -> wardstone.v1.ProbeHttpResult
-	74, // 61: wardstone.v1.OpResult.ensure_docker_network:type_name -> wardstone.v1.EnsureDockerNetworkResult
-	76, // 62: wardstone.v1.OpResult.systemd_unit_status:type_name -> wardstone.v1.SystemdUnitStatusResult
-	78, // 63: wardstone.v1.OpResult.time_sync_status:type_name -> wardstone.v1.TimeSyncStatusResult
-	30, // 64: wardstone.v1.OpResult.inspect_container:type_name -> wardstone.v1.InspectContainerResult
-	80, // 65: wardstone.v1.OpResult.ensure_secret:type_name -> wardstone.v1.EnsureSecretResult
-	82, // 66: wardstone.v1.OpResult.put_secret:type_name -> wardstone.v1.PutSecretResult
-	85, // 67: wardstone.v1.OpResult.list_secrets:type_name -> wardstone.v1.ListSecretsResult
-	44, // 68: wardstone.v1.OpResult.seed_volume_file:type_name -> wardstone.v1.SeedVolumeFileResult
-	46, // 69: wardstone.v1.OpResult.stat_volume_file:type_name -> wardstone.v1.StatVolumeFileResult
-	48, // 70: wardstone.v1.OpResult.list_directory:type_name -> wardstone.v1.ListDirectoryResult
-	40, // 71: wardstone.v1.OpResult.disk_space:type_name -> wardstone.v1.DiskSpaceResult
-	87, // 72: wardstone.v1.OpResult.export_secret_bundle:type_name -> wardstone.v1.ExportSecretBundleResult
-	89, // 73: wardstone.v1.OpResult.import_secret_bundle:type_name -> wardstone.v1.ImportSecretBundleResult
-	0,  // 74: wardstone.v1.OpError.code:type_name -> wardstone.v1.ErrorCode
-	90, // 75: wardstone.v1.EnsureContainer.env:type_name -> wardstone.v1.EnsureContainer.EnvEntry
-	15, // 76: wardstone.v1.EnsureContainer.ports:type_name -> wardstone.v1.PortBinding
-	17, // 77: wardstone.v1.EnsureContainer.mounts:type_name -> wardstone.v1.Mount
-	91, // 78: wardstone.v1.EnsureContainer.labels:type_name -> wardstone.v1.EnsureContainer.LabelsEntry
-	16, // 79: wardstone.v1.EnsureContainer.devices:type_name -> wardstone.v1.DeviceMapping
-	14, // 80: wardstone.v1.EnsureContainer.resources:type_name -> wardstone.v1.ContainerResources
-	1,  // 81: wardstone.v1.PortBinding.protocol:type_name -> wardstone.v1.PortProtocol
-	92, // 82: wardstone.v1.InspectContainerResult.labels:type_name -> wardstone.v1.InspectContainerResult.LabelsEntry
-	58, // 83: wardstone.v1.ListBlockDevicesResult.devices:type_name -> wardstone.v1.BlockDevice
-	67, // 84: wardstone.v1.ListPortsResult.ports:type_name -> wardstone.v1.ListeningPort
-	2,  // 85: wardstone.v1.EnsureSecret.kind:type_name -> wardstone.v1.SecretKind
-	84, // 86: wardstone.v1.ListSecretsResult.secrets:type_name -> wardstone.v1.SecretInfo
-	3,  // 87: wardstone.v1.KeystoneGateway.Join:input_type -> wardstone.v1.JoinRequest
-	7,  // 88: wardstone.v1.KeystoneGateway.Session:input_type -> wardstone.v1.AgentMessage
-	5,  // 89: wardstone.v1.KeystoneGateway.Renew:input_type -> wardstone.v1.RenewRequest
-	4,  // 90: wardstone.v1.KeystoneGateway.Join:output_type -> wardstone.v1.JoinResponse
-	9,  // 91: wardstone.v1.KeystoneGateway.Session:output_type -> wardstone.v1.KeystoneMessage
-	6,  // 92: wardstone.v1.KeystoneGateway.Renew:output_type -> wardstone.v1.RenewResponse
-	90, // [90:93] is the sub-list for method output_type
-	87, // [87:90] is the sub-list for method input_type
-	87, // [87:87] is the sub-list for extension type_name
-	87, // [87:87] is the sub-list for extension extendee
-	0,  // [0:87] is the sub-list for field type_name
+	90, // 38: wardstone.v1.Operation.erase_secret:type_name -> wardstone.v1.EraseSecret
+	12, // 39: wardstone.v1.OpResult.error:type_name -> wardstone.v1.OpError
+	18, // 40: wardstone.v1.OpResult.ensure_container:type_name -> wardstone.v1.EnsureContainerResult
+	20, // 41: wardstone.v1.OpResult.stop_container:type_name -> wardstone.v1.StopContainerResult
+	22, // 42: wardstone.v1.OpResult.container_logs:type_name -> wardstone.v1.ContainerLogsResult
+	24, // 43: wardstone.v1.OpResult.pull_image:type_name -> wardstone.v1.PullImageResult
+	42, // 44: wardstone.v1.OpResult.write_managed_file:type_name -> wardstone.v1.WriteManagedFileResult
+	50, // 45: wardstone.v1.OpResult.read_managed_file:type_name -> wardstone.v1.ReadManagedFileResult
+	52, // 46: wardstone.v1.OpResult.host_facts:type_name -> wardstone.v1.HostFactsResult
+	54, // 47: wardstone.v1.OpResult.health:type_name -> wardstone.v1.HealthResult
+	56, // 48: wardstone.v1.OpResult.self_update:type_name -> wardstone.v1.SelfUpdateResult
+	26, // 49: wardstone.v1.OpResult.remove_container:type_name -> wardstone.v1.RemoveContainerResult
+	28, // 50: wardstone.v1.OpResult.container_stats:type_name -> wardstone.v1.ContainerStatsResult
+	32, // 51: wardstone.v1.OpResult.prune_images:type_name -> wardstone.v1.PruneImagesResult
+	34, // 52: wardstone.v1.OpResult.ensure_volume:type_name -> wardstone.v1.EnsureVolumeResult
+	36, // 53: wardstone.v1.OpResult.snapshot_dir:type_name -> wardstone.v1.SnapshotDirResult
+	38, // 54: wardstone.v1.OpResult.measure_usage:type_name -> wardstone.v1.MeasureUsageResult
+	59, // 55: wardstone.v1.OpResult.list_block_devices:type_name -> wardstone.v1.ListBlockDevicesResult
+	61, // 56: wardstone.v1.OpResult.ensure_mount:type_name -> wardstone.v1.EnsureMountResult
+	63, // 57: wardstone.v1.OpResult.test_nfs:type_name -> wardstone.v1.TestNfsResult
+	65, // 58: wardstone.v1.OpResult.test_smb:type_name -> wardstone.v1.TestSmbResult
+	68, // 59: wardstone.v1.OpResult.list_ports:type_name -> wardstone.v1.ListPortsResult
+	70, // 60: wardstone.v1.OpResult.probe_tcp:type_name -> wardstone.v1.ProbeTcpResult
+	72, // 61: wardstone.v1.OpResult.probe_http:type_name -> wardstone.v1.ProbeHttpResult
+	74, // 62: wardstone.v1.OpResult.ensure_docker_network:type_name -> wardstone.v1.EnsureDockerNetworkResult
+	76, // 63: wardstone.v1.OpResult.systemd_unit_status:type_name -> wardstone.v1.SystemdUnitStatusResult
+	78, // 64: wardstone.v1.OpResult.time_sync_status:type_name -> wardstone.v1.TimeSyncStatusResult
+	30, // 65: wardstone.v1.OpResult.inspect_container:type_name -> wardstone.v1.InspectContainerResult
+	80, // 66: wardstone.v1.OpResult.ensure_secret:type_name -> wardstone.v1.EnsureSecretResult
+	82, // 67: wardstone.v1.OpResult.put_secret:type_name -> wardstone.v1.PutSecretResult
+	85, // 68: wardstone.v1.OpResult.list_secrets:type_name -> wardstone.v1.ListSecretsResult
+	44, // 69: wardstone.v1.OpResult.seed_volume_file:type_name -> wardstone.v1.SeedVolumeFileResult
+	46, // 70: wardstone.v1.OpResult.stat_volume_file:type_name -> wardstone.v1.StatVolumeFileResult
+	48, // 71: wardstone.v1.OpResult.list_directory:type_name -> wardstone.v1.ListDirectoryResult
+	40, // 72: wardstone.v1.OpResult.disk_space:type_name -> wardstone.v1.DiskSpaceResult
+	87, // 73: wardstone.v1.OpResult.export_secret_bundle:type_name -> wardstone.v1.ExportSecretBundleResult
+	89, // 74: wardstone.v1.OpResult.import_secret_bundle:type_name -> wardstone.v1.ImportSecretBundleResult
+	91, // 75: wardstone.v1.OpResult.erase_secret:type_name -> wardstone.v1.EraseSecretResult
+	0,  // 76: wardstone.v1.OpError.code:type_name -> wardstone.v1.ErrorCode
+	92, // 77: wardstone.v1.EnsureContainer.env:type_name -> wardstone.v1.EnsureContainer.EnvEntry
+	15, // 78: wardstone.v1.EnsureContainer.ports:type_name -> wardstone.v1.PortBinding
+	17, // 79: wardstone.v1.EnsureContainer.mounts:type_name -> wardstone.v1.Mount
+	93, // 80: wardstone.v1.EnsureContainer.labels:type_name -> wardstone.v1.EnsureContainer.LabelsEntry
+	16, // 81: wardstone.v1.EnsureContainer.devices:type_name -> wardstone.v1.DeviceMapping
+	14, // 82: wardstone.v1.EnsureContainer.resources:type_name -> wardstone.v1.ContainerResources
+	1,  // 83: wardstone.v1.PortBinding.protocol:type_name -> wardstone.v1.PortProtocol
+	94, // 84: wardstone.v1.InspectContainerResult.labels:type_name -> wardstone.v1.InspectContainerResult.LabelsEntry
+	58, // 85: wardstone.v1.ListBlockDevicesResult.devices:type_name -> wardstone.v1.BlockDevice
+	67, // 86: wardstone.v1.ListPortsResult.ports:type_name -> wardstone.v1.ListeningPort
+	2,  // 87: wardstone.v1.EnsureSecret.kind:type_name -> wardstone.v1.SecretKind
+	84, // 88: wardstone.v1.ListSecretsResult.secrets:type_name -> wardstone.v1.SecretInfo
+	3,  // 89: wardstone.v1.KeystoneGateway.Join:input_type -> wardstone.v1.JoinRequest
+	7,  // 90: wardstone.v1.KeystoneGateway.Session:input_type -> wardstone.v1.AgentMessage
+	5,  // 91: wardstone.v1.KeystoneGateway.Renew:input_type -> wardstone.v1.RenewRequest
+	4,  // 92: wardstone.v1.KeystoneGateway.Join:output_type -> wardstone.v1.JoinResponse
+	9,  // 93: wardstone.v1.KeystoneGateway.Session:output_type -> wardstone.v1.KeystoneMessage
+	6,  // 94: wardstone.v1.KeystoneGateway.Renew:output_type -> wardstone.v1.RenewResponse
+	92, // [92:95] is the sub-list for method output_type
+	89, // [89:92] is the sub-list for method input_type
+	89, // [89:89] is the sub-list for extension type_name
+	89, // [89:89] is the sub-list for extension extendee
+	0,  // [0:89] is the sub-list for field type_name
 }
 
 func init() { file_wardstone_v1_wardstone_proto_init() }
@@ -7182,6 +7383,7 @@ func file_wardstone_v1_wardstone_proto_init() {
 		(*Operation_DiskSpace)(nil),
 		(*Operation_ExportSecretBundle)(nil),
 		(*Operation_ImportSecretBundle)(nil),
+		(*Operation_EraseSecret)(nil),
 	}
 	file_wardstone_v1_wardstone_proto_msgTypes[8].OneofWrappers = []any{
 		(*OpResult_Error)(nil),
@@ -7220,6 +7422,7 @@ func file_wardstone_v1_wardstone_proto_init() {
 		(*OpResult_DiskSpace)(nil),
 		(*OpResult_ExportSecretBundle)(nil),
 		(*OpResult_ImportSecretBundle)(nil),
+		(*OpResult_EraseSecret)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -7227,7 +7430,7 @@ func file_wardstone_v1_wardstone_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_wardstone_v1_wardstone_proto_rawDesc), len(file_wardstone_v1_wardstone_proto_rawDesc)),
 			NumEnums:      3,
-			NumMessages:   90,
+			NumMessages:   92,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

@@ -138,6 +138,10 @@ no new agent behavior. A mere restart would NOT pick up the new value
 (docker env is fixed at create), which is why the plan removes rather
 than restarts; risk grades Medium (service interruption, no data).
 
+### A6. Amendment (epic #326 S02): a verified erase
+
+The store gains a fourth, still write-only operation: `EraseSecret{name, max_version, nonce}` (protocol minor 22). It refuses a store holding a newer version than `max_version`, overwrites then unlinks the sealed file and its sidecar, re-checks that both are absent, and returns that fact with evidence bound to the nonce (`proto/secreterase`). There is still no operation that returns a value. Personal integration credentials (`pc.` names) are excluded from the recovery export. See ADR-W030 A5.3.
+
 # Part B — Work packages
 
 - **W1 (agent):** the encrypted store; the three ops; env

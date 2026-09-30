@@ -138,6 +138,7 @@ message Operation {
     DiskSpace disk_space = 33;
     ExportSecretBundle export_secret_bundle = 34;
     ImportSecretBundle import_secret_bundle = 35;
+    EraseSecret erase_secret = 36;
   }
 }
 
@@ -180,6 +181,7 @@ message OpResult {
     DiskSpaceResult disk_space = 35;
     ExportSecretBundleResult export_secret_bundle = 36;
     ImportSecretBundleResult import_secret_bundle = 37;
+    EraseSecretResult erase_secret = 38;
   }
 }
 
@@ -1020,4 +1022,40 @@ message ImportSecretBundle {
 
 message ImportSecretBundleResult {
   uint32 secret_count = 1;
+}
+
+// EraseSecret removes one secret from the node's store and proves it is
+// gone (protocol minor 22, ADR-W030 A5.1, epic #326 S02). It is the
+// erase half of the write-only path: there is still no arm that reads a
+// value back, and this one returns nothing about the value either.
+//
+// It is VERSION-FENCED. max_version names the newest version the caller
+// means to erase; a store holding a NEWER version under the same name
+// (a later PutSecret the caller has not seen) is refused as FORBIDDEN
+// rather than erased, so a stale erase can never destroy a credential
+// that replaced the one it was aimed at. 0 means "any version".
+//
+// It is idempotent: erasing an absent secret succeeds with existed =
+// false and absent = true, which is what a retry after a lost answer
+// must see.
+//
+// The result is EVIDENCE, not an acknowledgement. After unlinking, the
+// agent re-checks that neither the sealed value nor its sidecar exists
+// and reports that as absent. evidence binds the answer to this request:
+// sha256("wardstone-erase-v1" || name || 0x00 || nonce || 0x00 ||
+// decimal(erased_version) || 0x00 || ("absent"|"present")), so a replayed
+// or reordered answer for another erase does not verify. The channel is
+// the mTLS session; evidence is what makes the answer specific.
+message EraseSecret {
+  string name = 1;
+  uint32 max_version = 2;
+  // A caller-chosen random value echoed into the evidence. Required.
+  string nonce = 3;
+}
+
+message EraseSecretResult {
+  bool existed = 1;
+  uint32 erased_version = 2;
+  bool absent = 3;
+  bytes evidence = 4;
 }
