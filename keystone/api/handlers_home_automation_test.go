@@ -142,6 +142,8 @@ type haFixture struct {
 	calls  atomic.Int32
 	live   []LiveNode
 	checks []*wsv1.ReadinessCheck
+	// addr is eth0's IPv4 address, the node's host address.
+	addr   string
 	radios []*wsv1.Radio
 }
 
@@ -171,7 +173,7 @@ func fixtureRadios() []*wsv1.Radio {
 // newHAFixture: one live node n1 (minor 25) with every prerequisite ready
 // and a Zigbee stick, a Z-Wave stick and a Bluetooth adapter.
 func newHAFixture(t *testing.T) *haFixture {
-	f := &haFixture{h: newHarness(t), checks: allReadyChecks(), radios: fixtureRadios()}
+	f := &haFixture{h: newHarness(t), checks: allReadyChecks(), radios: fixtureRadios(), addr: "192.0.2.10/24"}
 	f.h.s.Catalog = haFixtureCatalog(t)
 	if err := f.h.s.DB.RecordNodeJoin("n1"); err != nil {
 		t.Fatal(err)
@@ -192,7 +194,7 @@ func newHAFixture(t *testing.T) *haFixture {
 			return &wsv1.OpResult{Result: &wsv1.OpResult_HomeAutomationReadiness{HomeAutomationReadiness: &wsv1.HomeAutomationReadinessResult{
 				PlatformSupported: true,
 				Interfaces: []*wsv1.NodeInterface{
-					{Name: "eth0", Addresses: []string{"192.0.2.10/24", "fe80::1/64"}, Up: true, Multicast: true, DefaultRoute: true},
+					{Name: "eth0", Addresses: []string{f.addr, "fe80::1/64"}, Up: true, Multicast: true, DefaultRoute: true},
 					{Name: "wlan0", Up: true},
 				},
 				Checks: f.checks,
