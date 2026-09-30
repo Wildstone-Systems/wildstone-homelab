@@ -276,7 +276,7 @@ to be anything"), and `+ New Butler`.
 | Connect it (locked tool) | Turns that connection on and moves the tool into the tri-state list |
 | Tri-state tool | Persists per Butler; usage cell reads `off` when off; all-off shows the amber panel |
 | Forget / Correct | Removes or rewrites the note, provenance becomes "corrected by tom · just now" |
-| Duplicate | Copies directive, surface, route, connections and tool states; clears people, memory, sessions; opens the copy; toast "health copy made — nobody can talk to it yet" |
+| Duplicate | Copies directive, surface, route and tool states (never connections, secret grants or credentials); clears people, memory, sessions; opens the copy; toast "health copy made — nobody can talk to it yet" |
 | Retire → Retire it | Sets `retiredAt`; row leaves the active roster; footer button becomes `Bring back` |
 | Save (Identity) | Only enabled when dirty; renames the Butler and follows the rename in the drawer |
 | Toasts | Bottom-centre pill, 2.8s, coloured dot (ok / warn / bad) |

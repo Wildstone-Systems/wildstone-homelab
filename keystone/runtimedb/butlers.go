@@ -714,17 +714,20 @@ func (db *DB) RestoreButler(name, by string) error {
 //
 // What is copied is what somebody making a second Butler like this one
 // would otherwise retype: the directive, the surface and profile, the
-// route, the connections it may read, and the tools it has been
-// narrowed out of. What is deliberately NOT copied is everything that
-// names a person — who may talk to it, what it remembers, what it has
-// been asked. A copy that inherited an access list would silently grant
-// a new Butler to people who agreed to the old one, and a copy that
-// inherited memory would move somebody's notes into a scope they never
-// chose (ADR-W031 A4/A5).
+// route, and the tools it has been narrowed out of (narrowings only
+// ever narrow, so they cannot widen the copy). What is deliberately NOT
+// copied is everything that names a person — who may talk to it, what
+// it remembers, what it has been asked — and everything that carries
+// authority: connection grants, Agent secret grants, bot addresses and
+// runtime credentials. A copy that inherited an access list would
+// silently grant a new Butler to people who agreed to the old one, a
+// copy that inherited memory would move somebody's notes into a scope
+// they never chose (ADR-W031 A4/A5), and a copy that inherited
+// credentials or grants could act as the original. Those must be
+// granted fresh (design §7 "no automatic inheritance of another
+// agent's credentials", §17.2).
 //
-// It is one transaction because a half-copied Butler is worse than no
-// copy: a Butler with a route and no narrowings is one that has been
-// quietly widened.
+// The steps run in sequence, not in one transaction.
 func (db *DB) DuplicateButler(name, newName, by string) (int64, error) {
 	src, err := db.GetButler(name)
 	if err != nil {
@@ -740,15 +743,6 @@ func (db *DB) DuplicateButler(name, newName, by string) (int64, error) {
 	}, by)
 	if err != nil {
 		return 0, err
-	}
-	conns, err := db.ButlerConnections(name)
-	if err != nil {
-		return 0, err
-	}
-	for _, c := range conns {
-		if err := db.GrantButlerConnection(newName, c, by); err != nil {
-			return 0, fmt.Errorf("runtimedb: copying %s's connections: %w", name, err)
-		}
 	}
 	narrowed, err := db.ButlerToolNarrowings(name)
 	if err != nil {

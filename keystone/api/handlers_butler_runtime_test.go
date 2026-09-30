@@ -153,6 +153,15 @@ func TestADuplicateGetsItsOwnRuntimePrincipal(t *testing.T) {
 	if owner, _, _ := h.s.DB.RuntimePrincipalButler("runtime-kitchen-helper-1"); owner != original.Seq {
 		t.Error("duplicating moved the original's credential")
 	}
+	// The copy cannot poll or send as the source: its credential is
+	// its own and the source's still resolves to the source.
+	if rec.CredentialRef == readRuntime(t, h, "Kitchen Helper").CredentialRef {
+		t.Error("the copy shares the source's runtime credential")
+	}
+	dup, _ := h.s.DB.GetButler("Kitchen Helper copy")
+	if owner, _, _ := h.s.DB.RuntimePrincipalButler(rec.CredentialRef); owner != dup.Seq {
+		t.Error("the copy's credential does not resolve to the copy")
+	}
 }
 
 // Two names that slug alike get distinct credentials, and the second

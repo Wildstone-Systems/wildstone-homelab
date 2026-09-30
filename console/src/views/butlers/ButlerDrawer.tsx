@@ -184,7 +184,7 @@ export function ButlerDrawer({
                   async () => {
                     const copy = await api.duplicateButler(b.name);
                     onOpenOther(copy.butler.name);
-                    say(`${copy.butler.name} made — nobody can talk to it yet`, "warn");
+                    say(`${copy.butler.name} made — no connections yet, and nobody can talk to it`, "warn");
                   },
                   reloadAll,
                 )

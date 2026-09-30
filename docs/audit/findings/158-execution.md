@@ -71,7 +71,7 @@ clean up.
 | 15 | §16 | Delegation carries initiating person, scope, allowed data, bounded authority | missing | no delegation exists — F-158-09 |
 | 16 | §16 | A delegate may narrow, never widen, bypass a denial, or combine grants | missing | vacuous: nothing to delegate to — F-158-09 |
 | 17 | §16 | Bound delegation depth, event recursion, tool steps, runtime and cost | partial | tool steps bounded per task; depth, recursion, runtime and cost unbounded — F-158-07, F-158-09 |
-| 18 | §16 | Clone copies configuration without bot credentials, transcripts or running routines | partial | `keystone/runtimedb/butlers.go:556-620` — F-158-12 |
+| 18 | §16 | Clone copies configuration without bot credentials, transcripts or running routines | implemented | `DuplicateButler` copies no grants — F-158-12 |
 | 19 | §16 | Pause stops new runs; cancellation of active work is separate | missing | no agent-level pause; retire is the only lever — F-158-11 |
 | 20 | §16 | Deleting an agent preserves person/household memory and pauses its routines | partial | memory kept (`keystone/runtimedb/butlers.go:306-326`); routines not paused — F-158-10 |
 | 21 | §16 | Hiding in the UI is not pausing | implemented | retire is a stored `retired_at`, enforced in `ResolveButlerFor` (`keystone/runtimedb/butlers.go:463-512`), not a client filter |
@@ -431,27 +431,21 @@ and `Work.tsx` renders no control. So §7's "cancellation controls" is an
 API-only capability. *(A live box would have shown what an operator can
 actually reach; the client code settles it either way.)*
 
-### F-158-12 — clone is close to right, but it copies integration connection grants
+### F-158-12 — clone copies configuration and no integration connection grants
 
-- **Current status:** open
-- **Current evidence:** Current clone behavior needs a negative credential/grant-inheritance test against the post-Connection schema.
-- **Current owner:** chickenrat17
+- **Current status:** implemented
+- **Current evidence:** `DuplicateButler` no longer copies connection grants; `TestACloneInheritsNoCredentialsOrGrants` and `TestADuplicateGetsItsOwnRuntimePrincipal`.
 - **Tracking:** #313
-- **Audit status:** partial
-- **Audit evidence:** `DuplicateButler` (`keystone/runtimedb/butlers.go:556-620`) copies directive, surface, profile, model route, connection grants and tool narrowings, in one transaction. It deliberately copies neither the access list, nor memory, nor sessions (lines 542-554), and it touches `household_routines` and `butler_addresses` not at all — so a clone has no bot identity, no transcripts and no running routines. That is §16's clone requirement, and the API says so honestly (`keystone/api/handlers_butlers.go:610-613`: "Nobody can talk to it, it remembers nothing").
+- **Audit status:** implemented
+- **Audit evidence:** `DuplicateButler` (`keystone/runtimedb/butlers.go`) copies directive, surface, profile, model route and tool narrowings in one transaction. It deliberately copies neither the access list, nor memory, nor sessions, nor connection grants, and it touches `household_routines` and `butler_addresses` not at all — so a clone has no bot identity, no transcripts, no running routines and no credentials. That is §16's clone requirement.
 
-The one thing to weigh is the connection grants
-(`keystone/runtimedb/butlers.go:590-597`). Those are scoped credential
-references — `butler_connection_scope` rows joining to
-`integration_connections` — and §7 says "no automatic inheritance of
-another agent's credentials". They are copied automatically. The
-counter-argument is in `duplicateButler`'s own comment
-(`keystone/api/handlers_butlers.go:575-586`): a copy that gets the route
-but loses the narrowings would be *wider* than its original, and the
-transaction exists to prevent that.
-
-Both readings are defensible, which makes it a decision rather than a
-defect. See **Design gaps**.
+Connection grants are scoped credential references (`butler_connection_scope`
+rows joining to `integration_connections`), and §7 says "no automatic
+inheritance of another agent's credentials". They are no longer copied, so a
+duplicate does nothing that needs an integration until an operator grants it
+explicitly. Copying tool narrowings without the grants cannot widen the copy
+beyond its original. The earlier design question (usable clone versus safe
+clone) is resolved in favour of safe.
 
 ### F-158-13 — the household-wide stop control exists as restore quarantine, and its release path belongs to a different incident
 
@@ -790,13 +784,9 @@ household wants Butler-to-Butler delegation at all, given §16 also says
 the #156 memory-sharing finding is fixed, removes the most common reason
 to want it.
 
-**Clone and credential inheritance.** F-158-12: copying connection
-grants makes a clone usable and matches "copy appropriate
-configuration"; not copying them makes it safe and matches "no automatic
-inheritance of another agent's credentials", at the cost of a copy that
-does nothing until it is re-granted. The current code chose usable. A
-third option — copy the grants but mark them pending an explicit
-confirmation — is not implemented and would satisfy both readings.
+**Clone and credential inheritance.** Resolved by #313: a clone copies no
+connection grants and must be re-granted explicitly, matching "no automatic
+inheritance of another agent's credentials".
 
 **The stop control and the restore control are the same switch.**
 F-158-13. Either the incident stop gets its own flag with its own
