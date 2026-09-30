@@ -651,3 +651,22 @@ func TestReconciliationRequiresIntegrityDurabilityAndFence(t *testing.T) {
 		})
 	}
 }
+
+func TestJournaledStageRechecksStorageAfterFence(t *testing.T) {
+	s := testStore(t)
+	obj := Object{ID: strings.Repeat("2", 32), SHA256: digest([]byte("complete")), Size: 8}
+	calls := 0
+	err := s.StageObject("report.md", obj, strings.NewReader("complete"), func() error {
+		calls++
+		if calls == 2 {
+			return os.Rename(filePath(s, "staging", ""), filePath(s, "detached", ""))
+		}
+		return nil
+	})
+	if err == nil {
+		t.Fatal("replaced parent accepted")
+	}
+	if _, err := os.Stat(filePath(s, "detached", obj.ID)); !os.IsNotExist(err) {
+		t.Fatalf("published into detached directory: %v", err)
+	}
+}

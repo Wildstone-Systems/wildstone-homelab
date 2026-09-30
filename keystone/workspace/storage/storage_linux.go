@@ -191,10 +191,10 @@ func (s *Store) StageObject(logicalPath string, obj Object, body io.Reader, fenc
 	if s.hooks.beforeLink != nil {
 		s.hooks.beforeLink()
 	}
-	if err = s.current(dir, "staging"); err != nil {
+	if err = fence(); err != nil {
 		return err
 	}
-	if err = fence(); err != nil {
+	if err = s.current(dir, "staging"); err != nil {
 		return err
 	}
 	if err = s.link(f, dir, obj.ID); err != nil {
