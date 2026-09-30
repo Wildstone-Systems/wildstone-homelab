@@ -139,6 +139,8 @@ class ContractTests(unittest.TestCase):
                 "file:///etc/passwd",
                 "https://user@example.com/",
                 "https://example.com:bad/",
+                "https://"
+                + "a" * 2040,  # Adding the canonical slash exceeds 2,048 bytes.
                 "https://example.com/" + "a" * 2048,
                 "https://exam ple.com/",
                 "https://example.com\\@other.example/",

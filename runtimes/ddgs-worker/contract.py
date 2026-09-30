@@ -152,6 +152,8 @@ def normalize(rows, request, now=None):
             )
         except ValueError:
             raise Failure("provider_unavailable") from None
+        if not valid_string(url, 2048):
+            raise Failure("provider_unavailable")
         if url in seen:
             continue
         seen.add(url)

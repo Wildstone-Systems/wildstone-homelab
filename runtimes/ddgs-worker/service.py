@@ -47,7 +47,9 @@ class Worker:
         if proc is not None:
             # Kill the session's process group, including any unexpected descendants.
             try:
-                os.killpg(proc.pid, signal.SIGKILL)
+                # A reaped PID could already have been reused; never signal it.
+                if proc.returncode is None:
+                    os.killpg(proc.pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
             except OSError:
@@ -57,9 +59,12 @@ class Worker:
             end = asyncio.get_running_loop().time() + REAP_SECONDS
             while proc.poll() is None and asyncio.get_running_loop().time() < end:
                 await asyncio.sleep(0.01)
-            if proc.stdin:
-                proc.stdin.close()
-            proc.stdout.close()
+            for stream in (proc.stdin, proc.stdout):
+                if stream is not None:
+                    try:
+                        stream.close()
+                    except OSError:
+                        pass  # Closed pipes do not change proof of process exit.
             if proc.poll() is None:
                 # Never recycle capacity while an upstream process may still execute.
                 self.ready = False
