@@ -167,6 +167,14 @@ var ExportFuncs = []string{
 	"publishedHost",
 	// publishedPort <container> <port> — the matching host port, or "".
 	"publishedPort",
+	// hostNetworkEnv <container> <key> — the value of one env var on the
+	// PROVIDER's own named container, as installed, and only if that
+	// container runs with networkMode: host; otherwise "". A host-
+	// networked provider publishes no ports for publishedHost to read, so
+	// where it listens is what it was told to listen on — its own
+	// LISTEN_ADDRESS/PORT-style env (#442). A value that names a secret
+	// reference is never returned: a credential is not an address.
+	"hostNetworkEnv",
 }
 
 // ExportContext names the fields an export template renders over, beside
@@ -330,6 +338,43 @@ var registry = []Trait{
 						Key: "ZwaveWsURL",
 						Description: "ZwaveWsHost and ZwaveWsPort as one ws://host:port URL — " +
 							"the single value Home Assistant's Z-Wave JS integration asks for.",
+					},
+				},
+			},
+		},
+	},
+	{
+		Name: "matter",
+		Description: "A Matter controller a home-automation service can drive — the fabric " +
+			"(its root of trust and every commissioned device's credentials) and the server " +
+			"that owns it. A consumer (Home Assistant's Matter integration) requires this " +
+			"instead of guessing a container name, which a host-networked service cannot " +
+			"resolve anyway.",
+		Modes: []Mode{
+			{
+				Name: "server",
+				Description: "A Matter Server WebSocket API (the Open Home Foundation's " +
+					"Matter.js Server, python-matter-server compatible), one per fabric. " +
+					"It has no authentication of its own and runs on host networking, so " +
+					"the provider binds it to LOOPBACK on its own node: a consumer must be " +
+					"host-networked and on that same node, and the engine refuses one " +
+					"that is not rather than let it dial its own 127.0.0.1. The fabric's " +
+					"keys stay with the server; a consumer is never handed them.",
+				Exports: []Export{
+					{
+						Key: "MatterWsHost",
+						Description: "The address the server's WebSocket listens on, as " +
+							"installed: 127.0.0.1 on the provider's node, reachable only by a " +
+							"host-networked service on that node. Never a container name.",
+					},
+					{
+						Key:         "MatterWsPort",
+						Description: "The TCP port the WebSocket listens on at MatterWsHost. Plain ws://, no TLS.",
+					},
+					{
+						Key: "MatterWsURL",
+						Description: "MatterWsHost and MatterWsPort as one ws://host:port/ws URL — " +
+							"the single value Home Assistant's Matter integration asks for.",
 					},
 				},
 			},

@@ -132,7 +132,7 @@ func TestInterfaceNameShape(t *testing.T) {
 			t.Errorf("%s: unexpected error: %v", v, err)
 		}
 	}
-	for _, v := range []string{"../eth0", "eth0/", "eth 0", "a-name-that-is-too-long", ".hidden", "eth0;reboot", "s/x/y/"} {
+	for _, v := range []string{"../eth0", "eth0/", "eth 0", "a-name-that-is-too-long", ".hidden", "eth0;reboot", "s/x/y/", "lo"} {
 		if err := ValidateParamValue("interface_name", v); err == nil {
 			t.Errorf("%q: accepted, want refused", v)
 		}

@@ -2,6 +2,8 @@ package capability
 
 import (
 	"fmt"
+	"net/netip"
+	"net/url"
 	"regexp"
 	"sort"
 	"strconv"
@@ -287,6 +289,184 @@ func readsSecret(r resource.Resource, name string) bool {
 				return true
 			}
 		}
+	}
+	return false
+}
+
+// hostNetworkEnv answers the hostNetworkEnv export function: the value
+// of one env var on the provider's named container, as installed, if and
+// only if that container runs on the host's network. A bridge container
+// is not asked — where it listens is what it publishes, which
+// publishedHost reads — and a value that names a secret is withheld.
+func hostNetworkEnv(installed []resource.Resource, container, key string) string {
+	for _, r := range installed {
+		if r.Kind != resource.KindContainer || r.Container == nil || r.Metadata.Name != container {
+			continue
+		}
+		if !r.Container.HostNetwork() {
+			return ""
+		}
+		v := r.Container.Env[key]
+		if secretRefInContent.MatchString(v) {
+			return ""
+		}
+		return v
+	}
+	return ""
+}
+
+// LoopbackPlacementError refuses a consumer that would dial a URL its
+// provider exported on loopback from somewhere that loopback is not the
+// provider's.
+//
+// A provider on host networking may bind an unauthenticated API to
+// 127.0.0.1 so that nothing off its machine can reach it (matter:server,
+// #442). That URL means exactly one thing: the provider's node, seen from
+// that node's own network namespace. A consumer on another node, or a
+// consumer container on the Wildstone bridge (whose 127.0.0.1 is itself),
+// renders fine, applies fine, and then never connects. Refusing at
+// expansion is the one place the message can say why.
+type LoopbackPlacementError struct {
+	Package  string
+	Provider string
+	Key      string
+	URL      string
+	// Resource is "<Kind>/<name>" of the consumer's resource that carries
+	// the URL, and Node where it would use it.
+	Resource string
+	Node     string
+	// ProviderNodes are where the provider's host-networked containers
+	// run. Unset when the refusal is about the bridge, not the node.
+	ProviderNodes []string
+	// Bridge is set when the reader is a container on the Wildstone
+	// bridge rather than on the host's network.
+	Bridge bool
+}
+
+func (e *LoopbackPlacementError) Error() string {
+	if e.Bridge {
+		return fmt.Sprintf("capability: package %s: %s uses %s (%s from %s), a loopback address on the host's network, "+
+			"but it runs on the Wildstone bridge, where 127.0.0.1 is the container itself: give it networkMode: host",
+			e.Package, e.Resource, e.Key, e.URL, e.Provider)
+	}
+	return fmt.Sprintf("capability: package %s: %s on node %q uses %s (%s from %s), which listens on loopback on node %s only. "+
+		"Install %s on %s, or move %s",
+		e.Package, e.Resource, e.Node, e.Key, e.URL, e.Provider, quoteList(e.ProviderNodes),
+		e.Package, quoteList(e.ProviderNodes), e.Provider)
+}
+
+// loopbackURL reports whether v is a URL whose host is a loopback
+// address. Only whole URLs are judged: a bare "127.0.0.1" also turns up
+// in trust lists and health checks that have nothing to do with an
+// export, and matching those would refuse consumers for no reason.
+func loopbackURL(v string) bool {
+	if !strings.Contains(v, "://") {
+		return false
+	}
+	u, err := url.Parse(v)
+	if err != nil {
+		return false
+	}
+	h := u.Hostname()
+	if h == "localhost" {
+		return true
+	}
+	a, err := netip.ParseAddr(h)
+	return err == nil && a.IsLoopback()
+}
+
+// checkExportedLoopback holds a consumer to where a loopback URL its
+// provider exported actually answers: a resource that carries the URL
+// must be on a node where the provider runs a host-networked container,
+// and if it is a container, it must be on the host's network itself.
+//
+// Generic, like checkExportedSecrets: the engine does not know what
+// MatterWsURL is for, only that its value is a loopback URL and which of
+// the consumer's resources carry it. A provider with nothing installed
+// cannot be compared against and passes the node half; in a rehearsal
+// the nodes are stand-ins and only the bridge half applies.
+func checkExportedLoopback(out []resource.Resource, resolved map[string]string, exportedBy map[string]*pkgspec.Package, catalog *Catalog) error {
+	if catalog == nil {
+		return nil
+	}
+	keys := make([]string, 0, len(exportedBy))
+	for k := range exportedBy {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		v := resolved[key]
+		if !loopbackURL(v) {
+			continue
+		}
+		provider := exportedBy[key]
+		nodes := map[string]bool{}
+		for _, r := range catalog.installed(provider) {
+			if r.Kind == resource.KindContainer && r.Container.HostNetwork() {
+				nodes[r.Metadata.Node] = true
+			}
+		}
+		providerNodes := make([]string, 0, len(nodes))
+		for n := range nodes {
+			providerNodes = append(providerNodes, n)
+		}
+		sort.Strings(providerNodes)
+		for _, r := range out {
+			if !carriesValue(r, v) {
+				continue
+			}
+			e := &LoopbackPlacementError{
+				Package:  r.Metadata.Package,
+				Provider: fmt.Sprintf("capability %s (package %s)", provider.Metadata.Capability, provider.Metadata.Name),
+				Key:      key,
+				URL:      v,
+				Resource: string(r.Kind) + "/" + r.Metadata.Name,
+				Node:     r.Metadata.Node,
+			}
+			// A Job always runs on the bridge (its spec cannot say host).
+			if r.Kind == resource.KindJob || (r.Kind == resource.KindContainer && !r.Container.HostNetwork()) {
+				e.Bridge = true
+				return e
+			}
+			if catalog.rehearsal || len(nodes) == 0 || nodes[r.Metadata.Node] {
+				continue
+			}
+			e.ProviderNodes = providerNodes
+			return e
+		}
+	}
+	return nil
+}
+
+// carriesValue reports whether a rendered resource hands v to something
+// on its node: a container's (or a Job's) env value or argument, or the
+// content of a managed or seeded file.
+func carriesValue(r resource.Resource, v string) bool {
+	has := func(ss ...string) bool {
+		for _, s := range ss {
+			if strings.Contains(s, v) {
+				return true
+			}
+		}
+		return false
+	}
+	envHas := func(env map[string]string) bool {
+		for _, e := range env {
+			if has(e) {
+				return true
+			}
+		}
+		return false
+	}
+	switch {
+	case r.Kind == resource.KindContainer && r.Container != nil:
+		return envHas(r.Container.Env) || has(r.Container.Command...)
+	case r.Kind == resource.KindJob && r.Job != nil:
+		return envHas(r.Job.Run.Env) || has(r.Job.Run.Command...)
+	case r.Kind == resource.KindConfigFile && r.ConfigFile != nil:
+		return has(r.ConfigFile.Content)
+	case r.Kind == resource.KindSeedFile && r.SeedFile != nil:
+		return has(r.SeedFile.Content)
 	}
 	return false
 }

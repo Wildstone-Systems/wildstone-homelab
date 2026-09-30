@@ -215,9 +215,14 @@ var haComponents = []haComponentSpec{
 		Steps: []haStepSpec{{
 			ID: "ha_matter_integration", Title: "Add the Matter integration in Home Assistant",
 			Instructions: func(f haFacts) []string {
+				// matter-matterjs (matter:server, #442) binds its
+				// unauthenticated WebSocket to loopback only, so the URL is
+				// the same everywhere and only a host-networked Home
+				// Assistant on the Matter server's own machine can use it.
 				return []string{
 					"In Home Assistant: Settings → Devices & services → Add integration → Matter.",
-					fmt.Sprintf("Untick the add-on option and enter ws://%s:5580/ws.", f.host()),
+					"Untick the add-on option and enter ws://127.0.0.1:5580/ws.",
+					fmt.Sprintf("That address works only for a Home Assistant running on %s itself, on the host's network (the Home Assistant Wildstone runs is); the Matter server does not listen anywhere else.", nodeOr(f.Node)),
 				}
 			},
 		}},

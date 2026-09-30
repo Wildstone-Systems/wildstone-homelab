@@ -254,13 +254,17 @@ func validatePrivateIPv4(v string) error {
 var interfaceNameRegexp = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,14}$`)
 
 // validateInterfaceName is for a param that names one of the node's own
-// network interfaces — the thread-otbr backbone is the case that asked
-// for it. The node is the authority on which interfaces EXIST (the
-// home-automation readiness probe lists them); this only refuses what
-// could never be one.
+// network interfaces — the thread-otbr backbone asked for it, and
+// matter-matterjs's primary interface (#442) shares it. The node is the
+// authority on which interfaces EXIST (the home-automation readiness
+// probe lists them); this only refuses what could never be one, and
+// loopback, which exists everywhere and is never the LAN.
 func validateInterfaceName(v string) error {
 	if !interfaceNameRegexp.MatchString(v) {
 		return fmt.Errorf("%q is not a network interface name: give the node's LAN-facing interface as `ip link` shows it, e.g. eth0 or enp1s0 (at most 15 characters)", v)
+	}
+	if v == "lo" {
+		return fmt.Errorf("%q is loopback, which carries no LAN traffic: give the interface the node's LAN address is on", v)
 	}
 	return nil
 }

@@ -149,6 +149,17 @@ var imageArgv0 = map[string][]string{
 	// Evidence: `docker image inspect` of the pinned digest on 2026-09-30,
 	// and TestOTBRImageContract, which starts it.
 	"openthread/otbr": {""},
+
+	// The Matter.js Server declares ENTRYPOINT ["node",
+	// "--enable-source-maps", "/app/node_modules/matter-server/dist/esm/
+	// MatterServer.js"] with CMD [], so a command would be server flags
+	// only — the cloudflared shape. matter-matterjs sets none (env only,
+	// TestMatterRunsTheMatterJSServerImage); the entry is here so one
+	// added later starts from the right answer. Evidence: upstream's
+	// docker/matterjs-server/Dockerfile at v1.4.0, the release pinned as
+	// sha256:54232d0d…b236. The config blob itself was not readable from
+	// the authoring sandbox (GHCR's blob host is refused there).
+	"ghcr.io/matter-js/matterjs-server": {""},
 }
 
 // TestPackageCommandsNameTheirBinary walks every shipped package's
