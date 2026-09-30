@@ -99,7 +99,7 @@ func TestResearchConcurrentRestartAndContinuation(t *testing.T) {
 	if err != nil || b.Allowed.Searches != 12 {
 		t.Fatalf("config increase: %+v %v", b, err)
 	}
-	_, b, err = db.ReserveResearchAttempt(ctx, task, a, "search", DefaultResearchLimits())
+	_, b, err = db.ReserveResearchAttempt(ctx, task, a, "fetch", DefaultResearchLimits())
 	if !errors.Is(err, ErrResearchBudgetExhausted) || b.Allowed.Searches != 10 || b.SearchesUsed != 11 {
 		t.Fatalf("lowering: %+v %v", b, err)
 	}

@@ -145,7 +145,8 @@ func (db *DB) ReserveResearchAttempt(ctx context.Context, taskID string, ledgerA
 	if err != nil {
 		return 0, empty, err
 	}
-	exhausted := kind == "search" && b.SearchesUsed >= b.Allowed.Searches || kind == "fetch" && b.FetchesUsed >= b.Allowed.Fetches
+	exhausted := b.SearchesUsed > b.Allowed.Searches || b.FetchesUsed > b.Allowed.Fetches ||
+		kind == "search" && b.SearchesUsed >= b.Allowed.Searches || kind == "fetch" && b.FetchesUsed >= b.Allowed.Fetches
 	if exhausted {
 		if state == "running" {
 			if err = transitionButlerTaskTx(tx, task, ButlerTaskWaiting, "research budget exhausted", ""); err != nil {
@@ -379,4 +380,18 @@ func (db *DB) ContinueResearch(taskID, actor string, expected int64, limits Rese
 		return err
 	}
 	return tx.Commit()
+}
+
+// IsResearchBudgetWait recognizes only the current wait owned by accounting.
+// Runtime Work.Wait acknowledgements cannot create, replace or resolve it.
+func (db *DB) IsResearchBudgetWait(taskID string) (bool, error) {
+	task, err := parseButlerTaskID(taskID)
+	if err != nil {
+		return false, err
+	}
+	var n int
+	err = db.sql.QueryRow(`SELECT count(*) FROM research_budgets b
+ JOIN butler_tasks t ON t.seq=b.task JOIN butler_task_waits w ON w.seq=b.wait_seq
+ WHERE b.task=? AND t.state='waiting' AND w.task=t.seq AND w.reason='budget-exhausted' AND w.resolved_at=''`, task).Scan(&n)
+	return n == 1, err
 }

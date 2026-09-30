@@ -11,6 +11,9 @@ provider policy and full egress provenance. Its limits are configuration, never
 model arguments. `AuthorizeContinuation` separately authenticates explicit human
 intent and approves the exact task/revision/totals; missing callbacks refuse.
 No runtime method exposes continuation. S25/S26 supply the actual tool callers.
+The canonical gateway maps the typed exhaustion error to the existing waiting
+outcome only after confirming the stored research wait. Legacy Slice/Work.Wait
+acknowledges that wait without opening another one or replacing its guidance.
 
 Validate input, resolve policy, acquire any bounded upstream queue slot, and
 check for an authorized retained result **before** calling `Attempt`. Its
