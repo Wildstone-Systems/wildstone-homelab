@@ -78,6 +78,28 @@ func TestNestedParamReferencesAreChecked(t *testing.T) {
 	}
 }
 
+// .Consumer and the installed-state functions are part of the export
+// context; .Resolved and .Capability are real in a TEMPLATE and absent in
+// an export, so naming them must fail here rather than at install.
+func TestExportContextFieldsAreChecked(t *testing.T) {
+	ok := packageWithExports(map[string]string{
+		"MqttUsername":          `{{ .Consumer }}`,
+		"MqttPasswordSecretRef": `secret/mqtt-{{ .Consumer }}`,
+		"MqttHost":              `{{ publishedHost "mosquitto" 1883 }}`,
+		"MqttPort":              `{{ with .Params.port }}{{ . }}{{ end }}`,
+	}, []ParamDecl{{Name: "port"}})
+	if err := ok.Validate(); err != nil {
+		t.Fatalf(".Consumer, .Params and publishedHost must validate: %v", err)
+	}
+	for _, expr := range []string{`{{ .Resolved.IssuerURL }}`, `{{ with .Capability }}{{ . }}{{ end }}`} {
+		pkg := packageWithExports(map[string]string{"IssuerURL": expr}, nil)
+		err := pkg.Validate()
+		if err == nil || !strings.Contains(err.Error(), "cannot see") {
+			t.Errorf("%s: want an export-context error, got %v", expr, err)
+		}
+	}
+}
+
 func TestUnparseableExportIsRejected(t *testing.T) {
 	pkg := packageWithExports(map[string]string{"IssuerURL": `{{ origin `}, nil)
 	if err := pkg.Validate(); err == nil {

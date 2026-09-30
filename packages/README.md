@@ -86,7 +86,7 @@ one mechanism, which is worth deciding before any of them individually.
 | `metrics-prometheus` | timeseries | Prometheus, the store Grafana reads | internal |
 | `home-automation` | home-automation | adapter for a Home Assistant that already exists | — |
 | `home-assistant` | home-assistant | Home Assistant, run here | own |
-| `mqtt-mosquitto` | mqtt | Mosquitto broker, reachable from containers only | internal |
+| `mqtt-mosquitto` | mqtt | Mosquitto broker, password-only, on one private LAN address; provides `mqtt:broker` | internal |
 | `zigbee-zigbee2mqtt` | zigbee | Zigbee2MQTT over a USB stick or a network coordinator | proxy |
 | `cameras-frigate` | cameras | Frigate NVR (CPU, Coral or GPU) | proxy |
 | `dns-pihole`, `dns-adguard` | dns | Pi-hole or AdGuard Home, on 53/udp and 53/tcp | proxy |
@@ -168,11 +168,15 @@ Recorded here rather than left in someone's head (ADR-W018 A4).
   joined container is no longer reachable by its own name, which changes
   what a Route's upstream means. Gluetun's HTTP proxy is the shipped
   path; namespace sharing is a separate decision.
-- **Publishing Mosquitto to the LAN** — Mosquitto authenticates with a
-  password file in its own hashed format, and the node's secret
-  materialization produces Authelia's pbkdf2 form, not Mosquitto's. An
-  anonymous broker on the LAN is not an option, so the broker stays on
-  the container network until a Mosquitto-shaped digest exists.
+- **An MQTT client on another node** — `mqtt-mosquitto` issues each
+  consumer a password generated as a node secret on the broker's node,
+  and node secrets never leave their node. A consumer installed
+  elsewhere is refused at expansion with both node names (see
+  [the broker](#the-mqtt-broker-mqttbroker)) until a supported
+  cross-node credential path exists. The same limit keeps a Home
+  Assistant or ESP device you run OUTSIDE Wildstone off the broker for
+  now: Wildstone's secrets are write-only, so there is no plaintext to
+  hand it.
 - **Split-node OIDC** — the engine synthesises an app's client secret on
   the node its `OidcClient` is declared on, and the app's container reads
   the same reference on its own node. Secrets are node-local, so the new
@@ -313,7 +317,7 @@ params:
 ```
 
 `validate:` names a shape from a closed vocabulary (`iana_timezone`,
-`url`, `hostname`, `email`, `port`, `duration`) and `capability.Expand`
+`url`, `hostname`, `email`, `port`, `duration`, `private_ipv4`) and `capability.Expand`
 refuses a value that fails it — so the check runs against the value an
 operator actually supplied, not only the one you shipped.
 
@@ -425,10 +429,19 @@ provides:
       IssuerURL: '{{ with .Params.public_domain }}{{ origin (printf "auth.%s" .) }}{{ end }}'
 ```
 
-Four things to know:
+Five things to know:
 
-- The template renders over **your own** params, plus `origin` and
-  `sessionDomain`.
+- The template renders over **your own** params (`.Params`), the
+  requesting capability's name (`.Consumer`), and the functions `origin`,
+  `sessionDomain`, `publishedHost` and `publishedPort`.
+- **An export cannot see the params you were INSTALLED with** — only your
+  declared defaults (ADR-W025 Part B item 4). A fact that lives in a
+  required param, such as the address a listener was bound to, is read
+  back from what you rendered instead: `publishedHost "<container>"
+  <port>` and `publishedPort` answer where your own container publishes
+  that TCP port in the deployment's desired state, and render empty
+  before you are installed. Under `wild pkg lint` they answer from your
+  params' defaults and examples.
 - **Use `origin`, never string concatenation.** It answers where a host is
   actually *served*, which under the tailnet posture is the node's one
   certified name plus a port — not the host you declared (ADR-W019 A10).
@@ -438,6 +451,43 @@ Four things to know:
   and looping at a login screen.
 - `OidcSecretRef`, `PublisherSecretRef` and `TailnetHost` are yours
   already — every package gets them — and an export cannot override one.
+
+An export whose value is a secret reference (`secret/<name>`) is held to
+one more rule, by the engine and for every trait: the consumer may read
+it only on a node where your desired state declares that Secret. A
+consumer elsewhere, or one you declare no such Secret for, is refused at
+expansion — naming your package, the secret and both nodes — instead of
+installing and failing at the node.
+
+### The MQTT broker (`mqtt:broker`)
+
+`mqtt-mosquitto` provides it. A consumer requires it and renders only
+the exports — never the container name `mosquitto`, which a
+host-networked service cannot resolve:
+
+```yaml
+requires:
+  - { trait: mqtt, mode: broker }
+# ...
+env:
+  ZIGBEE2MQTT_CONFIG_MQTT_SERVER: "{{ .Resolved.MqttURL }}"          # mqtt://<private addr>:<port>
+  ZIGBEE2MQTT_CONFIG_MQTT_USER: "{{ .Resolved.MqttUsername }}"       # your capability name
+  ZIGBEE2MQTT_CONFIG_MQTT_PASSWORD: "{{ .Resolved.MqttPasswordSecretRef }}"  # secret/mqtt-<capability>
+```
+
+`MqttHost` and `MqttPort` are the same address split, for clients that
+take them separately (Frigate, Home Assistant). The address is the one
+private IPv4 the operator bound the broker to (`listen_addr`,
+`validate: private_ipv4` — never `0.0.0.0` or loopback), so it works from
+host networking and from the Wildstone bridge network alike. Anonymous
+clients are refused.
+
+Credentials are per consumer: the broker declares `secret/mqtt-zigbee`,
+`secret/mqtt-cameras` and `secret/mqtt-home-assistant` and writes their
+`$7$` hashes into its password file (`mosquitto:secret/...`, ADR-W012).
+A new consumer is a Secret and a password-file line in
+`packages/mqtt-mosquitto`; until then its install is refused. Every
+consumer must be on the broker's node — see "Not shipped, and why".
 
 ### Before you open a PR
 

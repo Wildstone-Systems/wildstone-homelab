@@ -76,7 +76,10 @@ func Lint(dir string, opts LintOptions) ([]Issue, error) {
 		}
 		catalogPkgs = append(catalogPkgs, cpkg)
 	}
-	catalog := capability.NewCatalog(catalogPkgs...)
+	// A rehearsal: nothing is installed, so an export that asks what its
+	// provider installed (mqtt:broker's address) answers from the
+	// provider rendered with its own defaults and examples.
+	catalog := capability.NewCatalog(catalogPkgs...).Rehearsal()
 
 	params := map[string]string{}
 	for _, decl := range pkg.Params {

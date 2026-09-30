@@ -75,7 +75,9 @@ func walkShipped(t *testing.T) map[string]shipped {
 		t.Fatal("no packages found under packages/ — the walk is broken, not the packages")
 	}
 
-	catalog := capability.NewCatalog(all...)
+	// A rehearsal, as lint's is: nothing is installed, so installed-state
+	// exports answer from each provider's own defaults and examples.
+	catalog := capability.NewCatalog(all...).Rehearsal()
 	out := make(map[string]shipped, len(all))
 	for i, pkg := range all {
 		params := map[string]string{}

@@ -78,6 +78,8 @@ func runTraits(args []string) int {
 	fmt.Fprintln(out)
 	fmt.Fprintf(out, "functions available inside an `exports` value: %s (plus Go's own built-ins)\n",
 		strings.Join(trait.ExportFuncs, ", "))
+	fmt.Fprintf(out, "fields available inside an `exports` value: .%s\n",
+		strings.Join(trait.ExportContext, ", ."))
 	return 0
 }
 
