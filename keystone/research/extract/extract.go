@@ -350,50 +350,24 @@ func decodeRCDATA(value string) string {
 }
 
 type markdownPart struct {
+	gap     bool
 	literal bool
 	text    string
 }
 
-// Reconstruct logical HTML while retaining container gaps near their original
-// source positions. Gaps inside tag syntax move to that tag's start so they
-// cannot become attributes; gaps in text remain exactly where they occurred.
+// Keep logical HTML segments and source container gaps distinct. Gap markers
+// are positioned after assembling the full stream so tokenizer state is not
+// reset between Goldmark nodes.
 func appendHTMLParts(parts []markdownPart, segments []mdtext.Segment, source []byte) []markdownPart {
-	type gap struct {
-		offset int
-		text   string
-	}
-	var gaps []gap
-	var raw strings.Builder
 	previous := segments[0].Start
 	for _, segment := range segments {
 		if previous < segment.Start {
-			gaps = append(gaps, gap{raw.Len(), string(source[previous:segment.Start])})
+			parts = append(parts, markdownPart{gap: true, literal: true, text: string(source[previous:segment.Start])})
 		}
-		raw.Write(segment.Value(source))
+		parts = append(parts, markdownPart{text: string(segment.Value(source))})
 		previous = segment.Stop
 	}
-	markup := raw.String()
-	z := html.NewTokenizer(strings.NewReader(markup))
-	offset, nextGap := 0, 0
-	for kind := z.Next(); kind != html.ErrorToken; kind = z.Next() {
-		end := offset + len(z.Raw())
-		for nextGap < len(gaps) && gaps[nextGap].offset < end {
-			if gaps[nextGap].offset > offset && kind != html.TextToken {
-				gaps[nextGap].offset = offset
-			}
-			nextGap++
-		}
-		offset = end
-		// This pass locates lexical tag boundaries only; final tree parsing
-		// handles namespaces, raw-text state and implicit closures.
-		z.NextIsNotRawText()
-	}
-	position := 0
-	for _, gap := range gaps {
-		parts = append(parts, markdownPart{false, markup[position:gap.offset]}, markdownPart{true, gap.text})
-		position = gap.offset
-	}
-	return append(parts, markdownPart{false, markup[position:]})
+	return parts
 }
 
 var literalPrefixPattern = regexp.MustCompile(`WS_MD_LITERAL_[0-9]+_`)
@@ -419,6 +393,11 @@ func prepareMarkdown(parts []markdownPart, filter *markupFilter) string {
 			break
 		}
 	}
+	type gap struct {
+		offset int
+		marker string
+	}
+	var gaps []gap
 	var markup strings.Builder
 	for _, part := range parts {
 		if part.text == "" {
@@ -430,9 +409,38 @@ func prepareMarkdown(parts []markdownPart, filter *markupFilter) string {
 		}
 		index := len(filter.literals)
 		filter.literals = append(filter.literals, part.text)
-		markup.WriteString(filter.literalPrefix + strconv.Itoa(index) + "_")
+		marker := filter.literalPrefix + strconv.Itoa(index) + "_"
+		if part.gap {
+			gaps = append(gaps, gap{markup.Len(), marker})
+		} else {
+			markup.WriteString(marker)
+		}
 	}
-	return markup.String()
+	// Locate gaps in one continuous stream, retaining RCDATA/raw-text state.
+	// Only gaps within actual tag syntax move to that tag's start; tag-like
+	// text inside textarea/xmp stays data and keeps its original gap position.
+	logical := markup.String()
+	z := html.NewTokenizer(strings.NewReader(logical))
+	offset, nextGap := 0, 0
+	for kind := z.Next(); kind != html.ErrorToken; kind = z.Next() {
+		end := offset + len(z.Raw())
+		for nextGap < len(gaps) && gaps[nextGap].offset < end {
+			if gaps[nextGap].offset > offset && kind != html.TextToken {
+				gaps[nextGap].offset = offset
+			}
+			nextGap++
+		}
+		offset = end
+	}
+	var prepared strings.Builder
+	position := 0
+	for _, gap := range gaps {
+		prepared.WriteString(logical[position:gap.offset])
+		prepared.WriteString(gap.marker)
+		position = gap.offset
+	}
+	prepared.WriteString(logical[position:])
+	return prepared.String()
 }
 
 // Markdown parsing identifies actual raw HTML spans. Autolinks, escaped angle
@@ -484,7 +492,7 @@ func extractMarkup(input string, base *url.URL, markdown bool) (string, bool, er
 		if start < position {
 			return ast.WalkContinue, nil
 		}
-		parts = append(parts, markdownPart{true, input[position:start]})
+		parts = append(parts, markdownPart{literal: true, text: input[position:start]})
 		parts = appendHTMLParts(parts, segments, source)
 		position = end
 		return ast.WalkSkipChildren, nil
@@ -492,7 +500,7 @@ func extractMarkup(input string, base *url.URL, markdown bool) (string, bool, er
 	if err != nil {
 		return "", false, err
 	}
-	parts = append(parts, markdownPart{true, input[position:]})
+	parts = append(parts, markdownPart{literal: true, text: input[position:]})
 	if err := filter.feed(prepareMarkdown(parts, &filter), true); err != nil {
 		return "", false, err
 	}

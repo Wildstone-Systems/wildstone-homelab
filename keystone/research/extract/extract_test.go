@@ -669,3 +669,17 @@ func TestMarkdownContainerGapsRetainSourceOrdering(t *testing.T) {
 		t.Fatalf("multiline container challenge: %v", err)
 	}
 }
+
+func TestMarkdownContainerGapsRespectRawTextState(t *testing.T) {
+	for _, tag := range []string{"textarea", "xmp", "noembed", "noframes"} {
+		for _, body := range []string{
+			"> <" + tag + ">\n> A <foo\n> bar> B\n> </" + tag + ">",
+			"> before <" + tag + ">A <foo\n> bar> B</" + tag + "> after",
+		} {
+			d, err := Extract(input("text/markdown", body))
+			if err != nil || !strings.Contains(d.Text, "A <foo\n> bar> B") {
+				t.Fatalf("%s %q reordered inert gaps: %q %v", tag, body, d.Text, err)
+			}
+		}
+	}
+}
