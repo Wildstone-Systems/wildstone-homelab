@@ -27,6 +27,14 @@ here is real.
 | `unknown-charset.eml` | undeclared/unknown charset | `ok`; read as UTF-8, never guessed |
 | `invalid-utf8.eml` | invalid UTF-8 bytes | `ok`; replaced with U+FFFD |
 | `no-message-id.eml` | no Message-ID | `ok`; fingerprint still stable |
+| `correction.eml` | reply to `plain.eml` moving the school night to 6:30–8:00 p.m. | `ok`; S05 supersedes the `plain.eml` candidate |
+| `ambiguous-time.eml` | "Thursday evening, sometime after dinner" | `ok`; S05 candidate is `needs_details` with no time |
+| `ics-cancel.eml` | `text/calendar; method=CANCEL` for the `ics-invite.eml` UID | `ok`; S05 cancels the unresolved candidate |
+| `prompt-injection-event.eml` | a real event plus instructions to approve it, retarget it and write memory | `ok`; S05 treats the text as evidence only |
+
+The mailbox monitor (`keystone/mailmonitor`, S05) reuses these files as
+its extraction fixtures; see `processor_test.go` for each file's exact
+candidate state.
 
 Scenarios that are about the mailbox rather than one message —
 UIDVALIDITY reset, expunge between SEARCH and FETCH, duplicate FETCH

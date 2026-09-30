@@ -1,0 +1,24 @@
+From: Front Office <office@school.example.internal>
+To: ada@example.internal
+Subject: Cancelled: School family night
+Date: Sat, 10 Oct 2026 09:00:00 +0000
+Message-ID: <invite-cancel-1@school.example.internal>
+MIME-Version: 1.0
+Content-Type: text/calendar; charset=utf-8; method=CANCEL
+Content-Transfer-Encoding: 7bit
+
+BEGIN:VCALENDAR
+PRODID:-//Example//Fixture//EN
+VERSION:2.0
+METHOD:CANCEL
+BEGIN:VEVENT
+UID:fixture-invite-1@example.internal
+SEQUENCE:1
+DTSTAMP:20261010T090000Z
+DTSTART;TZID=America/New_York:20261015T180000
+DTEND;TZID=America/New_York:20261015T193000
+SUMMARY:School family night
+STATUS:CANCELLED
+ORGANIZER;CN=Front Office:mailto:office@school.example.internal
+END:VEVENT
+END:VCALENDAR

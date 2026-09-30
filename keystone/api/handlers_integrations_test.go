@@ -231,6 +231,26 @@ func readWork(t *testing.T, h *harness, seq int64) runtimedb.IntegrationWork {
 	return w
 }
 
+// A mail read's answer carries a Person's normalized messages; the work
+// API never returns it (epic #326 S05: no full message body in any API
+// response). Another domain's answer is unaffected.
+func TestMailReadAnswersAreNotServedByTheWorkAPI(t *testing.T) {
+	h := newHarness(t)
+	adapter := newFakeAdapter(t, h, "mail-adapter")
+	setupConnection(t, h, "household-mail", "mail-adapter")
+	seq := queueWork(t, h, "household-mail", "query", "mail.changes", 5000)
+	if _, ok := adapter.claim(t); !ok {
+		t.Fatal("nothing to claim")
+	}
+	body := `{"outcome":"ok","messages":[{"content":{"text":"REPLACED-private-body"}}],"next":{"folders":[]}}`
+	if res := adapter.report(t, seq, "ok", body, ""); res.StatusCode != http.StatusOK {
+		t.Fatalf("report = %d", res.StatusCode)
+	}
+	if got := readWork(t, h, seq); got.ResultType != "ok" || strings.Contains(got.ResultJSON, "REPLACED-private-body") {
+		t.Fatalf("mail answer served: %+v", got)
+	}
+}
+
 // An adapter credential cannot claim another connection's work, and
 // cannot reach general API authority.
 func TestAdapterCredentialIsConnectionBoundAndNarrow(t *testing.T) {

@@ -118,6 +118,14 @@ func RestoreBackup(source, destination, reason string, snapshotAt time.Time) (*D
 		_ = os.Remove(destination)
 		return nil, fmt.Errorf("runtimedb: abandoning in-flight subscription runs during restore: %w", err)
 	}
+	// A mail candidate's excerpt and a mail read's result never come back
+	// from a snapshot (epic #326 S05): the excerpt key is not in the
+	// recovery set, and the read results carry message text.
+	if err := purgeMailOnRestore(restored); err != nil {
+		restored.Close()
+		_ = os.Remove(destination)
+		return nil, fmt.Errorf("runtimedb: purging mail excerpts during restore: %w", err)
+	}
 	if err := restored.EnterRestoreQuarantine(reason, snapshotAt); err != nil {
 		restored.Close()
 		_ = os.Remove(destination)

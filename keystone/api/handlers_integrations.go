@@ -23,6 +23,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/chickenrat17/wildstone-homelab/keystone/integration"
 	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 )
@@ -203,6 +204,12 @@ func (s *Server) getIntegrationWork(r *http.Request, _ principal.Identity) (any,
 	w, err := s.DB.GetIntegrationWork(seq)
 	if err != nil {
 		return nil, http.StatusNotFound, fmt.Errorf("no such work")
+	}
+	// A mail read's answer carries a Person's normalized messages. It is
+	// for the mailbox monitor in this process, never for an API caller
+	// (epic #326: no full message body in any API response).
+	if d, ok := integration.DomainOf(w.Capability); ok && d.Name == "mail" {
+		w.ResultJSON = ""
 	}
 	return w, http.StatusOK, nil
 }
