@@ -28,6 +28,7 @@ const (
 // Static errors intentionally exclude URLs, DNS answers, upstream bodies and
 // wrapped network errors, which may contain protected content.
 var (
+	ErrBlocked     = errors.New("permission_denied: authentication challenge")
 	ErrURL         = errors.New("invalid_input: invalid public URL")
 	ErrDestination = errors.New("permission_denied: non-public destination")
 	ErrTransport   = errors.New("provider_unavailable: public retrieval failed")
@@ -44,6 +45,8 @@ var (
 type Page struct {
 	URL         string
 	MediaType   string
+	Charset     string
+	SourceDate  time.Time
 	Body        []byte
 	RetrievedAt time.Time
 }
@@ -196,6 +199,9 @@ func (f Fetcher) request(ctx context.Context, u *url.URL) (*http.Response, error
 }
 
 func readPage(resp *http.Response, u *url.URL) (Page, error) {
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusProxyAuthRequired || resp.Header.Get("WWW-Authenticate") != "" {
+		return Page{}, ErrBlocked
+	}
 	if resp.StatusCode == http.StatusTooManyRequests {
 		return Page{}, ErrRateLimited
 	}
@@ -204,7 +210,7 @@ func readPage(resp *http.Response, u *url.URL) (Page, error) {
 	if resp.StatusCode != http.StatusOK {
 		return Page{}, ErrTransport
 	}
-	media, _, err := mime.ParseMediaType(resp.Header.Get("Content-Type"))
+	media, params, err := mime.ParseMediaType(resp.Header.Get("Content-Type"))
 	if err != nil || (media != "text/html" && media != "text/plain" && media != "text/markdown") {
 		return Page{}, ErrUnsupported
 	}
@@ -237,7 +243,8 @@ func readPage(resp *http.Response, u *url.URL) (Page, error) {
 	if err != nil {
 		return Page{}, ErrTransport
 	}
-	return Page{URL: u.String(), MediaType: media, Body: body, RetrievedAt: time.Now().UTC()}, nil
+	sourceDate, _ := http.ParseTime(resp.Header.Get("Last-Modified"))
+	return Page{URL: u.String(), MediaType: media, Charset: params["charset"], SourceDate: sourceDate.UTC(), Body: body, RetrievedAt: time.Now().UTC()}, nil
 }
 
 func networkError(ctx context.Context) error {
