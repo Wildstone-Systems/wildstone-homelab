@@ -2032,7 +2032,7 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 				review := newMailReview(db, mailMonitor, calendarActions, log)
 				mailMonitor.Hook = review
 				apiSrv.MailReview = review
-				go mailreview.RunReconciler(context.Background(), review, time.Minute, log)
+				go mailreview.RunReconciler(context.Background(), review, time.Minute, redact.Logger(log))
 			}
 			startScheduledSubscriptions(context.Background(), newScheduledSubscriptions(db, ledger, log, mailMonitor), mailMonitor, log)
 

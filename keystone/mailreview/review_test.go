@@ -19,10 +19,10 @@ import (
 
 func noEvent(t *testing.T, e *env) {
 	t.Helper()
-	if got := e.dav.candidateObjects(); len(got) != 0 {
+	if got := e.dav.CandidateObjects(); len(got) != 0 {
 		t.Fatalf("an event was written: %v", got)
 	}
-	if n := e.dav.putCount(); n != 0 {
+	if n := e.dav.PutCount(); n != 0 {
 		t.Fatalf("%d PUTs reached the calendar", n)
 	}
 }
@@ -38,8 +38,8 @@ func TestAReviewIsPrivateExactAndNamesOnlyVisibleConflicts(t *testing.T) {
 	e := newEnv(t)
 	ny := newYork()
 	// A clash sam can see (household), and one she cannot (bo-private).
-	e.dav.seed("household", "parents-evening", "Parents evening", time.Date(2026, 10, 15, 18, 30, 0, 0, ny), time.Date(2026, 10, 15, 19, 0, 0, 0, ny))
-	e.dav.seed("bo-private", "bo-secret", "Bo's private thing", time.Date(2026, 10, 15, 18, 0, 0, 0, ny), time.Date(2026, 10, 15, 20, 0, 0, 0, ny))
+	e.dav.Seed("household", "parents-evening", "Parents evening", time.Date(2026, 10, 15, 18, 30, 0, 0, ny), time.Date(2026, 10, 15, 19, 0, 0, 0, ny))
+	e.dav.Seed("bo-private", "bo-secret", "Bo's private thing", time.Date(2026, 10, 15, 18, 0, 0, 0, ny), time.Date(2026, 10, 15, 20, 0, 0, 0, ny))
 	c := e.record(t, "mfp1_a", draft(schoolNight()))
 
 	r, tokens := e.tokens(t, c.ID)
@@ -91,11 +91,11 @@ func TestAddCreatesExactlyOneEventRecordsEvidenceAndPurgesTheExcerpt(t *testing.
 	if err != nil || res.Outcome != OutcomeAdded {
 		t.Fatalf("add: %+v %v", res, err)
 	}
-	objs := e.dav.candidateObjects()
-	if len(objs) != 1 || objs[0] != "/cal/sam-family/wildstone-candidate-"+c.ID+".ics" || e.dav.putCount() != 1 {
-		t.Fatalf("objects %v puts %d", objs, e.dav.putCount())
+	objs := e.dav.CandidateObjects()
+	if len(objs) != 1 || objs[0] != "/cal/sam-family/wildstone-candidate-"+c.ID+".ics" || e.dav.PutCount() != 1 {
+		t.Fatalf("objects %v puts %d", objs, e.dav.PutCount())
 	}
-	ics := e.dav.object(objs[0])
+	ics := e.dav.Object(objs[0])
 	for _, want := range []string{"UID:wildstone-candidate-" + c.ID, "SUMMARY:School family night", "DTSTART:20261015T220000Z",
 		"DTEND:20261015T233000Z", "LOCATION:School gym"} {
 		if !strings.Contains(ics, want) {
@@ -125,7 +125,7 @@ func TestAddCreatesExactlyOneEventRecordsEvidenceAndPurgesTheExcerpt(t *testing.
 	if _, err := e.act(ActRequest{Actor: "sam", Token: tokens["dismiss"]}); err == nil {
 		t.Fatal("a sibling token of a used review was honoured")
 	}
-	if len(e.dav.candidateObjects()) != 1 || e.dav.putCount() != 1 {
+	if len(e.dav.CandidateObjects()) != 1 || e.dav.PutCount() != 1 {
 		t.Fatal("a replay wrote again")
 	}
 }
@@ -316,11 +316,11 @@ func TestRevokedAuthorityAndCalendarAccessLossFailClosed(t *testing.T) {
 		e := newEnv(t)
 		c := e.record(t, "mfp1_a", draft(schoolNight()))
 		_, tokens := e.tokens(t, c.ID)
-		e.dav.schedule("forbidden")
+		e.dav.Schedule("forbidden")
 		if _, err := e.act(ActRequest{Actor: "sam", Token: tokens["add"]}); !errors.Is(err, ErrCalendarRefused) {
 			t.Fatalf("forbidden: %v", err)
 		}
-		if len(e.dav.candidateObjects()) != 0 {
+		if len(e.dav.CandidateObjects()) != 0 {
 			t.Fatal("an event exists after a refused write")
 		}
 		if got := e.candidate(t, c.ID); got.State != runtimedb.MailCandidateProposed {
@@ -359,7 +359,7 @@ func TestANewConflictReturnsToReviewWithAFreshToken(t *testing.T) {
 		t.Fatalf("availability %s", first.Availability)
 	}
 	ny := newYork()
-	e.dav.seed("household", "late-meeting", "Late meeting", time.Date(2026, 10, 15, 19, 0, 0, 0, ny), time.Date(2026, 10, 15, 20, 0, 0, 0, ny))
+	e.dav.Seed("household", "late-meeting", "Late meeting", time.Date(2026, 10, 15, 19, 0, 0, 0, ny), time.Date(2026, 10, 15, 20, 0, 0, 0, ny))
 	res, err := e.act(ActRequest{Actor: "sam", Token: tokens["add"]})
 	if err != nil || res.Outcome != OutcomeReturned || res.Review == nil || res.Review.ID == first.ID ||
 		len(res.Review.Conflicts) != 1 || res.Candidate.State != runtimedb.MailCandidateProposed {
@@ -373,7 +373,7 @@ func TestANewConflictReturnsToReviewWithAFreshToken(t *testing.T) {
 	if res, err := e.act(ActRequest{Actor: "sam", Token: fresh["add"]}); err != nil || res.Outcome != OutcomeAdded {
 		t.Fatalf("add after seeing the conflict: %+v %v", res, err)
 	}
-	if len(e.dav.candidateObjects()) != 1 {
+	if len(e.dav.CandidateObjects()) != 1 {
 		t.Fatal("not exactly one event")
 	}
 }
@@ -404,8 +404,8 @@ func TestConcurrentDuplicateApprovalsCreateOneEvent(t *testing.T) {
 		}(i)
 	}
 	wg.Wait()
-	if added != 1 || refusedN != 7 || len(e.dav.candidateObjects()) != 1 || e.dav.putCount() != 1 {
-		t.Fatalf("added %d refused %d objects %v puts %d", added, refusedN, e.dav.candidateObjects(), e.dav.putCount())
+	if added != 1 || refusedN != 7 || len(e.dav.CandidateObjects()) != 1 || e.dav.PutCount() != 1 {
+		t.Fatalf("added %d refused %d objects %v puts %d", added, refusedN, e.dav.CandidateObjects(), e.dav.PutCount())
 	}
 }
 

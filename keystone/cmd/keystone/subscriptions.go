@@ -28,6 +28,7 @@ import (
 	"github.com/chickenrat17/wildstone-homelab/keystone/householdtz"
 	"github.com/chickenrat17/wildstone-homelab/keystone/mailmonitor"
 	"github.com/chickenrat17/wildstone-homelab/keystone/mailreview"
+	"github.com/chickenrat17/wildstone-homelab/keystone/redact"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 )
 
@@ -68,7 +69,7 @@ func newMailMonitor(db *runtimedb.DB, dataDir string, zone *householdtz.Zone, lo
 		return nil, fmt.Errorf("opening the mail excerpt key: %w", err)
 	}
 	return &mailmonitor.Processor{
-		DB: db, Vault: vault, Zone: zone, Log: log,
+		DB: db, Vault: vault, Zone: zone, Log: redact.Logger(log),
 		Extractor: &mailmonitor.Extractor{Router: mailmonitor.ButlerModelRouter{DB: db, Build: butlerProviderFor}},
 		Hook:      mailmonitor.NoopHook{},
 	}, nil
@@ -81,7 +82,7 @@ func newMailMonitor(db *runtimedb.DB, dataDir string, zone *householdtz.Zone, lo
 // mailbox credential. With no calendar configured, candidates are still
 // offered (Edit and Dismiss work) but nothing can be added.
 func newMailReview(db *runtimedb.DB, mail *mailmonitor.Processor, cal *domestic.Calendar, log *slog.Logger) *mailreview.Engine {
-	e := &mailreview.Engine{DB: db, Vault: mail.Vault, Log: log}
+	e := &mailreview.Engine{DB: db, Vault: mail.Vault, Log: redact.Logger(log)}
 	if cal != nil {
 		e.Calendar = cal
 	}
@@ -102,7 +103,7 @@ func scheduledDispatchers(e *automation.SubscriptionEngine, mail *mailmonitor.Pr
 	if mail != nil {
 		return map[string]automation.ScheduledDispatcher{
 			MailChangesMatchKind: mailmonitor.NewDispatcher(mailmonitor.Config{
-				DB: e.DB, Processor: mail, Runs: e, Log: e.Log,
+				DB: e.DB, Processor: mail, Runs: e, Log: redact.Logger(e.Log),
 			}),
 		}
 	}
@@ -121,6 +122,6 @@ func startScheduledSubscriptions(ctx context.Context, e *automation.Subscription
 	log.Info("scheduled subscriptions running", "every", scheduledSubscriptionEvery)
 	go e.RunScheduled(ctx, scheduledSubscriptionEvery)
 	if mail != nil {
-		go mailmonitor.RunSweeper(ctx, e.DB, 0, runtimedb.DefaultMailRetention(), log)
+		go mailmonitor.RunSweeper(ctx, e.DB, 0, runtimedb.DefaultMailRetention(), redact.Logger(log))
 	}
 }

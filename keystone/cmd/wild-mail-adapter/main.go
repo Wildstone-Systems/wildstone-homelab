@@ -61,6 +61,7 @@ import (
 	"github.com/chickenrat17/wildstone-homelab/keystone/adapter/mail/imapread"
 	"github.com/chickenrat17/wildstone-homelab/keystone/capability"
 	"github.com/chickenrat17/wildstone-homelab/keystone/pkgspec"
+	"github.com/chickenrat17/wildstone-homelab/keystone/redact"
 )
 
 var version = "dev" // set via -ldflags at release
@@ -265,7 +266,10 @@ func main() {
 		fmt.Println("wild-mail-adapter", version)
 		return
 	}
-	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	// Every line passes through the redactor: the adapter logs identifiers
+	// and fixed categories only, and a secret-shaped value that reached a
+	// line by mistake is replaced rather than written (epic #326 S08).
+	log := slog.New(redact.NewLogHandler(slog.NewTextHandler(os.Stderr, nil)))
 	c, err := loadConfig(os.Getenv)
 	if err != nil {
 		log.Error("wild-mail-adapter: refusing to start", "err", err)

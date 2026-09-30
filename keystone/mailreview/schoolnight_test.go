@@ -41,7 +41,7 @@ func TestSchoolNightFromMailToOneCreatedEvent(t *testing.T) {
 	ny := newYork()
 	// bo's private evening overlaps; sam cannot read bo-private, so it
 	// must not appear in her review.
-	e.dav.seed("bo-private", "bo-thing", "Bo's private appointment", time.Date(2026, 10, 15, 17, 0, 0, 0, ny), time.Date(2026, 10, 15, 21, 0, 0, 0, ny))
+	e.dav.Seed("bo-private", "bo-thing", "Bo's private appointment", time.Date(2026, 10, 15, 17, 0, 0, 0, ny), time.Date(2026, 10, 15, 21, 0, 0, 0, ny))
 	proc := &mailmonitor.Processor{DB: e.db, Vault: e.vault, Zone: householdtz.New(ny), Hook: e.eng, Now: e.clock.Now,
 		Extractor: &mailmonitor.Extractor{}}
 	g, err := e.eng.liveGrant(context.Background(), "sam-mail")
@@ -124,7 +124,7 @@ func TestSchoolNightFromMailToOneCreatedEvent(t *testing.T) {
 	if err != nil || res.Outcome != OutcomeCancelled {
 		t.Fatalf("cancel: %+v %v", res, err)
 	}
-	if objs := e.dav.candidateObjects(); len(objs) != 0 {
+	if objs := e.dav.CandidateObjects(); len(objs) != 0 {
 		t.Fatalf("the cancelled event is still there: %v", objs)
 	}
 	if got := e.candidate(t, id); got.State != runtimedb.MailCandidateCancelled || got.UpdatePending != "" {

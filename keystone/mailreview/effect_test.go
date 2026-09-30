@@ -16,7 +16,7 @@ import (
 
 func onlyOneEvent(t *testing.T, e *env, id string) {
 	t.Helper()
-	objs := e.dav.candidateObjects()
+	objs := e.dav.CandidateObjects()
 	if len(objs) != 1 || objs[0] != "/cal/sam-family/wildstone-candidate-"+id+".ics" {
 		t.Fatalf("calendar holds %v, want exactly the one event", objs)
 	}
@@ -47,13 +47,13 @@ func TestIndeterminateWritesAreReconciledByUID(t *testing.T) {
 			e := newEnv(t)
 			c := e.record(t, "mfp1_a", draft(schoolNight()))
 			_, tokens := e.tokens(t, c.ID)
-			e.dav.schedule(tc.faults...)
+			e.dav.Schedule(tc.faults...)
 			res, err := e.act(ActRequest{Actor: "sam", Token: tokens["add"]})
 			if err != nil || res.Outcome != OutcomeAdded || res.Effect == nil || res.Effect.State != tc.effect {
 				t.Fatalf("add: %+v %v", res, err)
 			}
 			onlyOneEvent(t, e, c.ID)
-			if n := e.dav.putCount(); n > tc.maxPuts {
+			if n := e.dav.PutCount(); n > tc.maxPuts {
 				t.Fatalf("%d PUTs, want at most %d", n, tc.maxPuts)
 			}
 			// A duplicate approval afterwards still makes nothing.
@@ -71,8 +71,8 @@ func TestAnUnanswerableLookupLeavesTheEffectForTheReconciler(t *testing.T) {
 	_, tokens := e.tokens(t, c.ID)
 	// Stored and answered too late, and then the calendar will not say
 	// whether it has it.
-	e.dav.schedule("hang-after")
-	e.dav.failGets(1)
+	e.dav.Schedule("hang-after")
+	e.dav.FailGets(1)
 	res, err := e.act(ActRequest{Actor: "sam", Token: tokens["add"]})
 	if err != nil || res.Outcome != OutcomePending {
 		t.Fatalf("add: %+v %v", res, err)
@@ -97,8 +97,8 @@ func TestAnUnanswerableLookupLeavesTheEffectForTheReconciler(t *testing.T) {
 		t.Fatal(err)
 	}
 	onlyOneEvent(t, e, c.ID)
-	if e.dav.putCount() != 1 {
-		t.Fatalf("%d PUTs", e.dav.putCount())
+	if e.dav.PutCount() != 1 {
+		t.Fatalf("%d PUTs", e.dav.PutCount())
 	}
 	effects, _ := e.db.ListMailEffects("sam", c.ID)
 	if len(effects) != 1 || effects[0].State != runtimedb.MailEffectReconciled {
@@ -161,8 +161,8 @@ func TestACrashAfterTheWriteIsSettledNotRepeated(t *testing.T) {
 		t.Fatal(err)
 	}
 	onlyOneEvent(t, e, c.ID)
-	if e.dav.putCount() != 1 {
-		t.Fatalf("%d PUTs: the reconciler wrote", e.dav.putCount())
+	if e.dav.PutCount() != 1 {
+		t.Fatalf("%d PUTs: the reconciler wrote", e.dav.PutCount())
 	}
 }
 
@@ -191,14 +191,14 @@ func TestACorrectionIsAnExactUpdateProposalNeverASilentEdit(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := "/cal/sam-family/wildstone-candidate-" + c.ID + ".ics"
-	before := e.dav.object(path)
+	before := e.dav.Object(path)
 
 	later := schoolNight()
 	later.Start, later.End = later.Start.Add(30*time.Minute), later.End.Add(30*time.Minute)
 	d := draft(later)
 	d.Correction, d.MessageKey = true, "m2"
 	next := e.record(t, "mfp1_b", d)
-	if e.dav.object(path) != before || e.dav.putCount() != 1 {
+	if e.dav.Object(path) != before || e.dav.PutCount() != 1 {
 		t.Fatal("a correction edited the event without approval")
 	}
 	r, fresh := e.tokens(t, next.ID)
@@ -213,11 +213,11 @@ func TestACorrectionIsAnExactUpdateProposalNeverASilentEdit(t *testing.T) {
 	if err != nil || res.Outcome != OutcomeUpdated {
 		t.Fatalf("apply: %+v %v", res, err)
 	}
-	objs := e.dav.candidateObjects()
+	objs := e.dav.CandidateObjects()
 	if len(objs) != 1 || objs[0] != path {
 		t.Fatalf("after the update the calendar holds %v", objs)
 	}
-	if ics := e.dav.object(path); !strings.Contains(ics, "DTSTART:20261015T223000Z") {
+	if ics := e.dav.Object(path); !strings.Contains(ics, "DTSTART:20261015T223000Z") {
 		t.Fatalf("event not updated:\n%s", ics)
 	}
 	if prior := e.candidate(t, c.ID); prior.UpdatePending != runtimedb.MailUpdateNone {
