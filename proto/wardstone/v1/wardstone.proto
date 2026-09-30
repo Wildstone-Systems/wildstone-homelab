@@ -386,7 +386,7 @@ message DeviceMapping {
 }
 
 message Mount {
-  string source = 1; // host path (managed-prefix-restricted) or volume name
+  string source = 1; // host path (managed-prefix-restricted, plus read-only /run/dbus from minor 26) or volume name
   string target = 2;
   bool read_only = 3;
 }

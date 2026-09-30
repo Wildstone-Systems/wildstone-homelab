@@ -147,7 +147,16 @@ import (
 //	checks for IPv6, IPv6 forwarding, multicast, the D-Bus system bus,
 //	BlueZ, Bluetooth adapters and /dev/net/tun. Read-only; a missing
 //	prerequisite is a MISSING check, not an OpError.
-const ProtocolMinor = 25
+//
+// 26: EnsureContainer accepts a bind mount of /run/dbus, the D-Bus system
+//
+//	bus, from outside the managed prefixes (#445): the one entry on a
+//	closed host-system-mount allowlist (devices.go), read-only at the
+//	same path inside and never through a symlink, so Home Assistant can
+//	use the host's BlueZ. No schema change. An older agent refuses it as
+//	outside its managed prefixes, so Keystone refuses to dispatch such a
+//	spec to one (resource.HostSystemMountProtocolMinor).
+const ProtocolMinor = 26
 
 // maxUpdateMsgBytes is the gRPC message size cap on both ends of the
 // session/join connections (ADR-W003 W5). SelfUpdate ships the new binary

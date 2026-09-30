@@ -1529,6 +1529,10 @@ func (r *Reconciler) applyContainerStep(ctx context.Context, nodeID string, step
 			sr.Error = ne
 			return sr
 		}
+		if ne := r.refuseIfHostBlueZMissing(ctx, nodeID, want); ne != "" {
+			sr.Error = ne
+			return sr
+		}
 		if ne := r.ensureNodePrereqs(ctx, nodeID); ne != "" {
 			sr.Error = ne
 			return sr
@@ -1837,6 +1841,13 @@ func (r *Reconciler) refuseIfAgentTooOld(nodeID string, step plan.PlanStep, spec
 	have, known := r.AgentProtocolMinor(nodeID)
 	if !known || have >= need {
 		return ""
+	}
+	if need >= resource.HostSystemMountProtocolMinor {
+		return fmt.Sprintf("%s/%s needs wardstone protocol minor %d (a read-only mount of the host's /run/dbus, for "+
+			"Bluetooth through the host's BlueZ) and the agent on node %s speaks minor %d: upgrade wardstoned there "+
+			"first. An older agent refuses the mount as outside its managed prefixes, so it is refused here, before "+
+			"the existing container is touched",
+			step.Kind, step.Name, need, nodeID, have)
 	}
 	if need >= resource.HostNetworkProtocolMinor {
 		return fmt.Sprintf("%s/%s needs wardstone protocol minor %d (networkMode: host) and the agent on node %s "+

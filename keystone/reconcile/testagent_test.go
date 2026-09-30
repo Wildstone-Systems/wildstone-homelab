@@ -89,6 +89,9 @@ type fakeContainer struct {
 	networkMode wsv1.ContainerNetworkMode
 	// hostAliases is the EnsureContainer.host_aliases it was created with.
 	hostAliases []string
+	// mounts and capAdd are what it was created with (#445).
+	mounts []*wsv1.Mount
+	capAdd []string
 }
 
 // dockerStatus is what the real agent reads off Docker's State.Status.
@@ -132,6 +135,9 @@ type testAgent struct {
 	// listening is what ListPorts reports: the node's listening TCP
 	// sockets, which a test sets to put something on a port.
 	listening []*wsv1.ListeningPort
+	// readiness is what HomeAutomationReadiness reports (#436); nil
+	// answers with no checks.
+	readiness []*wsv1.ReadinessCheck
 }
 
 func newTestAgent(t *testing.T, h *harness, nodeID, token string) *testAgent {
@@ -378,6 +384,13 @@ func (a *testAgent) handleOp(opID string, op *wsv1.Operation) *wsv1.OpResult {
 		return &wsv1.OpResult{OpId: opID, Result: &wsv1.OpResult_ListPorts{ListPorts: &wsv1.ListPortsResult{
 			Ports: append([]*wsv1.ListeningPort(nil), a.listening...),
 		}}}
+	case *wsv1.Operation_HomeAutomationReadiness:
+		a.countOp("HomeAutomationReadiness")
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		return &wsv1.OpResult{OpId: opID, Result: &wsv1.OpResult_HomeAutomationReadiness{HomeAutomationReadiness: &wsv1.HomeAutomationReadinessResult{
+			PlatformSupported: true, Checks: append([]*wsv1.ReadinessCheck(nil), a.readiness...),
+		}}}
 	case *wsv1.Operation_EnsureSecret:
 		return a.ensureSecret(opID, o.EnsureSecret)
 	case *wsv1.Operation_ListSecrets:
@@ -452,7 +465,8 @@ func (a *testAgent) ensureContainer(opID string, op *wsv1.EnsureContainer) *wsv1
 		delete(a.containers, op.GetName())
 	}
 	created := &fakeContainer{image: op.GetImage(), labels: op.GetLabels(), running: true, owned: true,
-		network: op.GetNetwork(), networkMode: op.GetNetworkMode(), hostAliases: op.GetHostAliases()}
+		network: op.GetNetwork(), networkMode: op.GetNetworkMode(), hostAliases: op.GetHostAliases(),
+		mounts: op.GetMounts(), capAdd: op.GetCapAdd()}
 	a.containers[op.GetName()] = created
 	a.runJobLocked(op.GetName(), created)
 	return &wsv1.OpResult{OpId: opID, Result: &wsv1.OpResult_EnsureContainer{EnsureContainer: &wsv1.EnsureContainerResult{
@@ -736,6 +750,25 @@ func (a *testAgent) setListening(ports ...*wsv1.ListeningPort) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.listening = ports
+}
+
+// setReadiness replaces what HomeAutomationReadiness reports.
+func (a *testAgent) setReadiness(checks ...*wsv1.ReadinessCheck) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.readiness = checks
+}
+
+// containerHostAccess reports the mounts and added capabilities the named
+// container was created with.
+func (a *testAgent) containerHostAccess(name string) (mounts []*wsv1.Mount, capAdd []string, ok bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	c, ok := a.containers[name]
+	if !ok {
+		return nil, nil, false
+	}
+	return c.mounts, c.capAdd, true
 }
 
 // containerNetworking reports what the named container was created with.

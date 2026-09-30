@@ -1392,6 +1392,12 @@ func validateContainer(r *Resource) error {
 		if m.Target == "" {
 			return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: fmt.Sprintf("spec.mounts[%d].target", i), Msg: "must not be empty"}
 		}
+		// A host system mount (#445) is only ever read-only and at its own
+		// path: the agent refuses anything else, so lint says so first.
+		if HostSystemMountAllowed(m.Source) && (!m.ReadOnly || m.Target != m.Source) {
+			return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: fmt.Sprintf("spec.mounts[%d]", i),
+				Msg: fmt.Sprintf("host path %q (%s) may only be mounted readOnly: true at the same path inside", m.Source, HostSystemMounts[m.Source])}
+		}
 	}
 	for i, d := range r.Container.Devices {
 		if d.Source == "" || !path.IsAbs(d.Source) || path.Clean(d.Source) != d.Source {

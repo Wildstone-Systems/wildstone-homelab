@@ -34,8 +34,47 @@
 #     For ZHA or a direct Z-Wave stick, set serial_device (advanced): one
 #     device node, on the same closed allowlist every package's devices
 #     are held to (serial/USB radios, never a block device).
-#   - Bluetooth is not wired here: it needs the host's D-Bus, which is a
-#     separate change.
+#   - Bluetooth: see BLUETOOTH below. The default gives the container
+#     nothing of the host's.
+#
+# BLUETOOTH (2.1.0), the closed choice `bluetooth`:
+#
+#   proxy (default, recommended) — no host access at all. Home Assistant
+#     gets Bluetooth from ESPHome Bluetooth proxies: ESP32 boards on the
+#     household's Wi-Fi/Ethernet, placed near the devices, that forward
+#     BLE advertisements and connections over the network. Wildstone does
+#     not own, flash or configure those boards; you flash one yourself
+#     (ESPHome's web installer, "Bluetooth Proxy"), and Home Assistant
+#     discovers it on the LAN — which works because it is host-networked —
+#     under Settings > Devices & services, where you add it. Several
+#     proxies cover a larger home, and none needs anything on this machine.
+#   host-bluez — use the machine's own Bluetooth adapter through the
+#     host's BlueZ. The container gets EXACTLY two things more: the host's
+#     /run/dbus mounted read-only (the D-Bus system bus, the one host path
+#     outside Wildstone's own on the host-mount allowlist) and the
+#     capabilities NET_ADMIN and NET_RAW, which Home Assistant's Bluetooth
+#     stack needs to manage the adapter. Because the container is on the
+#     host's network, those two capabilities act on the HOST's network
+#     stack, not a private one — that is the price of local Bluetooth, and
+#     why it is not the default. No USB bus, no /dev, no privileged mode.
+#     BlueZ (bluetooth.service), the system bus and an unblocked adapter
+#     are the host's to provide; Wildstone checks the node's readiness
+#     evidence (GET /api/v1/nodes/{node}/probes/home-automation) before
+#     creating or replacing the container, and refuses with that evidence
+#     — leaving the running container untouched — when any is definitely
+#     missing.
+#   off — no host access, and no proxies expected. Renders the same
+#     container as proxy; the difference is intent. Home Assistant's
+#     Bluetooth integration simply finds no adapter; remove it in the UI
+#     if you want it gone.
+#
+# Home Assistant's Bluetooth is Bluetooth Low Energy only (sensors,
+# beacons, BLE locks, lights and plant sensors). It does NOT speak
+# Bluetooth Classic: no audio speakers, headsets or classic serial
+# devices, in any mode. Switching mode replaces the container only: the
+# same home-assistant-config volume stays at /config, so integrations,
+# history and paired BLE devices survive; an adapter's pairing keys held
+# by the host's BlueZ stay on the host.
 #
 # MQTT. Optional, behind mqtt_enabled (default off, so an existing
 # install upgrades without needing a broker). With it on, the package
@@ -121,7 +160,9 @@ metadata:
   name: home-assistant
   # 2.0.0: host networking (port 8123 on the machine's LAN), Route to
   # host/8123, and optional authenticated MQTT (mqtt_enabled).
-  version: 2.0.0
+  # 2.1.0: bluetooth (proxy | host-bluez | off); default proxy renders
+  # exactly what 2.0.0 did.
+  version: 2.1.0
   capability: home-assistant
   profile: container
 requires:
@@ -134,6 +175,7 @@ params:
   - { name: timezone, default: UTC, source: timezone, validate: iana_timezone, description: "Your timezone, e.g. Europe/London." }
   - { name: mqtt_enabled, default: "false", validate: "enum:true|false", description: "Give Home Assistant its own login on the MQTT broker (mqtt-mosquitto), for Zigbee2MQTT, Frigate and other MQTT devices. Needs the broker installed on this same machine first; you then add the MQTT integration in Home Assistant once, with the details this provides. Leave false for none." }
   - { name: serial_device, default: "", example: "/dev/serial/by-id/usb-Nabu_Casa_ZBT-1_0001-if00-port0", description: "Advanced: a USB/serial radio handed straight to Home Assistant (ZHA or Z-Wave JS inside Home Assistant), by its name under /dev/serial/by-id/. Leave empty and use a Zigbee2MQTT or Z-Wave package instead unless you know you want this." }
+  - { name: bluetooth, default: proxy, validate: "enum:proxy|host-bluez|off", description: "How Home Assistant gets Bluetooth (BLE only; Bluetooth Classic devices such as speakers are not supported). proxy (recommended): ESPHome Bluetooth proxies on your network, which you flash and add in Home Assistant yourself; nothing from this machine. host-bluez: this machine's own adapter through its BlueZ, which must be installed and running; gives Home Assistant read-only access to the host's D-Bus and the NET_ADMIN and NET_RAW capabilities. off: no Bluetooth." }
 policies:
   classifications: [family_private]
   dataSensitivity: high
@@ -295,7 +337,17 @@ templates:
         {{- end }}
       mounts:
         - { source: home-assistant-config, target: /config }
+        {{- if eq .Params.bluetooth "host-bluez" }}
+        # host-bluez only: the host's D-Bus system bus, read-only, for
+        # BlueZ. Keystone checks the node's BlueZ readiness first.
+        - { source: /run/dbus, target: /run/dbus, readOnly: true }
+        {{- end }}
       devices: {{ with .Params.serial_device }}[{ source: "{{ . }}" }]{{ else }}[]{{ end }}
+      {{- if eq .Params.bluetooth "host-bluez" }}
+      # What Home Assistant's Bluetooth stack needs to manage the adapter;
+      # on the host network these act on the host's stack (see header).
+      capAdd: [NET_ADMIN, NET_RAW]
+      {{- end }}
       restart: unless-stopped
   - |
     apiVersion: wildstone.dev/v1

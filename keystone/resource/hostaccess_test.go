@@ -143,6 +143,9 @@ func TestRequiredProtocolMinor(t *testing.T) {
 		"hardening+device": {ContainerSpec{Image: "x", ReadOnlyRootfs: true, Devices: []DeviceMapping{{Source: "/dev/net/tun"}}}, HardeningProtocolMinor},
 		"hostNetwork":      {ContainerSpec{Image: "x", NetworkMode: NetworkModeHost}, HostNetworkProtocolMinor},
 		"host+hardening":   {ContainerSpec{Image: "x", NetworkMode: NetworkModeHost, ReadOnlyRootfs: true, CapAdd: []string{"NET_RAW"}}, HostNetworkProtocolMinor},
+		"host+dbus": {ContainerSpec{Image: "x", NetworkMode: NetworkModeHost, CapAdd: []string{"NET_ADMIN", "NET_RAW"},
+			Mounts: []Mount{{Source: "cfg", Target: "/config"}, {Source: "/run/dbus", Target: "/run/dbus", ReadOnly: true}}}, HostSystemMountProtocolMinor},
+		"volume only": {ContainerSpec{Image: "x", Mounts: []Mount{{Source: "cfg", Target: "/config"}}}, 0},
 	} {
 		if got := tc.spec.RequiredProtocolMinor(); got != tc.want {
 			t.Errorf("%s: RequiredProtocolMinor = %d, want %d", name, got, tc.want)
@@ -294,5 +297,67 @@ spec:
 	withHost, _ := json.Marshal(&ContainerSpec{Image: "x", NetworkMode: NetworkModeHost})
 	if !strings.Contains(string(withHost), `"networkMode":"host"`) {
 		t.Errorf("host networkMode missing from the hashed JSON: %s", withHost)
+	}
+}
+
+// hostSystemMountExamples is the SAME fixture wardstone/internal/agent's
+// TestHostSystemMountAllowlist runs (#445). Exact paths only: nothing is
+// cleaned into a match, and nothing under or beside /run/dbus counts.
+var hostSystemMountExamples = map[string]bool{
+	"/run/dbus":                     true,
+	"/run/dbus/":                    false,
+	"/run/dbus/system_bus_socket":   false,
+	"/var/run/dbus":                 false,
+	"/run/../run/dbus":              false,
+	"/run":                          false,
+	"/run/docker.sock":              false,
+	"/var/run/docker.sock":          false,
+	"/run/systemd":                  false,
+	"/etc":                          false,
+	"/":                             false,
+	"run/dbus":                      false,
+	"":                              false,
+	"/run/dbus-other":               false,
+	"/sys/class/bluetooth":          false,
+	"/dev/bus/usb":                  false,
+	"/run/dbus/../docker.sock":      false,
+	"/run/dbus/containers":          false,
+	"/run/user/1000/bus":            false,
+	"/var/lib/bluetooth":            false,
+	"/etc/dbus-1/system.d":          false,
+	"/run/dbus/system_bus_socket/x": false,
+}
+
+func TestHostSystemMountAllowlist(t *testing.T) {
+	for path, want := range hostSystemMountExamples {
+		if got := HostSystemMountAllowed(path); got != want {
+			t.Errorf("HostSystemMountAllowed(%q) = %v, want %v", path, got, want)
+		}
+	}
+	if len(HostSystemMounts) != 1 {
+		t.Errorf("HostSystemMounts = %v: a new entry is a new way into the host and needs the agent's twin, a fixture row and a review", HostSystemMounts)
+	}
+}
+
+// TestHostSystemMountIsReadOnlyAtItsOwnPath: /run/dbus lints only as a
+// read-only bind at /run/dbus; anything else is the lint error, not the
+// agent's FORBIDDEN after approval.
+func TestHostSystemMountIsReadOnlyAtItsOwnPath(t *testing.T) {
+	ok := containerWith(func(s *ContainerSpec) {
+		s.Mounts = []Mount{{Source: "cfg", Target: "/config"}, {Source: "/run/dbus", Target: "/run/dbus", ReadOnly: true}}
+	})
+	if err := ok.Validate(); err != nil {
+		t.Fatalf("read-only /run/dbus refused: %v", err)
+	}
+	for name, m := range map[string]Mount{
+		"writable":         {Source: "/run/dbus", Target: "/run/dbus"},
+		"elsewhere inside": {Source: "/run/dbus", Target: "/host/dbus", ReadOnly: true},
+	} {
+		spec := containerWith(func(s *ContainerSpec) { s.Mounts = []Mount{m} })
+		err := spec.Validate()
+		var ve *ValidationError
+		if !errors.As(err, &ve) || !strings.Contains(ve.Msg, "readOnly: true at the same path") {
+			t.Errorf("%s: got %v, want the read-only/same-path refusal", name, err)
+		}
 	}
 }

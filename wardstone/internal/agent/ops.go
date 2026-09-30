@@ -533,6 +533,14 @@ func (a *Agent) ensureContainer(ctx context.Context, op *wsv1.EnsureContainer) (
 			"image %q is not digest-pinned (repo@sha256:... required)", op.GetImage())
 	}
 	for _, m := range op.GetMounts() {
+		if hostSystemMountAllowed(m.GetSource()) {
+			// Outside the managed prefixes on purpose (#445), and held to
+			// its own rules instead: read-only, same path, no symlink.
+			if oerr := checkHostSystemMount(m); oerr != nil {
+				return nil, oerr
+			}
+			continue
+		}
 		if strings.Contains(m.GetSource(), "/") { // host path, not a named volume
 			if _, oerr := a.resolveManaged(m.GetSource()); oerr != nil {
 				return nil, oerr
