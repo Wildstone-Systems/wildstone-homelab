@@ -129,6 +129,9 @@ type testAgent struct {
 	// assert an RSA key was asked for rather than a random blob — the
 	// distinction the Secret kind exists to carry.
 	secrets map[string]wsv1.SecretKind
+	// listening is what ListPorts reports: the node's listening TCP
+	// sockets, which a test sets to put something on a port.
+	listening []*wsv1.ListeningPort
 }
 
 func newTestAgent(t *testing.T, h *harness, nodeID, token string) *testAgent {
@@ -368,6 +371,13 @@ func (a *testAgent) handleOp(opID string, op *wsv1.Operation) *wsv1.OpResult {
 	case *wsv1.Operation_InspectContainer:
 		a.countOp("InspectContainer")
 		return a.inspectContainer(opID, o.InspectContainer)
+	case *wsv1.Operation_ListPorts:
+		a.countOp("ListPorts")
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		return &wsv1.OpResult{OpId: opID, Result: &wsv1.OpResult_ListPorts{ListPorts: &wsv1.ListPortsResult{
+			Ports: append([]*wsv1.ListeningPort(nil), a.listening...),
+		}}}
 	case *wsv1.Operation_EnsureSecret:
 		return a.ensureSecret(opID, o.EnsureSecret)
 	case *wsv1.Operation_ListSecrets:
@@ -497,9 +507,14 @@ func (a *testAgent) inspectContainer(opID string, op *wsv1.InspectContainer) *ws
 	if errRes != nil {
 		return errRes
 	}
+	// NetworkMode as Docker records it (minor 22): "host", or the network.
+	networkMode := c.network
+	if c.networkMode == wsv1.ContainerNetworkMode_CONTAINER_NETWORK_MODE_HOST {
+		networkMode = "host"
+	}
 	return &wsv1.OpResult{OpId: opID, Result: &wsv1.OpResult_InspectContainer{InspectContainer: &wsv1.InspectContainerResult{
 		Running: c.running, Image: c.image, Labels: c.labels,
-		Status: c.dockerStatus(), ExitCode: c.exitCode,
+		Status: c.dockerStatus(), ExitCode: c.exitCode, NetworkMode: networkMode,
 	}}}
 }
 
@@ -714,6 +729,13 @@ func (a *testAgent) secretKind(name string) (wsv1.SecretKind, bool) {
 	defer a.mu.Unlock()
 	k, ok := a.secrets[name]
 	return k, ok
+}
+
+// setListening replaces what ListPorts reports.
+func (a *testAgent) setListening(ports ...*wsv1.ListeningPort) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.listening = ports
 }
 
 // containerNetworking reports what the named container was created with.

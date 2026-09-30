@@ -551,7 +551,7 @@ func TestHomeAssistantSeedsItsProxyTrust(t *testing.T) {
 		}
 	}
 	if !sawDockerRange {
-		t.Errorf("trusted_proxies should come from .Resolved.ProxyTrustCIDRs; got %v", parsed.Data.Stable.TrustedProxies)
+		t.Errorf("trusted_proxies should come from .Resolved.HostNetworkProxyTrustCIDRs; got %v", parsed.Data.Stable.TrustedProxies)
 	}
 
 	// With the migration marked done, a leftover http: block in YAML is

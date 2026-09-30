@@ -123,6 +123,13 @@ var Intrinsic = []Export{
 			"here is what stops each package guessing its own list.",
 	},
 	{
+		Key: "HostNetworkProxyTrustCIDRs",
+		Description: "ProxyTrustCIDRs for an app on HOST networking (networkMode: host), which " +
+			"the LAN reaches directly: Docker's default bridge pool and loopback only, " +
+			"[\"172.16.0.0/12\", \"127.0.0.1/32\"], without the 10/8 and 192.168/16 ranges a " +
+			"household LAN usually occupies — so a device on the LAN cannot forge X-Forwarded-For.",
+	},
+	{
 		Key: "TailnetHost",
 		Description: "The node's MagicDNS name under the tailnet ingress posture, and the " +
 			"empty string otherwise. Always defined, so a template may test it without " +

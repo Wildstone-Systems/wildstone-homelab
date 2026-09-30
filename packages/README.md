@@ -85,7 +85,7 @@ one mechanism, which is worth deciding before any of them individually.
 | `metrics-grafana` | metrics | Grafana dashboards | app OIDC |
 | `metrics-prometheus` | timeseries | Prometheus, the store Grafana reads | internal |
 | `home-automation` | home-automation | adapter for a Home Assistant that already exists | — |
-| `home-assistant` | home-assistant | Home Assistant, run here | own |
+| `home-assistant` | home-assistant | Home Assistant, run here on the host's network (LAN discovery; port 8123 on the LAN); `mqtt_enabled` switches on `mqtt:broker` | own |
 | `mqtt-mosquitto` | mqtt | Mosquitto broker, password-only, on one private LAN address; provides `mqtt:broker` | internal |
 | `zigbee-zigbee2mqtt` | zigbee | Zigbee2MQTT over a USB stick or a network coordinator; requires `mqtt:broker` on its node | proxy |
 | `zwave-zwave-js-ui` | zwave | Z-Wave JS UI on a USB stick (by `/dev/serial/by-id/`); WS server for Home Assistant on one private address, provides `zwave:server`; MQTT gateway off | proxy |
@@ -508,7 +508,13 @@ from a config file rather than env gets the reference in env and
 substitutes it itself where it can: `cameras-frigate` sets
 `FRIGATE_MQTT_PASSWORD: secret/mqtt-cameras` and writes
 `password: "{FRIGATE_MQTT_PASSWORD}"`, so its managed file never holds
-the password. The address is the one
+the password. A client that takes its broker only through its own UI
+cannot be configured at all: Home Assistant's MQTT integration is a
+config entry, and seeding one would put the password in plain text in
+its settings store, where nothing substitutes a reference. So
+`home-assistant` renders `WILDSTONE_MQTT_HOST`, `_PORT`, `_USERNAME` and
+`_PASSWORD` (the reference) into its env for the one-time integration
+form, and says so in its header. The address is the one
 private IPv4 the operator bound the broker to (`listen_addr`,
 `validate: private_ipv4` — never `0.0.0.0` or loopback), so it works from
 host networking and from the Wildstone bridge network alike. Anonymous
@@ -746,6 +752,28 @@ container its package runs on that node (its `homepageApps` row, icon and
 status), and its status dot dials `host.docker.internal:<port>` exactly
 as Caddy does. A package with two host-networked containers gets an
 unbranded card rather than a guess.
+
+**The port must be free, and is checked before anything is replaced.**
+A host-networked container's `host/<port>` Routes (same package, same
+node) are the only place its ports are stated, so before such a container
+is created — or replaces one that was on the bridge — Keystone reads the
+node's listening TCP sockets and refuses the step if one of those ports
+is taken, naming the port, the Route and the address it is held on. The
+existing container is left running. Replacing a container that is
+already host-networked skips the check (the listener is presumably
+itself). A port published through iptables alone, with Docker's
+userland proxy disabled, has no socket and is not seen.
+
+**What it trusts.** The proxy's requests arrive from the proxy's own
+address on the Wildstone bridge — Docker routes bridge-to-host traffic
+without masquerading — so an app that honours `X-Forwarded-For` trusts
+`.Resolved.HostNetworkProxyTrustCIDRs` (`172.16.0.0/12`, Docker's default
+bridge pool, and loopback) rather than `ProxyTrustCIDRs`, whose
+`10.0.0.0/8` and `192.168.0.0/16` are usually the household LAN — which
+on the host's network reaches the app directly and must not be believed
+about its own address. `home-assistant` is the worked example: its
+direct LAN listener (`http://<machine>:8123`) and its Wildstone URL are
+two doors to one app, and only the second is the proxy.
 
 ## Container-to-container addressing
 
