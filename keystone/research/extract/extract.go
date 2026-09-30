@@ -118,10 +118,11 @@ func hasControls(text string) bool {
 // a small hostile input. Keep one sentinel code point to disclose truncation.
 type limitedText struct {
 	strings.Builder
-	count     int
-	pending   strings.Builder
-	normalize bool
-	lastCR    bool
+	count             int
+	pending           strings.Builder
+	normalize         bool
+	lastCR            bool
+	generatedBoundary bool
 }
 
 func (b *limitedText) appendRune(r rune) {
@@ -130,6 +131,16 @@ func (b *limitedText) appendRune(r rune) {
 		b.count++
 	}
 }
+
+// A generated boundary only fills absent source whitespace. Source whitespace
+// replaces it, preserving Markdown spacing without inventing extra blank lines.
+func (b *limitedText) boundary() {
+	if b.pending.Len() == 0 {
+		b.write("\n")
+		b.generatedBoundary = b.pending.Len() != 0
+	}
+}
+
 func (b *limitedText) write(s string) {
 	for _, r := range s {
 		// Entity decoding can introduce CR/CRLF after response decoding.
@@ -146,6 +157,10 @@ func (b *limitedText) write(s string) {
 			return
 		}
 		if unicode.IsSpace(r) {
+			if b.generatedBoundary {
+				b.pending.Reset()
+				b.generatedBoundary = false
+			}
 			if b.count == 0 {
 				continue
 			}
@@ -161,6 +176,7 @@ func (b *limitedText) write(s string) {
 			}
 			continue
 		}
+		b.generatedBoundary = false
 		for _, space := range b.pending.String() {
 			b.appendRune(space)
 		}
@@ -299,7 +315,7 @@ func (f *markupFilter) feed(input string, preserve bool) error {
 					"footer", "form", "h1", "h2", "h3", "h4", "h5", "h6", "header", "hgroup", "hr",
 					"legend", "li", "main", "menu", "nav", "ol", "p", "pre", "search", "section", "summary",
 					"table", "tbody", "tfoot", "thead", "tr", "ul":
-					f.out.write("\n")
+					f.out.boundary()
 				}
 			}
 		}

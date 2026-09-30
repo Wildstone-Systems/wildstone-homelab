@@ -655,9 +655,9 @@ func TestSemicolonlessRCDATAReferences(t *testing.T) {
 
 func TestMarkdownContainerGapsRetainSourceOrdering(t *testing.T) {
 	for _, tc := range []struct{ body, want string }{
-		{"- <div>\n  Visible\n  </div>", "- \n\n  Visible"},
-		{"> <div>\n> First\n> Second\n> </div>", "> \n\n> First\n> Second\n>"},
-		{"- <div>\n  First\n  <em>Second</em>\n  Third\n  </div>", "- \n\n  First\n  Second\n  Third"},
+		{"- <div>\n  Visible\n  </div>", "- \n  Visible"},
+		{"> <div>\n> First\n> Second\n> </div>", "> \n> First\n> Second\n>"},
+		{"- <div>\n  First\n  <em>Second</em>\n  Third\n  </div>", "- \n  First\n  Second\n  Third"},
 	} {
 		d, err := Extract(input("text/markdown", tc.body))
 		if err != nil || d.Text != tc.want {
@@ -720,7 +720,7 @@ func TestMarkdownTableGapsStayWithTheirRows(t *testing.T) {
 		}
 	}
 	d, err := Extract(input("text/markdown", "> <table>\n> <tr><td>A</td></tr>\n> </table>"))
-	if err != nil || d.Text != "> \n\n> \n\nA\n\n>" {
+	if err != nil || d.Text != "> \n> A\n>" {
 		t.Fatalf("trailing quote prefix moved before cell: %q %v", d.Text, err)
 	}
 }
@@ -776,5 +776,25 @@ func TestBlockElementsSeparateTextWithoutSplittingInlineWords(t *testing.T) {
 		if err != nil || !strings.Contains(d.Text, "\n") {
 			t.Fatalf("%q block boundary: %q %v", body, d.Text, err)
 		}
+	}
+}
+
+func TestGeneratedBlockBoundariesCoalesce(t *testing.T) {
+	for _, media := range []string{"text/html", "text/markdown"} {
+		for _, body := range []string{"A<br>B", "<div>A</div><div>B</div>", "<div><section>A</section></div><div><section>B</section></div>", "<div>A</div>\n<div>B</div>"} {
+			d, err := Extract(input(media, body))
+			if err != nil || d.Text != "A\nB" {
+				t.Fatalf("%s %q: %q %v", media, body, d.Text, err)
+			}
+			body = strings.Replace(body, "A", strings.Repeat("x", MaxCharacters-2), 1)
+			d, err = Extract(input(media, body))
+			if err != nil || d.Source.Truncated || utf8.RuneCountInString(d.Text) != MaxCharacters || !strings.HasSuffix(d.Text, "\nB") {
+				t.Fatalf("%s boundary cap: %d %+v %v", media, utf8.RuneCountInString(d.Text), d.Source, err)
+			}
+		}
+	}
+	d, err := Extract(input("text/markdown", "<div>A</div>\n\n<div>B</div>"))
+	if err != nil || d.Text != "A\n\nB" {
+		t.Fatalf("source blank line lost: %q %v", d.Text, err)
 	}
 }
