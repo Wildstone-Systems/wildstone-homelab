@@ -23,9 +23,9 @@ func (s Settings) OpenRoot() (*os.Root, error) {
 	if !canonicalDirectory(s.Root) {
 		return nil, ErrRoot
 	}
-	root, err := os.OpenRoot(s.Root)
+	root, err := openRootNoSymlinks(s.Root)
 	if err != nil {
-		return nil, ErrRoot
+		return nil, err
 	}
 	return root, nil
 }
@@ -83,7 +83,7 @@ func (s Settings) openMountedRootWith(mountInfo func() (io.ReadCloser, error), f
 	if !canonicalDirectory(s.RequiredMount) {
 		return nil, ErrMount
 	}
-	base, err := os.OpenRoot(s.RequiredMount)
+	base, err := openRootNoSymlinks(s.RequiredMount)
 	if err != nil {
 		return nil, ErrMount
 	}
@@ -108,7 +108,7 @@ func (s Settings) openMountedRootWith(mountInfo func() (io.ReadCloser, error), f
 	if err != nil {
 		return nil, ErrRoot
 	}
-	root, err := base.OpenRoot(rel)
+	root, err := openRootDescendant(base, rel)
 	if err != nil {
 		return nil, ErrRoot
 	}
