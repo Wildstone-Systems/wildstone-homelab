@@ -170,10 +170,11 @@ func (b *limitedText) write(s string) {
 }
 
 type markupFilter struct {
-	out           *limitedText
-	base          *url.URL
-	literalPrefix string
-	literals      []string
+	out             *limitedText
+	base            *url.URL
+	literalPrefix   string
+	literals        []string
+	commentLiterals []bool
 }
 
 // Parse a bounded input into the HTML tree rather than approximating HTML's
@@ -239,6 +240,14 @@ func (f *markupFilter) feed(input string, preserve bool) error {
 			case "script", "style", "iframe", "object", "svg", "math", "template", "noscript", "title":
 				item.suppressed = true
 			}
+		}
+		// Generated comments retain their position inside tables; ordinary
+		// source comments remain discarded. The prefix is collision-checked.
+		if preserve && !item.exit && n.Type == html.CommentNode && strings.HasPrefix(n.Data, f.literalPrefix) {
+			if err := f.writeLiteralText(n.Data, false, !item.suppressed); err != nil {
+				return err
+			}
+			continue
 		}
 		if preserve && n.Type == html.TextNode && !item.exit {
 			rcdata := n.Parent != nil && n.Parent.Namespace == "" && (n.Parent.Data == "textarea" || n.Parent.Data == "title")
@@ -314,26 +323,34 @@ func (f *markupFilter) writeLiteralText(text string, rcdata, retain bool) error 
 		if at < 0 {
 			return write(text, false)
 		}
-		if err := write(text[:at], false); err != nil {
-			return err
-		}
+		before := text[:at]
 		rest := text[at+len(f.literalPrefix):]
 		end := strings.IndexByte(rest, '_')
 		if end < 0 {
-			return write(text[at:], false)
+			return write(text, false)
 		}
 		index, err := strconv.Atoi(rest[:end])
 		if err != nil || index < 0 || index >= len(f.literals) {
-			if err := write(f.literalPrefix, false); err != nil {
+			if err := write(before+f.literalPrefix, false); err != nil {
 				return err
 			}
 			text = rest
 			continue
 		}
+		after := rest[end+1:]
+		// In raw-text/RCDATA, generated comment wrappers remain text rather
+		// than comment nodes. Remove only wrappers around known gap markers.
+		if f.commentLiterals[index] && strings.HasSuffix(before, "<!--") && strings.HasPrefix(after, "-->") {
+			before = strings.TrimSuffix(before, "<!--")
+			after = strings.TrimPrefix(after, "-->")
+		}
+		if err := write(before, false); err != nil {
+			return err
+		}
 		if err := write(f.literals[index], true); err != nil {
 			return err
 		}
-		text = rest[end+1:]
+		text = after
 	}
 	return nil
 }
@@ -409,9 +426,10 @@ func prepareMarkdown(parts []markdownPart, filter *markupFilter) (preparedHTML, 
 		}
 		index := len(filter.literals)
 		filter.literals = append(filter.literals, part.text)
+		filter.commentLiterals = append(filter.commentLiterals, part.gap)
 		marker := filter.literalPrefix + strconv.Itoa(index) + "_"
 		if part.gap {
-			gaps = append(gaps, gap{markup.Len(), marker})
+			gaps = append(gaps, gap{markup.Len(), "<!--" + marker + "-->"})
 		} else {
 			markup.WriteString(marker)
 		}

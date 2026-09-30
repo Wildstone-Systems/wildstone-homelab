@@ -34,7 +34,9 @@ literals receive RCDATA entity decoding and control validation; ordinary
 Markdown and raw-text literals do not decode. Numeric references use the HTML
 tokenizer, including forms without semicolons. Container indentation/quote
 prefixes keep their source order; prefixes inside split tags are retained at
-the tag boundary. Authentication/control validation first parses the logical
+the tag boundary. Gap markers use generated comments to retain their positions
+through table parsing, with explicit restoration in raw-text/RCDATA.
+Authentication/control validation first parses the logical
 HTML without formatting gaps, so reinserting prefixes cannot conceal active
 controls in foreign integration points. Tree construction handles
 implicit closures and foreign-content exits while preserving HTML

@@ -707,3 +707,20 @@ func TestMarkdownFormattingGapsCannotChangeActiveControls(t *testing.T) {
 		t.Fatalf("inert RCDATA inside integration point: %v", err)
 	}
 }
+
+func TestMarkdownTableGapsStayWithTheirRows(t *testing.T) {
+	for _, body := range []string{
+		"> <table>\n> <tr><td>A</td></tr>\n> <tr><td>B</td></tr>\n> </table>",
+		"> <table>\n> <tbody>\n> <tr><td>A</td></tr>\n> <tr><td>B</td></tr>\n> </tbody>\n> </table>",
+	} {
+		d, err := Extract(input("text/markdown", body))
+		a, b := strings.Index(d.Text, "A"), strings.Index(d.Text, "B")
+		if err != nil || a < 0 || b <= a || !strings.Contains(d.Text[a+1:b], ">") || !strings.Contains(d.Text[b+1:], ">") || strings.Contains(d.Text, "WS_MD_LITERAL_") {
+			t.Fatalf("table gaps moved: %q %v", d.Text, err)
+		}
+	}
+	d, err := Extract(input("text/markdown", "> <table>\n> <tr><td>A</td></tr>\n> </table>"))
+	if err != nil || d.Text != "> \n> \nA\n\n>" {
+		t.Fatalf("trailing quote prefix moved before cell: %q %v", d.Text, err)
+	}
+}
