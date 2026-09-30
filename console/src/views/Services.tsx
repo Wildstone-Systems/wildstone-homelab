@@ -33,7 +33,7 @@ import { ServiceAccessPanel } from "./ServiceAccess";
 // list is the point — meeting a missing secret as a failed reconcile
 // tick, after approving a plan that could not have worked, is the shape
 // of F37.
-export function Services() {
+export function Services({ openPackage }: { openPackage?: string } = {}) {
   const list = useLoad(() => api.packages(), []);
   // Removing a capability proposes deleting everything it owns, and
   // only the statefile knows what that is.
@@ -57,6 +57,7 @@ export function Services() {
       // remove" and the reason went nowhere.
       resourcesError={resources.error}
       resourcesLoading={resources.loading}
+      openPackage={openPackage}
       onInstalled={() => {
         list.reload();
         resources.reload();
@@ -82,6 +83,10 @@ export function ServicesView({
   initialTab = "installed",
   initialGroup = "All",
   initialHideBlocked = false,
+  // A package another screen sent the person to (the Home Automation
+  // flow's connector): its install form, or its detail if it is
+  // already installed, opens once the list has it.
+  openPackage,
   onInstalled,
 }: {
   pkgs: PackageView[];
@@ -91,6 +96,7 @@ export function ServicesView({
   initialTab?: "installed" | "catalog";
   initialGroup?: Group | "All";
   initialHideBlocked?: boolean;
+  openPackage?: string;
   onInstalled: () => void;
 }) {
   const [tab, setTab] = useState<"installed" | "catalog">(initialTab);
@@ -100,6 +106,19 @@ export function ServicesView({
   const [chosen, setChosen] = useState<PackageView | null>(null);
   const [detail, setDetail] = useState<PackageView | null>(null);
   const [removing, setRemoving] = useState<PackageView | null>(null);
+  const [opened, setOpened] = useState(false);
+  useEffect(() => {
+    if (!openPackage || opened) return;
+    const p = pkgs.find((x) => x.name === openPackage && x.enabled) ?? pkgs.find((x) => x.name === openPackage);
+    if (!p) return;
+    setOpened(true);
+    if (p.enabled) {
+      setDetail(p);
+    } else {
+      setTab("catalog");
+      setChosen(p);
+    }
+  }, [openPackage, opened, pkgs]);
 
   // Split on `enabled`, never on name: files-filebrowser is both an
   // installed capability and a catalog entry, and splitting by name
