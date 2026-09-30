@@ -438,6 +438,11 @@ func TestChatEmptyAnswerIsActionable(t *testing.T) {
 			t.Errorf("held=%v: wrong explanation: %q", held, got)
 		}
 	}
+	// With a proposal already queued, retry advice would duplicate it.
+	got := chatReplyBody(askResponse{PlanIDs: []string{"plan-1"}}, false)
+	if strings.Contains(got, "/new") || strings.Contains(got, "asking again") || !strings.Contains(got, "plan-1") {
+		t.Errorf("plan-aware empty answer must not advise a retry: %q", got)
+	}
 	if got := chatReplyBody(askResponse{FinalText: " hi "}, true); got != "hi" {
 		t.Errorf("a real answer must pass through, got %q", got)
 	}

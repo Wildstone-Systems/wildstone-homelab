@@ -686,7 +686,13 @@ func (s *Server) chatOutcomeHeld(ask askResponse) bool {
 func chatReplyBody(ask askResponse, held bool) string {
 	body := strings.TrimSpace(ask.FinalText)
 	if body == "" {
-		body = chatEmptyAnswer(held)
+		if len(ask.PlanIDs) > 0 {
+			// A proposal is already queued: advising a retry would
+			// invite a duplicate, so point at the plan instead.
+			body = "I didn't get a written answer to that, but a change is already waiting for you."
+		} else {
+			body = chatEmptyAnswer(held)
+		}
 	}
 	if len(ask.PlanIDs) > 0 {
 		body += fmt.Sprintf("\n\nProposed for your approval: %s. Nothing has changed yet — approve it in the Console or with `wild plan approve`.",
