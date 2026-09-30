@@ -503,6 +503,8 @@ func (bs *Butlers) Sole(surface runtimedb.ButlerSurface, member string, asOwner 
 // a function value is the whole of what this package needs to enforce
 // it.
 type ConnectionScope struct {
+	// Conversation is the trusted adapter conversation ID, not its account address.
+	Conversation string
 	// Name is what a refusal cites, e.g. "household_portal".
 	Name string
 	// Ref is the Connection ROW this arrived over, for the legs that

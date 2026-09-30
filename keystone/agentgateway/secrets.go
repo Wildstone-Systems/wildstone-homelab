@@ -49,7 +49,7 @@ func memoryDestinationForTask(task runtimedb.ButlerTask) runtimedb.MemoryDestina
 		Member:     task.Owner,
 		Group:      task.Audience == runtimedb.ButlerAudienceShared,
 		AsOwner:    task.AsOwner,
-		Connection: butlerlive.ConnectionScope{Name: task.OriginConnection, Ref: task.OriginConnectionRef},
+		Connection: butlerlive.ConnectionScope{Name: task.OriginConnection, Ref: task.OriginConnectionRef, Conversation: task.OriginConversation},
 	}
 	return turn.MemoryDestination()
 }

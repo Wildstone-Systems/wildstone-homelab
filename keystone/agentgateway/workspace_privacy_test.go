@@ -172,7 +172,7 @@ func TestWorkspaceMemoryDeliveryUsesRecordedDestination(t *testing.T) {
 			case "revoked connection":
 				must(f.db.RevokeButlerAddressFor(agentName, "telegram", "synthetic-workspace-chat", personName))
 			case "group":
-				must(f.db.NoteChatRoom(connection, "synthetic-workspace-chat"))
+				must(f.db.NoteChatRoom(connection, "synthetic-conversation"))
 			case "cloud":
 				must(f.db.SetMemoryPrivacy(personName, memory, runtimedb.PrivacyPolicy{LocalOnly: true}))
 				setProcessingClass(t, f, agentName, agentapi.ProcessingCloud)

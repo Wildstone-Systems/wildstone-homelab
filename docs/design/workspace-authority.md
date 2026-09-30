@@ -110,6 +110,11 @@ checks it before dispatch or ledger reuse. Workspace/export calls must re-enter
 their resource/receipt seam instead of returning generic cached tool output.
 Queued external task deliveries also recheck the task owner's live Person
 binding independently of memory provenance, including workspace-only sources.
+The task pins the trusted ingress conversation ID separately from the Connection
+account address. Delivery checks that exact Connection/Person/conversation tuple,
+including a matching live binding and room discovery, in the source-authority
+transaction. Unknown legacy conversation identities fail closed; mutable thread
+pointers and an account address cannot supply a replacement identity.
 No content bounds, tool grants or runtime protocol fields are expanded.
 
 ## Migration sequence

@@ -24,6 +24,10 @@ func (db *DB) HasLivePersonChatBinding(connection int64, person string) (bool, e
 }
 
 func hasLivePersonChatBinding(q privacyReader, connection int64, person string) (bool, error) {
+	return hasLivePersonChatConversation(q, connection, person, "")
+}
+
+func hasLivePersonChatConversation(q privacyReader, connection int64, person, conversation string) (bool, error) {
 	var role, surface, admits, subject string
 	var at Connection
 	// Every input to Admits belongs to this one statement's snapshot. Separate
@@ -36,8 +40,8 @@ func hasLivePersonChatBinding(q privacyReader, connection int64, person string) 
  LEFT JOIN connection_admission ca ON ca.connection=a.seq
  WHERE cb.connection=? AND p.member=? AND cb.revoked_at=''
  AND p.admitted=1 AND p.disabled_at='' AND p.offboarded_at=''
- AND a.revoked_at=''
- LIMIT 1`, connection, person).Scan(&role, &surface, &at.AgentClass, &admits, &subject)
+ AND a.revoked_at='' AND (?='' OR cb.conversation=?)
+ LIMIT 1`, connection, person, conversation, conversation).Scan(&role, &surface, &at.AgentClass, &admits, &subject)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}

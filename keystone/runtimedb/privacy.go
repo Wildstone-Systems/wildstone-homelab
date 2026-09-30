@@ -313,8 +313,8 @@ func (db *DB) checkHistoryPrivacy(object string, task, session int64, model stri
 	}
 	defer tx.Rollback()
 	if delivery && d.ConnectionRef != 0 {
-		var owner string
-		if err = tx.QueryRow(`SELECT p.member FROM butler_tasks t JOIN butler_members p ON p.person_id=t.owner_person_id WHERE t.seq=?`, task).Scan(&owner); err != nil {
+		var owner, conversation string
+		if err = tx.QueryRow(`SELECT p.member,t.origin_conversation FROM butler_tasks t JOIN butler_members p ON p.person_id=t.owner_person_id WHERE t.seq=? AND t.origin_connection_ref=?`, task, d.ConnectionRef).Scan(&owner, &conversation); err != nil || conversation == "" {
 			return ErrPrivacy
 		}
 		// Re-read room discovery inside this transaction. An earlier gateway
@@ -322,11 +322,11 @@ func (db *DB) checkHistoryPrivacy(object string, task, session int64, model stri
 		// must not determine whether a known shared destination is refused.
 		var room bool
 		if err = tx.QueryRow(`SELECT EXISTS (
- SELECT 1 FROM chat_rooms r JOIN butler_addresses a ON a.seq=r.connection
- WHERE a.seq=? AND r.conversation=a.external_id)`, d.ConnectionRef).Scan(&room); err != nil || room || d.Group {
+ SELECT 1 FROM chat_rooms r
+ WHERE r.connection=? AND r.conversation=?)`, d.ConnectionRef, conversation).Scan(&room); err != nil || room || d.Group {
 			return ErrPrivacy
 		}
-		admitted, err := hasLivePersonChatBinding(tx, d.ConnectionRef, owner)
+		admitted, err := hasLivePersonChatConversation(tx, d.ConnectionRef, owner, conversation)
 		if err != nil || !admitted {
 			return ErrPrivacy
 		}

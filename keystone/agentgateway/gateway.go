@@ -254,9 +254,10 @@ func turnFor(hc butlerstore.HandleContext) butlerlive.Turn {
 		SessionID: hc.Task.SessionID,
 		Group:     hc.Audience == runtimedb.ButlerAudienceShared,
 		Connection: butlerlive.ConnectionScope{
-			Name:    hc.OriginConnection,
-			Ref:     hc.OriginConnectionRef,
-			Permits: permitsFor(hc.OriginConnection),
+			Name:         hc.OriginConnection,
+			Ref:          hc.OriginConnectionRef,
+			Conversation: hc.Task.OriginConversation,
+			Permits:      permitsFor(hc.OriginConnection),
 		},
 		// AsOwner and SystemExtra are recorded on the task at open
 		// (migration 0083, ADR-W039 Phase 2b, #337) precisely because

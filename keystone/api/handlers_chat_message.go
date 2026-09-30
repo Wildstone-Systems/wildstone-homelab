@@ -486,7 +486,7 @@ func (s *Server) chatInbound(r *http.Request, id principal.Identity, msg inbound
 			// authority seam has one to carry (§10.1). No Permits: a
 			// chat Connection's ceiling is its Agent's surface, which
 			// RequireSurface below already enforces.
-			Connection: butlerlive.ConnectionScope{Name: at.Name(), Ref: at.Seq},
+			Connection: butlerlive.ConnectionScope{Name: at.Name(), Ref: at.Seq, Conversation: conversation},
 			Butler:     named,
 			Member:     binding.Identity,
 			Text:       text,

@@ -124,3 +124,8 @@ BEGIN SELECT RAISE(ABORT,'sealed workspace inputs require retention coordination
 CREATE TRIGGER workspace_session_source_committed BEFORE INSERT ON workspace_session_sources
 WHEN NOT EXISTS(SELECT 1 FROM workspace_publications WHERE revision_id=NEW.revision AND state='committed')
 BEGIN SELECT RAISE(ABORT,'workspace source must be committed'); END;
+
+-- The chat conversation is not the Connection's account address. Pin the
+-- trusted ingress identity before a runtime delivery can be queued. Older
+-- external tasks have unknown conversations and delivery fails closed.
+ALTER TABLE butler_tasks ADD COLUMN origin_conversation TEXT NOT NULL DEFAULT '';

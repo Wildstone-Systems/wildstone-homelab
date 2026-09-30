@@ -577,6 +577,9 @@ func (bs *Butlers) task(b runtimedb.Butler, t Turn) (runtimedb.ButlerTask, bool,
 						"butlerlive: %s belongs to work that arrived over %s and this request did not (design §10.1)",
 						existing.ID, existing.OriginConnection)
 				}
+				if existing.OriginConnectionRef != 0 && existing.OriginConversation != t.Connection.Conversation {
+					return runtimedb.ButlerTask{}, false, fmt.Errorf("butlerlive: task conversation does not match this request")
+				}
 				return existing, true, nil
 			}
 		case errorsIsNotFound(err):
@@ -612,6 +615,7 @@ func (bs *Butlers) task(b runtimedb.Butler, t Turn) (runtimedb.ButlerTask, bool,
 		// transport, B10, so the two genuinely differ).
 		OriginConnection:    t.Connection.Name,
 		OriginConnectionRef: t.Connection.Ref,
+		OriginConversation:  t.Connection.Conversation,
 		Objective:           conversationObjective(b.Name, t.Text),
 		// Recorded so a Handle-resolved call (the Agent Gateway) can
 		// rebuild this turn's AsOwner/SystemExtra later — neither is a

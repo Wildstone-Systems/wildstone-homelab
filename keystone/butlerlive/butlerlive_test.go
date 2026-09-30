@@ -976,3 +976,34 @@ func TestOrdinaryAnsweredQuestionCompletesOnTheServingPath(t *testing.T) {
 		t.Fatalf("ordinary answer blocked: %s %s", task.State, answer.FinalText)
 	}
 }
+
+func TestWorkspaceTaskPinsDistinctConversation(t *testing.T) {
+	f := newFixture(t)
+	b, err := f.db.GetButler("alfred")
+	if err != nil {
+		t.Fatal(err)
+	}
+	at, err := f.db.ChatConnectionAt("telegram", "chat-telegram-alfred")
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := f.db.InsertButlerSession(runtimedb.ButlerSession{Principal: "butler", ActingFor: "mika", Butler: "alfred", Surface: runtimedb.ButlerSurfaceAdmin, Mode: runtimedb.ButlerModeFull})
+	if err != nil {
+		t.Fatal(err)
+	}
+	turn := f.turn("alfred", "synthetic question")
+	turn.SessionID = session
+	turn.Connection = ConnectionScope{Name: at.Name(), Ref: at.Seq, Conversation: "synthetic-distinct-room"}
+	task, resumed, err := f.butlers.task(b, turn)
+	if err != nil || resumed {
+		t.Fatalf("open: %v %v", resumed, err)
+	}
+	stored, err := f.db.GetButlerTask(task.ID)
+	if err != nil || stored.OriginConversation != turn.Connection.Conversation || stored.OriginConnectionRef != at.Seq {
+		t.Fatalf("stored origin: %+v %v", stored, err)
+	}
+	turn.Connection.Conversation = "different-room"
+	if _, _, err := f.butlers.task(b, turn); err == nil {
+		t.Fatal("resumed a task from another conversation")
+	}
+}

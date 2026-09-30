@@ -1,7 +1,10 @@
 package api
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"github.com/chickenrat17/wildstone-homelab/keystone/butlerlive"
 	"net/http"
 	"regexp"
 	"strings"
@@ -376,5 +379,37 @@ func TestAGroupRoomOpensNoSessionForAnybody(t *testing.T) {
 		if q.Target != "room-1" || !strings.Contains(q.Body, "one-to-one") {
 			t.Fatalf("reply = %+v, want a redirect into the room", q)
 		}
+	}
+}
+
+type conversationCapturingButlers struct {
+	failingButlers
+	turn butlerlive.Turn
+}
+
+func (c *conversationCapturingButlers) Serve(_ context.Context, turn butlerlive.Turn) (butlerlive.Answer, error) {
+	c.turn = turn
+	return butlerlive.Answer{}, errors.New("stop after trusted ingress")
+}
+func TestChatTaskPinsConversationApartFromAccount(t *testing.T) {
+	h := newHarness(t)
+	at := h.agentAt(t, "family", "telegram")
+	h.person("sam")
+	h.bindAccount(t, "family", "sam", "telegram", "12345")
+	capture := &conversationCapturingButlers{}
+	h.s.Butlers = capture
+	const conversation = "synthetic-distinct-room"
+	resp, _ := h.send(runtimedb.RoleConcierge, map[string]any{
+		"transport": "telegram", "account": "12345", "conversation": conversation, "text": "hello", "messageId": "conversation-test",
+	})
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("status=%d", resp.StatusCode)
+	}
+	turn := capture.turn
+	if turn.Connection.Conversation != conversation || turn.Connection.Ref != at.Seq || turn.Connection.Name != at.Name() || turn.Member != "sam" {
+		t.Fatalf("incorrect trusted ingress tuple: %+v", turn)
+	}
+	if turn.Connection.Conversation == at.ExternalID {
+		t.Fatal("conversation substituted account address")
 	}
 }
