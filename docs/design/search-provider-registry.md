@@ -46,7 +46,9 @@ are refused. Future worker support requires a reviewed allowlist extension.
 
 Endpoint references use `service/<name>`, credential references `secret/<name>`;
 names use 1–63 lowercase letters, digits, dots, underscores or hyphens, starting
-with a letter/digit. URLs, userinfo, paths, query parameters and secret literals
+with a letter/digit. Service references that the public response redactor would
+change (for example, token-shaped names) are refused before a Plan is stored,
+so Owner review and full replacement edits preserve the exact reference. URLs, userinfo, paths, query parameters and secret literals
 are not endpoint configuration. A syntactically valid service reference is not
 proof of a deployed service. It cannot become ready without a tester resolving
 and validating it. Missing endpoint references produce `unconfigured`.

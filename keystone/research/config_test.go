@@ -1,6 +1,7 @@
 package research
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -16,7 +17,9 @@ func TestProviderConfigDefaultsAndRefusals(t *testing.T) {
 		func(c *Config) { c.Kind = SearXNG }, func(c *Config) { c.Kind = Tavily }, func(c *Config) { c.Backends = []string{"auto"} },
 		func(c *Config) { c.Backends = []string{} }, func(c *Config) { c.Backends = []string{"duckduckgo", "google"} },
 		func(c *Config) { c.FallbackOrder = []string{"duckduckgo"} }, func(c *Config) { c.EndpointRef = "https://example.com" },
-		func(c *Config) { c.EndpointRef = "service/../ddgs" }, func(c *Config) { c.CredentialRef = "REPLACED-credential" },
+		func(c *Config) { c.EndpointRef = "service/../ddgs" },
+		func(c *Config) { c.EndpointRef = "service/abcdefghijklmnopqrstuvwxyz1234" },
+		func(c *Config) { c.EndpointRef = "service/" + strings.Repeat("a1", 16) }, func(c *Config) { c.CredentialRef = "REPLACED-credential" },
 		func(c *Config) { c.Limits.RequestTimeoutSeconds = 31 },
 		func(c *Config) { c.Limits.CacheSeconds = 0 },
 		func(c *Config) { c.Limits = &Limits{} }, func(c *Config) { c.Limits.SearchesPerTask = -1 },

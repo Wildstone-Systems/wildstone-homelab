@@ -11,6 +11,8 @@ import (
 	"regexp"
 	"strings"
 	"unicode"
+
+	"github.com/chickenrat17/wildstone-homelab/keystone/redact"
 )
 
 var ErrConflict = errors.New("research configuration changed; reload and propose again")
@@ -115,7 +117,9 @@ func (c Config) Normalize() (Config, error) {
 	if strings.TrimSpace(c.Name) != c.Name || len(c.Name) == 0 || len(c.Name) > 128 || strings.IndexFunc(c.Name, unicode.IsControl) >= 0 {
 		return fail()
 	}
-	if c.EndpointRef != "" && !validRef(c.EndpointRef, "service/") {
+	// Owner review and complete-replacement edits must see the exact reference.
+	// Do not exempt service names from the public-plane secret-value redactor.
+	if c.EndpointRef != "" && (!validRef(c.EndpointRef, "service/") || redact.String(c.EndpointRef) != c.EndpointRef) {
 		return fail()
 	}
 	if c.CredentialRef != "" && !validRef(c.CredentialRef, "secret/") {

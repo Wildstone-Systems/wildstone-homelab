@@ -79,7 +79,7 @@ func TestResearchOwnerPlanLifecycle(t *testing.T) {
 		}
 	}
 	view := call("GET", "/api/v1/plans/"+planID, nil)
-	if view["research"] == nil {
+	if change, ok := view["research"].(map[string]any); !ok || change["config"].(map[string]any)["endpointRef"] != "service/ddgs" {
 		t.Fatal("Plan review omitted configuration")
 	}
 	call("POST", "/api/v1/plans/"+planID+"/approve", map[string]any{})
@@ -162,6 +162,8 @@ func TestResearchOwnerAdmissionAndStrictInput(t *testing.T) {
 	for _, body := range []any{
 		map[string]any{"config": map[string]any{"name": "Public", "kind": "tavily"}},
 		map[string]any{"config": map[string]any{"name": "Public", "kind": "ddgs", "endpointRef": "https://example.com"}},
+		map[string]any{"config": map[string]any{"name": "Public", "kind": "ddgs", "endpointRef": "service/abcdefghijklmnopqrstuvwxyz1234"}},
+		map[string]any{"config": map[string]any{"name": "Public", "kind": "ddgs", "endpointRef": "service/" + strings.Repeat("a1", 16)}},
 		map[string]any{"config": map[string]any{"name": "Public", "kind": "ddgs", "apiKey": "REPLACED-secret"}},
 		map[string]any{"config": map[string]any{"name": "Public", "kind": "ddgs", "state": "ready"}},
 	} {
