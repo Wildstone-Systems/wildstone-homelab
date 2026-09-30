@@ -246,7 +246,7 @@ func deliveryPrivacyCheck(db *runtimedb.DB, row runtimedb.AgentDelivery, model s
 		// Workspace reads can precede the first session. A resolved task
 		// must carry its own provenance through delivery, and a failed
 		// policy lookup must not turn a known task into unrestricted data.
-		if err := db.CheckTaskPrivacy(task.ID, model, destination); err != nil {
+		if err := db.CheckTaskDeliveryPrivacy(task.ID, model, destination); err != nil {
 			return runtimedb.ErrPrivacy
 		}
 		return nil

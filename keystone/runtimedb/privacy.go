@@ -282,14 +282,7 @@ func (db *DB) CheckSessionPrivacy(id, model string, d MemoryDestination) error {
 	if err != nil {
 		return err
 	}
-	p, err := db.contentPrivacy(fmt.Sprintf("s:%d", s.Seq))
-	if err != nil {
-		return err
-	}
-	if err = p.Check(model, d); err != nil {
-		return err
-	}
-	return db.checkWorkspaceHistoryAuthority(fmt.Sprintf("s:%d", s.Seq), 0, s.Seq, d)
+	return db.checkHistoryPrivacy(fmt.Sprintf("s:%d", s.Seq), 0, s.Seq, model, d, false)
 }
 
 // CheckTaskPrivacy also covers first-turn workspace inputs before a session
@@ -299,14 +292,48 @@ func (db *DB) CheckTaskPrivacy(id, model string, d MemoryDestination) error {
 	if err != nil {
 		return err
 	}
-	p, err := db.contentPrivacy(fmt.Sprintf("t:%d", t.Seq))
+	return db.checkHistoryPrivacy(fmt.Sprintf("t:%d", t.Seq), t.Seq, 0, model, d, false)
+}
+
+// CheckTaskDeliveryPrivacy repeats the live binding gate within the same
+// transaction as source authority and privacy. A separate earlier admission
+// check cannot authorize a later, incompatible source-policy snapshot.
+func (db *DB) CheckTaskDeliveryPrivacy(id, model string, d MemoryDestination) error {
+	t, err := db.GetButlerTask(id)
+	if err != nil {
+		return err
+	}
+	return db.checkHistoryPrivacy(fmt.Sprintf("t:%d", t.Seq), t.Seq, 0, model, d, true)
+}
+
+func (db *DB) checkHistoryPrivacy(object string, task, session int64, model string, d MemoryDestination, delivery bool) error {
+	tx, err := db.sql.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if delivery && d.ConnectionRef != 0 {
+		var owner string
+		if err = tx.QueryRow(`SELECT p.member FROM butler_tasks t JOIN butler_members p ON p.person_id=t.owner_person_id WHERE t.seq=?`, task).Scan(&owner); err != nil {
+			return ErrPrivacy
+		}
+		admitted, err := hasLivePersonChatBinding(tx, d.ConnectionRef, owner)
+		if err != nil || !admitted {
+			return ErrPrivacy
+		}
+	}
+
+	p, err := contentPrivacy(tx, object)
 	if err != nil {
 		return err
 	}
 	if err = p.Check(model, d); err != nil {
 		return err
 	}
-	return db.checkWorkspaceHistoryAuthority(fmt.Sprintf("t:%d", t.Seq), t.Seq, 0, d)
+	if err = db.checkWorkspaceHistoryAuthorityIn(tx, object, task, session, d); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // includeTaskSources runs under mu. A newly remembered fact is still in this

@@ -20,11 +20,15 @@ import (
 // the existing human-established binding. Source provenance does not substitute
 // for this check when queued private work returns to its originating chat.
 func (db *DB) HasLivePersonChatBinding(connection int64, person string) (bool, error) {
+	return hasLivePersonChatBinding(db.sql, connection, person)
+}
+
+func hasLivePersonChatBinding(q privacyReader, connection int64, person string) (bool, error) {
 	var role, surface, admits, subject string
 	var at Connection
 	// Every input to Admits belongs to this one statement's snapshot. Separate
 	// role and Connection reads can admit a combination that never existed.
-	err := db.sql.QueryRow(`SELECT p.role,b.surface,b.agent_class,
+	err := q.QueryRow(`SELECT p.role,b.surface,b.agent_class,
  COALESCE(ca.admits,''),COALESCE(ca.subject_kind,'')
  FROM chat_bindings cb JOIN butler_members p ON p.person_id=cb.person_id
  JOIN butler_addresses a ON a.seq=cb.connection
