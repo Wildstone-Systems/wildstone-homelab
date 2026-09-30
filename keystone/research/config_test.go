@@ -24,6 +24,8 @@ func TestProviderConfigDefaultsAndRefusals(t *testing.T) {
 		func(c *Config) { c.Limits.CacheSeconds = 0 },
 		func(c *Config) { c.Limits = &Limits{} }, func(c *Config) { c.Limits.SearchesPerTask = -1 },
 		func(c *Config) { c.Limits.DownloadBytes = 6 * 1024 * 1024 }, func(c *Config) { c.Name = "bad\nname" },
+		func(c *Config) { c.Name = "abcdefghijklmnopqrstuvwxyz1234" },
+		func(c *Config) { c.Name = "password=REPLACED-value" },
 	} {
 		bad := c
 		limits := *c.Limits

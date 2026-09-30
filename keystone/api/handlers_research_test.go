@@ -79,7 +79,7 @@ func TestResearchOwnerPlanLifecycle(t *testing.T) {
 		}
 	}
 	view := call("GET", "/api/v1/plans/"+planID, nil)
-	if change, ok := view["research"].(map[string]any); !ok || change["config"].(map[string]any)["endpointRef"] != "service/ddgs" {
+	if change, ok := view["research"].(map[string]any); !ok || (change["config"].(map[string]any)["endpointRef"] != "service/ddgs" || change["config"].(map[string]any)["name"] != "Public research") {
 		t.Fatal("Plan review omitted configuration")
 	}
 	call("POST", "/api/v1/plans/"+planID+"/approve", map[string]any{})
@@ -126,11 +126,27 @@ func TestResearchOwnerPlanLifecycle(t *testing.T) {
 		t.Fatalf("stale default: %d", code)
 	}
 	call("PUT", "/api/v1/research/default-provider", map[string]any{"providerId": nil, "expectedConfigRevision": selection["configRevision"]})
-	update := map[string]any{"config": req["config"], "expectedConfigRevision": p.ConfigRevision}
+	providerView := call("GET", path, nil)
+	if providerView["name"] != "Public research" {
+		t.Fatalf("provider name changed in response: %v", providerView)
+	}
+	roundTrip := map[string]any{}
+	for _, key := range []string{"name", "kind", "endpointRef", "credentialRef", "backends", "fallbackOrder", "limits"} {
+		if value, ok := providerView[key]; ok {
+			roundTrip[key] = value
+		}
+	}
+	update := map[string]any{"config": roundTrip, "expectedConfigRevision": p.ConfigRevision}
+	roundTrip["name"] = "abcdefghijklmnopqrstuvwxyz1234"
+	code, _ = researchRequest(t, h, "PATCH", path, update, "mika", time.Now(), "same-origin")
+	if code != 400 {
+		t.Fatalf("unreviewable replacement name admitted: %d", code)
+	}
+	roundTrip["name"] = providerView["name"]
 	pending := call("PATCH", path, update)
 	call("POST", "/api/v1/plans/"+pending["planId"].(string)+"/approve", map[string]any{})
 	p, err = h.s.DB.SearchProvider(provider)
-	if err != nil || p.State != "untested" || p.TestedConfigRevision != "" {
+	if err != nil || p.State != "untested" || p.TestedConfigRevision != "" || p.Name != "Public research" {
 		t.Fatalf("update: %+v %v", p, err)
 	}
 	code, _ = researchRequest(t, h, "POST", path+"/test", testReq, "mika", time.Now(), "same-origin")
@@ -161,6 +177,8 @@ func TestResearchOwnerAdmissionAndStrictInput(t *testing.T) {
 	}
 	for _, body := range []any{
 		map[string]any{"config": map[string]any{"name": "Public", "kind": "tavily"}},
+		map[string]any{"config": map[string]any{"name": "abcdefghijklmnopqrstuvwxyz1234", "kind": "ddgs"}},
+		map[string]any{"config": map[string]any{"name": "password=REPLACED-value", "kind": "ddgs"}},
 		map[string]any{"config": map[string]any{"name": "Public", "kind": "ddgs", "endpointRef": "https://example.com"}},
 		map[string]any{"config": map[string]any{"name": "Public", "kind": "ddgs", "endpointRef": "service/abcdefghijklmnopqrstuvwxyz1234"}},
 		map[string]any{"config": map[string]any{"name": "Public", "kind": "ddgs", "endpointRef": "service/" + strings.Repeat("a1", 16)}},

@@ -114,7 +114,7 @@ func (c Config) Normalize() (Config, error) {
 	if c.Kind != DDGS {
 		return Config{}, errors.New("unsupported search provider kind")
 	}
-	if strings.TrimSpace(c.Name) != c.Name || len(c.Name) == 0 || len(c.Name) > 128 || strings.IndexFunc(c.Name, unicode.IsControl) >= 0 {
+	if strings.TrimSpace(c.Name) != c.Name || len(c.Name) == 0 || len(c.Name) > 128 || strings.IndexFunc(c.Name, unicode.IsControl) >= 0 || redact.String(c.Name) != c.Name {
 		return fail()
 	}
 	// Owner review and complete-replacement edits must see the exact reference.
