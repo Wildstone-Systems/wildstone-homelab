@@ -10,10 +10,13 @@ package api
 // the same terms: parameterless reads of fixed host locations.
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strconv"
+	"time"
 
+	"github.com/chickenrat17/wildstone-homelab/keystone/plan"
 	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
 	wsv1 "github.com/chickenrat17/wildstone-homelab/proto/gen/wardstone/v1"
 )
@@ -140,6 +143,51 @@ func (s *Server) probeRadios(r *http.Request, _ principal.Identity) (any, int, e
 	return map[string]any{
 		"node": node, "platformSupported": lr.GetPlatformSupported(), "radios": out,
 	}, http.StatusOK, nil
+}
+
+// radioInventoryTimeout bounds the inventory read a proposal waits on. The
+// op reads a handful of sysfs files; a node that has not answered by
+// then is treated as offline, not waited for.
+const radioInventoryTimeout = 5 * time.Second
+
+// radioInventory is the proposal pipeline's view of a node's radios
+// (#435), through the same Agents.Apply seam the probe endpoint uses.
+// nil means "could not ask": no agent plane, a node not connected, an
+// agent older than plan.RadioInventoryProtocolMinor, or any error — and
+// the duplicate-ownership check then compares exact paths only. A
+// platformSupported=false answer is an empty, non-nil inventory: the
+// node was asked and has nothing to fold.
+func (s *Server) radioInventory(node string) []plan.Radio {
+	if s.Agents == nil || node == "" {
+		return nil
+	}
+	if s.LiveNodes != nil {
+		live := false
+		for _, n := range s.LiveNodes() {
+			if n.NodeID == node {
+				live = n.ProtocolMinor >= plan.RadioInventoryProtocolMinor
+				break
+			}
+		}
+		if !live {
+			return nil
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), radioInventoryTimeout)
+	defer cancel()
+	res, err := s.Agents.Apply(ctx, node, &wsv1.Operation{Op: &wsv1.Operation_ListRadios{ListRadios: &wsv1.ListRadios{}}})
+	if err != nil || res.GetError() != nil || res.GetListRadios() == nil {
+		return nil
+	}
+	out := []plan.Radio{}
+	for _, r := range res.GetListRadios().GetRadios() {
+		paths := append([]string{}, r.GetByIdPaths()...)
+		if r.GetDevPath() != "" {
+			paths = append(paths, r.GetDevPath())
+		}
+		out = append(out, plan.Radio{ID: r.GetId(), Paths: paths})
+	}
+	return out
 }
 
 // readinessStateNames is the closed state vocabulary of the
