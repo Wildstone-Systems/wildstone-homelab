@@ -8,8 +8,8 @@ package agent
 // materializeEnv already makes for container env, extended to the files
 // an app reads instead of its environment.
 //
-// Two forms, because one secret genuinely has two representations in a
-// working deployment: Authelia stores an OIDC client secret as a pbkdf2
+// Three forms (plain, pbkdf2:, mosquitto:), because one secret genuinely
+// has more than one representation in a working deployment: Authelia stores an OIDC client secret as a pbkdf2
 // digest and verifies the client's presented value against it, while the
 // app itself must send that same value in the clear. The store holds one
 // plaintext secret and this derives the other form; the alternative —
@@ -42,11 +42,11 @@ const pbkdf2Iterations = 310000
 const pbkdf2SaltBytes = 16
 
 // fileSecretRefRegexp finds a secret reference inside file content. It is
-// deliberately anchored on the optional pbkdf2: prefix so that the two
-// forms cannot be confused, and bounded by the same character class the
+// deliberately anchored on the optional pbkdf2:/mosquitto: prefix so that
+// the forms cannot be confused, and bounded by the same character class the
 // secret store itself accepts (secretNameRegexp) so a reference that
 // cannot name a real secret is not treated as one.
-var fileSecretRefRegexp = regexp.MustCompile(`(pbkdf2:)?secret/([A-Za-z0-9][A-Za-z0-9._-]{0,63})`)
+var fileSecretRefRegexp = regexp.MustCompile(`(pbkdf2:|mosquitto:)?secret/([A-Za-z0-9][A-Za-z0-9._-]{0,63})`)
 
 // materializeFileContent substitutes every secret reference in content.
 //
@@ -77,7 +77,7 @@ func (a *Agent) materializeFileContent(path string, content []byte) ([]byte, *ws
 		}
 
 		sub := fileSecretRefRegexp.FindSubmatch(m)
-		hashed, name := len(sub[1]) > 0, string(sub[2])
+		form, name := string(sub[1]), string(sub[2])
 		value, err := a.openSecret(name)
 		if err != nil {
 			if os.IsNotExist(err) {
@@ -88,8 +88,12 @@ func (a *Agent) materializeFileContent(path string, content []byte) ([]byte, *ws
 			}
 			return m
 		}
-		if hashed {
-			digest, derr := pbkdf2Sha512Digest(value)
+		if form != "" {
+			derive := pbkdf2Sha512Digest
+			if form == "mosquitto:" {
+				derive = mosquittoPasswordHash
+			}
+			digest, derr := derive(value)
 			if derr != nil {
 				oerr = opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "%s: hashing secret/%s: %v", path, name, derr)
 				return m
@@ -190,6 +194,36 @@ func pbkdf2Sha512Digest(value string) (string, error) {
 	key := pbkdf2.Key([]byte(value), salt, pbkdf2Iterations, sha512.Size, sha512.New)
 	return fmt.Sprintf("$pbkdf2-sha512$%d$%s$%s", pbkdf2Iterations,
 		crypt64.EncodeToString(salt), crypt64.EncodeToString(key)), nil
+}
+
+// mosquittoIterations and mosquittoSaltBytes are what mosquitto_passwd
+// itself writes for the current `$7$` scheme (PBKDF2-HMAC-SHA512, 64-byte
+// key). The broker reads the iteration count from the entry, so this is
+// a cost choice, not a compatibility one; it matches the tool's default.
+const (
+	mosquittoIterations = 101
+	mosquittoSaltBytes  = 12
+)
+
+// mosquittoPasswordHash renders a value as the password field of a
+// Mosquitto password-file entry:
+//
+//	$7$101$<base64 salt>$<base64 hash>
+//
+// Both halves are standard base64 WITH padding, unlike the crypt64 form
+// above, and the key is derived from the raw (decoded) salt. The
+// template supplies "<user>:"; only the hash is derived here, so the
+// plaintext never leaves the node. A fresh salt per call is fine for the
+// same reason as pbkdf2Sha512Digest: drift detection compares the
+// pre-materialization source hash, never these bytes.
+func mosquittoPasswordHash(value string) (string, error) {
+	salt := make([]byte, mosquittoSaltBytes)
+	if _, err := rand.Read(salt); err != nil {
+		return "", err
+	}
+	key := pbkdf2.Key([]byte(value), salt, mosquittoIterations, sha512.Size, sha512.New)
+	return fmt.Sprintf("$7$%d$%s$%s", mosquittoIterations,
+		base64.StdEncoding.EncodeToString(salt), base64.StdEncoding.EncodeToString(key)), nil
 }
 
 // containsSecretRef reports whether content carries anything this would

@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"crypto/sha512"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/pem"
 	"os"
@@ -428,5 +429,122 @@ func TestManagedFileModeSurvivesTheUmask(t *testing.T) {
 	}
 	if got := si.Mode().Perm(); got != 0o600 {
 		t.Errorf("a materialized file landed %04o, want 0600 — it holds live secrets", got)
+	}
+}
+
+// verifyMosquittoHash re-derives a `$7$` entry the way the broker does,
+// from the encoded string alone and independently of the producer:
+// standard padded base64, key derived from the DECODED salt.
+func verifyMosquittoHash(t *testing.T, encoded, value string) bool {
+	t.Helper()
+	parts := strings.Split(encoded, "$")
+	// "", "7", iterations, salt, hash
+	if len(parts) != 5 || parts[1] != "7" {
+		t.Fatalf("not a Mosquitto $7$ entry: %q", encoded)
+	}
+	iter, err := strconv.Atoi(parts[2])
+	if err != nil {
+		t.Fatalf("iterations %q: %v", parts[2], err)
+	}
+	salt, err := base64.StdEncoding.DecodeString(parts[3])
+	if err != nil {
+		t.Fatalf("salt is not padded standard base64: %v", err)
+	}
+	want, err := base64.StdEncoding.DecodeString(parts[4])
+	if err != nil || len(want) != sha512.Size {
+		t.Fatalf("hash is not a padded 64-byte base64 value: %v", err)
+	}
+	got := pbkdf2.Key([]byte(value), salt, iter, sha512.Size, sha512.New)
+	return hmac.Equal(got, want)
+}
+
+func TestMosquittoHashVerifiesAndSaltsRandomly(t *testing.T) {
+	h1, err := mosquittoPasswordHash("broker-pass")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !verifyMosquittoHash(t, h1, "broker-pass") {
+		t.Error("hash does not verify against the value it was derived from")
+	}
+	if verifyMosquittoHash(t, h1, "wrong") {
+		t.Error("hash verifies against the wrong value")
+	}
+	h2, _ := mosquittoPasswordHash("broker-pass")
+	if h1 == h2 {
+		t.Error("two hashes of one value are identical: salt is not random")
+	}
+}
+
+// The user name comes from the template; only the hash is derived, the
+// plaintext never lands in the file, and rotating the node secret
+// rematerializes a hash of the NEW value with an unchanged source hash.
+func TestMaterializedMosquittoPasswordFile(t *testing.T) {
+	a := materializeAgent(t)
+	putSecret(t, a, "mqtt-z2m", "first-pass")
+	path := filepath.Join(a.cfg.ManagedPrefixes[0], "mosquitto", "passwd")
+	src := "z2m:mosquitto:secret/mqtt-z2m\n"
+
+	entry := func() string {
+		line := strings.TrimSpace(readManagedForTest(t, a, path))
+		user, hash, ok := strings.Cut(line, ":")
+		if !ok || user != "z2m" {
+			t.Fatalf("unexpected password file line: %q", line)
+		}
+		return hash
+	}
+	sourceHash := func() string {
+		res, oerr := a.readManagedFile(&wsv1.ReadManagedFile{Path: path})
+		if oerr != nil {
+			t.Fatal(oerr)
+		}
+		if len(res.ReadManagedFile.GetContent()) != 0 {
+			t.Fatal("read returned content for a materialized file")
+		}
+		return res.ReadManagedFile.GetSourceSha256Hex()
+	}
+
+	if _, oerr := a.writeManagedFile(writeFileOp(path, src, true)); oerr != nil {
+		t.Fatal(oerr)
+	}
+	if strings.Contains(readManagedForTest(t, a, path), "first-pass") {
+		t.Fatal("plaintext landed in the password file")
+	}
+	if !verifyMosquittoHash(t, entry(), "first-pass") {
+		t.Error("entry does not authenticate the secret")
+	}
+	before := sourceHash()
+
+	putSecret(t, a, "mqtt-z2m", "second-pass")
+	if _, oerr := a.writeManagedFile(writeFileOp(path, src, true)); oerr != nil {
+		t.Fatal(oerr)
+	}
+	if !verifyMosquittoHash(t, entry(), "second-pass") {
+		t.Error("rotated secret was not rematerialized")
+	}
+	if sourceHash() != before {
+		t.Error("source hash changed across rotation: reconciliation would rewrite forever")
+	}
+}
+
+// A dangling reference fails before the working file is replaced, and the
+// error names the reference, never a value.
+func TestMosquittoDanglingReferenceKeepsWorkingFile(t *testing.T) {
+	a := materializeAgent(t)
+	putSecret(t, a, "mqtt-z2m", "good-pass")
+	path := filepath.Join(a.cfg.ManagedPrefixes[0], "mosquitto", "passwd")
+	if _, oerr := a.writeManagedFile(writeFileOp(path, "z2m:mosquitto:secret/mqtt-z2m\n", true)); oerr != nil {
+		t.Fatal(oerr)
+	}
+	good := readManagedForTest(t, a, path)
+
+	_, oerr := a.writeManagedFile(writeFileOp(path, "z2m:mosquitto:secret/mqtt-z2m\nfrigate:mosquitto:secret/missing\n", true))
+	if oerr == nil {
+		t.Fatal("dangling reference was accepted")
+	}
+	if strings.Contains(oerr.GetMessage(), "good-pass") || !strings.Contains(oerr.GetMessage(), "secret/missing") {
+		t.Errorf("error should name the reference only: %q", oerr.GetMessage())
+	}
+	if readManagedForTest(t, a, path) != good {
+		t.Error("working file was replaced by a failed write")
 	}
 }

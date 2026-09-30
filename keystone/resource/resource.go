@@ -655,7 +655,7 @@ type ConfigFileSpec struct {
 	// Filename is one path segment: "configuration.yml", "immich.json".
 	Filename string `yaml:"filename"`
 	// Content is the rendered file. Secret REFERENCES (secret/<name>,
-	// pbkdf2:secret/<name>) are resolved on the node at write time; a
+	// pbkdf2:secret/<name>, mosquitto:secret/<name>) are resolved on the node at write time; a
 	// literal secret value here is refused by the policy engine, the same
 	// as anywhere else (ADR-W005 A2).
 	Content string `yaml:"content"`
@@ -1807,7 +1807,7 @@ func validateSeedFile(r *Resource) error {
 // secretRefInSeed mirrors the agent's reference syntax, used here only to
 // REFUSE one. Kept separate from the reconciler's copy so this package
 // keeps no dependency on it.
-var secretRefInSeed = regexp.MustCompile(`(pbkdf2:)?secret/[A-Za-z0-9][A-Za-z0-9._-]{0,63}`)
+var secretRefInSeed = regexp.MustCompile(`(pbkdf2:|mosquitto:)?secret/[A-Za-z0-9][A-Za-z0-9._-]{0,63}`)
 
 func validateBackupPlan(r *Resource) error {
 	bad := func(field, msg string) error {
