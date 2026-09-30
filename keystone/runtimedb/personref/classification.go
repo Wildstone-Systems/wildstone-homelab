@@ -748,6 +748,24 @@ var Columns = []Column{
 		"0097: opaque effect receipt identity supplied by CommitWorkspacePublication"},
 	{"workspace_receipts", "publication_id", NotAPerson,
 		"0097: FK to a committed publication intent"},
+	// 0098 (ADR-W047 / #490): provider configuration and Agent selectors do
+	// not own Person data. Owner actors remain in existing Plan/audit records.
+	{"search_providers", "id", NotAPerson,
+		"0098: proposeResearchProvider supplies a server-issued research.NewID provider identity"},
+	{"search_providers", "config_json", NotAPerson,
+		"0098: ApproveResearchPlan stores research.Config: display name, kind, service/secret references, backend policy and numeric limits; no Person selector"},
+	{"search_providers", "config_revision", NotAPerson,
+		"0098: ApproveResearchPlan generates an opaque research.NewID configuration generation"},
+	{"search_providers", "test_revision", NotAPerson,
+		"0098: BeginSearchProviderTest generates a single-use probe generation, not caller identity"},
+	{"search_providers", "tested_config_revision", NotAPerson,
+		"0098: RecordSearchProviderTest copies the exact tested configuration generation"},
+	{"research_selections", "scope", NotAPerson,
+		"0098: researchScope encodes household or agent/<stable butlers.seq>; no Person namespace"},
+	{"research_selections", "provider_id", NotAPerson,
+		"0098: SetResearchSelection stores a search_providers.id selector or null inheritance; it grants no authority"},
+	{"research_selections", "config_revision", NotAPerson,
+		"0098: SetResearchSelection generates an opaque research.NewID selection generation"},
 	// 0099 (ADR-W047 / #475): provenance retains immutable revision
 	// identities. Person ownership remains on agent_workspaces.person_id.
 	{"workspace_task_sources", "revision", NotAPerson,
