@@ -2,6 +2,7 @@ import { ReactNode, useState } from "react";
 import {
   ArrowSquareOut,
   CheckCircle,
+  EnvelopeSimple,
   Plugs,
   SealCheck,
   Sparkle,
@@ -19,7 +20,7 @@ import { ServiceTile } from "../ui/ServiceTile";
 import { Drawer } from "../ui/Drawer";
 import { Sparkline } from "../ui/Sparkline";
 
-export type Destination = "plans" | "butler" | "nodes" | "backups" | "activity";
+export type Destination = "plans" | "butler" | "nodes" | "backups" | "activity" | "mail";
 
 // Home (ADR-W027): three bands. What is true right now, what needs a
 // decision, and what the household runs.
@@ -116,6 +117,18 @@ export function HomeView({
 
         {groups.length === 0 && (
           <div className="muted">Statefile is empty — enable a capability from Services.</div>
+        )}
+
+        {/* Your own mailbox monitor, when email is installed (epic
+            #326): the way in from the screen you land on. */}
+        {pkgs.some((p) => p.capability === "mail" && p.enabled) && (
+          <div className="allwell">
+            <EnvelopeSimple size={17} />
+            Let an Agent watch your mailbox for events, with your approval.{" "}
+            <button className="btn btn-ghost" onClick={() => onNavigate("mail")}>
+              Watch this mailbox
+            </button>
+          </div>
         )}
       </div>
 

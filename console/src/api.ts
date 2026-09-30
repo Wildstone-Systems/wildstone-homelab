@@ -2444,3 +2444,288 @@ export interface InviteKey {
   expiresAt: string;
   note: string;
 }
+
+// ---------------------------------------------------------------- watch this mailbox
+
+// "Watch this mailbox" (epic #326 S07). The Console's half of a Person's
+// mailbox monitor: the setup read model a screen resumes from, the
+// protected credential intake, the Person's authorization, the
+// subscription an Owner approves, its health and controls, and the
+// private event candidates it produces. Every path is the Console's
+// (/api/v1/integrations/...); the Homepage serves the same handlers
+// under /api/v1/home/..., so one API, two doors.
+//
+// Nothing here carries a stored credential value back: the intake is
+// write-only, and the read model has no field that could hold one.
+
+export const MAIL_MATCH_KIND = "mail.changes";
+
+export interface MailScope {
+  folders: string[];
+  senders?: string[];
+  subjects?: string[];
+}
+
+// What a Person authorizes, and (with cadence and the conflict
+// calendars) what the subscription an Owner approves names.
+export interface MailWatchChoice {
+  agent: number;
+  targetCalendar: string;
+  scope: MailScope;
+  processingLocation: "local" | "cloud";
+  cadence?: string;
+  conflictCalendars?: string[];
+}
+
+export interface CredentialCopy {
+  node: string;
+  provisionState: string;
+  eraseState?: string;
+  erasedAt?: string;
+  eraseDetail?: string;
+}
+
+// One version of a Personal credential. The login is shown to its owner;
+// the password never leaves the node it was sent to.
+export interface PersonalCredential {
+  seq: number;
+  connection: string;
+  member: string;
+  need: string;
+  version: number;
+  login?: string;
+  secretRef: string;
+  state: string;
+  createdAt: string;
+  revokedAt?: string;
+  copies: CredentialCopy[] | null;
+}
+
+export interface BackgroundAuthorization {
+  seq: number;
+  connection: string;
+  person: string;
+  credentialVersion: number;
+  scope: MailScope;
+  processingLocation: string;
+  agent: number;
+  targetCalendar: string;
+  executable: string;
+  subscription: number;
+  digest: string;
+  createdAt: string;
+  revokedAt?: string;
+}
+
+export interface SubscriptionSchedule {
+  nextDueAt?: string;
+  hold?: "" | "paused" | "auth_failed" | "config_failed";
+  holdReason?: string;
+  heldAt?: string;
+  heldBy?: string;
+  consecutiveFailures: number;
+  lastRunAt?: string;
+  lastSuccessAt?: string;
+  lastFailureAt?: string;
+  lastOutcome?: string;
+  lastError?: string;
+  blockedAt?: string;
+  blockedReason?: string;
+}
+
+export interface SubscriptionCheckpoint {
+  version: number;
+  cursor?: unknown;
+  committedAt?: string;
+  committedByRun?: number;
+}
+
+export interface SubscriptionRun {
+  id: number;
+  state: string;
+  outcome?: string;
+  error?: string;
+  startedAt: string;
+  finishedAt?: string;
+}
+
+// GET /api/v1/agent-subscriptions[/{id}]: a Person sees only their own;
+// an Owner sees every one.
+export interface AgentSubscription {
+  id: number;
+  agent: string;
+  trigger: string;
+  matchKind: string;
+  match: string;
+  audience?: string;
+  capabilities: string[] | null;
+  cadence?: string;
+  source?: string;
+  person?: string;
+  version: number;
+  approvedVersion: number;
+  awaitingApproval: boolean;
+  enabled: boolean;
+  schedule?: SubscriptionSchedule;
+  checkpoint?: SubscriptionCheckpoint;
+  runs?: SubscriptionRun[] | null;
+}
+
+export interface MailPendingPlan {
+  id: string;
+  kind: "subscription" | "render";
+  summary: string;
+  // A pending subscription's match: the choices it was filed with.
+  match?: Record<string, unknown>;
+}
+
+export interface MailMonitor {
+  connection: IntegrationConnection & { executable?: string };
+  nodes: string[];
+  credential?: PersonalCredential;
+  authorization?: BackgroundAuthorization;
+  subscriptions: AgentSubscription[];
+  pendingPlans: MailPendingPlan[];
+  unverifiedErasures?: CredentialCopy[];
+}
+
+export interface MailSetup {
+  member: string;
+  owner: boolean;
+  provider?: { package: string; version: string; settings: Record<string, string> };
+  monitors: MailMonitor[];
+  agents: { seq: number; name: string }[];
+  calendars: { id: string; name: string; writable: boolean }[];
+  cadence: { default: string; min: string; max: string };
+  calendarsError?: string;
+}
+
+// An event candidate, as the Person-scoped review API serves it (S06).
+// Coded against the expected contract; conflicts are only the ones the
+// Person may see.
+export interface MailCandidateConflict {
+  calendar: string;
+  title?: string;
+  start?: string;
+  end?: string;
+}
+
+export interface MailCandidateFields {
+  title: string;
+  start?: string;
+  end?: string;
+  durationMinutes?: number;
+  allDay: boolean;
+  tz?: string;
+  location?: string;
+  notes?: string;
+  confidence: number;
+  missing: string[] | null;
+  ambiguous: string[] | null;
+}
+
+export interface MailCandidate {
+  id: string;
+  revision: number;
+  connection: string;
+  targetCalendar: string;
+  state: string;
+  stateReason?: string;
+  fields: MailCandidateFields;
+  conflicts?: MailCandidateConflict[] | null;
+  createdAt: string;
+  expiresAt?: string;
+}
+
+export type MailCandidateAction = "add" | "edit" | "dismiss";
+
+// The edits a Person may make to a candidate before adding it.
+export type MailCandidateEdit = Pick<
+  MailCandidateFields,
+  "title" | "start" | "end" | "allDay" | "location" | "notes"
+>;
+
+const integrationPath = (name: string, rest: string) =>
+  `/api/v1/integrations/${encodeURIComponent(name)}/${rest}`;
+
+export const MAIL_CANDIDATES_PATH = "/api/v1/mail/candidates";
+
+export const mailApi = {
+  setup: () => call<MailSetup>("GET", "/api/v1/mail/setup"),
+
+  // An Owner prepares a Personal connection: it exists, has a node to
+  // run on, and its adapter is rendered (executable and node tokens).
+  // None of that reads any mail.
+  createConnection: (name: string) =>
+    call<{ seq: number }>("POST", "/api/v1/integrations", {
+      name,
+      adapter: "wild-mail-adapter",
+      ownership: "personal",
+    }),
+  addPlacement: (name: string, node: string, role: "primary" | "fallback", rank: number) =>
+    call<{ declared: string }>("POST", integrationPath(name, "placement"), { node, role, rank }),
+  renderAdapter: (name: string, rotateTokens = false) =>
+    call<{ eligible: boolean; reason?: string; executable?: string }>(
+      "POST",
+      integrationPath(name, "adapter/render"),
+      { dryRun: false, rotateTokens },
+    ),
+
+  // The protected intake. The password is in this one request body and
+  // nowhere else; the caller clears its field once this resolves.
+  submitCredential: (name: string, login: string, password: string) =>
+    call<{ note: string }>("POST", integrationPath(name, "credential"), { login, password }),
+  revokeCredential: (name: string) =>
+    call<{ revoked: number; note: string; state: string; degradedReason?: string }>(
+      "POST",
+      integrationPath(name, "credential/revoke"),
+      {},
+    ),
+  // An Owner's retry of an unproven erasure.
+  eraseCredential: (name: string) =>
+    call<{ state: string; degradedReason?: string }>("POST", integrationPath(name, "credential/erase"), {}),
+
+  fileSubscription: (name: string, choice: MailWatchChoice) =>
+    call<{ plan: PlanRecord; subscription?: number; note: string }>(
+      "POST",
+      integrationPath(name, "subscription"),
+      choice,
+    ),
+  // The Person's own authorization, naming the subscription an Owner
+  // approved. cadence and the conflict calendars are the subscription's,
+  // not the authorization's, so they are not sent.
+  authorize: (name: string, choice: MailWatchChoice, subscription: number) =>
+    call<{ authorization: BackgroundAuthorization; note: string }>(
+      "POST",
+      integrationPath(name, "authorization"),
+      {
+        agent: choice.agent,
+        targetCalendar: choice.targetCalendar,
+        scope: choice.scope,
+        processingLocation: choice.processingLocation,
+        subscription,
+      },
+    ),
+  revokeAuthorization: (name: string) =>
+    call<{ revoked: boolean; note: string }>("POST", integrationPath(name, "authorization/revoke"), {}),
+
+  subscriptions: () =>
+    call<{ subscriptions: AgentSubscription[] | null }>("GET", "/api/v1/agent-subscriptions"),
+  controlSubscription: (
+    id: number,
+    action: "pause" | "resume" | "disable" | "enable" | "cadence",
+    extra: { reason?: string; cadence?: string } = {},
+  ) => call<AgentSubscription>("POST", `/api/v1/agent-subscriptions/${id}/control`, { action, ...extra }),
+
+  // S06's Person-scoped review. Kept to these three calls so the
+  // contract is adjusted in one place.
+  candidates: () => call<{ candidates: MailCandidate[] | null }>("GET", MAIL_CANDIDATES_PATH),
+  candidate: (id: string) =>
+    call<MailCandidate>("GET", `${MAIL_CANDIDATES_PATH}/${encodeURIComponent(id)}`),
+  actOnCandidate: (id: string, revision: number, action: MailCandidateAction, fields?: MailCandidateEdit) =>
+    call<MailCandidate>("POST", `${MAIL_CANDIDATES_PATH}/${encodeURIComponent(id)}/act`, {
+      revision,
+      action,
+      ...(fields ? { fields } : {}),
+    }),
+};
