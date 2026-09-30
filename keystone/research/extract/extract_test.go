@@ -363,3 +363,23 @@ func TestRawTextTagsDoNotNestAcrossMarkdownSpans(t *testing.T) {
 		}
 	}
 }
+
+func TestMarkdownRetainsContinuousTextareaAndRawTextState(t *testing.T) {
+	for _, tag := range []string{"textarea", "xmp", "noembed", "noframes"} {
+		body := "before <" + tag + "><input type=password></" + tag + "> after"
+		for _, media := range []string{"text/html", "text/markdown"} {
+			d, err := Extract(input(media, body))
+			if err != nil || strings.Join(strings.Fields(d.Text), " ") != "before <input type=password> after" {
+				t.Fatalf("%s %s lost inert data: %q %v", media, tag, d.Text, err)
+			}
+		}
+	}
+	d, err := Extract(input("text/markdown", "before <textarea>&lt;input type=password&gt;</textarea> after"))
+	if err != nil || !strings.Contains(d.Text, "after") {
+		t.Fatalf("RCDATA references: %q %v", d.Text, err)
+	}
+	// Once the textarea ends, real controls must still be rejected.
+	if _, err = Extract(input("text/markdown", "<textarea>example</textarea><input type=password>")); err != publicfetch.ErrBlocked {
+		t.Fatal("real challenge after textarea", err)
+	}
+}

@@ -5,6 +5,7 @@ package extract
 
 import (
 	"bytes"
+	stdhtml "html"
 	"io"
 	"net/url"
 	"strings"
@@ -185,9 +186,8 @@ func (f *markupFilter) feed(input string, preserve bool) error {
 			}
 		}
 		if f.suppressed != "" {
-			// Markdown may present raw-text tags as separate spans. A fresh
-			// tokenizer sees their inner opening tags, but HTML treats those
-			// as text, not nesting. Only normal/foreign containers nest.
+			// Only normal/foreign containers nest. Raw-text/RCDATA opening
+			// tags in their contents are text, not nested elements.
 			switch f.suppressed {
 			case "object", "template", "svg", "math":
 				if (kind == html.StartTagToken || (kind == html.SelfClosingTagToken && t.Data != "svg" && t.Data != "math")) && t.Data == f.suppressed {
@@ -253,8 +253,9 @@ func (f *markupFilter) feed(input string, preserve bool) error {
 }
 
 // Markdown parsing identifies actual raw HTML spans. Autolinks, escaped angle
-// brackets and code examples remain literal Markdown data. The HTML filter's
-// suppression state spans inline tags so inline script bodies are discarded.
+// brackets and code examples remain literal Markdown data. Escaping those
+// literal spans lets one continuous tokenizer retain HTML raw-text/RCDATA
+// state across all inline nodes, including non-suppressed textarea contents.
 func extractMarkup(input string, base *url.URL, markdown bool) (string, bool, error) {
 	out := limitedText{normalize: !markdown}
 	filter := markupFilter{out: &out, base: base}
@@ -274,6 +275,7 @@ func extractMarkup(input string, base *url.URL, markdown bool) (string, bool, er
 	source := []byte(input)
 	root := goldmark.DefaultParser().Parse(mdtext.NewReader(source))
 	position := 0
+	var markup strings.Builder
 	err := ast.Walk(root, func(node ast.Node, entering bool) (ast.WalkStatus, error) {
 		if !entering {
 			return ast.WalkContinue, nil
@@ -299,32 +301,29 @@ func extractMarkup(input string, base *url.URL, markdown bool) (string, bool, er
 		if start < position {
 			return ast.WalkContinue, nil
 		}
-		if filter.suppressed == "" {
-			out.write(input[position:start])
-		}
+		markup.WriteString(stdhtml.EscapeString(input[position:start]))
 		// Container prefixes (quotes/list indentation) are not HTML. Segment
 		// values reconstruct the logical tag, including parser padding, while
 		// gaps remain inert Markdown outside the HTML tokenizer.
 		var raw strings.Builder
 		previous := start
 		for _, segment := range segments {
-			if filter.suppressed == "" {
-				out.write(input[previous:segment.Start])
-			}
+			markup.WriteString(stdhtml.EscapeString(input[previous:segment.Start]))
 			raw.Write(segment.Value(source))
 			previous = segment.Stop
 		}
-		if err := filter.feed(raw.String(), true); err != nil {
-			return ast.WalkStop, err
-		}
+		markup.WriteString(raw.String())
 		position = end
 		return ast.WalkSkipChildren, nil
 	})
 	if err != nil {
 		return "", false, err
 	}
-	if filter.suppressed == "" {
-		out.write(input[position:])
+	markup.WriteString(stdhtml.EscapeString(input[position:]))
+	// Escaping has a fixed expansion bound from the already byte-bounded
+	// input. Link expansion happens only inside the capped output builder.
+	if err := filter.feed(markup.String(), true); err != nil {
+		return "", false, err
 	}
 	return out.String(), out.count > MaxCharacters, nil
 }
