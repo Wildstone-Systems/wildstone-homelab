@@ -62,7 +62,7 @@ var PortBlock = portBlock()
 
 func portBlock() []int {
 	out := []int{443}
-	for p := 7443; p <= 53443; p += 1000 {
+	for p := 7443; p <= 54443; p += 1000 {
 		out = append(out, p)
 	}
 	return out
@@ -180,9 +180,15 @@ var wellKnown = map[string]int{
 
 	// matrix-element. Element keeps each device's session and encryption
 	// keys in browser storage for its origin, so a moved port signs the
-	// household out. This is the last port in PortBlock: the next pinned
-	// service has to extend the block (and the ingress package with it).
+	// household out.
 	"element": 53443,
+
+	// notes-silverbullet. Its service worker keeps a copy of the space in
+	// browser storage for its origin, so a moved port leaves every device
+	// syncing an orphaned copy. This is the last port in PortBlock: the
+	// next pinned service has to extend the block (and the ingress
+	// package with it).
+	"notes": 54443,
 }
 
 // Of derives the addressing posture from desired state.

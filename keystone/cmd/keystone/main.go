@@ -1025,8 +1025,12 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 		return domestic.ConfirmDenied, nil
 	}
 	actions.Audit = func(c domestic.Call, r domestic.Result, aerr error) {
+		message := r.Summary
+		if r.AuditSummary != "" {
+			message = r.AuditSummary
+		}
 		ev := runtimedb.Event{
-			Type: "domestic.acted", Kind: "Automation", Name: c.Rule, Message: r.Summary,
+			Type: "domestic.acted", Kind: "Automation", Name: c.Rule, Message: message,
 			Attrs: map[string]string{"tool": c.Tool, "tier": c.Tier, "subject": c.Subject},
 		}
 		if aerr != nil {
@@ -1367,6 +1371,19 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 		for _, e := range filedrop.Executors() {
 			actions.Register(e)
 		}
+		// The household knowledge folder (packages/knowledge-wildstone,
+		// ADR-W046). The drop box's shape exactly: the folder is a
+		// ConfigFile in desired state, read per call, and the install is
+		// checked per call, so installing it works without a restart and
+		// removing it stops the tools at once — while the notes stay on
+		// disk.
+		notes := &domestic.Knowledge{Authority: db,
+			Root:    apiSrv.KnowledgeRoot,
+			Enabled: func() (bool, error) { return apiSrv.CapabilityEnabled(domestic.KnowledgeCapability) },
+		}
+		for _, e := range notes.Executors() {
+			actions.Register(e)
+		}
 		// PantryOS (packages/pantry-pantryos, ADR-W044). The calendar's
 		// road (ADR-W034 A5): Keystone holds the upstream, and each call
 		// is gated on the package being installed, as the lists are.
@@ -1655,13 +1672,14 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 				if capName, _, ok := strings.Cut(tool, "."); ok && capName == domestic.HostOpsCapability {
 					continue
 				}
-				// filedrop, lists and pantry are gated on the install
-				// for the same reason: a Butler that lists "find_file",
-				// "add_items" or "start_cooking" to a household without
-				// the capability has promised them something that cannot
-				// happen.
+				// filedrop, knowledge, lists and pantry are gated on the
+				// install for the same reason: a Butler that lists
+				// "find_file", "add_items" or "start_cooking" to a
+				// household without the capability has promised them
+				// something that cannot happen.
 				if capName, _, ok := strings.Cut(tool, "."); ok &&
 					(strings.HasPrefix(capName, "chat-") || capName == domestic.FiledropCapability ||
+						capName == domestic.KnowledgeCapability ||
 						capName == domestic.ListsCapability || capName == domestic.PantryCapability) {
 					on, cerr := apiSrv.CapabilityEnabled(capName)
 					if cerr != nil {

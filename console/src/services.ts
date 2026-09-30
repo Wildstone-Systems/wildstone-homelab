@@ -101,6 +101,10 @@ const GROUP_OF: Record<string, Group> = {
   filedrop: "Documents",
   "file-sync": "Documents",
   bookmarks: "Documents",
+  // The household's Markdown notes (ADR-W046): the folder agents use,
+  // and the web UI people edit it in.
+  knowledge: "Documents",
+  notes: "Documents",
   feeds: "Documents",
 
   ingress: "Network",

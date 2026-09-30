@@ -125,6 +125,12 @@ type Result struct {
 	ProposalConfirmed bool
 	// Summary is one line: "notified topic household-mika".
 	Summary string
+	// AuditSummary, when set, is what the operator's event stream
+	// records instead of Summary. An executor whose answer carries
+	// household content — a note it read — sets it, so the audit says
+	// WHAT was done to WHICH item without copying the content into a
+	// log every operator can page through.
+	AuditSummary string
 	// Detail is small structured context for the audit record.
 	Detail map[string]string
 }

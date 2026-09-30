@@ -153,6 +153,9 @@ var homepageApps = map[string]homepageApp{
 	// household sign-in and Davis's, one card away, is not.
 	"radicale":    {"Calendar", "mdi-calendar-blank", "The household's own calendars, on every phone — your household sign-in"},
 	"element-web": {"Messages", "element", "Household chat in the browser — sign in with your household account"},
+	// The notes capability (ADR-W046). SilverBullet has a dashboard-icons
+	// slug of its own.
+	"silverbullet": {"Notes", "silverbullet", "The household's notes, decisions and plans — the same ones your assistant reads"},
 
 	// matrix-synapse has no row on purpose: its Route is the Matrix
 	// client-API only, not a page — Element (above) is what a person
