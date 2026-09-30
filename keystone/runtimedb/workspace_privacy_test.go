@@ -200,3 +200,124 @@ func TestWorkspacePrivacyMigrationAndRunnerGaps(t *testing.T) {
 		t.Fatalf("runner gap behavior: %s %v", order, err)
 	}
 }
+
+func TestWorkspacePrivacyMemorySourcesAndAtomicFailure(t *testing.T) {
+	db, w, id := workspaceAuthorityFixture(t)
+	ctx, guard, a := workspacePrivacyTurn(t, db, id, ModelLocal, MemoryDestination{BuiltIn: true})
+	memory, err := db.RecordMemory(MemoryRecord{Scope: MemoryScopePersonal, Kind: MemoryFact, Content: "synthetic input", Owner: "mika", Author: "mika", Butler: "alfred", Audience: ButlerAudiencePrivate, PermissionLabel: "household", SourceKind: "conversation", SourceID: "fixture"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = TrackMemoryPrivacy(ctx, memory, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.CreateWorkspaceArtifact(WorkspaceArtifact{ID: "output", WorkspaceID: w.ID, Path: "output.txt"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.sql.Exec(`CREATE TRIGGER reject_test_revision BEFORE INSERT ON workspace_revisions BEGIN SELECT RAISE(ABORT,'injected metadata failure'); END;`); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.CreateWorkspaceRevisionForTask(ctx, a, w.ID, "", workspaceNewRevision("output-r1", "output")); err == nil {
+		t.Fatal("injected failure ignored")
+	}
+	var count int
+	if err = db.sql.QueryRow(`SELECT COUNT(*) FROM task_memory_sources`).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("partial evidence survived: %d %v", count, err)
+	}
+	if _, err = db.sql.Exec(`DROP TRIGGER reject_test_revision`); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.CreateWorkspaceRevisionForTask(ctx, a, w.ID, "", workspaceNewRevision("output-r1", "output")); err != nil {
+		t.Fatal(err)
+	}
+	task, _ := parseButlerTaskID(id)
+	workspaceFinishRevision(t, db, w, task, "output", "output-r1", "")
+	if err = db.SetMemoryPrivacy("mika", memory, PrivacyPolicy{LocalOnly: true, TrustedOnly: true}); err != nil {
+		t.Fatal(err)
+	}
+	next, _ := workspacePrivacyTask(t, db)
+	cloud, _, reader := workspacePrivacyTurn(t, db, next, ModelCloud, MemoryDestination{BuiltIn: true})
+	if got, err := db.ReadWorkspaceRevision(cloud, reader, w.ID, "output", "output-r1"); !errors.Is(err, ErrPrivacy) || got.ID != "" {
+		t.Fatalf("later source tightening lost: %+v %v", got, err)
+	}
+	if err = guard.Check(); err != nil {
+		t.Fatal(err)
+	}
+	if err = CheckPrivacyDelivery(ctx, MemoryDestination{}); !errors.Is(err, ErrPrivacy) {
+		t.Fatalf("output disclosure lost provenance: %v", err)
+	}
+	// A source that is no longer authorized cannot be laundered by a local route.
+	if _, err = db.sql.Exec(`UPDATE butler_memory SET forgotten_at='2026-09-30T00:00:00Z' WHERE seq=?`, memory); err != nil {
+		t.Fatal(err)
+	}
+	local, _, reader := workspacePrivacyTurn(t, db, next, ModelLocal, MemoryDestination{BuiltIn: true})
+	if got, err := db.ReadWorkspaceRevision(local, reader, w.ID, "output", "output-r1"); !errors.Is(err, ErrWorkspaceDenied) || got.ID != "" {
+		t.Fatalf("forgotten source disclosed: %+v %v", got, err)
+	}
+}
+
+func TestWorkspacePrivacyReadFailureAndUnknownSourceFailClosed(t *testing.T) {
+	db, w, id := workspaceAuthorityFixture(t)
+	task, _ := parseButlerTaskID(id)
+	workspacePublish(t, db, workspaceIntent(t, db, w, task, "source", "r1", "", 1), "receipt")
+	next, _ := workspacePrivacyTask(t, db)
+	ctx, _, a := workspacePrivacyTurn(t, db, next, ModelLocal, MemoryDestination{BuiltIn: true})
+	if _, err := db.sql.Exec(`CREATE TRIGGER reject_test_read BEFORE INSERT ON workspace_task_sources BEGIN SELECT RAISE(ABORT,'injected source persistence failure'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := db.ReadWorkspaceRevision(ctx, a, w.ID, "source", "r1"); err == nil || got.ID != "" {
+		t.Fatalf("failed provenance commit disclosed metadata: %+v %v", got, err)
+	}
+	if _, err := db.sql.Exec(`DROP TRIGGER reject_test_read`); err != nil {
+		t.Fatal(err)
+	}
+	p := workspaceIntent(t, db, w, task, "unknown", "r2", "", 1)
+	if err := db.RecordWorkspaceProvenance(WorkspaceProvenance{ID: "unresolved", RevisionID: "r2", SourceID: "unrecognized-source", SourceVersion: "v1", Privacy: "normal", Audience: "private"}); err != nil {
+		t.Fatal(err)
+	}
+	workspacePublish(t, db, p, "receipt-unknown")
+	if got, err := db.ReadWorkspaceRevision(ctx, a, w.ID, "unknown", "r2"); !errors.Is(err, ErrWorkspaceDenied) || got.ID != "" {
+		t.Fatalf("unknown source treated as public: %+v %v", got, err)
+	}
+}
+
+func TestWorkspacePrivacyQAReadOnlyAndFrozenInputs(t *testing.T) {
+	db, w, id := workspaceAuthorityFixture(t)
+	task, _ := parseButlerTaskID(id)
+	workspacePublish(t, db, workspaceIntent(t, db, w, task, "source", "r1", "", 1), "receipt")
+	next, _ := workspacePrivacyTask(t, db)
+	ctx, _, a := workspacePrivacyTurn(t, db, next, ModelLocal, MemoryDestination{BuiltIn: true})
+	if _, err := db.ReadWorkspaceRevision(ctx, a, w.ID, "source", "r1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.CreateWorkspaceArtifact(WorkspaceArtifact{ID: "copy", WorkspaceID: w.ID, Path: "copy.txt"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.CreateWorkspaceRevisionForTask(ctx, a, w.ID, "", workspaceNewRevision("copy-r1", "copy")); err != nil {
+		t.Fatal(err)
+	}
+	// Source snapshots pin the earlier revision independently of mutable task
+	// bookkeeping. A future cleanup cannot erase a derivative's restriction.
+	if _, err := db.sql.Exec(`DELETE FROM workspace_task_sources`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.sql.Exec(`DELETE FROM workspace_session_sources`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.sql.Exec(`INSERT INTO content_privacy(object,local_only) VALUES('wa:source',1)`); err != nil {
+		t.Fatal(err)
+	}
+	policy, err := db.contentPrivacy("wr:copy-r1")
+	if err != nil || !policy.LocalOnly {
+		t.Fatalf("snapshot lost input: %+v %v", policy, err)
+	}
+	if _, err := db.sql.Exec(`UPDATE models SET readiness='qa-only'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ReadWorkspaceRevision(ctx, a, w.ID, "source", "r1"); err != nil {
+		t.Fatalf("QA read refused: %v", err)
+	}
+	if err := db.CreateWorkspaceRevisionForTask(ctx, a, w.ID, "", workspaceNewRevision("qa-write", "copy")); !errors.Is(err, ErrWorkspaceDenied) {
+		t.Fatalf("QA mutation admitted: %v", err)
+	}
+}

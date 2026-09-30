@@ -40,6 +40,18 @@ CREATE TRIGGER workspace_source_committed BEFORE INSERT ON workspace_task_source
 WHEN NOT EXISTS(SELECT 1 FROM workspace_publications WHERE revision_id=NEW.revision AND state='committed')
 BEGIN SELECT RAISE(ABORT,'workspace source must be committed'); END;
 
+CREATE TABLE workspace_revision_memories (
+ revision TEXT NOT NULL REFERENCES workspace_revisions(id),
+ memory INTEGER NOT NULL REFERENCES butler_memory(seq),
+ PRIMARY KEY(revision,memory)
+);
+CREATE TABLE workspace_revision_inputs (
+ revision TEXT NOT NULL REFERENCES workspace_revisions(id),
+ source_revision TEXT NOT NULL REFERENCES workspace_revisions(id),
+ PRIMARY KEY(revision,source_revision),
+ CHECK(revision<>source_revision)
+);
+
 -- Keep the existing memory graph intact. contentPrivacy traverses its union
 -- with this graph, using UNION to terminate conservative lineage cycles.
 CREATE VIEW workspace_privacy_edges AS
@@ -55,7 +67,58 @@ CREATE VIEW workspace_privacy_edges AS
  UNION SELECT 't:'||seq,'s:'||session FROM butler_tasks WHERE session IS NOT NULL
  UNION SELECT 't:'||task,'s:'||session FROM session_task_sources
  UNION SELECT 't:'||t.seq,'m:'||m.seq FROM butler_tasks t JOIN butler_memory m ON m.source_kind IN ('conversation','group-conversation') AND m.source_id='bt-'||t.seq
- UNION SELECT 'm:'||m.seq,'t:'||t.seq FROM butler_memory m JOIN butler_tasks t ON m.source_kind IN ('conversation','group-conversation') AND m.source_id='bt-'||t.seq;
+ UNION SELECT 'm:'||m.seq,'t:'||t.seq FROM butler_memory m JOIN butler_tasks t ON m.source_kind IN ('conversation','group-conversation') AND m.source_id='bt-'||t.seq
+ UNION SELECT 'wr:'||revision,'m:'||memory FROM workspace_revision_memories
+ UNION SELECT 'wr:'||revision,'wr:'||source_revision FROM workspace_revision_inputs;
 CREATE VIEW workspace_content_privacy AS
  SELECT 'wr:'||id AS object,privacy='local-only' AS local_only,trusted_only FROM workspace_revisions
  UNION ALL SELECT 'wr:'||revision_id,privacy='local-only',trusted_only FROM workspace_provenance;
+
+-- Pin the exact known inputs at revision creation. Live graph traversal still
+-- catches later tightening, but task/session relinking cannot discard history.
+CREATE TRIGGER workspace_revision_capture AFTER INSERT ON workspace_revisions BEGIN
+ INSERT OR IGNORE INTO workspace_revision_memories(revision,memory)
+ WITH RECURSIVE edges(child,parent) AS (
+ SELECT child,parent FROM privacy_edges UNION SELECT child,parent FROM workspace_privacy_edges
+ ), sources(object) AS (SELECT 't:'||NEW.task_id UNION SELECT e.parent FROM edges e JOIN sources s ON s.object=e.child)
+ SELECT NEW.id,m.seq FROM sources s JOIN butler_memory m ON s.object='m:'||m.seq;
+ INSERT OR IGNORE INTO workspace_revision_inputs(revision,source_revision)
+ WITH RECURSIVE edges(child,parent) AS (
+ SELECT child,parent FROM privacy_edges UNION SELECT child,parent FROM workspace_privacy_edges
+ ), sources(object) AS (SELECT 't:'||NEW.task_id UNION SELECT e.parent FROM edges e JOIN sources s ON s.object=e.child)
+ SELECT NEW.id,r.id FROM sources s JOIN workspace_revisions r ON s.object='wr:'||r.id WHERE r.id<>NEW.id;
+END;
+
+INSERT OR IGNORE INTO workspace_revision_memories(revision,memory)
+ WITH RECURSIVE lineage(revision,object) AS (
+ SELECT id,'t:'||task_id FROM workspace_revisions UNION
+ SELECT l.revision,e.parent FROM lineage l JOIN (
+ SELECT child,parent FROM privacy_edges UNION SELECT child,parent FROM workspace_privacy_edges
+ ) e ON e.child=l.object
+ ) SELECT l.revision,m.seq FROM lineage l JOIN butler_memory m ON l.object='m:'||m.seq;
+INSERT OR IGNORE INTO workspace_revision_inputs(revision,source_revision)
+ WITH RECURSIVE lineage(revision,object) AS (
+ SELECT id,'t:'||task_id FROM workspace_revisions UNION
+ SELECT l.revision,e.parent FROM lineage l JOIN (
+ SELECT child,parent FROM privacy_edges UNION SELECT child,parent FROM workspace_privacy_edges
+ ) e ON e.child=l.object
+ ) SELECT l.revision,r.id FROM lineage l JOIN workspace_revisions r ON l.object='wr:'||r.id WHERE r.id<>l.revision;
+
+CREATE TRIGGER workspace_revision_memories_immutable BEFORE UPDATE ON workspace_revision_memories
+BEGIN SELECT RAISE(ABORT,'workspace input identity is immutable'); END;
+CREATE TRIGGER workspace_revision_inputs_immutable BEFORE UPDATE ON workspace_revision_inputs
+BEGIN SELECT RAISE(ABORT,'workspace input identity is immutable'); END;
+CREATE TRIGGER workspace_revision_sessions_immutable BEFORE UPDATE ON workspace_revision_sessions
+BEGIN SELECT RAISE(ABORT,'workspace input identity is immutable'); END;
+CREATE TRIGGER workspace_revision_memories_sealed BEFORE DELETE ON workspace_revision_memories
+WHEN EXISTS(SELECT 1 FROM workspace_publications WHERE revision_id=OLD.revision AND state<>'staging')
+BEGIN SELECT RAISE(ABORT,'sealed workspace inputs require retention coordination'); END;
+CREATE TRIGGER workspace_revision_inputs_sealed BEFORE DELETE ON workspace_revision_inputs
+WHEN EXISTS(SELECT 1 FROM workspace_publications WHERE revision_id=OLD.revision AND state<>'staging')
+BEGIN SELECT RAISE(ABORT,'sealed workspace inputs require retention coordination'); END;
+CREATE TRIGGER workspace_revision_sessions_sealed BEFORE DELETE ON workspace_revision_sessions
+WHEN EXISTS(SELECT 1 FROM workspace_publications WHERE revision_id=OLD.revision AND state<>'staging')
+BEGIN SELECT RAISE(ABORT,'sealed workspace inputs require retention coordination'); END;
+CREATE TRIGGER workspace_session_source_committed BEFORE INSERT ON workspace_session_sources
+WHEN NOT EXISTS(SELECT 1 FROM workspace_publications WHERE revision_id=NEW.revision AND state='committed')
+BEGIN SELECT RAISE(ABORT,'workspace source must be committed'); END;

@@ -28,10 +28,12 @@ func checkWorkspaceTask(q privacyReader, person, agent, taskID, connection, work
  SELECT 1 FROM agent_workspaces w
  JOIN butler_members person ON person.person_id=w.person_id
  JOIN butlers agent ON agent.seq=w.agent_id
+ JOIN models model ON model.seq=agent.model
  JOIN butler_tasks task ON task.seq=? AND task.owner_person_id=person.person_id AND task.butler=agent.name
  WHERE w.id=? AND w.visibility='private' AND person.member=? AND agent.name=?
  AND person.admitted=1 AND person.disabled_at='' AND person.offboarded_at=''
  AND agent.enabled=1 AND agent.retired_at=''
+ AND model.enabled=1 AND model.readiness<>'unavailable'
  AND task.kind='conversation' AND task.state IN ('pending','running','waiting')
  AND task.audience=? AND task.origin_connection=?
  AND task.agent_class=agent.agent_class AND task.surface=agent.surface

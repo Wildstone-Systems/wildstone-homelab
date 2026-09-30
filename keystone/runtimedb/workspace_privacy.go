@@ -31,7 +31,7 @@ func (db *DB) workspaceTurn(ctx context.Context, a *WorkspaceAccess) (*PrivacyTu
 	}
 	p.mu.Lock()
 	seq, err := parseButlerTaskID(a.task)
-	if err != nil || p.task == 0 || seq != p.task || p.failure != nil {
+	if err != nil || p.task == 0 || seq != p.task || p.failure != nil || p.destination.Group {
 		p.mu.Unlock()
 		return nil, ErrWorkspaceContext
 	}
@@ -179,6 +179,18 @@ func (db *DB) CreateWorkspaceRevisionForTask(ctx context.Context, a *WorkspaceAc
 	defer tx.Rollback()
 	if err = checkWorkspaceTask(tx, a.person, a.agent, a.task, a.connection, workspace); err != nil {
 		return err
+	}
+	var writable bool
+	err = tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM butler_tasks task
+ JOIN butlers agent ON agent.name=task.butler JOIN models model ON model.seq=agent.model
+ LEFT JOIN butler_sessions session ON session.seq=task.session
+ WHERE task.seq=? AND model.enabled=1 AND model.readiness='ready'
+ AND (task.session IS NULL OR session.mode='full'))`, p.task).Scan(&writable)
+	if err != nil {
+		return err
+	}
+	if !writable {
+		return ErrWorkspaceDenied
 	}
 	if r.TaskID != 0 && r.TaskID != p.task {
 		return ErrWorkspaceContext
