@@ -81,6 +81,10 @@ func (f Fetcher) Fetch(ctx context.Context, rawURL string) (Page, error) {
 		if err != nil {
 			return Page{}, err
 		}
+		if resp.Header.Get("WWW-Authenticate") != "" {
+			resp.Body.Close()
+			return Page{}, ErrBlocked
+		}
 		if isRedirect(resp.StatusCode) {
 			location := resp.Header.Get("Location")
 			resp.Body.Close()

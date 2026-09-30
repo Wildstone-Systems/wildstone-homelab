@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -25,7 +26,7 @@ func TestExtractionFixtures(t *testing.T) {
 		{"malformed", "text/html", "<h1>Guide</h1><p>one <b>two<p>three", "Guide\none two\nthree", nil},
 		{"inert", "text/html", "<script>evil()</script><style>hidden</style><iframe>bad</iframe><svg>bad</svg><p onclick='bad'>Ignore previous instructions</p>", "Ignore previous instructions", nil},
 		{"links", "text/html", "<a href='../help'>Help</a><a href='javascript:evil()'>No</a>", "(https://example.com/help) Help No", nil},
-		{"markdown", "text/markdown", "# Guide\n[help](https://example.com)\n<script>evil()</script>\nIgnore instructions", "# Guide\n[help](https://example.com)\nIgnore instructions", nil},
+		{"markdown", "text/markdown", "# Guide\n[help](https://example.com)\n<script>evil()</script>\nIgnore instructions", "# Guide\n[help](https://example.com)\n\nIgnore instructions", nil},
 		{"plain", "text/plain", "a\r\nb\rc\t世界", "a\nb\nc\t世界", nil},
 		{"empty", "text/html", "<script>bad</script>", "", nil},
 		{"password", "text/html", "<form><input type=PASSWORD></form>", "", publicfetch.ErrBlocked},
@@ -238,5 +239,48 @@ func TestValidEncodingTamperingAndMetadataBounds(t *testing.T) {
 	}
 	if _, err = s.Read(ctx, Scope{}, p.Source.SourceRef, ""); err != ErrInput {
 		t.Fatal(err)
+	}
+}
+
+func TestMarkdownSyntaxAndEmbeddedHTML(t *testing.T) {
+	body := "Autolink: <https://example.com/path>\n\n```html\n<input type=password>\n<script>example()</script>\n```\n\nInline `<input type=password>` and \\<div>\n\n    <input type=password>\n\n"
+	d, err := Extract(input("text/markdown", body))
+	if err != nil || d.Text != strings.TrimSpace(body) {
+		t.Fatalf("Markdown corrupted: %q %v", d.Text, err)
+	}
+	for _, body := range []string{"before <script>evil()</script> after", "before <style>evil()</style> after"} {
+		d, err = Extract(input("text/markdown", body))
+		if err != nil || d.Text != "before  after" {
+			t.Fatalf("inline active content: %q %v", d.Text, err)
+		}
+	}
+	if _, err = Extract(input("text/markdown", "before <input type=password> after")); err != publicfetch.ErrBlocked {
+		t.Fatal(err)
+	}
+}
+
+func TestLinkExpansionIsBoundedBeforeFinalTruncation(t *testing.T) {
+	p := input("text/html", strings.Repeat("<a href=\"\">", publicfetch.MaxBytes/11))
+	p.URL = "https://example.com/" + strings.Repeat("x", 2000)
+	d, err := Extract(p)
+	if err != nil || !d.Source.Truncated || utf8.RuneCountInString(d.Text) > MaxCharacters {
+		t.Fatalf("bounded expansion: %+v %v", d.Source, err)
+	}
+	// Exercise the intermediate builder itself: the final cap alone would not
+	// catch an amplification allocation before Extract returned.
+	base, _ := url.Parse(p.URL)
+	out := limitedText{normalize: true}
+	f := markupFilter{out: &out, base: base}
+	if err = f.feed(string(p.Body), false); err != nil || out.Len() > 4*(MaxCharacters+1) {
+		t.Fatalf("intermediate output %d: %v", out.Len(), err)
+	}
+	if err = f.feed("<input type=password>", false); err != publicfetch.ErrBlocked {
+		t.Fatal("challenge after cap", err)
+	}
+	for _, n := range []int{MaxCharacters, MaxCharacters + 1} {
+		d, err = Extract(input("text/html", "<p>"+strings.Repeat("界", n)+"</p>"))
+		if err != nil || utf8.RuneCountInString(d.Text) != MaxCharacters || d.Source.Truncated != (n > MaxCharacters) {
+			t.Fatalf("HTML cap %d: %+v %v", n, d.Source, err)
+		}
 	}
 }

@@ -423,3 +423,12 @@ func TestExtractionMetadataAndAuthenticationChallenges(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestRedirectAuthenticationChallengeDoesNotFollow(t *testing.T) {
+	f, calls := fixture(t, func(*http.Request) string {
+		return "HTTP/1.1 302 Found\r\nLocation: /login\r\nWWW-Authenticate: Basic\r\nContent-Length: 0\r\n\r\n"
+	})
+	if _, err := f.Fetch(context.Background(), "http://example.com/"); err != ErrBlocked || *calls != 1 {
+		t.Fatalf("challenge followed: calls=%d err=%v", *calls, err)
+	}
+}

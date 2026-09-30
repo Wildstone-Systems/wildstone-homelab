@@ -12,6 +12,9 @@ import (
 	"unicode/utf8"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/research/publicfetch"
+	"github.com/yuin/goldmark"
+	"github.com/yuin/goldmark/ast"
+	mdtext "github.com/yuin/goldmark/text"
 	"golang.org/x/net/html"
 	"golang.org/x/net/html/charset"
 )
@@ -78,16 +81,17 @@ func Extract(p publicfetch.Page) (Document, error) {
 		}
 	}
 	text = strings.ReplaceAll(strings.ReplaceAll(text, "\r\n", "\n"), "\r", "\n")
+	bounded := false
 	if p.MediaType != "text/plain" {
-		text, err = extractMarkup(text, u, p.MediaType == "text/markdown")
+		text, bounded, err = extractMarkup(text, u, p.MediaType == "text/markdown")
 		if err != nil {
 			return Document{}, err
 		}
 	}
 	text = strings.TrimSpace(text)
 	runes := []rune(text)
-	truncated := len(runes) > MaxCharacters
-	if truncated {
+	truncated := bounded || len(runes) > MaxCharacters
+	if len(runes) > MaxCharacters {
 		text = string(runes[:MaxCharacters])
 	}
 	source := SourceInfo{URL: p.URL, MediaType: p.MediaType, RetrievedAt: p.RetrievedAt.UTC().Format("2006-01-02T15:04:05Z07:00"), Truncated: truncated}
@@ -97,30 +101,76 @@ func Extract(p publicfetch.Page) (Document, error) {
 	return Document{Source: source, Text: text}, nil
 }
 
-// Tokenization tolerates malformed markup without executing it. Markdown syntax
-// remains text; embedded HTML is stripped by the same conservative filter.
-func extractMarkup(input string, base *url.URL, markdown bool) (string, error) {
+// limitedText caps retained output during extraction, before links can expand
+// a small hostile input. Keep one sentinel code point to disclose truncation.
+type limitedText struct {
+	strings.Builder
+	count     int
+	pending   strings.Builder
+	normalize bool
+}
+
+func (b *limitedText) appendRune(r rune) {
+	if b.count <= MaxCharacters {
+		b.WriteRune(r)
+		b.count++
+	}
+}
+func (b *limitedText) write(s string) {
+	for _, r := range s {
+		if b.count > MaxCharacters {
+			return
+		}
+		if unicode.IsSpace(r) {
+			if b.count == 0 {
+				continue
+			}
+			if b.normalize {
+				if r == '\n' {
+					b.pending.Reset()
+					b.pending.WriteByte('\n')
+				} else if b.pending.Len() == 0 {
+					b.pending.WriteByte(' ')
+				}
+			} else if b.pending.Len() < 4*(MaxCharacters+1) {
+				b.pending.WriteRune(r)
+			}
+			continue
+		}
+		for _, space := range b.pending.String() {
+			b.appendRune(space)
+		}
+		b.pending.Reset()
+		b.appendRune(r)
+	}
+}
+
+type markupFilter struct {
+	out        *limitedText
+	base       *url.URL
+	suppressed string
+	depth      int
+}
+
+func (f *markupFilter) feed(input string, preserve bool) error {
 	z := html.NewTokenizer(strings.NewReader(input))
-	var out strings.Builder
-	var suppressed string
-	depth := 0
 	for {
 		kind := z.Next()
 		if kind == html.ErrorToken {
 			if z.Err() != io.EOF {
-				return "", publicfetch.ErrUnsupported
+				return publicfetch.ErrUnsupported
 			}
-			break
+			return nil
 		}
 		t := z.Token()
-		if suppressed != "" {
-			if kind == html.StartTagToken && t.Data == suppressed {
-				depth++
+		if f.suppressed != "" {
+			if kind == html.StartTagToken && t.Data == f.suppressed {
+				f.depth++
 			}
-			if kind == html.EndTagToken && t.Data == suppressed {
-				depth--
-				if depth == 0 {
-					suppressed = ""
+			if kind == html.EndTagToken && t.Data == f.suppressed {
+				f.depth--
+				if f.depth == 0 {
+					f.suppressed = ""
 				}
 			}
 			continue
@@ -129,23 +179,25 @@ func extractMarkup(input string, base *url.URL, markdown bool) (string, error) {
 			switch t.Data {
 			case "script", "style", "iframe", "object", "svg", "math", "template", "noscript", "head":
 				if kind != html.SelfClosingTagToken {
-					suppressed = t.Data
-					depth = 1
+					f.suppressed = t.Data
+					f.depth = 1
 				}
 				continue
 			case "input":
 				for _, a := range t.Attr {
 					if a.Key == "type" && strings.EqualFold(a.Val, "password") {
-						return "", publicfetch.ErrBlocked
+						return publicfetch.ErrBlocked
 					}
 				}
 			case "a":
-				for _, a := range t.Attr {
-					if a.Key == "href" {
-						if link, e := url.Parse(a.Val); e == nil {
-							link = base.ResolveReference(link)
-							if (link.Scheme == "https" || link.Scheme == "http") && link.User == nil && len(link.String()) <= 2048 {
-								out.WriteString(" (" + link.String() + ") ")
+				if f.out.count <= MaxCharacters {
+					for _, a := range t.Attr {
+						if a.Key == "href" {
+							if link, e := url.Parse(a.Val); e == nil {
+								link = f.base.ResolveReference(link)
+								if (link.Scheme == "https" || link.Scheme == "http") && link.User == nil && len(link.String()) <= 2048 {
+									f.out.write(" (" + link.String() + ") ")
+								}
 							}
 						}
 					}
@@ -153,25 +205,83 @@ func extractMarkup(input string, base *url.URL, markdown bool) (string, error) {
 			}
 		}
 		if kind == html.TextToken {
-			if markdown {
-				out.WriteString(t.Data)
+			if preserve {
+				f.out.write(t.Data)
 			} else {
-				out.WriteString(strings.Join(strings.Fields(t.Data), " "))
-				out.WriteByte(' ')
+				f.out.write(strings.Join(strings.Fields(t.Data), " "))
+				f.out.write(" ")
 			}
 		} else if kind == html.StartTagToken || kind == html.EndTagToken || kind == html.SelfClosingTagToken {
 			switch t.Data {
 			case "p", "div", "br", "li", "pre", "tr", "h1", "h2", "h3", "h4", "h5", "h6":
-				out.WriteByte('\n')
+				f.out.write("\n")
 			}
 		}
 	}
-	lines := strings.Split(out.String(), "\n")
-	var cleaned []string
-	for _, line := range lines {
-		if line = strings.TrimSpace(line); line != "" {
-			cleaned = append(cleaned, line)
+}
+
+// Markdown parsing identifies actual raw HTML spans. Autolinks, escaped angle
+// brackets and code examples remain literal Markdown data. The HTML filter's
+// suppression state spans inline tags so inline script bodies are discarded.
+func extractMarkup(input string, base *url.URL, markdown bool) (string, bool, error) {
+	out := limitedText{normalize: !markdown}
+	filter := markupFilter{out: &out, base: base}
+	if !markdown {
+		if err := filter.feed(input, false); err != nil {
+			return "", false, err
 		}
+		lines := strings.Split(out.String(), "\n")
+		var cleaned []string
+		for _, line := range lines {
+			if line = strings.TrimSpace(line); line != "" {
+				cleaned = append(cleaned, line)
+			}
+		}
+		return strings.Join(cleaned, "\n"), out.count > MaxCharacters, nil
 	}
-	return strings.Join(cleaned, "\n"), nil
+	source := []byte(input)
+	root := goldmark.DefaultParser().Parse(mdtext.NewReader(source))
+	position := 0
+	err := ast.Walk(root, func(node ast.Node, entering bool) (ast.WalkStatus, error) {
+		if !entering {
+			return ast.WalkContinue, nil
+		}
+		start, end := -1, -1
+		switch n := node.(type) {
+		case *ast.RawHTML:
+			if n.Segments.Len() > 0 {
+				start = n.Segments.At(0).Start
+				end = n.Segments.At(n.Segments.Len() - 1).Stop
+			}
+		case *ast.HTMLBlock:
+			if n.Lines().Len() > 0 {
+				start = n.Lines().At(0).Start
+				end = n.Lines().At(n.Lines().Len() - 1).Stop
+			}
+			if n.HasClosure() {
+				if start < 0 {
+					start = n.ClosureLine.Start
+				}
+				end = n.ClosureLine.Stop
+			}
+		}
+		if start < position || end < start {
+			return ast.WalkContinue, nil
+		}
+		if filter.suppressed == "" {
+			out.write(input[position:start])
+		}
+		if err := filter.feed(input[start:end], true); err != nil {
+			return ast.WalkStop, err
+		}
+		position = end
+		return ast.WalkSkipChildren, nil
+	})
+	if err != nil {
+		return "", false, err
+	}
+	if filter.suppressed == "" {
+		out.write(input[position:])
+	}
+	return out.String(), out.count > MaxCharacters, nil
 }
