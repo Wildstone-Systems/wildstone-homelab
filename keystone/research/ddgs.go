@@ -60,7 +60,7 @@ type workerHit struct {
 	URL        string  `json:"url"`
 	Title      string  `json:"title,omitempty"`
 	Snippet    *string `json:"snippet"`
-	SourceDate string  `json:"sourceDate,omitempty"`
+	SourceDate *string `json:"sourceDate,omitempty"`
 }
 type workerData struct {
 	Items       *[]workerHit `json:"items"`
@@ -169,8 +169,8 @@ func (a *ddgs) Search(ctx context.Context, input SearchRequest) (SearchResult, e
 		}
 		u.Host = strings.ToLower(u.Host)
 		source := Source{URL: u.String(), Title: row.Title, Provider: DDGS, Backend: "duckduckgo", RetrievedAt: stamp}
-		if row.SourceDate != "" {
-			date, ok := utcStamp(row.SourceDate)
+		if row.SourceDate != nil {
+			date, ok := utcStamp(*row.SourceDate)
 			if !ok {
 				return fail(failure(ProviderUnavailable))
 			}
