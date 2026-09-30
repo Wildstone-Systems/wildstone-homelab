@@ -606,3 +606,32 @@ func TestCancellationDuringAuthorizationRemainsDistinct(t *testing.T) {
 		}
 	}
 }
+
+func TestMarkdownLiteralRestorationHonorsRCDATA(t *testing.T) {
+	for _, media := range []string{"text/html", "text/markdown"} {
+		d, err := Extract(input(media, "before <textarea>A &amp; B &lt;input type=password&gt;</textarea> after"))
+		if err != nil || d.Text != "before A & B <input type=password> after" {
+			t.Fatalf("%s RCDATA: %q %v", media, d.Text, err)
+		}
+		for _, tag := range []string{"textarea", "title"} {
+			for _, prefix := range []string{"", strings.Repeat("x", MaxCharacters+1) + "\n\n"} {
+				body := prefix + "before <" + tag + ">A &amp; B &#x1b;</" + tag + "> after"
+				if _, err := Extract(input(media, body)); err != publicfetch.ErrUnsupported {
+					t.Fatalf("%s %s prefix=%d decoded control: %v", media, tag, len(prefix), err)
+				}
+			}
+		}
+	}
+	// Literal references inside ordinary Markdown and raw-text are data,
+	// while RCDATA references decode exactly once without becoming markup.
+	for _, body := range []string{"A &amp; B &#x1b;", "before <xmp>A &amp; B &#x1b;</xmp> after"} {
+		d, err := Extract(input("text/markdown", body))
+		if err != nil || !strings.Contains(d.Text, "A &amp; B &#x1b;") {
+			t.Fatalf("literal/raw-text changed: %q %v", d.Text, err)
+		}
+	}
+	d, err := Extract(input("text/markdown", "before <textarea>&amp;#x1b;</textarea> after"))
+	if err != nil || d.Text != "before &#x1b; after" {
+		t.Fatalf("double-decoded RCDATA: %q %v", d.Text, err)
+	}
+}

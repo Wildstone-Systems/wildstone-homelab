@@ -29,7 +29,9 @@ HTML tree semantics, not CSS layout or script execution. Executable/embedded sub
 attributes are discarded; headings retain line boundaries and HTTP/S links
 are resolved against the final URL as inert text. Markdown uses pinned Goldmark v1.7.13 to identify actual HTML spans. It replaces
 Markdown-only text with collision-checked literal markers, restored directly
-as data after parsing one continuous HTML stream. Tree construction handles
+as data after parsing one continuous HTML stream. Restored textarea/title
+literals receive RCDATA entity decoding and control validation; ordinary
+Markdown and raw-text literals do not decode. Tree construction handles
 implicit closures and foreign-content exits while preserving HTML
 raw-text/RCDATA state across nodes; autolinks, escaped angle brackets, code
 spans and fenced/indented examples remain literal data. Plain text is

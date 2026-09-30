@@ -241,18 +241,21 @@ func (f *markupFilter) feed(input string, preserve bool) error {
 				item.suppressed = true
 			}
 		}
+		if preserve && n.Type == html.TextNode && !item.exit {
+			rcdata := n.Parent != nil && n.Parent.Namespace == "" && (n.Parent.Data == "textarea" || n.Parent.Data == "title")
+			if err := f.writeLiteralText(n.Data, rcdata, !item.suppressed); err != nil {
+				return err
+			}
+			continue
+		}
 		if !item.suppressed {
 			if n.Type == html.TextNode && !item.exit {
-				if preserve {
-					f.writeLiteralText(n.Data)
-				} else {
-					f.out.write(strings.Map(func(r rune) rune {
-						if unicode.IsSpace(r) && r != '\r' && r != '\n' {
-							return ' '
-						}
-						return r
-					}, n.Data))
-				}
+				f.out.write(strings.Map(func(r rune) rune {
+					if unicode.IsSpace(r) && r != '\r' && r != '\n' {
+						return ' '
+					}
+					return r
+				}, n.Data))
 			} else if n.Type == html.ElementNode {
 				if !item.exit {
 					switch n.Data {
@@ -287,36 +290,53 @@ func (f *markupFilter) feed(input string, preserve bool) error {
 	return nil
 }
 
-// Literal markers are restored directly into the bounded text builder, never
-// re-tokenized or recursively expanded. This works in both decoded RCDATA and
-// undecoded raw-text modes without changing the original Markdown data.
-func (f *markupFilter) writeLiteralText(text string) {
-	if f.literalPrefix == "" {
-		f.out.write(text)
-		return
+// Restore markers as data, never markup or recursively expanded markers.
+// RCDATA decodes references in restored literals; ordinary Markdown and HTML
+// raw-text do not. Inspect every decoded literal even when output is full or
+// suppressed so the retained-text cap cannot hide a forbidden control.
+func (f *markupFilter) writeLiteralText(text string, rcdata, retain bool) error {
+	write := func(value string, literal bool) error {
+		if literal && rcdata {
+			value = stdhtml.UnescapeString(value)
+		}
+		if hasControls(value) {
+			return publicfetch.ErrUnsupported
+		}
+		if retain {
+			f.out.write(value)
+		}
+		return nil
 	}
-	for len(text) > 0 && f.out.count <= MaxCharacters {
+	if f.literalPrefix == "" {
+		return write(text, false)
+	}
+	for len(text) > 0 {
 		at := strings.Index(text, f.literalPrefix)
 		if at < 0 {
-			f.out.write(text)
-			return
+			return write(text, false)
 		}
-		f.out.write(text[:at])
+		if err := write(text[:at], false); err != nil {
+			return err
+		}
 		rest := text[at+len(f.literalPrefix):]
 		end := strings.IndexByte(rest, '_')
 		if end < 0 {
-			f.out.write(text[at:])
-			return
+			return write(text[at:], false)
 		}
 		index, err := strconv.Atoi(rest[:end])
 		if err != nil || index < 0 || index >= len(f.literals) {
-			f.out.write(f.literalPrefix)
+			if err := write(f.literalPrefix, false); err != nil {
+				return err
+			}
 			text = rest
 			continue
 		}
-		f.out.write(f.literals[index])
+		if err := write(f.literals[index], true); err != nil {
+			return err
+		}
 		text = rest[end+1:]
 	}
+	return nil
 }
 
 type markdownPart struct {
