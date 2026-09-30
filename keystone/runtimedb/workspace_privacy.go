@@ -217,6 +217,12 @@ func (db *DB) CreateWorkspaceRevisionForTask(ctx context.Context, a *WorkspaceAc
 		}
 		policy.LocalOnly = policy.LocalOnly || inherited.LocalOnly
 		policy.TrustedOnly = policy.TrustedOnly || inherited.TrustedOnly
+		// Editing consumes the base even without a separate read call. Persist
+		// that input before revision creation so task/session continuations and
+		// the revision's frozen input snapshot inherit the same restrictions.
+		if _, err = tx.Exec(`INSERT OR IGNORE INTO workspace_task_sources(task,revision) VALUES(?,?)`, p.task, base); err != nil {
+			return err
+		}
 	}
 	if r.Privacy == "" {
 		r.Privacy = "normal"

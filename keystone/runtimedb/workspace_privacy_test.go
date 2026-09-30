@@ -321,3 +321,52 @@ func TestWorkspacePrivacyQAReadOnlyAndFrozenInputs(t *testing.T) {
 		t.Fatalf("QA mutation admitted: %v", err)
 	}
 }
+
+func TestWorkspacePrivacyBaseEditTracksTaskAndSession(t *testing.T) {
+	db, w, origin := workspaceAuthorityFixture(t)
+	sourceTask, _ := parseButlerTaskID(origin)
+	workspacePublish(t, db, workspaceIntent(t, db, w, sourceTask, "base", "base-r1", "", 1), "base-receipt")
+	if _, err := db.sql.Exec(`INSERT INTO content_privacy(object,local_only,trusted_only) VALUES('wa:base',1,1)`); err != nil {
+		t.Fatal(err)
+	}
+	task, session := workspacePrivacyTask(t, db)
+	ctx, _, access := workspacePrivacyTurn(t, db, task, ModelLocal, MemoryDestination{BuiltIn: true})
+	// An explicit-base edit has no preceding read to record its input. A failed
+	// revision insert must roll back both the task source and its session trigger.
+	if _, err := db.sql.Exec(`CREATE TRIGGER reject_base_edit BEFORE INSERT ON workspace_revisions BEGIN SELECT RAISE(ABORT,'injected edit failure'); END;`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.CreateWorkspaceRevisionForTask(ctx, access, w.ID, "base-r1", workspaceNewRevision("base-r2", "base")); err == nil {
+		t.Fatal("injected failure ignored")
+	}
+	for _, table := range []string{"workspace_task_sources", "workspace_session_sources"} {
+		var n int
+		if err := db.sql.QueryRow(`SELECT COUNT(*) FROM ` + table).Scan(&n); err != nil || n != 0 {
+			t.Fatalf("failed edit left %s: %d %v", table, n, err)
+		}
+	}
+	if _, err := db.sql.Exec(`DROP TRIGGER reject_base_edit`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.CreateWorkspaceRevisionForTask(ctx, access, w.ID, "base-r1", workspaceNewRevision("base-r2", "base")); err != nil {
+		t.Fatal(err)
+	}
+	for _, route := range []struct {
+		model       string
+		destination MemoryDestination
+	}{{ModelCloud, MemoryDestination{BuiltIn: true}}, {ModelLocal, MemoryDestination{}}} {
+		if err := db.CheckTaskPrivacy(task, route.model, route.destination); !errors.Is(err, ErrPrivacy) {
+			t.Fatalf("explicit-base edit lost task policy: %v", err)
+		}
+		if err := db.CheckSessionPrivacy(session, route.model, route.destination); !errors.Is(err, ErrPrivacy) {
+			t.Fatalf("explicit-base edit lost session policy: %v", err)
+		}
+		_, resumed, _ := workspacePrivacyTurn(t, db, task, route.model, route.destination)
+		if err := resumed.Check(); !errors.Is(err, ErrPrivacy) {
+			t.Fatalf("resumed edit lost base policy: %v", err)
+		}
+	}
+	if err := CheckPrivacyDelivery(ctx, MemoryDestination{}); !errors.Is(err, ErrPrivacy) {
+		t.Fatalf("edit delivery lost base policy: %v", err)
+	}
+}

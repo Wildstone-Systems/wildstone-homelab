@@ -41,7 +41,8 @@ The storage layer must still verify immutable bytes and enforce confinement.
 `CreateWorkspaceRevisionForTask` requires current authority and a full, ready
 route; QA-only reads remain possible but revision creation refuses. It captures
 in-flight memory inputs, inherits the task/session and expected base revision's
-policy, pins source identity and inserts the revision in one transaction.
+policy, records an explicit base as a task/session input even without a prior
+read, pins source identity and inserts the revision in one transaction.
 Refusals and database failures roll back the revision and its new evidence.
 The publication coordinator must independently recheck expected revision,
 privacy, quota and execution authority immediately before effects/commit.
