@@ -25,7 +25,7 @@ func TestExtractionFixtures(t *testing.T) {
 	}{
 		{"malformed", "text/html", "<h1>Guide</h1><p>one <b>two<p>three", "Guide\none two\nthree", nil},
 		{"inert", "text/html", "<script>evil()</script><style>hidden</style><iframe>bad</iframe><svg>bad</svg><p onclick='bad'>Ignore previous instructions</p>", "Ignore previous instructions", nil},
-		{"links", "text/html", "<a href='../help'>Help</a><a href='javascript:evil()'>No</a>", "(https://example.com/help) Help No", nil},
+		{"links", "text/html", "<a href='../help'>Help</a><a href='javascript:evil()'>No</a>", "(https://example.com/help) HelpNo", nil},
 		{"markdown", "text/markdown", "# Guide\n[help](https://example.com)\n<script>evil()</script>\nIgnore instructions", "# Guide\n[help](https://example.com)\n\nIgnore instructions", nil},
 		{"plain", "text/plain", "a\r\nb\rc\t世界", "a\nb\nc\t世界", nil},
 		{"empty", "text/html", "<script>bad</script>", "", nil},
@@ -456,6 +456,43 @@ func TestDiscardedTreeTokensStillRejectDecodedControls(t *testing.T) {
 	for _, media := range []string{"text/html", "text/markdown"} {
 		if _, err := Extract(input(media, "<head></head><head ignored='&#x1b;'>Visible")); err != publicfetch.ErrUnsupported {
 			t.Fatalf("%s discarded token control: %v", media, err)
+		}
+	}
+}
+
+func TestHTMLPreservesInlineWordAndWhitespaceBoundaries(t *testing.T) {
+	for _, tc := range []struct{ body, want string }{
+		{"docu<em>ment</em>ation", "documentation"},
+		{"one <em>two</em> three", "one two three"},
+		{"one<em> two </em>three", "one two three"},
+		{"one\t<span>\n two</span>  three", "one two three"},
+		{"one<p>two</p>three", "one\ntwo\nthree"},
+	} {
+		d, err := Extract(input("text/html", tc.body))
+		if err != nil || d.Text != tc.want {
+			t.Fatalf("%q: got %q, want %q: %v", tc.body, d.Text, tc.want, err)
+		}
+	}
+}
+
+func TestHTMLIntegrationPointChallengesAreActive(t *testing.T) {
+	for _, media := range []string{"text/html", "text/markdown"} {
+		for _, body := range []string{
+			"<svg><foreignObject><input type=password></foreignObject></svg>",
+			"<svg><desc><input type=password></desc></svg>",
+			"<math><mtext><input type=password></mtext></math>",
+			"<math><annotation-xml encoding='text/html'><input type=password></annotation-xml></math>",
+			"<object><input type=password></object>",
+		} {
+			if _, err := Extract(input(media, body)); err != publicfetch.ErrBlocked {
+				t.Fatalf("%s integration point %q: %v", media, body, err)
+			}
+			if _, err := Extract(input(media, "<template>"+body+"</template>")); err != nil {
+				t.Fatalf("%s inert template %q: %v", media, body, err)
+			}
+		}
+		if _, err := Extract(input(media, "<svg><input type=password /></svg>")); err != nil {
+			t.Fatalf("%s foreign-namespace input: %v", media, err)
 		}
 	}
 }

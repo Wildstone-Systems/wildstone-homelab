@@ -194,6 +194,7 @@ func (f *markupFilter) feed(input string, preserve bool) error {
 	type frame struct {
 		node       *html.Node
 		suppressed bool
+		inert      bool
 		exit       bool
 	}
 	stack := []frame{{node: root}}
@@ -210,6 +211,19 @@ func (f *markupFilter) feed(input string, preserve bool) error {
 			}
 		}
 		if n.Type == html.ElementNode {
+			if n.Namespace == "" && (n.Data == "template" || n.Data == "noscript") {
+				item.inert = true
+			}
+			// Retained-text suppression does not make rendered HTML controls
+			// inert: foreign integration points and object fallback can contain
+			// real HTML inputs. Template contents remain inert documentation.
+			if !item.exit && !item.inert && n.Namespace == "" && n.Data == "input" {
+				for _, a := range n.Attr {
+					if a.Key == "type" && strings.EqualFold(a.Val, "password") {
+						return publicfetch.ErrBlocked
+					}
+				}
+			}
 			switch n.Data {
 			case "script", "style", "iframe", "object", "svg", "math", "template", "noscript", "title":
 				item.suppressed = true
@@ -220,18 +234,16 @@ func (f *markupFilter) feed(input string, preserve bool) error {
 				if preserve {
 					f.writeLiteralText(n.Data)
 				} else {
-					f.out.write(strings.Join(strings.Fields(n.Data), " "))
-					f.out.write(" ")
+					f.out.write(strings.Map(func(r rune) rune {
+						if unicode.IsSpace(r) {
+							return ' '
+						}
+						return r
+					}, n.Data))
 				}
 			} else if n.Type == html.ElementNode {
 				if !item.exit {
 					switch n.Data {
-					case "input":
-						for _, a := range n.Attr {
-							if a.Key == "type" && strings.EqualFold(a.Val, "password") {
-								return publicfetch.ErrBlocked
-							}
-						}
 					case "a":
 						if f.out.count <= MaxCharacters {
 							for _, a := range n.Attr {
@@ -254,9 +266,9 @@ func (f *markupFilter) feed(input string, preserve bool) error {
 			}
 		}
 		if !item.exit {
-			stack = append(stack, frame{n, item.suppressed, true})
+			stack = append(stack, frame{node: n, suppressed: item.suppressed, inert: item.inert, exit: true})
 			for child := n.LastChild; child != nil; child = child.PrevSibling {
-				stack = append(stack, frame{node: child, suppressed: item.suppressed})
+				stack = append(stack, frame{node: child, suppressed: item.suppressed, inert: item.inert})
 			}
 		}
 	}
