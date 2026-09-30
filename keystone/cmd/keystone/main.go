@@ -2014,6 +2014,11 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 			apiSrv.AgentGateway = butlers.AgentClient
 			apiSrv.Ledger = ledger
 
+			// Scheduled Agent subscriptions (ADR-W039 §3.6.1, epic
+			// #326): coordinator-held, on this ledger, gated by the
+			// Person's live background authorization.
+			startScheduledSubscriptions(context.Background(), newScheduledSubscriptions(db, ledger, log), log)
+
 			// The heartbeat sweeper (ADR-W039 §3.7, Phase 4, #340): the
 			// only thing that ever marks a runtime offline on its own,
 			// rather than in answer to a call it made. It never touches
