@@ -6,7 +6,7 @@ package api
 // reachability probes for DNS/tunnel/NAS targets. Every underlying op
 // is dial-or-read only (TestNfs/TestSmb dial TCP, no mount is ever
 // performed — see the proto), so the whole family carries the read verb.
-// The home-automation probes (radio inventory, #434) join the family on
+// The home-automation probes (radio inventory #434, readiness #436) join the family on
 // the same terms: parameterless reads of fixed host locations.
 
 import (
@@ -139,6 +139,66 @@ func (s *Server) probeRadios(r *http.Request, _ principal.Identity) (any, int, e
 	}
 	return map[string]any{
 		"node": node, "platformSupported": lr.GetPlatformSupported(), "radios": out,
+	}, http.StatusOK, nil
+}
+
+// readinessStateNames is the closed state vocabulary of the
+// home-automation readiness probe. An unspecified or future state reads
+// as "unknown", so the Console never shows a state the agent did not
+// assert.
+var readinessStateNames = map[wsv1.ReadinessState]string{
+	wsv1.ReadinessState_READINESS_STATE_READY:       "ready",
+	wsv1.ReadinessState_READINESS_STATE_MISSING:     "missing",
+	wsv1.ReadinessState_READINESS_STATE_UNSUPPORTED: "unsupported",
+	wsv1.ReadinessState_READINESS_STATE_UNKNOWN:     "unknown",
+}
+
+// probeHomeAutomation reports a node's LAN-native home-automation
+// prerequisites (HomeAutomationReadiness, protocol minor 25, #436). Like
+// the radio inventory it is parameterless: a report, never a fix.
+func (s *Server) probeHomeAutomation(r *http.Request, _ principal.Identity) (any, int, error) {
+	res, node, status, err := s.probeDispatch(r, &wsv1.Operation{Op: &wsv1.Operation_HomeAutomationReadiness{
+		HomeAutomationReadiness: &wsv1.HomeAutomationReadiness{},
+	}})
+	if err != nil {
+		return nil, status, err
+	}
+	type iface struct {
+		Name         string   `json:"name"`
+		Addresses    []string `json:"addresses"`
+		Up           bool     `json:"up"`
+		Multicast    bool     `json:"multicast"`
+		DefaultRoute bool     `json:"defaultRoute"`
+	}
+	type check struct {
+		Check   string `json:"check"`
+		State   string `json:"state"`
+		Subject string `json:"subject"`
+		Value   string `json:"value,omitempty"`
+		Detail  string `json:"detail,omitempty"`
+	}
+	hr := res.GetHomeAutomationReadiness()
+	ifaces := []iface{}
+	for _, i := range hr.GetInterfaces() {
+		ifaces = append(ifaces, iface{
+			Name: i.GetName(), Addresses: append([]string{}, i.GetAddresses()...),
+			Up: i.GetUp(), Multicast: i.GetMulticast(), DefaultRoute: i.GetDefaultRoute(),
+		})
+	}
+	checks := []check{}
+	for _, c := range hr.GetChecks() {
+		state, ok := readinessStateNames[c.GetState()]
+		if !ok {
+			state = "unknown"
+		}
+		checks = append(checks, check{
+			Check: c.GetCheck(), State: state, Subject: c.GetSubject(),
+			Value: c.GetValue(), Detail: c.GetDetail(),
+		})
+	}
+	return map[string]any{
+		"node": node, "platformSupported": hr.GetPlatformSupported(),
+		"interfaces": ifaces, "checks": checks,
 	}, http.StatusOK, nil
 }
 

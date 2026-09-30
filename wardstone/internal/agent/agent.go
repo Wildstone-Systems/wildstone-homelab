@@ -131,7 +131,13 @@ import (
 //	picker a Zigbee/Z-Wave/Bluetooth app needs. An older agent answers
 //	it as an unknown operation (INVALID), which the probe endpoint
 //	relays as-is.
-const ProtocolMinor = 24
+//
+// 25: adds HomeAutomationReadiness (#436): typed, evidence-carrying
+//
+//	checks for IPv6, IPv6 forwarding, multicast, the D-Bus system bus,
+//	BlueZ, Bluetooth adapters and /dev/net/tun. Read-only; a missing
+//	prerequisite is a MISSING check, not an OpError.
+const ProtocolMinor = 25
 
 // maxUpdateMsgBytes is the gRPC message size cap on both ends of the
 // session/join connections (ADR-W003 W5). SelfUpdate ships the new binary

@@ -139,6 +139,7 @@ message Operation {
     ExportSecretBundle export_secret_bundle = 34;
     ImportSecretBundle import_secret_bundle = 35;
     ListRadios list_radios = 36; // protocol minor 24
+    HomeAutomationReadiness home_automation_readiness = 37; // protocol minor 25
   }
 }
 
@@ -182,6 +183,7 @@ message OpResult {
     ExportSecretBundleResult export_secret_bundle = 36;
     ImportSecretBundleResult import_secret_bundle = 37;
     ListRadiosResult list_radios = 38; // protocol minor 24
+    HomeAutomationReadinessResult home_automation_readiness = 39; // protocol minor 25
   }
 }
 
@@ -1139,4 +1141,66 @@ message ListRadiosResult {
   // Sorted by id.
   repeated Radio radios = 1;
   bool platform_supported = 2;
+}
+
+// ---------------------------------------------------------------- home automation readiness (protocol minor 25)
+
+// HomeAutomationReadiness reports whether a node can host LAN-native home
+// automation. Bounded and read-only: procfs/sysfs values, the kernel's
+// interface list, an Lstat of the D-Bus socket and of /dev/net/tun, and
+// one systemd property query for the fixed unit bluetooth.service. It
+// never writes a sysctl, installs a package or starts a unit, and it
+// takes no parameters, so nothing on the wire chooses what is read.
+//
+// A missing prerequisite is a ReadinessCheck in state MISSING, never an
+// OpError. Non-Linux agents answer platform_supported=false with every
+// check UNSUPPORTED.
+message HomeAutomationReadiness {}
+
+enum ReadinessState {
+  READINESS_STATE_UNSPECIFIED = 0;
+  // The prerequisite is present.
+  READINESS_STATE_READY = 1;
+  // Observed absent, disabled or of the wrong type.
+  READINESS_STATE_MISSING = 2;
+  // This node cannot have it at all (non-Linux, kernel without IPv6).
+  READINESS_STATE_UNSUPPORTED = 3;
+  // The agent could not tell (read error, unreachable systemd,
+  // unexpected value).
+  READINESS_STATE_UNKNOWN = 4;
+}
+
+message ReadinessCheck {
+  // Closed vocabulary: "ipv6", "interface_ipv6", "ipv6_forwarding",
+  // "multicast", "dbus_system_bus", "bluez_service",
+  // "bluetooth_adapter", "tun". Per-interface and per-adapter checks
+  // repeat the name once per subject.
+  string check = 1;
+  ReadinessState state = 2;
+  // What produced the state: a path ("/proc/sys/net/ipv6/conf/all/
+  // forwarding", "/run/dbus/system_bus_socket"), an interface ("eth0"),
+  // a unit ("bluetooth.service") or an adapter ("hci0"). Empty only
+  // when there was nothing to check (no candidate interface).
+  string subject = 3;
+  // The observed raw value ("0", "socket", "char 10:200", flags).
+  string value = 4;
+  // Human-readable evidence.
+  string detail = 5;
+}
+
+// A LAN-facing candidate interface: one holding a default route or, when
+// there is none, an up, addressed, non-loopback, non-container one.
+message NodeInterface {
+  string name = 1;
+  repeated string addresses = 2; // CIDR, sorted
+  bool up = 3;
+  bool multicast = 4;
+  bool default_route = 5;
+}
+
+message HomeAutomationReadinessResult {
+  bool platform_supported = 1;
+  repeated NodeInterface interfaces = 2;
+  // In a fixed order: the check names above, each once per subject.
+  repeated ReadinessCheck checks = 3;
 }

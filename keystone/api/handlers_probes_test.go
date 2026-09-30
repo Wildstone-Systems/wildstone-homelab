@@ -164,3 +164,66 @@ func TestProbeRadios(t *testing.T) {
 		t.Fatalf("old agent = %d, want 400", resp.StatusCode)
 	}
 }
+
+// TestProbeHomeAutomation maps HomeAutomationReadiness (#436): every
+// state reaches the Console as a closed lower-case name with its
+// evidence, a future state reads as "unknown", and empty lists are []
+// rather than null.
+func TestProbeHomeAutomation(t *testing.T) {
+	h := newHarness(t)
+	h.s.Agents = applierFunc(func(_ context.Context, node string, op *wsv1.Operation) (*wsv1.OpResult, error) {
+		if _, ok := op.GetOp().(*wsv1.Operation_HomeAutomationReadiness); !ok || node != "n1" {
+			t.Fatalf("dispatched %v to %q", op, node)
+		}
+		return &wsv1.OpResult{Result: &wsv1.OpResult_HomeAutomationReadiness{HomeAutomationReadiness: &wsv1.HomeAutomationReadinessResult{
+			PlatformSupported: true,
+			Interfaces: []*wsv1.NodeInterface{
+				{Name: "eth0", Addresses: []string{"192.0.2.10/24"}, Up: true, Multicast: true, DefaultRoute: true},
+			},
+			Checks: []*wsv1.ReadinessCheck{
+				{Check: "ipv6", State: wsv1.ReadinessState_READINESS_STATE_READY, Subject: "/proc/sys/net/ipv6/conf/all/disable_ipv6", Value: "0"},
+				{Check: "ipv6_forwarding", State: wsv1.ReadinessState_READINESS_STATE_MISSING, Subject: "/proc/sys/net/ipv6/conf/all/forwarding", Value: "0"},
+				{Check: "multicast", State: wsv1.ReadinessState_READINESS_STATE_UNSUPPORTED, Subject: "eth0"},
+				{Check: "bluez_service", State: wsv1.ReadinessState_READINESS_STATE_UNKNOWN, Subject: "bluetooth.service", Detail: "connect to systemd: refused"},
+				{Check: "tun", State: wsv1.ReadinessState(42), Subject: "/dev/net/tun"},
+			},
+		}}}, nil
+	})
+
+	var out struct {
+		PlatformSupported bool `json:"platformSupported"`
+		Interfaces        []struct {
+			Name         string   `json:"name"`
+			Addresses    []string `json:"addresses"`
+			DefaultRoute bool     `json:"defaultRoute"`
+		} `json:"interfaces"`
+		Checks []struct {
+			Check   string `json:"check"`
+			State   string `json:"state"`
+			Subject string `json:"subject"`
+			Value   string `json:"value"`
+			Detail  string `json:"detail"`
+		} `json:"checks"`
+	}
+	if resp := h.do(runtimedb.RoleButler, http.MethodGet, "/api/v1/nodes/n1/probes/home-automation", nil, &out); resp.StatusCode != http.StatusOK {
+		t.Fatalf("home-automation = %d", resp.StatusCode)
+	}
+	if !out.PlatformSupported || len(out.Interfaces) != 1 || out.Interfaces[0].Name != "eth0" || !out.Interfaces[0].DefaultRoute {
+		t.Fatalf("interfaces = %+v", out)
+	}
+	want := []string{"ready", "missing", "unsupported", "unknown", "unknown"}
+	if len(out.Checks) != len(want) {
+		t.Fatalf("checks = %+v", out.Checks)
+	}
+	for i, w := range want {
+		if out.Checks[i].State != w {
+			t.Fatalf("check %d (%s) state = %q, want %q", i, out.Checks[i].Check, out.Checks[i].State, w)
+		}
+	}
+	if c := out.Checks[1]; c.Subject != "/proc/sys/net/ipv6/conf/all/forwarding" || c.Value != "0" {
+		t.Fatalf("forwarding evidence = %+v", c)
+	}
+	if out.Checks[3].Detail == "" {
+		t.Fatal("unknown state lost its detail")
+	}
+}

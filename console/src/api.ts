@@ -195,6 +195,45 @@ export interface RadioInventory {
   radios: Radio[];
 }
 
+// Home-automation readiness (GET /api/v1/nodes/{node}/probes/home-automation,
+// #436). A per-interface or per-adapter check repeats `check` once per
+// `subject`; `subject` names the path, interface, unit or adapter that
+// produced `state`.
+export type ReadinessState = "ready" | "missing" | "unsupported" | "unknown";
+
+export type ReadinessCheckName =
+  | "ipv6"
+  | "interface_ipv6"
+  | "ipv6_forwarding"
+  | "multicast"
+  | "dbus_system_bus"
+  | "bluez_service"
+  | "bluetooth_adapter"
+  | "tun";
+
+export interface ReadinessCheck {
+  check: ReadinessCheckName;
+  state: ReadinessState;
+  subject: string;
+  value?: string;
+  detail?: string;
+}
+
+export interface NodeInterface {
+  name: string;
+  addresses: string[];
+  up: boolean;
+  multicast: boolean;
+  defaultRoute: boolean;
+}
+
+export interface HomeAutomationReadiness {
+  node: string;
+  platformSupported: boolean;
+  interfaces: NodeInterface[];
+  checks: ReadinessCheck[];
+}
+
 export interface ProbeResult {
   reachable: boolean;
   detail?: string;
@@ -2341,6 +2380,11 @@ export const api = {
     call<RadioInventory>(
       "GET",
       `/api/v1/nodes/${encodeURIComponent(node)}/probes/radios`,
+    ),
+  probeHomeAutomation: (node: string) =>
+    call<HomeAutomationReadiness>(
+      "GET",
+      `/api/v1/nodes/${encodeURIComponent(node)}/probes/home-automation`,
     ),
   probeHttp: (node: string, url: string) =>
     call<ProbeResult>(
