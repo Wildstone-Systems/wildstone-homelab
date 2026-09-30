@@ -107,6 +107,21 @@ type SubscriptionChange struct {
 	CapabilitySet string `json:"capabilitySet"`
 	// BudgetJSON bounds what a matched Task may spend.
 	BudgetJSON string `json:"budgetJson,omitempty"`
+	// Trigger is "event" (the default, 0086) or "schedule" (0099, epic
+	// #326 S03). Cadence is a Go duration for a scheduled subscription
+	// (default 15m, 5m..24h); Source names the integration connection it
+	// reads. A Personal source binds the subscription to that
+	// connection's owning Person, whose own authorization dispatch
+	// additionally requires — this approval never substitutes for it.
+	Trigger string `json:"trigger,omitempty"`
+	Cadence string `json:"cadence,omitempty"`
+	Source  string `json:"source,omitempty"`
+	// Revises, when set, makes this the approval of an EDIT to an
+	// existing subscription rather than a new one: approving it enables
+	// exactly Version of row Revises, and nothing if that row has been
+	// edited again since.
+	Revises int64 `json:"revises,omitempty"`
+	Version int   `json:"version,omitempty"`
 }
 
 // RoutineChange is the exact routine version an Owner reviews. Output audience

@@ -777,6 +777,15 @@ type SubscriptionProposal struct {
 	// Budget bounds what a matched Task may spend, in the ledger's own
 	// budget shape.
 	Budget json.RawMessage `json:"budget,omitempty"`
+	// Trigger is "event" (the default) or "schedule": a scheduled
+	// subscription is due every Cadence (a duration like "15m"; default
+	// 15m, 5m..24h) and reads Source, an integration connection. A
+	// Personal source additionally needs its owning Person's own
+	// authorization before anything runs; Owner approval never
+	// substitutes for it (epic #326 S03).
+	Trigger string `json:"trigger,omitempty"`
+	Cadence string `json:"cadence,omitempty"`
+	Source  string `json:"source,omitempty"`
 }
 
 // NotifyRequest sends text outward through a Wildstone Connection

@@ -600,6 +600,12 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/household/routines/{name}/purge", s.handle(principal.VerbManage, s.consequential(s.purgeDeletedRoutine)))
 	mux.Handle("GET /api/v1/household/execution-stop", s.handle(principal.VerbRead, s.getHouseholdExecutionStop))
 	mux.Handle("POST /api/v1/household/execution-stop", s.handle(principal.VerbApprove, s.changeHouseholdExecutionStop))
+	// Agent subscriptions, event and scheduled (epic #326 S03): one
+	// surface for Console, CLI and Butler. Approval stays the Plan path.
+	mux.Handle("GET /api/v1/agent-subscriptions", s.handle(principal.VerbRead, s.listAgentSubscriptions))
+	mux.Handle("GET /api/v1/agent-subscriptions/{id}", s.handle(principal.VerbRead, s.getAgentSubscription))
+	mux.Handle("PUT /api/v1/agent-subscriptions/{id}", s.handle(principal.VerbPropose, s.reviseAgentSubscription))
+	mux.Handle("POST /api/v1/agent-subscriptions/{id}/control", s.handle(principal.VerbPropose, s.controlAgentSubscription))
 	mux.Handle("GET /api/v1/butler/tools", s.handle(principal.VerbRead, s.listButlerToolControls))
 	mux.Handle("PUT /api/v1/butler/tools", s.handle(principal.VerbManage, s.setButlerToolControl))
 	mux.Handle("GET /api/v1/butler/grants", s.handle(principal.VerbRead, s.listButlerGrants))

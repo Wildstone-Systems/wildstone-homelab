@@ -115,7 +115,7 @@ func (g *Gateway) proposeSubscription(ctx context.Context, s *session, req agent
 	view, err := proposals.FileSubscription(g.Proposals, id, proposals.SubscriptionRequest{
 		Butler: s.hc.Butler.Name, MatchKind: sub.MatchKind, MatchJSON: string(sub.Match),
 		Audience: sub.Audience, CapabilitySet: sub.Capabilities, BudgetJSON: string(sub.Budget),
-		Summary: summary,
+		Summary: summary, Trigger: sub.Trigger, Cadence: sub.Cadence, Source: sub.Source,
 	})
 	if err != nil {
 		return agentapi.ProposalRef{}, fmt.Errorf("%w: %v", ErrRefused, err)

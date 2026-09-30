@@ -109,6 +109,15 @@ func RestoreBackup(source, destination, reason string, snapshotAt time.Time) (*D
 		_ = os.Remove(destination)
 		return nil, fmt.Errorf("runtimedb: clearing stale recovery imports during restore: %w", err)
 	}
+	// A scheduled subscription run recorded as in flight belonged to the
+	// lost machine and can never report (epic #326 S03). Abandoning it
+	// keeps its checkpoint where it was, so the first run after release
+	// re-reads that work rather than skipping it.
+	if err := abandonRunsOnRestore(restored); err != nil {
+		restored.Close()
+		_ = os.Remove(destination)
+		return nil, fmt.Errorf("runtimedb: abandoning in-flight subscription runs during restore: %w", err)
+	}
 	if err := restored.EnterRestoreQuarantine(reason, snapshotAt); err != nil {
 		restored.Close()
 		_ = os.Remove(destination)
