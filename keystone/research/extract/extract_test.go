@@ -496,3 +496,39 @@ func TestHTMLIntegrationPointChallengesAreActive(t *testing.T) {
 		}
 	}
 }
+
+// Exercise the representation boundary and active/inert ancestry together,
+// rather than treating each parser-repair regression as an isolated example.
+func TestChallengeDetectionAcrossRepresentationsAndOutputCap(t *testing.T) {
+	cases := []struct {
+		name, body string
+		blocked    bool
+	}{
+		{"direct", "<input type=password>", true},
+		{"case-and-entity", "<INPUT TYPE='pass&#119;ord'>", true},
+		{"optional-head", "<head><title>Login</title><body><input type=password>", true},
+		{"foreign-breakout", "<svg><p><input type=password>", true},
+		{"foreign-integration", "<math><mtext><input type=password></mtext></math>", true},
+		{"object-fallback", "<object><input type=password></object>", true},
+		{"inert-template", "<template><svg><foreignObject><input type=password></foreignObject></svg></template>", false},
+		{"raw-text", "<script><input type=password></script>", false},
+		{"rcdata", "<textarea><input type=password></textarea>", false},
+		{"encoded-example", "&lt;input type=password&gt;", false},
+		{"comment", "<!-- <input type=password> -->", false},
+	}
+	for _, tc := range cases {
+		for _, media := range []string{"text/html", "text/markdown", "text/plain"} {
+			for _, prefix := range []string{"", strings.Repeat("x", MaxCharacters+1) + "\n\n"} {
+				d, err := Extract(input(media, prefix+tc.body))
+				wantBlocked := tc.blocked && media != "text/plain"
+				if wantBlocked {
+					if err != publicfetch.ErrBlocked {
+						t.Fatalf("%s %s prefix=%d: want blocked, got %v", media, tc.name, len(prefix), err)
+					}
+				} else if err != nil || utf8.RuneCountInString(d.Text) > MaxCharacters || (prefix != "" && !d.Source.Truncated) {
+					t.Fatalf("%s %s prefix=%d: unexpected result %+v %v", media, tc.name, len(prefix), d.Source, err)
+				}
+			}
+		}
+	}
+}

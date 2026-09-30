@@ -12,13 +12,18 @@ Declared supported encodings decode to UTF-8. HTML without a declared charset
 uses HTML encoding sniffing (including meta/BOM); other text defaults to UTF-8.
 Unknown encodings, invalid UTF-8, binary controls, PDF and unsupported media
 are refused. Transport 401/403/407 and WWW-Authenticate challenges, plus HTML
-password inputs, produce a specific `permission_denied` challenge error.
+active HTML-namespace password inputs (including foreign integration points
+and object fallback), produce a specific `permission_denied` challenge error.
+Template/noscript contents and literal Markdown examples remain inert.
 This is conservative detection, not a promise to recognize every CAPTCHA or
 script-only login page. No authentication, browser, script or external asset
 request is attempted.
 
 HTML uses the tolerant HTML tree parser and caps retained output during construction,
-so repeated links cannot amplify a bounded response into unbounded text. Executable/embedded subtrees, comments and
+so repeated links cannot amplify a bounded response into unbounded text.
+Parsing still inspects the complete bounded response to detect challenges and
+controls beyond the retained-text cap; the cap is not an early parsing exit.
+Normalization follows HTML tree semantics, not CSS layout or script execution. Executable/embedded subtrees, comments and
 attributes are discarded; headings retain line boundaries and HTTP/S links
 are resolved against the final URL as inert text. Markdown uses pinned Goldmark v1.7.13 to identify actual HTML spans. It replaces
 Markdown-only text with collision-checked literal markers, restored directly
