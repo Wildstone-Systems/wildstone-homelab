@@ -255,6 +255,7 @@ export function Shell() {
                 setOpenPackage(undefined);
                 setView("services");
               }}
+              onNavigate={setView}
             />
           )}
           {view === "butler" && <Butler onEyebrow={setEyebrowOverride} onNavigate={setView} />}

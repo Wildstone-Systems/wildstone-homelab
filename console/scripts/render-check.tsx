@@ -2770,5 +2770,224 @@ check("the draft asks the API about exactly the chosen components",
 check("Bluetooth is not asked about on the external path",
   !queryOf({ ...haManagedDraft, topology: "external" }).select?.includes("bluetooth"));
 
+// Home automation readiness (#449): the chosen machine's evidence and
+// the radio picker, rendered from the aggregate's answer (#446) alone.
+import { manualPathProblem, radioIdentity, selectedRadios } from "../src/views/HomeAutomation";
+import type { HomeAutomationBlocker, HomeAutomationNode, HomeAutomationRadio, ReadinessCheck } from "../src/api";
+
+const haVisible = (html: string) => html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
+const haChecksReady: ReadinessCheck[] = [
+  { check: "ipv6", state: "ready", subject: "all", value: "enabled" },
+  { check: "interface_ipv6", state: "ready", subject: "eth0", value: "fd00::10/64" },
+  { check: "multicast", state: "ready", subject: "eth0" },
+  { check: "ipv6_forwarding", state: "ready", subject: "all", value: "1" },
+  { check: "dbus_system_bus", state: "ready", subject: "/run/dbus/system_bus_socket" },
+  { check: "bluez_service", state: "ready", subject: "bluetooth.service", value: "active" },
+  { check: "bluetooth_adapter", state: "ready", subject: "hci0" },
+  { check: "tun", state: "ready", subject: "/dev/net/tun" },
+];
+const haWithChecks = (over: Partial<Record<string, Partial<ReadinessCheck>>>) =>
+  haChecksReady.map((c) => ({ ...c, ...(over[c.check] ?? {}) }));
+const haZigbeeRadio: HomeAutomationRadio = {
+  id: "serial-by-id:usb-Example_Zigbee_Coordinator_0001-if00-port0", kind: "zigbee", kindReason: "USB id 10c4:ea60 is a known Zigbee coordinator",
+  kernelName: "ttyUSB0", devPath: "/dev/ttyUSB0", byIdPaths: ["/dev/serial/by-id/usb-Example_Zigbee_Coordinator_0001-if00-port0"],
+  usb: { vendorId: "10c4", productId: "ea60", manufacturer: "Example", product: "Zigbee Coordinator" },
+  owners: [], suitableFor: [{ component: "zigbee", fit: "detected" }],
+};
+const haSpareZigbee: HomeAutomationRadio = {
+  ...haZigbeeRadio, id: "usb:SPARE0002", kernelName: "ttyACM1", devPath: "/dev/ttyACM1", byIdPaths: [],
+  usb: { vendorId: "1a86", productId: "55d4", product: "Spare Zigbee Stick", serial: "SPARE0002" },
+};
+const haUnknownRadio: HomeAutomationRadio = {
+  id: "sysfs:/devices/pci0000:00/usb1/1-3", kind: "unknown", kindReason: "generic USB-serial bridge; the protocol is not identifiable",
+  kernelName: "ttyUSB1", devPath: "/dev/ttyUSB1", byIdPaths: [],
+  owners: [], suitableFor: [{ component: "zigbee", fit: "possible" }, { component: "zwave", fit: "possible" }, { component: "thread", fit: "possible" }],
+};
+const haNodeOk = (over: Partial<HomeAutomationNode> = {}, radios: HomeAutomationRadio[] = [haZigbeeRadio], checks = haChecksReady): HomeAutomationNode => ({
+  id: "node-a", connected: true, selected: true, agentVersion: "0.40.0", protocolMinor: 27, hostAddress: "192.0.2.10", blockers: [],
+  readiness: { probe: "ok", platformSupported: true, checks,
+    interfaces: [{ name: "eth0", up: true, multicast: true, defaultRoute: true, addresses: ["192.0.2.10/24", "fd00::10/64"] }] },
+  radioInventory: { probe: "ok", platformSupported: true, radios, unresolvedClaims: [] },
+  ...over,
+});
+const haRetry = { kind: "retry_probe" as const, label: "Check again", node: "node-a" };
+const haReadiness = (node: HomeAutomationNode, comps: Parameters<typeof haStatus>[1], draft: Partial<HADraft> = {}, extra: Record<string, unknown> = {}) => {
+  const status = haStatus({ nodes: [node] }, comps);
+  const d: HADraft = { topology: "managed", goals: [], bluetooth: "none", step: "readiness", ...draft };
+  const html = text(renderToString(h(HomeAutomationView, { status, draft: d, onDraft: () => {}, onOpenPackage: () => {}, onOpenServices: () => {}, ...extra })));
+  return { html, seen: haVisible(html), status, draft: d };
+};
+
+// Fully ready: every check passes and the one identified radio is the
+// pick, without anyone reading a serial path.
+const haZigbeeReady = { selection: "requested" as const, state: "ready_to_propose" as const, reason: "ready to propose",
+  radioCandidates: [haZigbeeRadio.id] };
+const haFull = haReadiness(haNodeOk(), {
+  zigbee: haZigbeeReady,
+  mqtt: { selection: "dependency", state: "ready_to_propose", reason: "ready to propose" },
+  matter: { selection: "requested", state: "ready_to_propose", reason: "ready to propose" },
+}, { goals: ["zigbee", "matter-wifi"] });
+check("a fully ready machine says so", haFull.seen.includes("Ready: nothing stands in the way of what you chose"), haFull.seen);
+check("the machine's connectivity and address are shown", haFull.seen.includes("Connected") && haFull.seen.includes("192.0.2.10"));
+check("every readiness check is evidence in a table with row headers",
+  haFull.html.includes('<th scope="row">IPv6') && haFull.seen.includes("TUN device") && haFull.seen.includes("BlueZ Bluetooth service") &&
+  !haFull.seen.includes("Missing"), haFull.seen);
+check("the broker the choice needs is on the page with its standing", haFull.seen.includes("MQTT broker") && haFull.seen.includes("needed by your choices"));
+check("the radio is named by what it says it is", haFull.seen.includes("Example Zigbee Coordinator") && haFull.seen.includes("Zigbee radio"));
+check("its stable identity is explained", haFull.seen.includes("Recognised by its own name, in any USB port"));
+check("its suitability is the API's", haFull.seen.includes("Zigbee (identified)"));
+check("the radio picker is a labelled radio group",
+  haFull.html.includes('name="ha-radio-zigbee"') && haFull.seen.includes("Radio for Zigbee") && haFull.html.includes("<legend"));
+check("the only identified radio is picked for the household",
+  haInput(haFull.html, 'name="ha-radio-zigbee"').includes('checked=""') && haFull.seen.includes("chosen for you"), haFull.html);
+check("the pick is the radio's stable id", selectedRadios(haFull.draft, haFull.status).zigbee === haZigbeeRadio.id);
+check("the ordinary flow asks for no device path", !/<input[^>]*type="text"/.test(haFull.html) && !haFull.seen.includes("/dev/tty"), haFull.seen);
+check("typing a path is behind an explicit advanced control",
+  /<button[^>]*aria-expanded="false"[^>]*>Advanced: enter a device path by hand/.test(haFull.html), haFull.html);
+check("a component that takes no radio gets no picker (Matter over Wi-Fi)", !haFull.seen.includes("Radio for Matter"));
+
+// No radios: the remedy is the API's exact, node-specific step.
+const haNoRadioBlocker = (title: string, severity: "blocking" | "warning"): HomeAutomationBlocker => ({
+  code: "no_radio", severity, message: `No ${title} radio is plugged into node-a.`,
+  evidence: [{ source: "radios", subject: "node-a", state: "none", value: "0 radio(s) inventoried" }],
+  actions: [{ kind: "manual_step", label: "Plug in a radio", node: "node-a", component: "zwave",
+    instructions: [`Plug a ${title} adapter into node-a (a USB extension cable away from the machine helps reception), then check again.`] }, haRetry],
+});
+const haNone = haReadiness(haNodeOk({}, []), {
+  zwave: { selection: "requested", state: "blocked", reason: "blocked", blockers: [haNoRadioBlocker("Z-Wave", "blocking")] },
+}, { goals: ["zwave"] });
+check("no radios says none were found", haNone.seen.includes("No radios found"), haNone.seen);
+check("no radios counts as standing in the way", haNone.seen.includes("One thing stands in the way"));
+check("the plug-in step is the API's own words for this machine",
+  haNone.seen.includes("Plug a Z-Wave adapter into node-a (a USB extension cable away from the machine helps reception), then check again."));
+check("the failing evidence is on the page", haNone.seen.includes("node-a: none — 0 radio(s) inventoried"), haNone.seen);
+check("the manual step offers Check again", /<button[^>]*>Check again<\/button>/.test(haNone.html.slice(haNone.html.indexOf("ha-blocker-msg"))));
+check("an empty picker says why", haNone.seen.includes("No radio on node-a suits Z-Wave"));
+
+// Unknown radio: offered only where the API says "possible", never named
+// a Zigbee stick because of what it is called.
+const haUnknownComps = {
+  zigbee: { selection: "requested" as const, state: "ready_to_propose" as const, reason: "ready", radioCandidates: [haUnknownRadio.id] },
+  zwave: { selection: "requested" as const, state: "ready_to_propose" as const, reason: "ready", radioCandidates: [haUnknownRadio.id] },
+};
+const haUnknown = haReadiness(haNodeOk({}, [haUnknownRadio]), haUnknownComps, { goals: ["zigbee", "zwave"] });
+check("an unidentified radio is called that", haUnknown.seen.includes("Unidentified serial device"), haUnknown.seen);
+check("its suitability is only possible", haUnknown.seen.includes("Zigbee (possible, not identified)"));
+check("a port-bound identity is flagged as not stable",
+  haUnknown.seen.includes("moving it to another port makes it a different radio") && haUnknown.seen.includes("Not stable"));
+check("an unidentified radio is never picked for the household",
+  JSON.stringify(selectedRadios(haUnknown.draft, haUnknown.status)) === "{}" && !haUnknown.seen.includes("chosen for you"));
+check("the household is asked to choose", haUnknown.seen.includes("Choose which radio to use for Zigbee and Z-Wave"));
+check("picking it warns it did not identify itself", haUnknown.seen.includes("could be a Zigbee radio, but it did not say so"));
+const haUnknownPicked = haReadiness(haNodeOk({}, [haUnknownRadio]), haUnknownComps, { goals: ["zigbee", "zwave"], radios: { zigbee: haUnknownRadio.id } });
+check("one radio cannot be picked for two protocols",
+  /disabled=""/.test(haInput(haUnknownPicked.html, 'name="ha-radio-zwave"')) && haUnknownPicked.seen.includes("Chosen for Zigbee"), haUnknownPicked.html);
+check("and only the first pick counts",
+  JSON.stringify(selectedRadios({ ...haUnknownPicked.draft, radios: { zigbee: haUnknownRadio.id, zwave: haUnknownRadio.id } }, haUnknownPicked.status)) ===
+    JSON.stringify({ zigbee: haUnknownRadio.id }));
+const haStale = haReadiness(haNodeOk(), { zigbee: haZigbeeReady }, { goals: ["zigbee"], radios: { zigbee: "usb:GONE" } });
+check("a pick that is no longer offered is said so, not kept",
+  haStale.seen.includes("no longer offered") && selectedRadios(haStale.draft, haStale.status).zigbee === undefined, haStale.seen);
+
+// Duplicate owner: two services hold one radio.
+const haShared: HomeAutomationRadio = { ...haZigbeeRadio, owners: [
+  { device: "/dev/ttyUSB0", radioId: haZigbeeRadio.id, container: "zigbee2mqtt", package: "zigbee2mqtt", component: "zigbee", capability: "zigbee", source: "/dev/serial/by-id/usb-Example_Zigbee_Coordinator_0001-if00-port0" },
+  { device: "/dev/ttyUSB0", radioId: haZigbeeRadio.id, container: "camera-app", package: "camera-app", source: "/dev/ttyUSB0" },
+] };
+const haDup = haReadiness(haNodeOk({}, [haShared, haSpareZigbee]), {
+  zigbee: { selection: "installed", state: "degraded", reason: "shares its radio", radios: [haShared.owners[0]],
+    blockers: [{ code: "radio_conflict", severity: "blocking", message: "Zigbee shares its radio with another service; a radio answers one program at a time.",
+      evidence: [{ source: "statefile", subject: "Container/zigbee2mqtt", value: "/dev/serial/by-id/usb-Example_Zigbee_Coordinator_0001-if00-port0", detail: "zigbee2mqtt" },
+        { source: "statefile", subject: "Container/camera-app", value: "/dev/ttyUSB0", detail: "camera-app" }],
+      actions: [{ kind: "open_service", label: "Open camera-app", package: "camera-app" },
+        { kind: "select_radio", label: "Choose another radio", component: "zigbee", node: "node-a", radioIds: [haSpareZigbee.id] }] }] },
+}, { goals: ["zigbee"] });
+check("a radio held twice is shown as held twice", haDup.seen.includes("Used by 2 services") && haDup.seen.includes("More than one service has this radio"), haDup.seen);
+check("its owners are named", haDup.seen.includes("Zigbee (zigbee2mqtt)") && haDup.seen.includes("camera-app"));
+check("the conflict's evidence stays on the page", haDup.seen.includes("Container/camera-app — /dev/ttyUSB0 · camera-app"), haDup.seen);
+check("the owning service can be opened", /<button[^>]*>Open camera-app<\/button>/.test(haDup.html));
+check("choosing another radio goes to the picker", /<a[^>]*href="#ha-radio-zigbee"[^>]*>Choose another radio<\/a>/.test(haDup.html) && haDup.html.includes('id="ha-radio-zigbee"'));
+check("the replacement offered is the API's", haDup.seen.includes("Replacement radio for Zigbee") && haDup.seen.includes("Spare Zigbee Stick"));
+check("the radio in use now is named", haDup.seen.includes("Using Example Zigbee Coordinator"));
+
+// Offline machine: nothing checked, nothing pretended.
+const haOfflineBlocker: HomeAutomationBlocker = { code: "node_offline", severity: "blocking",
+  message: "node-a is not connected, so its radios and prerequisites cannot be checked and nothing can change on it.",
+  evidence: [{ source: "node", subject: "node-a", state: "disconnected" }], actions: [haRetry] };
+const haOffline = haReadiness(haNodeOk({ connected: false, lastSeenAt: new Date(Date.now() - 7200_000).toISOString(), blockers: [haOfflineBlocker],
+  readiness: { probe: "offline", platformSupported: false, interfaces: [], checks: [] },
+  radioInventory: { probe: "offline", platformSupported: false, radios: [], unresolvedClaims: [] } }), {
+  zigbee: { selection: "requested", state: "blocked", reason: "blocked", blockers: [haOfflineBlocker] },
+}, { goals: ["zigbee"] });
+check("an offline machine reads as offline", haOffline.seen.includes("Offline") && haOffline.seen.includes("Last seen 2h ago"), haOffline.seen);
+check("its checks are not checked, and say why", haOffline.seen.includes("Not checked: node-a is offline."));
+check("no check reads as ready when nothing was checked", !haOffline.seen.includes(" Ready "));
+check("the node blocker offers Check again", haOffline.seen.includes("node-a is not connected") && haOffline.seen.includes("Check again"));
+check("an offline machine offers no radio to pick", !haOffline.html.includes('name="ha-radio-zigbee"'));
+
+// Missing IPv6: exact instructions, and Check again keeps the evidence.
+const haIpv6Blocker: HomeAutomationBlocker = { code: "ipv6_forwarding_missing", severity: "blocking",
+  message: "Thread border router: IPv6 forwarding is missing on node-a.",
+  evidence: [{ source: "readiness", subject: "all", state: "missing", value: "0", detail: "net.ipv6.conf.all.forwarding" }],
+  actions: [{ kind: "manual_step", label: "How to fix this", node: "node-a", component: "thread", instructions: [
+    "IPv6 forwarding is off on node-a; a Thread border router routes IPv6 between Thread and your LAN.",
+    "Run: sudo sysctl -w net.ipv6.conf.all.forwarding=1 net.ipv6.conf.eth0.accept_ra=2",
+    "Persist both in /etc/sysctl.d/60-wildstone-thread.conf (accept_ra=2 keeps the machine's own IPv6 route while forwarding).",
+  ] }, haRetry] };
+const haIpv6Node = haNodeOk({}, [], haWithChecks({ ipv6_forwarding: { state: "missing", value: "0", detail: "net.ipv6.conf.all.forwarding" },
+  bluetooth_adapter: { state: "missing" } }));
+const haIpv6Comps = { thread: { selection: "requested" as const, state: "blocked" as const, reason: "blocked", blockers: [haIpv6Blocker] } };
+const haIpv6 = haReadiness(haIpv6Node, haIpv6Comps, { goals: ["matter-thread"] });
+check("missing IPv6 forwarding is shown in the evidence table", /IPv6 forwarding.*Missing/.test(haIpv6.seen), haIpv6.seen);
+check("it is marked as what blocks the choice", /IPv6 forwarding[^]*?st-bad[^>]*>Missing/.test(haIpv6.html));
+check("a missing check nothing chosen needs is a fact, not an alarm",
+  /Bluetooth adapter[^]*?st-mute[^>]*>Missing/.test(haIpv6.html) && haIpv6.seen.includes("not needed for what you chose"), haIpv6.html);
+check("the fix is the API's exact node-specific command",
+  haIpv6.seen.includes("Run: sudo sysctl -w net.ipv6.conf.all.forwarding=1 net.ipv6.conf.eth0.accept_ra=2") && haIpv6.seen.includes("How to fix this on node-a"));
+check("the instructions are an ordered list", haIpv6.html.includes("<ol>"));
+const haIpv6Again = haReadiness(haIpv6Node, haIpv6Comps, { goals: ["matter-thread"] }, { loading: true });
+check("checking again keeps the failing evidence visible",
+  haIpv6Again.seen.includes("all: missing — 0 · net.ipv6.conf.all.forwarding") && haIpv6Again.seen.includes("sudo sysctl -w") && haIpv6Again.seen.includes("Checking…"), haIpv6Again.seen);
+check("and cannot be pressed twice", /<button[^>]*disabled=""[^>]*>Check again<\/button>/.test(haIpv6Again.html));
+
+// Missing BlueZ: the host path's remedy, and no picker for an adapter
+// BlueZ uses without claiming.
+const haBtAdapter: HomeAutomationRadio = { ...haZigbeeRadio, id: "sysfs:/devices/usb1/1-4", kind: "bluetooth", kindReason: "bluetooth class",
+  kernelName: "hci0", byIdPaths: [], usb: { vendorId: "0a12", productId: "0001", product: "Bluetooth Dongle" },
+  suitableFor: [{ component: "bluetooth", fit: "detected" }] };
+const haBlueZ = haReadiness(haNodeOk({}, [haBtAdapter], haWithChecks({ bluez_service: { state: "missing", value: "inactive" } })), {
+  bluetooth: { selection: "requested", state: "blocked", reason: "blocked", mode: "host-bluez", blockers: [{
+    code: "bluez_service_missing", severity: "blocking", message: "Bluetooth: BlueZ Bluetooth service is missing on node-a.",
+    evidence: [{ source: "readiness", subject: "bluetooth.service", state: "missing", value: "inactive" }],
+    actions: [{ kind: "manual_step", label: "How to fix this", node: "node-a", component: "bluetooth", instructions: [
+      "The BlueZ Bluetooth service is not running on node-a.",
+      "Install and start it: sudo apt install bluez && sudo systemctl enable --now bluetooth",
+    ] }, haRetry] }] },
+}, { bluetooth: "host-bluez" });
+check("missing BlueZ is in the Bluetooth evidence", /BlueZ Bluetooth service[^]*?st-bad[^>]*>Missing/.test(haBlueZ.html), haBlueZ.seen);
+check("with the API's install step", haBlueZ.seen.includes("Install and start it: sudo apt install bluez &amp;&amp; sudo systemctl enable --now bluetooth"), haBlueZ.seen);
+check("the adapter is listed but not put in a picker", haBlueZ.seen.includes("Bluetooth Dongle") && !haBlueZ.seen.includes("Radio for Bluetooth"));
+
+// Advanced/manual path: only when asked for, validated, and it takes
+// the component out of the radio-id selection.
+const haManualDraft = { goals: ["zigbee" as const], radios: { zigbee: haZigbeeRadio.id }, manualRadios: { zigbee: "/dev/ttyAMA0" } };
+const haManual = haReadiness(haNodeOk(), { zigbee: haZigbeeReady }, haManualDraft);
+check("a remembered manual path opens the advanced panel",
+  /<input[^>]*id="ha-manual-zigbee"[^>]*>/.test(haManual.html) && haManual.html.includes('aria-expanded="true"') && haManual.html.includes('<label for="ha-manual-zigbee"'), haManual.html);
+check("a manual path replaces the picked radio id", selectedRadios(haManual.draft, haManual.status).zigbee === undefined);
+check("a manual path must be a device path",
+  manualPathProblem("ttyUSB0") !== undefined && manualPathProblem("/dev/serial/by-id/x") === undefined && manualPathProblem("") === undefined);
+const haManualBad = haReadiness(haNodeOk(), { zigbee: haZigbeeReady }, { ...haManualDraft, manualRadios: { zigbee: "COM3" } });
+check("a bad manual path is announced", haManualBad.html.includes('aria-invalid="true"') && haManualBad.seen.includes("A device path starts with /dev/"));
+check("radio identities are read from the documented id prefixes",
+  radioIdentity("usb:X").stable && radioIdentity("serial-by-id:x").stable && !radioIdentity("sysfs:/x").stable);
+
+// The picks are part of the draft, and survive only as known ids.
+haStore.set("wildstone.homeAutomation.draft", JSON.stringify({ topology: "managed", goals: ["zigbee"], step: "readiness",
+  radios: { zigbee: haZigbeeRadio.id, toaster: "usb:1", zwave: 5 }, manualRadios: [] }));
+const haRadioDraft = loadDraft(haStorage);
+check("radio picks survive leaving the screen, junk dropped",
+  JSON.stringify(haRadioDraft.radios) === JSON.stringify({ zigbee: haZigbeeRadio.id }) && haRadioDraft.manualRadios === undefined, JSON.stringify(haRadioDraft));
+
 console.log(failures === 0 ? "\nALL CHECKS PASSED" : `\n${failures} CHECK(S) FAILED`);
 process.exit(failures === 0 ? 0 : 1);

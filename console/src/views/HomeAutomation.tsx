@@ -4,11 +4,21 @@ import {
   api,
   ApiError,
   BluetoothMode,
+  HomeAutomationAction,
+  HomeAutomationBlocker,
   HomeAutomationComponent,
   HomeAutomationComponentId,
+  HomeAutomationEvidence,
+  HomeAutomationNode,
   HomeAutomationQuery,
+  HomeAutomationRadio,
+  HomeAutomationRadioOwner,
   HomeAutomationStatus,
   HomeAutomationTopology,
+  Radio,
+  RadioKind,
+  ReadinessCheckName,
+  ReadinessState,
 } from "../api";
 import { ago, ErrorLine, useLoad } from "../lib";
 import { Kind, StatusPill } from "../ui/status";
@@ -100,12 +110,36 @@ export const BLUETOOTH_COPY: Record<BluetoothChoice, { title: string; body: stri
 
 // The draft: only choices, never facts. Every field is optional because
 // "not chosen yet" is a real answer the screen has to render.
+//
+// `radios` holds the radio picked per component on the readiness step,
+// by the inventory's stable radio `id` (never a /dev path): it is what
+// the setup sequence proposes with. `manualRadios` is the advanced
+// escape hatch — a device path typed by hand for a radio the inventory
+// does not list — and is only ever set from that explicit affordance.
 export interface Draft {
   topology?: HomeAutomationTopology;
   node?: string;
   goals: Goal[];
   bluetooth: BluetoothChoice;
   step: Step;
+  radios?: Partial<Record<HomeAutomationComponentId, string>>;
+  manualRadios?: Partial<Record<HomeAutomationComponentId, string>>;
+}
+
+const COMPONENT_IDS: HomeAutomationComponentId[] = [
+  "mqtt", "home-assistant", "home-automation", "zigbee", "zwave", "matter", "thread", "bluetooth",
+];
+
+// A per-component string map from storage, keeping only known component
+// ids with non-empty string values; undefined when nothing survives.
+function componentMap(v: unknown): Partial<Record<HomeAutomationComponentId, string>> | undefined {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return undefined;
+  const out: Partial<Record<HomeAutomationComponentId, string>> = {};
+  for (const id of COMPONENT_IDS) {
+    const x = (v as Record<string, unknown>)[id];
+    if (typeof x === "string" && x) out[id] = x;
+  }
+  return Object.keys(out).length ? out : undefined;
 }
 
 export const EMPTY_DRAFT: Draft = { goals: [], bluetooth: "none", step: "choose" };
@@ -128,7 +162,12 @@ export function loadDraft(storage: Pick<Storage, "getItem"> | undefined = safeLo
       r.bluetooth === "host-bluez" || r.bluetooth === "proxy" ? r.bluetooth : "none";
     const step: Step = r.step === "readiness" && topology === "managed" ? "readiness" : "choose";
     const node = typeof r.node === "string" && r.node ? r.node : undefined;
-    return { topology, node, goals, bluetooth, step };
+    const d: Draft = { topology, node, goals, bluetooth, step };
+    const radios = componentMap(r.radios);
+    const manualRadios = componentMap(r.manualRadios);
+    if (radios) d.radios = radios;
+    if (manualRadios) d.manualRadios = manualRadios;
+    return d;
   } catch {
     return EMPTY_DRAFT;
   }
@@ -184,9 +223,11 @@ function effectiveTopology(d: Draft, status: HomeAutomationStatus | null): HomeA
 export function HomeAutomation({
   onOpenPackage,
   onOpenServices,
+  onNavigate,
 }: {
   onOpenPackage: (pkg: string) => void;
   onOpenServices: () => void;
+  onNavigate?: Navigate;
 }) {
   const [draft, setDraftState] = useState<Draft>(() => loadDraft());
   const setDraft = (d: Draft) => {
@@ -236,6 +277,7 @@ export function HomeAutomation({
       onRefresh={status.reload}
       onOpenPackage={onOpenPackage}
       onOpenServices={onOpenServices}
+      onNavigate={onNavigate}
     />
   );
 }
@@ -250,6 +292,7 @@ export function HomeAutomationView({
   onRefresh = () => {},
   onOpenPackage,
   onOpenServices,
+  onNavigate,
 }: {
   status: HomeAutomationStatus;
   draft: Draft;
@@ -259,6 +302,7 @@ export function HomeAutomationView({
   onRefresh?: () => void;
   onOpenPackage: (pkg: string) => void;
   onOpenServices: () => void;
+  onNavigate?: Navigate;
 }) {
   const topology = effectiveTopology(draft, status);
   const comps = useMemo(() => new Map(status.components.map((c) => [c.id, c])), [status.components]);
@@ -282,9 +326,16 @@ export function HomeAutomationView({
         <ReadinessStep
           status={status}
           comps={comps}
-          onBack={() => onDraft({ ...draft, step: "choose" })}
-          onRefresh={onRefresh}
-          loading={loading}
+          draft={draft}
+          onDraft={onDraft}
+          handlers={{
+            onBack: () => onDraft({ ...draft, step: "choose" }),
+            onRefresh,
+            loading,
+            onOpenPackage,
+            onOpenServices,
+            onNavigate,
+          }}
         />
       ) : (
         <>
@@ -295,7 +346,13 @@ export function HomeAutomationView({
           />
           {topology && (
             <>
-              <NodeChoice status={status} value={draft.node} onChange={(n) => onDraft({ ...draft, node: n })} />
+              <NodeChoice
+                status={status}
+                value={draft.node}
+                // Radio picks name one machine's radios, so another
+                // machine starts without them.
+                onChange={(n) => onDraft({ ...draft, node: n, radios: undefined, manualRadios: undefined })}
+              />
               <GoalChoice draft={draft} topology={topology} comps={comps} onDraft={onDraft} />
               <NextStep
                 topology={topology}
@@ -672,23 +729,174 @@ function DependencyNote({ deps }: { deps: HomeAutomationComponent[] }) {
   );
 }
 
-// The readiness step. #449 fills it with the prerequisite evidence, the
-// radio picker and each blocker's remedy; until then it shows the API's
-// own per-component answer so the person can see where they stand.
+// ---------------------------------------------------------------- readiness
+
+// The readiness step (#449): the chosen machine's prerequisite evidence,
+// its radios, a radio picker per radio-driven component, and every
+// blocker with exactly the remedies the API permits.
+//
+// Nothing here judges. Which checks a component needs, which radio suits
+// which protocol, who owns a radio and what to do about it are all the
+// API's answer (#446): this renders them, and records only what the
+// person picks. A radio is picked by its stable id from the inventory;
+// typing a /dev path is an explicitly advanced affordance, never the
+// ordinary flow.
+
+// Household wording for the readiness probe's checks, grouped by what
+// they are for. Labels only: whether a check matters for a choice is
+// the API's blockers, not this table.
+const CHECK_GROUPS: { title: string; checks: { check: ReadinessCheckName; label: string }[] }[] = [
+  {
+    title: "Network",
+    checks: [
+      { check: "ipv6", label: "IPv6" },
+      { check: "interface_ipv6", label: "IPv6 on the network interface" },
+      { check: "multicast", label: "Multicast (device discovery)" },
+      { check: "ipv6_forwarding", label: "IPv6 forwarding" },
+    ],
+  },
+  {
+    title: "Bluetooth",
+    checks: [
+      { check: "dbus_system_bus", label: "D-Bus system bus" },
+      { check: "bluez_service", label: "BlueZ Bluetooth service" },
+      { check: "bluetooth_adapter", label: "Bluetooth adapter" },
+    ],
+  },
+  {
+    title: "Thread",
+    checks: [{ check: "tun", label: "TUN device (/dev/net/tun)" }],
+  },
+];
+
+const KIND_LABEL: Record<RadioKind, string> = {
+  zigbee: "Zigbee radio",
+  zwave: "Z-Wave radio",
+  thread: "Thread radio",
+  bluetooth: "Bluetooth adapter",
+  unknown: "Unidentified serial device",
+};
+
+// What a radio is called on screen: what it says about itself over USB,
+// else its stable by-id name, else the kernel's name for it.
+export function radioName(r: Radio): string {
+  const product = [r.usb?.manufacturer, r.usb?.product].filter(Boolean).join(" ");
+  if (product) return product;
+  const byId = r.byIdPaths[0]?.split("/").pop();
+  return byId || r.kernelName || r.id;
+}
+
+// How the radio is recognised again after a reboot or a replug, from the
+// id's documented prefix (api.ts: serial-by-id:, usb:, sysfs:).
+export function radioIdentity(id: string): { stable: boolean; text: string } {
+  if (id.startsWith("serial-by-id:")) return { stable: true, text: "Recognised by its own name, in any USB port" };
+  if (id.startsWith("usb:")) return { stable: true, text: "Recognised by its USB serial number, in any USB port" };
+  if (id.startsWith("sysfs:"))
+    return { stable: false, text: "Recognised by the USB port it is in: moving it to another port makes it a different radio" };
+  return { stable: false, text: "No stable identity reported" };
+}
+
+// The components that take a radio, as the API shows them: something to
+// pick from, a radio already held, or a blocker about radios. Bluetooth
+// through BlueZ uses the adapter without claiming it, so it has none of
+// these and gets no picker.
+const RADIO_CODES = new Set(["no_radio", "radio_in_use", "radio_missing", "radio_conflict"]);
+function takesRadio(c: HomeAutomationComponent): boolean {
+  return (
+    (c.radioCandidates?.length ?? 0) > 0 ||
+    (c.radios?.length ?? 0) > 0 ||
+    c.blockers.some((b) => RADIO_CODES.has(b.code) || b.actions.some((a) => a.kind === "select_radio"))
+  );
+}
+
+// The radio ids a component may be given: the API's free candidates and
+// any a select_radio remedy offers (a replacement for an installed one).
+function radioOptions(c: HomeAutomationComponent): string[] {
+  const ids = [...(c.radioCandidates ?? [])];
+  for (const b of c.blockers)
+    for (const a of b.actions)
+      if (a.kind === "select_radio" && (!a.component || a.component === c.id))
+        for (const id of a.radioIds ?? []) if (!ids.includes(id)) ids.push(id);
+  return ids;
+}
+
+// The radio each component would be given, from the draft: what the
+// person picked, if the API still offers it and no other component took
+// it; else, when the API offers exactly one identified radio and nobody
+// else picked it, that one. This is what the setup sequence (#450) sends
+// as the selected radio ids. A component with a hand-typed path has no
+// radio id here: the path is in `draft.manualRadios`.
+export function selectedRadios(draft: Draft, status: HomeAutomationStatus): Partial<Record<HomeAutomationComponentId, string>> {
+  const out: Partial<Record<HomeAutomationComponentId, string>> = {};
+  const taken = new Set<string>();
+  const inventory = selectedNode(status)?.radioInventory?.radios ?? [];
+  const involved = status.components.filter((c) => c.selection !== "none" && takesRadio(c) && !draft.manualRadios?.[c.id]);
+  // Explicit picks first, so an automatic one never takes a radio the
+  // person gave to something else.
+  for (const c of involved) {
+    const pick = draft.radios?.[c.id];
+    if (pick && radioOptions(c).includes(pick) && !taken.has(pick)) {
+      out[c.id] = pick;
+      taken.add(pick);
+    }
+  }
+  for (const c of involved) {
+    if (out[c.id] || draft.radios?.[c.id] || c.selection === "installed") continue;
+    const detected = radioOptions(c).filter((id) =>
+      inventory.some((r) => r.id === id && r.suitableFor.some((s) => s.component === c.id && s.fit === "detected")),
+    );
+    if (detected.length === 1 && !taken.has(detected[0])) {
+      out[c.id] = detected[0];
+      taken.add(detected[0]);
+    }
+  }
+  return out;
+}
+
+function selectedNode(status: HomeAutomationStatus): HomeAutomationNode | undefined {
+  return status.nodes.find((n) => n.id === status.node);
+}
+
+// A manual path is only accepted as a device path; anything else is
+// said to be wrong rather than silently stored.
+export function manualPathProblem(path: string): string | undefined {
+  if (!path) return undefined;
+  if (!/^\/dev\/\S+$/.test(path)) return "A device path starts with /dev/ and has no spaces.";
+  return undefined;
+}
+
+type Navigate = (view: "plans" | "backups" | "nodes") => void;
+
+interface ActionHandlers {
+  onRefresh: () => void;
+  onBack: () => void;
+  onOpenPackage: (pkg: string) => void;
+  onOpenServices: () => void;
+  onNavigate?: Navigate;
+  loading: boolean;
+}
+
 function ReadinessStep({
   status,
   comps,
-  onBack,
-  onRefresh,
-  loading,
+  draft,
+  onDraft,
+  handlers,
 }: {
   status: HomeAutomationStatus;
   comps: Map<HomeAutomationComponentId, HomeAutomationComponent>;
-  onBack: () => void;
-  onRefresh: () => void;
-  loading: boolean;
+  draft: Draft;
+  onDraft: (d: Draft) => void;
+  handlers: ActionHandlers;
 }) {
+  const node = selectedNode(status);
   const involved = [...comps.values()].filter((c) => c.selection !== "none");
+  const picked = selectedRadios(draft, status);
+  const blocking = involved.reduce((n, c) => n + c.blockers.filter((b) => b.severity === "blocking").length, 0);
+  const missingPick = involved.filter(
+    (c) => c.selection !== "installed" && takesRadio(c) && radioOptions(c).length > 0 && !picked[c.id] && !draft.manualRadios?.[c.id],
+  );
+
   return (
     <section className="ha-readiness" aria-labelledby="ha-readiness-title">
       <div className="sect">
@@ -696,31 +904,616 @@ function ReadinessStep({
           Is {status.node ?? "the machine"} ready?
         </h2>
         <span className="fade" />
-        <button type="button" className="btn btn-ghost" disabled={loading} onClick={onRefresh}>
+        <span className="muted ha-checked" aria-live="polite">
+          {handlers.loading ? "Checking…" : `Checked ${ago(status.generatedAt)}`}
+        </span>
+        <button type="button" className="btn btn-ghost" disabled={handlers.loading} onClick={handlers.onRefresh}>
           Check again
         </button>
       </div>
+
+      <ReadinessSummary blocking={blocking} missingPick={missingPick} involved={involved.length} />
+
+      {node ? (
+        <>
+          <NodeCard node={node} handlers={handlers} />
+          <PrerequisiteCard node={node} involved={involved} />
+          <RadioInventoryCard node={node} comps={comps} />
+        </>
+      ) : (
+        <div className="callout callout-warn" role="note">
+          No machine is chosen yet. Go back to choose which machine this runs on.
+        </div>
+      )}
+
+      <h3 className="ha-legend ha-sub-head">What you chose</h3>
       <ul className="ha-list ha-readiness-list">
         {involved.map((c) => (
-          <li key={c.id}>
+          <li key={c.id} id={`ha-comp-${c.id}`}>
             <div className="ha-readiness-row">
-              <span className="ha-option-title">{c.title}</span>
+              <span className="ha-option-title">
+                {c.title}
+                {c.selection === "dependency" && <span className="muted"> (needed by your choices)</span>}
+              </span>
               <ComponentPill c={c} />
             </div>
             <div className="muted">{c.reason}</div>
+            {takesRadio(c) && node && (
+              <RadioPicker c={c} node={node} comps={comps} draft={draft} picked={picked} onDraft={onDraft} />
+            )}
             {c.blockers.map((b, i) => (
-              <div key={`${b.code}-${i}`} className={b.severity === "blocking" ? "callout callout-bad" : "callout callout-warn"}>
-                {b.message}
-              </div>
+              <BlockerCard key={`${b.code}-${i}`} b={b} handlers={handlers} checkedAt={status.generatedAt} />
             ))}
           </li>
         ))}
       </ul>
       <div className="row">
-        <button type="button" className="btn btn-secondary" onClick={onBack}>
+        <button type="button" className="btn btn-secondary" onClick={handlers.onBack}>
           Back to choices
         </button>
       </div>
     </section>
   );
+}
+
+function ReadinessSummary({
+  blocking,
+  missingPick,
+  involved,
+}: {
+  blocking: number;
+  missingPick: HomeAutomationComponent[];
+  involved: number;
+}) {
+  if (involved === 0) return <div className="muted">Nothing is chosen yet.</div>;
+  if (blocking > 0) {
+    return (
+      <div className="callout callout-bad" role="status">
+        {blocking === 1 ? "One thing stands" : `${blocking} things stand`} in the way. Each one below says what was
+        found and what you can do about it.
+      </div>
+    );
+  }
+  if (missingPick.length > 0) {
+    return (
+      <div className="callout callout-warn" role="status">
+        Choose which radio to use for {missingPick.map((c) => c.title).join(" and ")}.
+      </div>
+    );
+  }
+  return (
+    <div className="callout callout-ok" role="status">
+      Ready: nothing stands in the way of what you chose. Nothing is installed until you approve a plan.
+    </div>
+  );
+}
+
+function NodeCard({ node, handlers }: { node: HomeAutomationNode; handlers: ActionHandlers }) {
+  return (
+    <div className="card ha-card" aria-labelledby="ha-node-title">
+      <div className="ha-readiness-row">
+        <h3 id="ha-node-title">The machine</h3>
+        <StatusPill kind={node.connected ? "ok" : "bad"}>{node.connected ? "Connected" : "Offline"}</StatusPill>
+      </div>
+      <dl className="ha-facts">
+        <dt>Name</dt>
+        <dd>{node.id}</dd>
+        {!node.connected && (
+          <>
+            <dt>Last seen</dt>
+            <dd>{ago(node.lastSeenAt)}</dd>
+          </>
+        )}
+        {node.agentVersion && (
+          <>
+            <dt>Wildstone agent</dt>
+            <dd>{node.agentVersion}</dd>
+          </>
+        )}
+        {node.hostAddress && (
+          <>
+            <dt>Address on your network</dt>
+            <dd>{node.hostAddress}</dd>
+          </>
+        )}
+      </dl>
+      {node.blockers.map((b, i) => (
+        <BlockerCard key={`${b.code}-${i}`} b={b} handlers={handlers} />
+      ))}
+    </div>
+  );
+}
+
+// The probe's own words for a probe that did not produce evidence.
+function probeProblem(node: HomeAutomationNode, probe?: string, detail?: string): string | undefined {
+  switch (probe) {
+    case undefined:
+    case "ok":
+      return undefined;
+    case "offline":
+      return `Not checked: ${node.id} is offline.`;
+    case "agent_outdated":
+      return `Not checked: the Wildstone agent on ${node.id} is too old to report this.`;
+    case "not_wired":
+      return "Not checked: Keystone cannot reach any machine's agent right now.";
+    default:
+      return `Not checked: ${node.id} did not answer${detail ? ` (${detail})` : ""}.`;
+  }
+}
+
+function checkState(state: ReadinessState): string {
+  switch (state) {
+    case "ready":
+      return "Ready";
+    case "missing":
+      return "Missing";
+    case "unsupported":
+      return "Not supported";
+    default:
+      return "Unknown";
+  }
+}
+
+function PrerequisiteCard({ node, involved }: { node: HomeAutomationNode; involved: HomeAutomationComponent[] }) {
+  const r = node.readiness;
+  const problem = probeProblem(node, r?.probe, r?.detail);
+  // A row is red or amber only when a component the person chose has a
+  // blocker for that check (codes are <check>_<state>): the API decides
+  // what matters for which choice, and a missing thing nothing chosen
+  // needs is shown as a fact, not an alarm.
+  const severityFor = (check: string, subject: string): "blocking" | "warning" | undefined => {
+    let sev: "blocking" | "warning" | undefined;
+    for (const c of involved)
+      for (const b of c.blockers) {
+        if (!b.code.startsWith(check + "_")) continue;
+        if (b.evidence.length > 0 && !b.evidence.some((e) => e.subject === subject || e.subject === check)) continue;
+        if (b.severity === "blocking") return "blocking";
+        sev = "warning";
+      }
+    return sev;
+  };
+  return (
+    <div className="card ha-card" aria-labelledby="ha-prereq-title">
+      <h3 id="ha-prereq-title">Network and system</h3>
+      {!r || problem ? (
+        <div className="muted">{problem ?? `Not checked: ${node.id} was not asked.`}</div>
+      ) : !r.platformSupported ? (
+        <div className="muted">{node.id} cannot report these (not a Linux host).</div>
+      ) : (
+        <>
+          {r.interfaces.length > 0 && (
+            <table className="ha-table">
+              <caption className="ha-caption">Network interfaces</caption>
+              <thead>
+                <tr>
+                  <th scope="col">Interface</th>
+                  <th scope="col">State</th>
+                  <th scope="col">Addresses</th>
+                </tr>
+              </thead>
+              <tbody>
+                {r.interfaces.map((i) => (
+                  <tr key={i.name}>
+                    <th scope="row">
+                      {i.name}
+                      {i.defaultRoute && <span className="muted"> (default route)</span>}
+                    </th>
+                    <td>
+                      {i.up ? "Up" : "Down"}
+                      {i.multicast ? ", multicast on" : ", multicast off"}
+                    </td>
+                    <td className="ha-mono">{i.addresses.length ? i.addresses.join(", ") : "none"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          {CHECK_GROUPS.map((g) => {
+            const rows = g.checks.flatMap((c) =>
+              r.checks.filter((row) => row.check === c.check).map((row) => ({ ...row, label: c.label })),
+            );
+            if (rows.length === 0) return null;
+            return (
+              <table key={g.title} className="ha-table">
+                <caption className="ha-caption">{g.title}</caption>
+                <tbody>
+                  {rows.map((row, i) => {
+                    const sev = row.state === "ready" ? undefined : severityFor(row.check, row.subject);
+                    const kind: Kind =
+                      row.state === "ready" ? "ok" : sev === "blocking" ? "bad" : sev === "warning" ? "warn" : "mute";
+                    return (
+                      <tr key={`${row.check}-${row.subject}-${i}`}>
+                        <th scope="row">
+                          {row.label}
+                          {row.subject && row.subject !== row.check && <span className="muted ha-mono"> {row.subject}</span>}
+                        </th>
+                        <td>
+                          <StatusPill kind={kind}>{checkState(row.state)}</StatusPill>
+                          {row.state !== "ready" && !sev && <span className="muted"> not needed for what you chose</span>}
+                        </td>
+                        <td className="muted">{[row.value, row.detail].filter(Boolean).join(" · ")}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            );
+          })}
+        </>
+      )}
+    </div>
+  );
+}
+
+function ownerLine(o: HomeAutomationRadioOwner, comps: Map<HomeAutomationComponentId, HomeAutomationComponent>): string {
+  const who = (o.component && comps.get(o.component)?.title) || o.package || o.container;
+  return o.package && who !== o.package ? `${who} (${o.package})` : who;
+}
+
+function RadioInventoryCard({
+  node,
+  comps,
+}: {
+  node: HomeAutomationNode;
+  comps: Map<HomeAutomationComponentId, HomeAutomationComponent>;
+}) {
+  const inv = node.radioInventory;
+  const problem = probeProblem(node, inv?.probe, inv?.detail);
+  return (
+    <div className="card ha-card" aria-labelledby="ha-radios-title">
+      <h3 id="ha-radios-title">Radios plugged into {node.id}</h3>
+      {!inv || problem ? (
+        <div className="muted">{problem ?? `Not checked: ${node.id} was not asked.`}</div>
+      ) : !inv.platformSupported ? (
+        <div className="muted">{node.id} cannot list its radios (not a Linux host).</div>
+      ) : inv.radios.length === 0 ? (
+        <div className="muted">No radios found. Plug a USB radio into {node.id} and check again.</div>
+      ) : (
+        <ul className="ha-radios">
+          {inv.radios.map((r) => (
+            <RadioRow key={r.id} r={r} comps={comps} />
+          ))}
+        </ul>
+      )}
+      {inv && inv.unresolvedClaims.length > 0 && (
+        <div className="callout callout-warn" role="note">
+          Given to a service but not plugged in:
+          <ul>
+            {inv.unresolvedClaims.map((o, i) => (
+              <li key={`${o.device}-${i}`}>
+                <span className="ha-mono">{o.source || o.device}</span> for {ownerLine(o, comps)}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function RadioRow({ r, comps }: { r: HomeAutomationRadio; comps: Map<HomeAutomationComponentId, HomeAutomationComponent> }) {
+  const identity = radioIdentity(r.id);
+  const shared = r.owners.length > 1;
+  return (
+    <li className="ha-radio">
+      <div className="ha-readiness-row">
+        <span className="ha-option-title">{radioName(r)}</span>
+        <span className="ha-pills">
+          <StatusPill kind={r.kind === "unknown" ? "warn" : "mute"}>{KIND_LABEL[r.kind]}</StatusPill>
+          {r.owners.length === 0 ? (
+            <StatusPill kind="ok">Free</StatusPill>
+          ) : (
+            <StatusPill kind={shared ? "bad" : "mute"}>{shared ? `Used by ${r.owners.length} services` : "In use"}</StatusPill>
+          )}
+        </span>
+      </div>
+      <dl className="ha-facts">
+        <dt>Identity</dt>
+        <dd>
+          {identity.text}
+          {!identity.stable && <StatusPill kind="warn">Not stable</StatusPill>}
+        </dd>
+        {r.byIdPaths[0] && (
+          <>
+            <dt>Stable name</dt>
+            <dd className="ha-mono">{r.byIdPaths[0].split("/").pop()}</dd>
+          </>
+        )}
+        <dt>Suits</dt>
+        <dd>
+          {r.suitableFor.length === 0
+            ? "Nothing you can set up here"
+            : r.suitableFor
+                .map((s) => `${comps.get(s.component)?.title ?? s.component} (${s.fit === "detected" ? "identified" : "possible, not identified"})`)
+                .join(", ")}
+        </dd>
+        {r.kindReason && (
+          <>
+            <dt>Why</dt>
+            <dd className="muted">{r.kindReason}</dd>
+          </>
+        )}
+        {r.owners.length > 0 && (
+          <>
+            <dt>Used by</dt>
+            <dd>{r.owners.map((o) => ownerLine(o, comps)).join(", ")}</dd>
+          </>
+        )}
+      </dl>
+      {shared && (
+        <div className="callout callout-bad" role="note">
+          More than one service has this radio. A radio answers one program at a time, so at most one of them works.
+        </div>
+      )}
+    </li>
+  );
+}
+
+function RadioPicker({
+  c,
+  node,
+  comps,
+  draft,
+  picked,
+  onDraft,
+}: {
+  c: HomeAutomationComponent;
+  node: HomeAutomationNode;
+  comps: Map<HomeAutomationComponentId, HomeAutomationComponent>;
+  draft: Draft;
+  picked: Partial<Record<HomeAutomationComponentId, string>>;
+  onDraft: (d: Draft) => void;
+}) {
+  const inventory = node.radioInventory?.radios ?? [];
+  const byId = new Map(inventory.map((r) => [r.id, r]));
+  const options = radioOptions(c);
+  const manual = draft.manualRadios?.[c.id] ?? "";
+  const [advanced, setAdvanced] = useState(manual !== "");
+  const current = picked[c.id];
+  const wanted = draft.radios?.[c.id];
+  // Suitable radios someone else holds: shown so the person sees why
+  // they are not offered; freeing one is the owning service's business.
+  const held = inventory.filter(
+    (r) =>
+      !options.includes(r.id) &&
+      r.owners.length > 0 &&
+      r.suitableFor.some((s) => s.component === c.id) &&
+      !r.owners.some((o) => o.component === c.id),
+  );
+  const pickedElsewhere = (id: string) =>
+    (Object.entries(picked) as [HomeAutomationComponentId, string][]).find(([k, v]) => v === id && k !== c.id)?.[0];
+  const setRadio = (id: string) =>
+    onDraft({ ...draft, radios: { ...draft.radios, [c.id]: id } });
+  const setManual = (path: string) => {
+    const next = { ...draft.manualRadios };
+    if (path) next[c.id] = path;
+    else delete next[c.id];
+    onDraft({ ...draft, manualRadios: next });
+  };
+  const fieldId = `ha-radio-${c.id}`;
+  const manualId = `ha-manual-${c.id}`;
+  const manualProblem = manualPathProblem(manual);
+  const installed = c.selection === "installed";
+
+  return (
+    <div className="ha-picker">
+      {installed && (c.radios?.length ?? 0) > 0 && (
+        <div className="ha-current">
+          Using{" "}
+          {c.radios!.map((o, i) => {
+            const r = o.radioId ? byId.get(o.radioId) : undefined;
+            return (
+              <span key={`${o.device}-${i}`}>
+                {i > 0 && ", "}
+                <strong>{r ? radioName(r) : o.source || o.device}</strong>
+                {!o.radioId && <span className="muted"> (not plugged in)</span>}
+              </span>
+            );
+          })}
+          .
+        </div>
+      )}
+      {(!installed || options.length > 0) && (
+        <fieldset className="ha-fieldset ha-nested" id={fieldId} tabIndex={-1}>
+          <legend className="ha-legend-sub">{installed ? `Replacement radio for ${c.title}` : `Radio for ${c.title}`}</legend>
+          {options.length === 0 && held.length === 0 && (
+            <div className="muted">No radio on {node.id} suits {c.title}.</div>
+          )}
+          {wanted && !options.includes(wanted) && !manual && (
+            <div className="callout callout-warn" role="note">
+              The radio you chose earlier is no longer offered for {c.title}: it was unplugged or another service took it.
+            </div>
+          )}
+          <div className="ha-options">
+            {options.map((id) => {
+              const r = byId.get(id);
+              const fit = r?.suitableFor.find((s) => s.component === c.id)?.fit;
+              const other = pickedElsewhere(id);
+              const on = current === id && !manual;
+              const oid = `${fieldId}-${id.replace(/[^A-Za-z0-9_-]/g, "_")}`;
+              return (
+                <label key={id} className={on ? "ha-option on" : "ha-option"}>
+                  <input
+                    type="radio"
+                    name={fieldId}
+                    value={id}
+                    checked={on}
+                    disabled={!!other || !!manual}
+                    onChange={() => setRadio(id)}
+                    aria-labelledby={`${oid}-title`}
+                    aria-describedby={`${oid}-desc`}
+                  />
+                  <span className="ha-option-body">
+                    <span id={`${oid}-title`} className="ha-option-title">
+                      {r ? radioName(r) : id}
+                    </span>
+                    <span id={`${oid}-desc`} className="ha-option-text">
+                      {r ? KIND_LABEL[r.kind] : "Not in the latest inventory"}
+                      {fit === "possible" &&
+                        ` — could be a ${c.title} radio, but it did not say so. Choose it only if you know it is one.`}
+                      {r && ` ${radioIdentity(r.id).text}.`}
+                      {other && ` Chosen for ${comps.get(other)?.title ?? other}.`}
+                    </span>
+                    {on && !wanted && <StatusPill kind="mute">The only identified radio, chosen for you</StatusPill>}
+                  </span>
+                </label>
+              );
+            })}
+            {held.map((r) => (
+              <div key={r.id} className="ha-option ha-option-off" aria-disabled="true">
+                <span className="ha-option-body">
+                  <span className="ha-option-title">{radioName(r)}</span>
+                  <span className="ha-option-text">
+                    Used by {r.owners.map((o) => ownerLine(o, comps)).join(", ")}. Free it from that service to use it
+                    here.
+                  </span>
+                </span>
+              </div>
+            ))}
+          </div>
+          <div className="ha-manual">
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              aria-expanded={advanced}
+              aria-controls={`${manualId}-panel`}
+              onClick={() => setAdvanced(!advanced)}
+            >
+              Advanced: enter a device path by hand
+            </button>
+            {advanced && (
+              <div id={`${manualId}-panel`} className="ha-manual-panel">
+                <label htmlFor={manualId} className="ha-legend-sub">
+                  Device path for {c.title}
+                </label>
+                <div className="muted ha-hint-inline">
+                  Only for a radio the list above does not show. A typed path is not checked against the inventory, and
+                  it is used instead of a radio chosen above.
+                </div>
+                <input
+                  id={manualId}
+                  className="input ha-mono"
+                  type="text"
+                  spellCheck={false}
+                  autoComplete="off"
+                  placeholder="/dev/serial/by-id/…"
+                  value={manual}
+                  aria-invalid={manualProblem ? true : undefined}
+                  aria-describedby={manualProblem ? `${manualId}-err` : undefined}
+                  onChange={(e) => setManual(e.target.value.trim())}
+                />
+                {manualProblem && (
+                  <div id={`${manualId}-err`} className="ha-field-err" role="alert">
+                    {manualProblem}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </fieldset>
+      )}
+    </div>
+  );
+}
+
+// One blocker: what was found (kept on screen through every "Check
+// again" until the evidence changes), and the remedies the API permits.
+function BlockerCard({
+  b,
+  handlers,
+  checkedAt,
+}: {
+  b: HomeAutomationBlocker;
+  handlers: ActionHandlers;
+  checkedAt?: string;
+}) {
+  const seen = new Set<string>();
+  const actions = b.actions.filter((a) => {
+    const k = `${a.kind}|${a.label}|${a.package ?? ""}|${a.component ?? ""}`;
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+  const manual = actions.filter((a) => a.kind === "manual_step" && (a.instructions?.length ?? 0) > 0);
+  const buttons = actions.filter((a) => !(a.kind === "manual_step" && (a.instructions?.length ?? 0) > 0));
+  return (
+    <div className={b.severity === "blocking" ? "callout callout-bad ha-blocker" : "callout callout-warn ha-blocker"} role="note">
+      <div className="ha-blocker-msg">{b.message}</div>
+      {b.evidence.length > 0 && (
+        <ul className="ha-evidence" aria-label="What was found">
+          {b.evidence.map((e, i) => (
+            <li key={i}>{evidenceLine(e)}</li>
+          ))}
+        </ul>
+      )}
+      {manual.map((a, i) => (
+        <div key={`m-${i}`} className="ha-manual-step">
+          <div className="ha-legend-sub">{a.label}{a.node ? ` on ${a.node}` : ""}</div>
+          <ol>
+            {a.instructions!.map((line, j) => (
+              <li key={j}>{line}</li>
+            ))}
+          </ol>
+        </div>
+      ))}
+      {buttons.length > 0 && (
+        <div className="row ha-actions">
+          {buttons.map((a, i) => (
+            <ActionButton key={i} a={a} handlers={handlers} />
+          ))}
+        </div>
+      )}
+      {checkedAt && actions.some((a) => a.kind === "retry_probe") && (
+        <div className="muted ha-checked">{handlers.loading ? "Checking…" : `Last checked ${ago(checkedAt)}`}</div>
+      )}
+    </div>
+  );
+}
+
+export function evidenceLine(e: HomeAutomationEvidence): string {
+  const head = [e.subject, e.state].filter(Boolean).join(": ");
+  const tail = [e.value, e.detail].filter(Boolean).join(" · ");
+  return [head || e.source, tail].filter(Boolean).join(" — ");
+}
+
+function ActionButton({ a, handlers }: { a: HomeAutomationAction; handlers: ActionHandlers }) {
+  const btn = (onClick: () => void, disabled = false) => (
+    <button type="button" className="btn btn-secondary btn-sm" disabled={disabled} onClick={onClick}>
+      {a.label}
+    </button>
+  );
+  // In-page targets are links: the picker or component card is already
+  // on this screen.
+  const jump = (href: string) => (
+    <a className="btn btn-secondary btn-sm" href={href}>
+      {a.label}
+    </a>
+  );
+  switch (a.kind) {
+    case "retry_probe":
+      return btn(handlers.onRefresh, handlers.loading);
+    case "select_radio":
+      return a.component ? jump(`#ha-radio-${a.component}`) : null;
+    case "resolve_dependency":
+      return a.component ? jump(`#ha-comp-${a.component}`) : null;
+    case "choose_node":
+      return btn(handlers.onBack);
+    case "install_package":
+    case "reconfigure_package":
+    case "upgrade_package":
+    case "open_service":
+    case "mint_publisher":
+      return a.package ? btn(() => handlers.onOpenPackage(a.package!)) : btn(handlers.onOpenServices);
+    case "open_plan":
+      return handlers.onNavigate ? btn(() => handlers.onNavigate!("plans")) : null;
+    case "open_backups":
+      return handlers.onNavigate ? btn(() => handlers.onNavigate!("backups")) : null;
+    case "pair_node":
+      return handlers.onNavigate ? btn(() => handlers.onNavigate!("nodes")) : null;
+    case "manual_step":
+      // A manual step without instructions has nothing to show but its
+      // label; it is followed by the Check again beside it.
+      return <span className="ha-manual-label">{a.label}</span>;
+  }
+  return null;
 }
