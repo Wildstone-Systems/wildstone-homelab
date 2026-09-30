@@ -574,7 +574,7 @@ func (s *Server) chatInbound(r *http.Request, id principal.Identity, msg inbound
 			s.Log.Error("recording chat thread failed", "err", err)
 		}
 	}
-	body := chatReplyBody(ask)
+	body := chatReplyBody(ask, s.chatOutcomeHeld(ask))
 	if ask.SessionID != "" {
 		if err := s.DB.CheckSessionPrivacy(ask.SessionID, runtimedb.ModelLocal, runtimedb.MemoryDestination{ConnectionRef: at.Seq}); err != nil {
 			body = "I can't send that answer here because of its privacy settings. Please continue on your household screen."
@@ -641,14 +641,58 @@ func (s *Server) chatThread(at runtimedb.Connection, conversation, identity stri
 	return &turnContext{SessionID: sess.ID, History: historyFrom(sess.Turns)}, false
 }
 
+// chatEmptyAnswer is what a person reads when the turn ended without
+// any text. It names the recovery that exists from chat — /new — and,
+// when the conversation is holding actions for an owner review, says so
+// rather than leaving repeated silence unexplained.
+func chatEmptyAnswer(held bool) string {
+	if held {
+		return "I didn't get an answer to that. An earlier request in this conversation may or may not have gone through, " +
+			"so I'm holding further actions until an Owner reviews it in the Console. Send /new to carry on in a fresh conversation."
+	}
+	return "I didn't get an answer to that. Try asking again in different words, or send /new to start a fresh conversation."
+}
+
+// chatOutcomeHeld reports whether the conversation behind an empty
+// reply is holding actions for an uncertain outcome. It only looks when
+// there is no text to send, and any lookup failure counts as not held:
+// the reply must not fail because the explanation could not be
+// refined.
+func (s *Server) chatOutcomeHeld(ask askResponse) bool {
+	if strings.TrimSpace(ask.FinalText) != "" || ask.SessionID == "" {
+		return false
+	}
+	task, err := s.DB.ButlerTaskForSession(ask.SessionID)
+	if err != nil {
+		if !errors.Is(err, runtimedb.ErrNotFound) {
+			s.Log.Warn("reading task for an empty chat reply", "session", ask.SessionID, "err", err)
+		}
+		return false
+	}
+	work, err := s.DB.ConversationWorkForTask(task.ID)
+	if err != nil {
+		if !errors.Is(err, runtimedb.ErrNotFound) {
+			s.Log.Warn("reading conversation work for an empty chat reply", "session", ask.SessionID, "err", err)
+		}
+		return false
+	}
+	return work.UncertainOutcome
+}
+
 // chatReplyBody renders a completed session as the message a person
 // reads. A proposal is named explicitly with its plan id and where to
 // approve it: over chat, "I've made that change" would be a lie, and a
 // silent proposal is worse than either (ADR-W026 A5).
-func chatReplyBody(ask askResponse) string {
+func chatReplyBody(ask askResponse, held bool) string {
 	body := strings.TrimSpace(ask.FinalText)
 	if body == "" {
-		body = "(no answer)"
+		if len(ask.PlanIDs) > 0 {
+			// A proposal is already queued: advising a retry would
+			// invite a duplicate, so point at the plan instead.
+			body = "I didn't get a written answer to that, but a change is already waiting for you."
+		} else {
+			body = chatEmptyAnswer(held)
+		}
 	}
 	if len(ask.PlanIDs) > 0 {
 		body += fmt.Sprintf("\n\nProposed for your approval: %s. Nothing has changed yet — approve it in the Console or with `wild plan approve`.",
