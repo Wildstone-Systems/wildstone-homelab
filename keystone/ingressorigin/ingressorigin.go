@@ -62,7 +62,7 @@ var PortBlock = portBlock()
 
 func portBlock() []int {
 	out := []int{443}
-	for p := 7443; p <= 54443; p += 1000 {
+	for p := 7443; p <= 55443; p += 1000 {
 		out = append(out, p)
 	}
 	return out
@@ -185,10 +185,14 @@ var wellKnown = map[string]int{
 
 	// notes-silverbullet. Its service worker keeps a copy of the space in
 	// browser storage for its origin, so a moved port leaves every device
-	// syncing an orphaned copy. This is the last port in PortBlock: the
-	// next pinned service has to extend the block (and the ingress
-	// package with it).
+	// syncing an orphaned copy.
 	"notes": 54443,
+
+	// zwave-zwave-js-ui's admin UI (#444). The block was full at notes, so
+	// this pin extended it by one port — and ingress-tailnet-ts and the
+	// installer's port check with it. This is the last port in PortBlock:
+	// the next pinned service has to extend the block again.
+	"zwave": 55443,
 }
 
 // Of derives the addressing posture from desired state.

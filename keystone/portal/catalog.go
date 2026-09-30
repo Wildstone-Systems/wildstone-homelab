@@ -51,6 +51,7 @@ var operatorOnly = map[string]bool{
 	// The plumbing the house runs on rather than uses.
 	"mqtt":          true,
 	"zigbee":        true,
+	"zwave":         true,
 	"notifications": true,
 	// Fetching things off the internet on the household's behalf. An
 	// indexer is a legal and a bandwidth decision, not a preference, and

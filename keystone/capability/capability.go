@@ -83,6 +83,10 @@ type Catalog struct {
 	// from each provider rendered with its own defaults and examples
 	// (Rehearsal). Never set on the install path.
 	rehearsal bool
+	// rehearsalNested marks the catalog a rehearsal renders a PROVIDER
+	// against: its installed-state questions answer nothing, so the
+	// rehearsal goes one provider deep and never recurses (installed).
+	rehearsalNested bool
 	// current is the node's desired state at expansion time. It carries
 	// the Ingress declaration, which is where a deployment's ADDRESSING
 	// lives (ADR-W019 A8/A10) — and addressing is not derivable from the

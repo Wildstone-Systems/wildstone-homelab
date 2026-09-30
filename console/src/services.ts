@@ -72,6 +72,7 @@ const GROUP_OF: Record<string, Group> = {
   "home-automation": "Home",
   cameras: "Home",
   zigbee: "Home",
+  zwave: "Home",
   mqtt: "Home",
   inventory: "Home",
   recipes: "Home",

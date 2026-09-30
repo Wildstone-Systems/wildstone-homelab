@@ -133,6 +133,15 @@ var imageArgv0 = map[string][]string{
 	// does not reach — so the Dockerfile is the check, and a docker
 	// inspect on a node is the stronger one when one is available.
 	"ghcr.io/kozea/radicale": {""},
+
+	// Z-Wave JS UI declares no ENTRYPOINT (Entrypoint null) with
+	// WorkingDir /usr/src/app and CMD ["node", "server/bin/www"], so a
+	// command is the whole argv and names node — the caddy shape. The
+	// package runs its managed start.mjs, which imports server/bin/www.js
+	// itself. Evidence: `docker image inspect` of the pinned digest
+	// sha256:717f9d26…2f89 (11.24.2), pulled from Docker Hub on
+	// 2026-09-30, and TestZwaveJSUIServesHomeAssistant boots it.
+	"zwavejs/zwave-js-ui": {"node"},
 }
 
 // TestPackageCommandsNameTheirBinary walks every shipped package's

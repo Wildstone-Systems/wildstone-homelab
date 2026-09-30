@@ -88,6 +88,7 @@ one mechanism, which is worth deciding before any of them individually.
 | `home-assistant` | home-assistant | Home Assistant, run here | own |
 | `mqtt-mosquitto` | mqtt | Mosquitto broker, password-only, on one private LAN address; provides `mqtt:broker` | internal |
 | `zigbee-zigbee2mqtt` | zigbee | Zigbee2MQTT over a USB stick or a network coordinator; requires `mqtt:broker` on its node | proxy |
+| `zwave-zwave-js-ui` | zwave | Z-Wave JS UI on a USB stick (by `/dev/serial/by-id/`); WS server for Home Assistant on one private address, provides `zwave:server`; MQTT gateway off | proxy |
 | `cameras-frigate` | cameras | Frigate NVR (CPU, Coral or GPU); `mqtt_enabled` switches on `mqtt:broker` | proxy |
 | `dns-pihole`, `dns-adguard` | dns | Pi-hole or AdGuard Home, on 53/udp and 53/tcp | proxy |
 | `vpn-gluetun` | vpn | Gluetun VPN client with a kill switch and an HTTP proxy for other containers | internal |
@@ -153,6 +154,14 @@ leads outside the list. A node whose agent predates minor 12 ignores all
 three: the port publishes as TCP, the device is absent, the capability
 is not granted, and the app says what it is missing. `IPC_LOCK` needs
 minor 21: Keystone refuses to dispatch a spec adding it to an older agent.
+
+Hand a radio to the app through the device mapping, not through env. A
+real `/dev/serial/by-id/` name is a long mixed-case run the policy
+engine reads as secret-shaped, so an env value carrying it is refused
+(`secret-values-forbidden`) the moment an operator types a real one.
+Map it to a fixed `target` and give the app that path instead —
+`zwave-zwave-js-ui` maps the stick to `/dev/zwave` and sets
+`ZWAVE_PORT: /dev/zwave`.
 
 ### Not shipped, and why
 
@@ -511,6 +520,31 @@ Credentials are per consumer: the broker declares `secret/mqtt-zigbee`,
 A new consumer is a Secret and a password-file line in
 `packages/mqtt-mosquitto`; until then its install is refused. Every
 consumer must be on the broker's node — see "Not shipped, and why".
+
+### The Z-Wave server (`zwave:server`)
+
+`zwave-zwave-js-ui` provides it. Home Assistant's Z-Wave JS integration
+wants one URL, and a consumer renders it from the export — never
+`ws://zwave-js-ui:3000`, which a host-networked Home Assistant cannot
+resolve:
+
+```yaml
+requires:
+  - { trait: zwave, mode: server }
+# ...
+url: "{{ .Resolved.ZwaveWsURL }}"   # ws://<private addr>:<port>
+```
+
+`ZwaveWsHost` and `ZwaveWsPort` are the same address split. The WS
+server has no authentication, so it is published only on the private
+IPv4 the operator chose (`listen_addr`, `validate: private_ipv4`); the
+management UI is an `admin_tailscale` Route and is not published at
+all. Nothing about the network's S0/S2 keys is exported: they are
+generated on first start into Z-Wave JS UI's own store (backed up
+daily with it) and never appear in params, secrets or a plan. The
+package is not instanced — one controller, one server, one
+`zwave:server` — and its header covers first install, moving an
+existing controller over, and NVM backups.
 
 ### Before you open a PR
 

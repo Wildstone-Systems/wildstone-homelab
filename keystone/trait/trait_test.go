@@ -178,6 +178,32 @@ func TestMqttBrokerCarriesTheConsumerContract(t *testing.T) {
 	}
 }
 
+// TestZwaveServerCarriesTheConsumerContract pins the keys Home
+// Assistant renders its Z-Wave JS connection from (#444). No key may
+// carry a security key: those belong to the server, not its clients.
+func TestZwaveServerCarriesTheConsumerContract(t *testing.T) {
+	tr, ok := Lookup("zwave")
+	if !ok {
+		t.Fatal("trait zwave is missing")
+	}
+	if tr.Structural {
+		t.Error("zwave is satisfied by a Z-Wave server package, not by the system")
+	}
+	m, ok := tr.LookupMode("server")
+	if !ok {
+		t.Fatal("zwave has no server mode")
+	}
+	want := []string{"ZwaveWsHost", "ZwaveWsPort", "ZwaveWsURL"}
+	if got := strings.Join(m.ExportKeys(), ","); got != strings.Join(want, ",") {
+		t.Errorf("zwave:server exports %s, want %s", got, strings.Join(want, ","))
+	}
+	for _, k := range m.ExportKeys() {
+		if strings.Contains(strings.ToLower(k), "key") || strings.Contains(strings.ToLower(k), "secret") {
+			t.Errorf("zwave:server export %s looks like key material; the network keys never leave the server", k)
+		}
+	}
+}
+
 // TestExportContextNamesTheConsumer: .Consumer is what lets a provider
 // issue per-consumer credentials; losing it from the declared context
 // would make pkgspec refuse the shipped broker.
