@@ -65,3 +65,37 @@ free the path for a fresh artifact or erase bytes. S05 must resolve uncertain
 storage effects before releasing that charge. Later lifecycle work must add
 an explicit coordinated purge path; deleting sealed provenance/journal rows
 is intentionally refused by this foundation.
+
+## Configurable quota integration gate (S06 / #479)
+
+These dormant primitives enforce the initial 1 GiB Agent budget and 10 MiB
+file ceiling. They do **not** consume workspace configuration or its revision.
+In particular, `ReserveWorkspaceBytes` must not be presented as enforcement of
+an Owner-selected quota: 0097 fixes both the reservation-size ceiling and the
+aggregate admission trigger at 1 GiB. A smaller configured file limit is also
+not enforced by the revision table's 10 MiB platform ceiling.
+
+The configuration slice #476 / PR #515 accepts a positive per-Agent quota up
+to 1 TiB and a file limit from one byte to 10 MiB (bounded by the quota).
+W047 section 8 identifies defaults; #479 explicitly owns validating
+Owner-configurable bounds and wiring them into staged publication. Neither
+this persistence slice nor configuration readiness activates workspace tools.
+The two seams are not yet a complete configurable-quota implementation.
+
+Before activation, S06 must replace the fixed-default reservation constraints
+in a forward migration and bind atomic admission to current trusted settings.
+It must check the configured per-file limit as well as the platform ceiling,
+coordinate configuration changes with reservation/commit, and preserve held
+reservations plus retained history/trash in Agent-wide accounting. Do not
+silently clamp a larger configured quota to 1 GiB, ignore smaller configured
+limits, accept model-supplied limits, or remove the fail-closed default checks
+without their replacement. Existing retained bytes must survive limit lowering.
+
+Required integration cases include quota above 1 GiB (within the configured
+maximum), a one-byte configured file limit, configuration changes between
+reserve and commit, restart, and simultaneous writes across Person/visibility
+scopes. Lowering a limit below retained/held usage must refuse further growth
+without deleting artifacts or discarding unresolved recovery reservations.
+S05 may develop against defaults, but S06 remains a prerequisite for exposing
+writes that claim to obey workspace settings. A configuration revision alone
+is not authorization and must not let an old reservation bypass current limits.
