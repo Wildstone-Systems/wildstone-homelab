@@ -63,6 +63,32 @@ func TestValidateParamValueExistingShapesUnaffected(t *testing.T) {
 	}
 }
 
+// TestPrivateIPv4Shape: a LAN or tailnet listener gets one private
+// address, and each thing an operator might type instead — every
+// interface, loopback, a public address, a name, IPv6 — is refused with
+// a reason.
+func TestPrivateIPv4Shape(t *testing.T) {
+	for _, v := range []string{"192.168.1.10", "10.0.0.2", "172.16.5.4", "172.31.255.1", "100.64.0.1"} {
+		if err := ValidateParamValue("private_ipv4", v); err != nil {
+			t.Errorf("%s: unexpected error: %v", v, err)
+		}
+	}
+	for v, want := range map[string]string{
+		"0.0.0.0":       "every interface",
+		"127.0.0.1":     "loopback",
+		"8.8.8.8":       "not a private address",
+		"172.32.0.1":    "not a private address",
+		"broker.local":  "not an IPv4 address",
+		"fd00::1":       "not an IPv4 address",
+		"192.168.1.10:": "not an IPv4 address",
+	} {
+		err := ValidateParamValue("private_ipv4", v)
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: want an error containing %q, got %v", v, want, err)
+		}
+	}
+}
+
 // TestEnumShapeValues pins the parsing helper directly: the prefix, the
 // split, and that a bare "enum" (no colon) is not the enum form at all —
 // it falls through to the ordinary closed-vocabulary lookup and fails

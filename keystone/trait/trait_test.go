@@ -157,6 +157,42 @@ func TestExportFuncNamesAreUsableAsTemplateFunctions(t *testing.T) {
 	}
 }
 
+// TestMqttBrokerCarriesTheConsumerContract pins the keys Zigbee2MQTT,
+// Frigate and Home Assistant render against (#438). Renaming one is a
+// change to three consumer packages, not to this table alone.
+func TestMqttBrokerCarriesTheConsumerContract(t *testing.T) {
+	tr, ok := Lookup("mqtt")
+	if !ok {
+		t.Fatal("trait mqtt is missing")
+	}
+	if tr.Structural {
+		t.Error("mqtt is satisfied by a broker package, not by the system")
+	}
+	m, ok := tr.LookupMode("broker")
+	if !ok {
+		t.Fatal("mqtt has no broker mode")
+	}
+	want := []string{"MqttHost", "MqttPasswordSecretRef", "MqttPort", "MqttURL", "MqttUsername"}
+	if got := strings.Join(m.ExportKeys(), ","); got != strings.Join(want, ",") {
+		t.Errorf("mqtt:broker exports %s, want %s", got, strings.Join(want, ","))
+	}
+}
+
+// TestExportContextNamesTheConsumer: .Consumer is what lets a provider
+// issue per-consumer credentials; losing it from the declared context
+// would make pkgspec refuse the shipped broker.
+func TestExportContextNamesTheConsumer(t *testing.T) {
+	have := map[string]bool{}
+	for _, f := range ExportContext {
+		have[f] = true
+	}
+	for _, f := range []string{"Params", "Consumer"} {
+		if !have[f] {
+			t.Errorf("ExportContext lacks %s", f)
+		}
+	}
+}
+
 // TestLookupsAgreeWithTheTable. Names/ModeNames/ClassNames feed "must be
 // one of ..." messages, and a list that disagrees with what Lookup
 // accepts tells an author their correct spelling is wrong.

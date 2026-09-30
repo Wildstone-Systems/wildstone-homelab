@@ -56,7 +56,7 @@ metrics-prometheus 1.0.0 9a93297824a6b973
 monitoring 1.0.0 69713ab679cfdbd7
 monitoring-beszel 1.0.2 31d82ffe44cc7ec9
 movies-radarr 1.0.3 db51c7b2106e8f62
-mqtt-mosquitto 1.0.0 655714a2a046b37b
+mqtt-mosquitto 2.0.0 fd4a0f86ced1b1c0
 music-lidarr 1.0.3 b656f45aa361283a
 music-navidrome 1.0.2 b7f6ae0e347c9a99
 notes-silverbullet 1.0.0 c12937ca3ca144d0

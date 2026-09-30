@@ -116,9 +116,9 @@ type Provide struct {
 	// Exports fill the `.Resolved` keys this trait mode carries
 	// (keystone/trait), for every package expanded against a catalog
 	// containing this one. Each value is a template rendered over the
-	// PROVIDER's params plus the addressing functions in
-	// trait.ExportFuncs — see keystone/capability's buildResolved for the
-	// exact context.
+	// PROVIDER's params, the requesting capability's name (.Consumer),
+	// and the functions in trait.ExportFuncs — see keystone/capability's
+	// buildResolved for the exact context.
 	//
 	// This block is what makes a new integration data rather than a code
 	// change. It used to be Go: the engine looked up "identity"/"oidc" by
@@ -742,6 +742,22 @@ var exportStubFuncs = func() template.FuncMap {
 // as YAML).
 var paramFieldRegexp = regexp.MustCompile(`\.Params\.([A-Za-z_][A-Za-z0-9_]*)`)
 
+// contextFieldRegexp matches a top-level field of the dot — `.Resolved`
+// in `{{ .Resolved.X }}` — and not the second half of a chain
+// (`.Params.x`), which is preceded by a name character.
+var contextFieldRegexp = regexp.MustCompile(`(?:^|[^A-Za-z0-9_)\].$])\.([A-Z][A-Za-z0-9_]*)`)
+
+// exportContextFields is trait.ExportContext as a set. An export
+// referencing `.Resolved` or `.Capability` — both real in a TEMPLATE —
+// would otherwise fail only when rendered, during an install.
+var exportContextFields = func() map[string]bool {
+	m := map[string]bool{}
+	for _, f := range trait.ExportContext {
+		m[f] = true
+	}
+	return m
+}()
+
 // validateExports checks one `provides` entry's exports as STRUCTURE:
 // non-empty values, templates that parse against the known functions, and
 // param references the package actually declares.
@@ -779,6 +795,13 @@ func validateExports(p *Package, prov Provide, field string) error {
 			return &ValidationError{Field: kf, Msg: fmt.Sprintf(
 				"is not a valid template (%v); the functions available are %s plus Go's own built-ins",
 				err, strings.Join(trait.ExportFuncs, ", "))}
+		}
+		for _, m := range contextFieldRegexp.FindAllStringSubmatch(expr, -1) {
+			if !exportContextFields[m[1]] {
+				return &ValidationError{Field: kf, Msg: fmt.Sprintf(
+					"references .%s, which an export cannot see — it renders over %s only",
+					m[1], "."+strings.Join(trait.ExportContext, " and ."))}
+			}
 		}
 		for _, m := range paramFieldRegexp.FindAllStringSubmatch(expr, -1) {
 			if !declared[m[1]] {
