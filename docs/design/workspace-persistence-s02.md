@@ -14,8 +14,12 @@ workspace tables, indexes and constraints in one ordinary migration
 transaction, with foreign keys enabled. It does not rebuild existing tables,
 backfill workspaces, seed tools, or modify existing Agent assignments.
 
+The integration target is `feature/471-native-agent-capabilities`, refreshed
+through `3c2c023c9aadcfb78eeda3bde591a1d652fc6921` (PR #513). The migration
+number is unchanged because that feature-branch update adds no migration.
 This is the first database slice of #471. Successors #490 and #497 must
-refresh main and allocate the next unused migration number after 0097;
+refresh that feature branch and allocate the next unused migration number
+after 0097;
 0098 is not reserved here. Once merged, changes to this schema require a
 new forward migration, not an edit to 0097. There is no downgrade migration.
 Older binaries do not use these additive tables; that is not permission to
@@ -27,8 +31,12 @@ Workspace identity binds a stable Person ID and Agent database identity.
 Artifact ownership and revision facts cannot be updated. Revisions retain
 creating-task linkage, content hash, size, media type and privacy metadata.
 Source edges are recorded before preparation and sealed with the revision's
-publication intent. These records are trusted Keystone inputs, not model
-arguments. Selectors and receipts grant no authority.
+publication intent. Sealing refuses workspace-source edges until their source
+revisions have committed publications; tentative or aborted bytes cannot become
+durable lineage. Receipts cannot be deleted while publication history is retained,
+so exact retries preserve their original effect identity. These records are
+trusted Keystone inputs, not model arguments. Selectors and receipts grant
+no authority.
 
 The resource resolver in S03 must recheck current Person/Agent access,
 source restrictions and surface/class ceilings. Sharing remains a later

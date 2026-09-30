@@ -509,3 +509,116 @@ func TestWorkspaceRetainedForeignKeysAndCrossArtifactRevision(t *testing.T) {
 		t.Fatalf("cross-artifact current revision accepted or wrong failure: %v", err)
 	}
 }
+
+func TestWorkspacePrepareRequiresCommittedProvenanceSource(t *testing.T) {
+	for _, state := range []string{"unpublished", "staging", "prepared", "bytes_published", "aborted", "committed"} {
+		t.Run(state, func(t *testing.T) {
+			db, w, task := workspaceFixture(t)
+			var source WorkspacePublication
+			if state == "unpublished" {
+				if err := db.CreateWorkspaceArtifact(WorkspaceArtifact{ID: "source", WorkspaceID: w.ID, Path: "source.txt"}); err != nil {
+					t.Fatal(err)
+				}
+				if err := db.CreateWorkspaceRevision(WorkspaceRevision{ID: "source-r1", ArtifactID: "source", TaskID: task, Hash: strings.Repeat("a", 64), SizeBytes: 1, MediaType: "text/plain", Privacy: "normal"}); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				source = workspaceIntent(t, db, w, task, "source", "source-r1", "", 1)
+				if state == "prepared" || state == "bytes_published" || state == "committed" {
+					if err := db.PrepareWorkspacePublication(w.ID, source.ID); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if state == "bytes_published" || state == "committed" {
+					if err := db.MarkWorkspaceBytesPublished(w.ID, source.ID); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if state == "committed" {
+					if err := db.CommitWorkspacePublication(w.ID, source.ID, "source-receipt"); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if state == "aborted" {
+					if err := db.AbortWorkspacePublication(w.ID, source.ID); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			derived := workspaceIntent(t, db, w, task, "derived", "derived-r1", "", 1)
+			if err := db.RecordWorkspaceProvenance(WorkspaceProvenance{ID: "derived-source", RevisionID: derived.RevisionID, SourceRevision: "source-r1", Privacy: "normal", Audience: w.PersonID}); err != nil {
+				t.Fatal(err)
+			}
+			err := db.PrepareWorkspacePublication(w.ID, derived.ID)
+			if state == "committed" {
+				if err != nil {
+					t.Fatalf("committed source refused: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("derived publication sealed with %s source", state)
+			}
+			if !strings.Contains(err.Error(), "workspace provenance source is not committed") {
+				t.Fatalf("expected source invariant, got unrelated failure: %v", err)
+			}
+			pending, err := db.WorkspacePublication(w.ID, derived.ID)
+			if err != nil || pending.State != "staging" {
+				t.Fatalf("failed prepare changed journal: %+v %v", pending, err)
+			}
+			if state == "unpublished" || state == "aborted" {
+				return
+			}
+			// An uncertain source can settle without changing the recorded provenance;
+			// sealing the exact derived intent must then become safe.
+			if state == "staging" {
+				if err := db.PrepareWorkspacePublication(w.ID, source.ID); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if state != "bytes_published" {
+				if err := db.MarkWorkspaceBytesPublished(w.ID, source.ID); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := db.CommitWorkspacePublication(w.ID, source.ID, "source-receipt"); err != nil {
+				t.Fatal(err)
+			}
+			if err := db.PrepareWorkspacePublication(w.ID, derived.ID); err != nil {
+				t.Fatalf("retry after source commit: %v", err)
+			}
+		})
+	}
+}
+
+func TestWorkspaceReceiptDeletionCannotEraseSettledIdentity(t *testing.T) {
+	db, w, task := workspaceFixture(t)
+	p := workspaceIntent(t, db, w, task, "first", "first-r1", "", 1)
+	workspacePublish(t, db, p, "settled-receipt")
+	if _, err := db.sql.Exec(`DELETE FROM workspace_receipts WHERE id='settled-receipt'`); err == nil || !strings.Contains(err.Error(), "workspace receipt history requires explicit retention coordination") {
+		t.Fatalf("receipt deletion must be refused by invariant: %v", err)
+	}
+	receipt, err := db.WorkspaceReceipt(w.ID, p.ID)
+	if err != nil || receipt != "settled-receipt" {
+		t.Fatalf("receipt identity lost: %q %v", receipt, err)
+	}
+	if err := db.CommitWorkspacePublication(w.ID, p.ID, receipt); err != nil {
+		t.Fatalf("exact settled retry failed: %v", err)
+	}
+	second := workspaceIntent(t, db, w, task, "second", "second-r1", "", 1)
+	if err := db.PrepareWorkspacePublication(w.ID, second.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.MarkWorkspaceBytesPublished(w.ID, second.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.CommitWorkspacePublication(w.ID, second.ID, receipt); err == nil {
+		t.Fatal("settled receipt reused by another publication")
+	}
+	if _, err := db.WorkspaceArtifact(w.ID, second.ArtifactID); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("receipt collision exposed second artifact: %v", err)
+	}
+	if original, err := db.WorkspaceReceipt(w.ID, p.ID); err != nil || original != receipt {
+		t.Fatalf("receipt collision changed original identity: %q %v", original, err)
+	}
+}

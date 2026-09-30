@@ -140,6 +140,15 @@ BEGIN SELECT RAISE(ABORT,'workspace provenance is immutable'); END;
 CREATE TRIGGER workspace_provenance_pending BEFORE INSERT ON workspace_provenance
 WHEN EXISTS(SELECT 1 FROM workspace_publications WHERE revision_id=NEW.revision_id AND state<>'staging')
 BEGIN SELECT RAISE(ABORT,'prepared provenance is sealed'); END;
+-- Staging may collect tentative lineage, but sealing must pin retained,
+-- committed source bytes. A revision row alone is not publication evidence.
+CREATE TRIGGER workspace_publications_sources_committed BEFORE UPDATE OF state ON workspace_publications
+WHEN NEW.state='prepared' AND EXISTS(
+ SELECT 1 FROM workspace_provenance edge
+ WHERE edge.revision_id=NEW.revision_id AND edge.source_revision IS NOT NULL
+ AND NOT EXISTS(SELECT 1 FROM workspace_publications source
+                WHERE source.revision_id=edge.source_revision AND source.state='committed'))
+BEGIN SELECT RAISE(ABORT,'workspace provenance source is not committed'); END;
 CREATE TRIGGER workspace_provenance_privacy BEFORE INSERT ON workspace_provenance
 WHEN (NEW.privacy='local-only' OR EXISTS(SELECT 1 FROM workspace_revisions WHERE id=NEW.source_revision AND privacy='local-only')) AND NOT EXISTS(SELECT 1 FROM workspace_revisions WHERE id=NEW.revision_id AND privacy='local-only')
 BEGIN SELECT RAISE(ABORT,'derived revision cannot widen source privacy'); END;
@@ -154,6 +163,9 @@ WHEN NOT EXISTS(SELECT 1 FROM workspace_publications WHERE id=NEW.publication_id
 BEGIN SELECT RAISE(ABORT,'receipt requires committed publication'); END;
 CREATE TRIGGER workspace_receipts_immutable BEFORE UPDATE ON workspace_receipts
 BEGIN SELECT RAISE(ABORT,'workspace receipts are immutable'); END;
+CREATE TRIGGER workspace_receipts_no_delete BEFORE DELETE ON workspace_receipts
+WHEN EXISTS(SELECT 1 FROM workspace_publications WHERE id=OLD.publication_id)
+BEGIN SELECT RAISE(ABORT,'workspace receipt history requires explicit retention coordination'); END;
 
 CREATE TRIGGER workspace_provenance_delete_sealed BEFORE DELETE ON workspace_provenance
 WHEN EXISTS(SELECT 1 FROM workspace_publications WHERE revision_id=OLD.revision_id AND state<>'staging')
