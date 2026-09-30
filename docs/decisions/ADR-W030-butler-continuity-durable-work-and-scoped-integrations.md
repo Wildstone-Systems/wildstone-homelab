@@ -136,6 +136,14 @@ Personal CalDAV/IMAP access requires member-scoped credential onboarding through
 
 Offboarding disables every personal connection and starts verified credential erasure/revocation on all eligible nodes. A household-shared connection whose credential belongs to the departing Person pauses for Owner resolution through the W033 F2 inventory; it cannot resume until an Owner supplies or reauthorizes a credential. Connection and routine history retain the departing member's original attribution.
 
+### A5.2 Amendment (epic #326 S01): package-bundled adapters and node-bound claims
+
+A package declares an adapter in `integrates:` (docs/catalog-integration-contract.md §4). The declaration is inert at install and upgrade: `capability.Engine.Expand` never reads it, so installing a package that bundles an adapter creates no adapter container, credential, connection or upstream read. The adapter is rendered only per connection placement by `capability.Engine.ExpandAdapter` — one container per prepared node, owned by `integration/<connection>` rather than by the capability so a package upgrade never reads it as leftovers — and it inherits named package params, the package version and the placement node, never a credential. V1 adapter programs are Wildstone binaries shipped by the release and installed on every node under `/srv/wildstone/bin`, run in a pinned public base image, like the chat adapter (W033 B7.1); the first is `wild-mail-adapter`.
+
+The declaration fails closed on version skew rather than loading partially: an older Keystone rejects the unknown key under strict parsing, a newer adapter contract, unknown domain, unshipped program or undeclared query is a validation error, and the rendered container uses the protocol-minor-18 hardening fields so an older Wardstone is refused the step. Inside a declared integration domain the vocabulary is enforced at dispatch as well as declaration: the integration-work queue refuses a query or action name the domain does not declare, so a read-only domain (mail) cannot be sent an action even on a widened connection.
+
+"One lease epoch permits only the current holder to claim work" is now enforced at the claim: an adapter principal may be bound to a placement node (migration 0097), and such a principal claims only while that node holds the lease and is not being removed. A principal bound without a node keeps the earlier connection-wide meaning.
+
 ## A6. Native automation where appropriate, Wildstone for cross-app coordination
 
 Butler authors native routines through supported app interfaces when that app owns the workflow. Wildstone executes cross-app routines using incoming events and targeted queries. Track external routine IDs and edits; do not silently duplicate or migrate execution.

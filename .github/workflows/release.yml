@@ -79,6 +79,12 @@ jobs:
           # public distroless image with that directory mounted. No
           # image of ours is published for this either.
           build agent-bridge cli ./cmd/agent-bridge
+          # The read-only mailbox adapter bundled with mail-roundcube
+          # (epic #326): shipped the same way again — the installer puts
+          # it on every node at /srv/wildstone/bin and a Person's approved
+          # mailbox placement runs it in the public distroless image. It
+          # stays dormant until then.
+          build wild-mail-adapter keystone ./cmd/wild-mail-adapter
           # The Console's built output. Architecture-independent — it is
           # static files a browser runs — so it has no _linux_<arch>
           # suffix, and install.sh fetches it by that plain name.

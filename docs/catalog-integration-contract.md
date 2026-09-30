@@ -526,7 +526,13 @@ assumed.
 4. **Who owns the well-known event list per domain** — `keystone/integration`
    alongside the queries, or `keystone/household` with the envelope? The
    second is closer to where event semantics already live.
-5. **Does `integrates.domain` allow more than one per package?**
+5. **Resolved (epic #326 S01): `integrates:` is a list of blocks.** As
+   implemented in `keystone/pkgspec/integrates.go`, each entry carries
+   `domain`, `shape`, an `adapter` block (`contract`, pinned `image`,
+   shipped `program`, `inherits`, `needs`) and `answers`, and the block
+   fails closed rather than loading against an older vocabulary. The
+   original question follows.
+   **Does `integrates.domain` allow more than one per package?**
    `mail-roundcube` wants `calendar` *and* `mail` at different shapes,
    which argues for a list. That in turn argues `integrates:` is a list
    of blocks, not one block — cheap now, expensive later.

@@ -844,6 +844,20 @@ install_agent_bridge() {
   fetch_binary agent-bridge /srv/wildstone/bin
 }
 
+# install_mail_adapter puts the read-only mailbox adapter (epic #326)
+# where a Person's mailbox placement mounts it from, the same way the
+# chat adapter and agent bridge are shipped: every node gets the program,
+# and nothing runs it until someone enables a mailbox connection there.
+# A release from before the adapter shipped simply has no mailbox
+# monitoring, and a placement on such a node never becomes ready.
+install_mail_adapter() {
+  release_has "wild-mail-adapter_linux_${ARCH}.tar.gz" || {
+    log "this release has no wild-mail-adapter; mailbox monitoring will not run on this node"
+    return 0
+  }
+  fetch_binary wild-mail-adapter /srv/wildstone/bin
+}
+
 install_console() {
   # The Console ships as its own release asset so a control-plane host
   # never needs Node (#34): building it pulled 568 apt packages to
@@ -1897,6 +1911,7 @@ install -d -m 0700 /var/lib/wildstone/wardstone
 install -d -m 0755 /srv/wildstone
 install_chat_adapter
 install_agent_bridge
+install_mail_adapter
 
 # The node identity and secret store used to live at
 # /etc/wildstone/wardstone — inside the managed prefix the ingress
