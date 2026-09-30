@@ -161,119 +161,106 @@ func (b *limitedText) write(s string) {
 type markupFilter struct {
 	out           *limitedText
 	base          *url.URL
-	suppressed    string
-	depth         int
 	literalPrefix string
 	literals      []string
 }
 
+// Parse a bounded input into the HTML tree rather than approximating HTML's
+// implicit closures, foreign-content exits and raw-text states. Walk all nodes
+// for decoded controls, while retaining only bounded, non-suppressed text.
 func (f *markupFilter) feed(input string, preserve bool) error {
+	// Also inspect tokens that tree construction may discard (for example,
+	// attributes on a redundant head tag). Tree nodes are checked below too,
+	// since foreign-content rules can expose additional decoded text.
 	z := html.NewTokenizer(strings.NewReader(input))
-	var foreign []string
-	for {
-		kind := z.Next()
-		if kind == html.ErrorToken {
-			if z.Err() != io.EOF {
-				return publicfetch.ErrUnsupported
-			}
-			return nil
-		}
-		t := z.Token()
-		// SVG/MathML descendants are discarded, but their apparent HTML
-		// raw-text tags must not consume the foreign closing boundary or
-		// hide a later real authentication challenge. Track this independently
-		// of suppression, including foreign elements inside other containers.
-		if len(foreign) > 0 && (kind == html.StartTagToken || kind == html.SelfClosingTagToken) {
-			z.NextIsNotRawText()
-		}
-		if t.Data == "svg" || t.Data == "math" {
-			if kind == html.StartTagToken {
-				foreign = append(foreign, t.Data)
-			} else if kind == html.EndTagToken {
-				for i := len(foreign) - 1; i >= 0; i-- {
-					if foreign[i] == t.Data {
-						foreign = foreign[:i]
-						break
-					}
-				}
-			}
-		}
-		// Character references are decoded by the tokenizer, after the raw
-		// response check. Check every token even after the output cap so a
-		// discarded suffix cannot conceal a forbidden decoded control.
-		if hasControls(t.Data) {
+	for z.Next() != html.ErrorToken {
+		token := z.Token()
+		if hasControls(token.Data) {
 			return publicfetch.ErrUnsupported
 		}
-		for _, attr := range t.Attr {
+		for _, attr := range token.Attr {
 			if hasControls(attr.Val) {
 				return publicfetch.ErrUnsupported
 			}
 		}
-		if f.suppressed != "" {
-			// Only normal/foreign containers nest. Raw-text/RCDATA opening
-			// tags in their contents are text, not nested elements.
-			switch f.suppressed {
-			case "object", "template", "svg", "math":
-				if (kind == html.StartTagToken || (kind == html.SelfClosingTagToken && t.Data != "svg" && t.Data != "math")) && t.Data == f.suppressed {
-					f.depth++
-				}
-			}
-			if kind == html.EndTagToken && t.Data == f.suppressed {
-				f.depth--
-				if f.depth == 0 {
-					f.suppressed = ""
-				}
-			}
-			continue
+	}
+	if z.Err() != io.EOF {
+		return publicfetch.ErrUnsupported
+	}
+	root, err := html.Parse(strings.NewReader(input))
+	if err != nil {
+		return publicfetch.ErrUnsupported
+	}
+	type frame struct {
+		node       *html.Node
+		suppressed bool
+		exit       bool
+	}
+	stack := []frame{{node: root}}
+	for len(stack) > 0 {
+		item := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		n := item.node
+		if hasControls(n.Data) {
+			return publicfetch.ErrUnsupported
 		}
-		if kind == html.StartTagToken || kind == html.SelfClosingTagToken {
-			switch t.Data {
-			// Head/body wrappers have optional end/start tags in HTML. Drop
-			// their tags, but suppress only actual metadata elements (title,
-			// script, style, etc.), allowing implicit body content through.
+		for _, attr := range n.Attr {
+			if hasControls(attr.Val) {
+				return publicfetch.ErrUnsupported
+			}
+		}
+		if n.Type == html.ElementNode {
+			switch n.Data {
 			case "script", "style", "iframe", "object", "svg", "math", "template", "noscript", "title":
-				// HTML ignores the slash on non-void elements. Only foreign
-				// SVG/MathML elements here can actually self-close.
-				if kind != html.SelfClosingTagToken || (t.Data != "svg" && t.Data != "math") {
-					f.suppressed = t.Data
-					f.depth = 1
+				item.suppressed = true
+			}
+		}
+		if !item.suppressed {
+			if n.Type == html.TextNode && !item.exit {
+				if preserve {
+					f.writeLiteralText(n.Data)
+				} else {
+					f.out.write(strings.Join(strings.Fields(n.Data), " "))
+					f.out.write(" ")
 				}
-				continue
-			case "input":
-				for _, a := range t.Attr {
-					if a.Key == "type" && strings.EqualFold(a.Val, "password") {
-						return publicfetch.ErrBlocked
-					}
-				}
-			case "a":
-				if f.out.count <= MaxCharacters {
-					for _, a := range t.Attr {
-						if a.Key == "href" {
-							if link, e := url.Parse(a.Val); e == nil {
-								link = f.base.ResolveReference(link)
-								if (link.Scheme == "https" || link.Scheme == "http") && link.User == nil && len(link.String()) <= 2048 {
-									f.out.write(" (" + link.String() + ") ")
+			} else if n.Type == html.ElementNode {
+				if !item.exit {
+					switch n.Data {
+					case "input":
+						for _, a := range n.Attr {
+							if a.Key == "type" && strings.EqualFold(a.Val, "password") {
+								return publicfetch.ErrBlocked
+							}
+						}
+					case "a":
+						if f.out.count <= MaxCharacters {
+							for _, a := range n.Attr {
+								if a.Key == "href" {
+									if link, e := url.Parse(a.Val); e == nil {
+										link = f.base.ResolveReference(link)
+										if (link.Scheme == "https" || link.Scheme == "http") && link.User == nil && len(link.String()) <= 2048 {
+											f.out.write(" (" + link.String() + ") ")
+										}
+									}
 								}
 							}
 						}
 					}
 				}
+				switch n.Data {
+				case "p", "div", "br", "li", "pre", "tr", "h1", "h2", "h3", "h4", "h5", "h6":
+					f.out.write("\n")
+				}
 			}
 		}
-		if kind == html.TextToken {
-			if preserve {
-				f.writeLiteralText(t.Data)
-			} else {
-				f.out.write(strings.Join(strings.Fields(t.Data), " "))
-				f.out.write(" ")
-			}
-		} else if kind == html.StartTagToken || kind == html.EndTagToken || kind == html.SelfClosingTagToken {
-			switch t.Data {
-			case "p", "div", "br", "li", "pre", "tr", "h1", "h2", "h3", "h4", "h5", "h6":
-				f.out.write("\n")
+		if !item.exit {
+			stack = append(stack, frame{n, item.suppressed, true})
+			for child := n.LastChild; child != nil; child = child.PrevSibling {
+				stack = append(stack, frame{node: child, suppressed: item.suppressed})
 			}
 		}
 	}
+	return nil
 }
 
 // Literal markers are restored directly into the bounded text builder, never
@@ -354,7 +341,7 @@ func prepareMarkdown(parts []markdownPart, filter *markupFilter) string {
 
 // Markdown parsing identifies actual raw HTML spans. Autolinks, escaped angle
 // brackets and code examples remain literal Markdown data. State-safe literal
-// markers let one tokenizer retain HTML raw-text/RCDATA state across all nodes,
+// markers let one HTML parser retain raw-text/RCDATA state across all nodes,
 // including non-suppressed textarea and xmp contents.
 func extractMarkup(input string, base *url.URL, markdown bool) (string, bool, error) {
 	out := limitedText{normalize: !markdown}

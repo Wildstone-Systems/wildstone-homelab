@@ -436,3 +436,26 @@ func TestForeignContentDoesNotConsumeFollowingHTML(t *testing.T) {
 		}
 	}
 }
+
+func TestForeignContentImplicitExit(t *testing.T) {
+	for _, media := range []string{"text/html", "text/markdown"} {
+		for _, foreign := range []string{"svg", "math"} {
+			body := "<" + foreign + "><p>Visible"
+			d, err := Extract(input(media, body))
+			if err != nil || d.Text != "Visible" {
+				t.Fatalf("%s %s implicit exit: %q %v", media, foreign, d.Text, err)
+			}
+			if _, err := Extract(input(media, body+"<input type=password>")); err != publicfetch.ErrBlocked {
+				t.Fatalf("%s %s implicit challenge: %v", media, foreign, err)
+			}
+		}
+	}
+}
+
+func TestDiscardedTreeTokensStillRejectDecodedControls(t *testing.T) {
+	for _, media := range []string{"text/html", "text/markdown"} {
+		if _, err := Extract(input(media, "<head></head><head ignored='&#x1b;'>Visible")); err != publicfetch.ErrUnsupported {
+			t.Fatalf("%s discarded token control: %v", media, err)
+		}
+	}
+}
