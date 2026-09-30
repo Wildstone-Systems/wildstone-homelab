@@ -747,12 +747,12 @@ func TestHomeAutomationRealCatalog(t *testing.T) {
 		t.Errorf("real zwave = %s %v %+v", zw.State, zw.RadioCandidates, zw.Blockers)
 	}
 	for id, want := range map[string]string{haMQTT: "mqtt-mosquitto", haHomeAssistant: "home-assistant", haExternalHA: "home-automation-hass",
-		haZigbee: "zigbee-zigbee2mqtt", haZWave: "zwave-zwave-js-ui"} {
+		haZigbee: "zigbee-zigbee2mqtt", haZWave: "zwave-zwave-js-ui", haThread: "thread-otbr"} {
 		if c := v.comp(t, id); c.Package != want || c.State == haUnavailable {
 			t.Errorf("%s = %s %s", id, c.Package, c.State)
 		}
 	}
-	for _, id := range []string{haMatter, haThread} {
+	for _, id := range []string{haMatter} {
 		if c := v.comp(t, id); c.State != haUnavailable {
 			t.Errorf("%s = %s, want unavailable until its package exists", id, c.State)
 		}
