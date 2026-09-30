@@ -166,7 +166,7 @@ func newCredentialHarness(t *testing.T) *credentialHarness {
 			t.Fatal(err)
 		}
 		for _, n := range []string{"n1", "n2"} {
-			nodes.containers[n]["mail-adapter-"+conn.name] = true
+			nodes.containers[n]["mail-adapter-"+conn.name+"-"+n] = true
 		}
 	}
 	return c
@@ -388,7 +388,7 @@ func TestReplaceRevokeFenceFirstThenProveErasure(t *testing.T) {
 		if _, ok := c.nodes.holds(n, "pc.sam-mail.fk.v1"); !ok {
 			t.Fatalf("replacing the password rotated the fingerprint key on %s", n)
 		}
-		if c.nodes.containers[n]["mail-adapter-sam-mail"] {
+		if c.nodes.containers[n]["mail-adapter-sam-mail-"+n] {
 			t.Fatalf("the adapter started with v1 still runs on %s", n)
 		}
 	}
@@ -456,7 +456,7 @@ func TestFailedStagingLeavesTheWorkingCredential(t *testing.T) {
 	if v, _ := c.nodes.holds("n1", "pc.sam-mail.v1"); v != appPassword {
 		t.Fatal("the working credential was erased by a failed replacement")
 	}
-	if !c.nodes.containers["n1"]["mail-adapter-sam-mail"] {
+	if !c.nodes.containers["n1"]["mail-adapter-sam-mail-n1"] {
 		t.Fatal("a failed replacement took down the working adapter")
 	}
 	c.assertValueNowhere(t, []string{body}, appPassword, appPassword2)

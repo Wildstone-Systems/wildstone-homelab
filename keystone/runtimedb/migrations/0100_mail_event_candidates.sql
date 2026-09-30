@@ -1,5 +1,5 @@
 -- 0100: private mail event candidates (epic #326 S05, #458; ADR-W030
--- A5.5).
+-- A5.6).
 --
 -- A mailbox monitor turns one Person's new mail into possible calendar
 -- events. What it keeps is deliberately small, because the message it

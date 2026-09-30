@@ -587,6 +587,9 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/integrations/{name}/authorization", s.handle(principal.VerbManage, s.consoleAuthorizeBackground))
 	mux.Handle("POST /api/v1/integrations/{name}/authorization/revoke", s.handle(principal.VerbManage, s.consoleRevokeBackground))
 	mux.Handle("POST /api/v1/integrations/{name}/executable", s.handle(principal.VerbManage, s.setIntegrationExecutable))
+	// Render the adapter placement as a Plan (epic #326): records the
+	// executable, places node-bound adapter tokens, never approves.
+	mux.Handle("POST /api/v1/integrations/{name}/adapter/render", s.handle(principal.VerbManage, s.renderIntegrationAdapter))
 	mux.Handle("GET /api/v1/home/integrations/{name}/credential", s.portal(surfaceHome, s.homeCredential))
 	mux.Handle("POST /api/v1/home/integrations/{name}/credential", s.portal(surfaceHome, s.homeSubmitCredential))
 	mux.Handle("POST /api/v1/home/integrations/{name}/credential/revoke", s.portal(surfaceHome, s.homeRevokeCredential))

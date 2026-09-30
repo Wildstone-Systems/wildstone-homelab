@@ -83,10 +83,33 @@ var adapterConnectionRegexp = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?
 func AdapterOwner(connection string) string { return "integration/" + connection }
 
 // AdapterContainerName names the adapter container for one connection
-// and domain. One per node: the lease, not the name, says which one is
-// active.
-func AdapterContainerName(domain, connection string) string {
-	return domain + "-adapter-" + connection
+// and domain on one placement node. The lease, not the name, says which
+// one is active; the node is in the name because desired state keys a
+// resource by kind and name alone, so one container per prepared node
+// needs one name per node.
+func AdapterContainerName(domain, connection, node string) string {
+	return domain + "-adapter-" + connection + "-" + node
+}
+
+// AdapterPrincipalName names the adapter principal (and, with
+// AdapterTokenSecretName, the node secret holding its token) for one
+// connection on one node — node-bound, so it claims only while that node
+// holds the connection's lease (ADR-W030 A5.2).
+func AdapterPrincipalName(domain, connection, node string) string {
+	return domain + "-adapter-" + connection + "-" + node
+}
+
+// AdapterTokenSecretName is the node secret an adapter principal's token
+// is placed in.
+func AdapterTokenSecretName(domain, connection, node string) string {
+	return AdapterPrincipalName(domain, connection, node) + "-token"
+}
+
+// adapterSecretResourceName keys one node's declaration of a connection
+// secret. The node secret keeps its own name (SecretSpec.Name, the
+// secret/<name> target); only the desired-state key is per node.
+func adapterSecretResourceName(ref, node string) string {
+	return ref + "." + node
 }
 
 // ExpandAdapter renders the adapter a package declares for domain, for
@@ -108,7 +131,7 @@ func (e *Engine) ExpandAdapter(pkg *pkgspec.Package, params map[string]string, d
 		return nil, err
 	}
 	a := in.Adapter
-	name := AdapterContainerName(domain, pl.Connection)
+	name := AdapterContainerName(domain, pl.Connection, pl.Node)
 	owner := AdapterOwner(pl.Connection)
 	meta := func(n string) resource.Metadata {
 		return resource.Metadata{Name: n, Owner: owner, Package: pkg.Metadata.Name, Node: pl.Node}
@@ -149,7 +172,7 @@ func (e *Engine) ExpandAdapter(pkg *pkgspec.Package, params map[string]string, d
 		}
 		env[AdapterEnvSecretPrefix+envName(need.Name)] = "secret/" + ref
 		out = append(out, resource.Resource{
-			ApiVersion: resource.ApiVersion, Kind: resource.KindSecret, Metadata: meta(ref),
+			ApiVersion: resource.ApiVersion, Kind: resource.KindSecret, Metadata: meta(adapterSecretResourceName(ref, pl.Node)),
 			Secret: &resource.SecretSpec{Name: ref, Provided: true, Purpose: need.Purpose},
 		})
 	}

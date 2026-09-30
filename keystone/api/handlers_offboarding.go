@@ -63,6 +63,7 @@ func (s *Server) offboardMember(r *http.Request, id principal.Identity) (any, in
 				if out := s.eraseCredentialCopies(r.Context(), c.Name, false); len(out) > 0 {
 					erasures[c.Name] = out
 				}
+				s.refileAdapterRender(c.Name, actingMember(id))
 			}
 		}
 	}

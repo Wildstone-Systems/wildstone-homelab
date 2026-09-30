@@ -163,6 +163,7 @@ func (s *Server) setIntegrationExecutable(r *http.Request, id principal.Identity
 	if err := s.DB.SetConnectionExecutable(name, req.Executable, actingMember(id)); err != nil {
 		return nil, credentialStatus(err), err
 	}
+	s.refileAdapterRender(name, actingMember(id))
 	return map[string]any{"executable": req.Executable}, http.StatusOK, nil
 }
 
@@ -269,6 +270,9 @@ func (s *Server) submitCredential(r *http.Request, name, actor string) (any, int
 		return nil, code, err
 	}
 	s.appendCredentialEvent("integration.credential-stored", name, actor)
+	// After the superseded version's erasure below, so the render sees
+	// the connection as it now is.
+	defer s.refileAdapterRender(name, actor)
 	out := map[string]any{
 		"credential": active,
 		"note": "stored on the connection's placement nodes and nowhere else. The adapter reads it on " +
@@ -353,6 +357,7 @@ func (s *Server) revokeCredential(r *http.Request, name, actor string, administe
 	}
 	s.appendCredentialEvent("integration.credential-revoked", name, actor)
 	outcomes := s.eraseCredentialCopies(r.Context(), name, false)
+	s.refileAdapterRender(name, actor)
 	conn, _ := s.DB.GetConnection(name)
 	return map[string]any{
 		"revoked":        n,
@@ -395,6 +400,7 @@ func (s *Server) authorizeBackground(r *http.Request, name, actor string) (any, 
 		return nil, code, err
 	}
 	s.appendCredentialEvent("integration.background-authorized", name, actor)
+	s.refileAdapterRender(name, actor)
 	return map[string]any{
 		"authorization": a,
 		"note": "authorized for this exact scope, Agent, calendar, credential and adapter version. It runs " +
@@ -423,6 +429,7 @@ func (s *Server) revokeBackground(r *http.Request, name, actor string, administe
 		return nil, credentialStatus(err), err
 	}
 	s.appendCredentialEvent("integration.background-revoked", name, actor)
+	s.refileAdapterRender(name, actor)
 	return map[string]any{"revoked": true, "note": "no new mail is read from now on; queued reads were cancelled"},
 		http.StatusOK, nil
 }
@@ -560,7 +567,7 @@ func (s *Server) removeAdapterContainer(ctx context.Context, adapter, connection
 	if domain == "" {
 		return fmt.Sprintf("the adapter container for %q on %s cannot be named, so its removal is unproven", adapter, node)
 	}
-	name := capability.AdapterContainerName(domain, connection)
+	name := capability.AdapterContainerName(domain, connection, node)
 	// Best-effort stop; the remove's own answer is authoritative.
 	s.Agents.Apply(ctx, node, &wsv1.Operation{Op: &wsv1.Operation_StopContainer{ //nolint:errcheck
 		StopContainer: &wsv1.StopContainer{Name: name},

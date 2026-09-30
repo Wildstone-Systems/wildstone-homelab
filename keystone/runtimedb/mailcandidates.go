@@ -1,7 +1,7 @@
 package runtimedb
 
 // Private mail event candidates (migration 0100, epic #326 S05, #458;
-// ADR-W030 A5.5).
+// ADR-W030 A5.6).
 //
 // A mailbox monitor reads one Person's new mail and may find a possible
 // calendar event in it. This file is the only place that finding is

@@ -1,5 +1,5 @@
 // Package mailmonitor turns one Person's new mail into private, versioned
-// calendar event candidates (epic #326 S05, #458; ADR-W030 A5.5).
+// calendar event candidates (epic #326 S05, #458; ADR-W030 A5.6).
 //
 // A scheduled run (S03) hands the Dispatcher a claimed run; it queues one
 // bounded mail.changes read against the Person's connection, and when the
