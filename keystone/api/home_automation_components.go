@@ -70,6 +70,10 @@ type haComponentSpec struct {
 	Checks []haCheckNeed
 	// Steps are what somebody must do outside Wildstone, in order.
 	Steps []haStepSpec
+	// ManagedHAParams are settings a Wildstone-run Home Assistant needs
+	// for this component to reach it (Zigbee2MQTT needs Home Assistant's
+	// own MQTT login). Checked only when that package declares the param.
+	ManagedHAParams map[string]string
 }
 
 type haCheckNeed struct {
@@ -100,6 +104,22 @@ type haFacts struct {
 	HostAddress string
 	MQTTHost    string
 	MQTTPort    string
+	ZWaveHost   string
+	ZWavePort   string
+}
+
+func orHost(v string, f haFacts) string {
+	if v != "" {
+		return v
+	}
+	return f.host()
+}
+
+func orDefault(v, d string) string {
+	if v != "" {
+		return v
+	}
+	return d
 }
 
 func (f haFacts) host() string {
@@ -155,6 +175,7 @@ var haComponents = []haComponentSpec{
 		ID: haZigbee, Title: "Zigbee", Capability: "zigbee", Topology: haTopologyShared, Protocol: true,
 		Requires:  []string{haMQTT},
 		RadioKind: "zigbee", RadioClaims: true,
+		ManagedHAParams: map[string]string{"mqtt_enabled": "true"},
 		Steps: []haStepSpec{{
 			ID: "ha_mqtt_integration", Title: "Connect Home Assistant to the MQTT broker",
 			Instructions: func(f haFacts) []string {
@@ -169,6 +190,7 @@ var haComponents = []haComponentSpec{
 				return []string{
 					"In Home Assistant: Settings → Devices & services → Add integration → MQTT.",
 					fmt.Sprintf("Broker %s, port %s, username home-assistant, and the password Wildstone keeps as secret/mqtt-home-assistant on %s.", broker, port, nodeOr(f.Node)),
+					"A Home Assistant Wildstone runs has these as WILDSTONE_MQTT_HOST, WILDSTONE_MQTT_PORT and WILDSTONE_MQTT_PASSWORD: docker exec home-assistant printenv on that machine.",
 					"Zigbee devices then appear through MQTT discovery.",
 				}
 			},
@@ -182,7 +204,7 @@ var haComponents = []haComponentSpec{
 			Instructions: func(f haFacts) []string {
 				return []string{
 					"In Home Assistant: Settings → Devices & services → Add integration → Z-Wave.",
-					fmt.Sprintf("Untick \"Use the Z-Wave Supervisor add-on\" and enter ws://%s:3000.", f.host()),
+					fmt.Sprintf("Untick \"Use the Z-Wave Supervisor add-on\" and enter ws://%s:%s.", orHost(f.ZWaveHost, f), orDefault(f.ZWavePort, "3000")),
 				}
 			},
 		}},

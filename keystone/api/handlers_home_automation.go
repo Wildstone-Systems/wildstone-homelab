@@ -1068,6 +1068,40 @@ func (b *haBuild) evaluate(spec haComponentSpec) *haComponent {
 		})
 	}
 
+	// A Wildstone-run Home Assistant this component feeds must carry
+	// the settings it needs; offered as a reconfigure of that package.
+	if hass := b.comps[haHomeAssistant]; hass != nil && hass.installed && hass.pkg != nil && c.Selection != "none" {
+		want := map[string]string{}
+		for name, v := range spec.ManagedHAParams {
+			for _, d := range hass.pkg.Params {
+				if d.Name != name {
+					continue
+				}
+				have := b.params[hass.pkg.Metadata.Name][name]
+				if have == "" {
+					have = d.Default
+				}
+				if have != v {
+					want[name] = v
+				}
+			}
+		}
+		if len(want) > 0 {
+			var names []string
+			for n := range want {
+				names = append(names, n+"="+want[n])
+			}
+			sort.Strings(names)
+			c.Blockers = append(c.Blockers, haBlocker{
+				Code: "ha_setting_needed", Severity: haWarning,
+				Message:  fmt.Sprintf("Home Assistant needs %s to use %s.", strings.Join(names, ", "), spec.Title),
+				Evidence: []haEvidence{{Source: "plan", Subject: hass.pkg.Metadata.Name, Value: strings.Join(names, ", "), Detail: "installed params differ"}},
+				Actions: []haAction{{Kind: "reconfigure_package", Label: "Preview the Home Assistant change", Component: haHomeAssistant,
+					Package: hass.pkg.Metadata.Name, Capability: hass.Capability, Node: hass.Node, Params: want}},
+			})
+		}
+	}
+
 	// Installed: what is actually running, and whether it answers.
 	var failed *haPlan
 	if c.installed && len(spec.ModeParams) == 0 {
@@ -1613,8 +1647,15 @@ func (b *haBuild) facts(node string) haFacts {
 		f.HostAddress = n.HostAddress
 	}
 	for pkg, params := range b.params {
-		if p, err := b.catalogGet(pkg); err == nil && p.Metadata.Capability == "mqtt" {
+		p, err := b.catalogGet(pkg)
+		if err != nil {
+			continue
+		}
+		switch p.Metadata.Capability {
+		case "mqtt":
 			f.MQTTHost, f.MQTTPort = params["listen_addr"], params["listen_port"]
+		case "zwave":
+			f.ZWaveHost, f.ZWavePort = params["listen_addr"], params["ws_port"]
 		}
 	}
 	return f

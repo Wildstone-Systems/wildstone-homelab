@@ -56,7 +56,10 @@ templates:
 		"hass-test": `apiVersion: wildstone.dev/v1
 kind: Package
 metadata: { name: hass-test, version: 1.2.0, capability: home-assistant }
+requires:
+  - { trait: mqtt, mode: broker, when: mqtt_enabled }
 params:
+  - { name: mqtt_enabled, default: "false", validate: "enum:true|false" }
   - { name: node, required: true, source: node }
   - { name: bluetooth, default: "off", validate: "enum:proxy|host-bluez|off" }
 templates:
@@ -478,6 +481,15 @@ func TestHomeAutomationPartialManagedInstall(t *testing.T) {
 	if a := z.action("install_package"); a == nil || a.Package != "zigbee-test" || len(a.RadioIDs) != 1 || a.RadioIDs[0] != haZigbeeID {
 		t.Errorf("zigbee install = %+v", z.Actions)
 	}
+	// Home Assistant was installed without its MQTT login: offered as a
+	// reconfigure, not hidden.
+	if b := z.blocker("ha_setting_needed"); b == nil || b.Severity != haWarning || b.Actions[0].Kind != "reconfigure_package" ||
+		b.Actions[0].Package != "hass-test" || b.Actions[0].Params["mqtt_enabled"] != "true" {
+		t.Errorf("zigbee ha setting = %+v", z.Blockers)
+	}
+	if len(hass.Requires) != 0 {
+		t.Errorf("home-assistant without mqtt_enabled requires %v", hass.Requires)
+	}
 	if b := v.comp(t, haBluetooth); b.State != haNotSelected || len(b.Modes) != 3 {
 		t.Errorf("bluetooth = %s modes %v", b.State, b.Modes)
 	}
@@ -633,7 +645,7 @@ func TestHomeAutomationHealthyFullStack(t *testing.T) {
 	f := newHAFixture(t)
 	f.install(t, "mqtt-test", "2.0.0", map[string]string{"node": "n1", "listen_addr": "192.0.2.10"},
 		haContainer("mosquitto", "mqtt", "mqtt-test", "n1"))
-	f.install(t, "hass-test", "1.2.0", map[string]string{"node": "n1", "bluetooth": "host-bluez"},
+	f.install(t, "hass-test", "1.2.0", map[string]string{"node": "n1", "bluetooth": "host-bluez", "mqtt_enabled": "true"},
 		haContainer("home-assistant", "home-assistant", "hass-test", "n1"),
 		haVolume("home-assistant-config", "home-assistant", "hass-test", "n1"),
 		haVolume("home-assistant-backup-repo", "home-assistant", "hass-test", "n1"),
@@ -668,6 +680,9 @@ func TestHomeAutomationHealthyFullStack(t *testing.T) {
 		}
 	}
 	hass := v.comp(t, haHomeAssistant)
+	if len(hass.Requires) != 1 || hass.Requires[0] != haMQTT {
+		t.Errorf("home-assistant with mqtt_enabled requires %v", hass.Requires)
+	}
 	if hass.Backup == nil || len(hass.Backup.Uncovered) != 0 || hass.Backup.LastSuccessAt == nil || hass.Backup.Volumes[0] != "home-assistant-config" {
 		t.Errorf("backup = %+v", hass.Backup)
 	}
@@ -727,13 +742,17 @@ func TestHomeAutomationRealCatalog(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.h.s.Catalog = c
-	v := f.get(t, "?topology=managed&select=zigbee")
-	for id, want := range map[string]string{haMQTT: "mqtt-mosquitto", haHomeAssistant: "home-assistant", haExternalHA: "home-automation-hass", haZigbee: "zigbee-zigbee2mqtt"} {
+	v := f.get(t, "?topology=managed&select=zigbee,zwave")
+	if zw := v.comp(t, haZWave); zw.State != haReadyToPropose || len(zw.RadioCandidates) != 1 || zw.RadioCandidates[0] != zwaveID {
+		t.Errorf("real zwave = %s %v %+v", zw.State, zw.RadioCandidates, zw.Blockers)
+	}
+	for id, want := range map[string]string{haMQTT: "mqtt-mosquitto", haHomeAssistant: "home-assistant", haExternalHA: "home-automation-hass",
+		haZigbee: "zigbee-zigbee2mqtt", haZWave: "zwave-zwave-js-ui"} {
 		if c := v.comp(t, id); c.Package != want || c.State == haUnavailable {
 			t.Errorf("%s = %s %s", id, c.Package, c.State)
 		}
 	}
-	for _, id := range []string{haZWave, haMatter, haThread} {
+	for _, id := range []string{haMatter, haThread} {
 		if c := v.comp(t, id); c.State != haUnavailable {
 			t.Errorf("%s = %s, want unavailable until its package exists", id, c.State)
 		}
