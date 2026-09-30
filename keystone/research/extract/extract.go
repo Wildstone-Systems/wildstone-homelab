@@ -169,6 +169,7 @@ type markupFilter struct {
 
 func (f *markupFilter) feed(input string, preserve bool) error {
 	z := html.NewTokenizer(strings.NewReader(input))
+	var foreign []string
 	for {
 		kind := z.Next()
 		if kind == html.ErrorToken {
@@ -178,6 +179,25 @@ func (f *markupFilter) feed(input string, preserve bool) error {
 			return nil
 		}
 		t := z.Token()
+		// SVG/MathML descendants are discarded, but their apparent HTML
+		// raw-text tags must not consume the foreign closing boundary or
+		// hide a later real authentication challenge. Track this independently
+		// of suppression, including foreign elements inside other containers.
+		if len(foreign) > 0 && (kind == html.StartTagToken || kind == html.SelfClosingTagToken) {
+			z.NextIsNotRawText()
+		}
+		if t.Data == "svg" || t.Data == "math" {
+			if kind == html.StartTagToken {
+				foreign = append(foreign, t.Data)
+			} else if kind == html.EndTagToken {
+				for i := len(foreign) - 1; i >= 0; i-- {
+					if foreign[i] == t.Data {
+						foreign = foreign[:i]
+						break
+					}
+				}
+			}
+		}
 		// Character references are decoded by the tokenizer, after the raw
 		// response check. Check every token even after the output cap so a
 		// discarded suffix cannot conceal a forbidden decoded control.

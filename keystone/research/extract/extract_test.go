@@ -414,3 +414,25 @@ func TestMarkdownLiteralMarkersCannotBeForgedOrExpandedRecursively(t *testing.T)
 		t.Fatal("non-deterministic extraction")
 	}
 }
+
+func TestForeignContentDoesNotConsumeFollowingHTML(t *testing.T) {
+	for _, media := range []string{"text/html", "text/markdown"} {
+		for _, foreign := range []string{"svg", "math"} {
+			for _, child := range []string{"script", "style", "title", "textarea", "xmp", "plaintext"} {
+				for _, wrapper := range []string{"", "object"} {
+					body := "<" + foreign + "><" + child + "></" + foreign + ">"
+					if wrapper != "" {
+						body = "<" + wrapper + ">" + body + "</" + wrapper + ">"
+					}
+					d, err := Extract(input(media, body+"\n\nVisible"))
+					if err != nil || d.Text != "Visible" {
+						t.Fatalf("%s %s/%s/%s suffix: %q %v", media, wrapper, foreign, child, d.Text, err)
+					}
+					if _, err := Extract(input(media, body+"<input type=password>")); err != publicfetch.ErrBlocked {
+						t.Fatalf("%s %s/%s/%s challenge: %v", media, wrapper, foreign, child, err)
+					}
+				}
+			}
+		}
+	}
+}
