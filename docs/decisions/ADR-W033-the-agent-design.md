@@ -893,7 +893,9 @@ This proposal does not claim the tools are implemented.
   inference approval is insufficient for external search/fetch egress;
   check full trusted task/session sources before network effects and on resume.
 - **F6:** only configured workspace scratch/file-trash expiry is an exception
-  to indefinite soft deletion: seven days after terminal task for scratch,
-  30 days for file trash by default. Active/waiting scratch is protected.
+  to indefinite soft deletion: seven days after entry into completed, failed or
+  cancelled for scratch/staging, 30 days for file trash by default. Pending,
+  running, waiting, paused-offboarded and unknown states are protected;
+  cleanup rechecks current state and unresolved-publication recovery pins.
   People, Agents, Connections, routines and other durable entities stay
   recoverable until explicit purge. Retirement does not remove artifacts.
