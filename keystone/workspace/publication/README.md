@@ -52,7 +52,9 @@ notification, or creates a receipt. Already committed writes and original
 receipts remain settled. Incomplete open sessions remain resumable scratch.
 Quarantine/coordinator fences refuse recovery just as they refuse execution.
 Unexpected startup recovery errors fail startup before durable dispatch;
-explicit restore/household-stop gates retain the administrative recovery surface.
+confirmed restore/household-stop gates retain the administrative recovery surface
+but disable durable coordination for the process lifetime. After releasing a
+gate, restart Keystone so recovery completes before durable runners are wired.
 
 Rollback marks unsettled publication/session rows aborted. It preserves prior
 committed revisions, all byte objects and held reservations, including an

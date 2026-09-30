@@ -740,9 +740,11 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	// Startup has no fresh per-task resource authorization, so it never invents
 	// publication success. Bytes/reservations and prior revisions remain intact.
 	if coordinating {
-		if err := recoverWorkspaceAtStartup(db, log); err != nil {
+		recovered, err := recoverWorkspaceAtStartup(db, log)
+		if err != nil {
 			return err
 		}
+		coordinating = recovered
 	}
 
 	// Heartbeats inform the human takeover decision; they never auto-promote.
