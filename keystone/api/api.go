@@ -590,6 +590,13 @@ func (s *Server) Handler() http.Handler {
 	// Render the adapter placement as a Plan (epic #326): records the
 	// executable, places node-bound adapter tokens, never approves.
 	mux.Handle("POST /api/v1/integrations/{name}/adapter/render", s.handle(principal.VerbManage, s.renderIntegrationAdapter))
+	// Watch this mailbox (epic #326 S07): the setup read model a screen
+	// resumes from, and filing the subscription a Person's authorization
+	// names. The Plan it files is an Owner's to approve.
+	mux.Handle("GET /api/v1/mail/setup", s.handle(principal.VerbRead, s.consoleMailSetup))
+	mux.Handle("POST /api/v1/integrations/{name}/subscription", s.handle(principal.VerbManage, s.consoleFileMailSubscription))
+	mux.Handle("GET /api/v1/home/mail/setup", s.portal(surfaceHome, s.homeMailSetup))
+	mux.Handle("POST /api/v1/home/integrations/{name}/subscription", s.portal(surfaceHome, s.homeFileMailSubscription))
 	mux.Handle("GET /api/v1/home/integrations/{name}/credential", s.portal(surfaceHome, s.homeCredential))
 	mux.Handle("POST /api/v1/home/integrations/{name}/credential", s.portal(surfaceHome, s.homeSubmitCredential))
 	mux.Handle("POST /api/v1/home/integrations/{name}/credential/revoke", s.portal(surfaceHome, s.homeRevokeCredential))
