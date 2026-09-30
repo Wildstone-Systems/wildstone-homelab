@@ -124,7 +124,17 @@ import (
 //	touched. A pre-minor-22 agent would ignore the field and start the
 //	container on the bridge with nothing published, so Keystone refuses
 //	to dispatch a host-mode spec to one (resource.HostNetworkProtocolMinor).
-const ProtocolMinor = 22
+//
+// 23: EnsureContainer.host_aliases gives one closed name,
+//
+//	"host.docker.internal", Docker's "host-gateway" value instead of a
+//	node DNS answer (#433), so a bridge-networked proxy can reach a
+//	"host/<port>" Route with no machine-specific address in desired
+//	state. No schema change. An older agent tries to resolve the name,
+//	fails and skips it, leaving the proxy with no route to the host, so
+//	Keystone withholds the alias from and refuses host Routes on one
+//	(resource.HostGatewayProtocolMinor).
+const ProtocolMinor = 23
 
 // maxUpdateMsgBytes is the gRPC message size cap on both ends of the
 // session/join connections (ADR-W003 W5). SelfUpdate ships the new binary

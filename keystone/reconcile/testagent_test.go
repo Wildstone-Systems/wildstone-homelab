@@ -87,6 +87,8 @@ type fakeContainer struct {
 	// namespace (protocol minor 19).
 	network     string
 	networkMode wsv1.ContainerNetworkMode
+	// hostAliases is the EnsureContainer.host_aliases it was created with.
+	hostAliases []string
 }
 
 // dockerStatus is what the real agent reads off Docker's State.Status.
@@ -440,7 +442,7 @@ func (a *testAgent) ensureContainer(opID string, op *wsv1.EnsureContainer) *wsv1
 		delete(a.containers, op.GetName())
 	}
 	created := &fakeContainer{image: op.GetImage(), labels: op.GetLabels(), running: true, owned: true,
-		network: op.GetNetwork(), networkMode: op.GetNetworkMode()}
+		network: op.GetNetwork(), networkMode: op.GetNetworkMode(), hostAliases: op.GetHostAliases()}
 	a.containers[op.GetName()] = created
 	a.runJobLocked(op.GetName(), created)
 	return &wsv1.OpResult{OpId: opID, Result: &wsv1.OpResult_EnsureContainer{EnsureContainer: &wsv1.EnsureContainerResult{
@@ -723,4 +725,16 @@ func (a *testAgent) containerNetworking(name string) (network string, mode wsv1.
 		return "", 0, false
 	}
 	return c.network, c.networkMode, true
+}
+
+// containerHostAliases reports the host_aliases the named container was
+// created with.
+func (a *testAgent) containerHostAliases(name string) ([]string, bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	c, ok := a.containers[name]
+	if !ok {
+		return nil, false
+	}
+	return append([]string(nil), c.hostAliases...), true
 }

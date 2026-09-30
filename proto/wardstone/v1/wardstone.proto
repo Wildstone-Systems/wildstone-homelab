@@ -258,6 +258,14 @@ message EnsureContainer {
   //
   // A pre-minor-14 agent ignores this field, so the container starts
   // exactly as it does today.
+  //
+  // One name is not resolved (protocol minor 23): "host.docker.internal"
+  // is written as Docker's literal "host-gateway", which the daemon
+  // replaces with its bridge gateway. Keystone sends it only to the
+  // ingress proxy and the dashboard, so a Route upstream "host/<port>"
+  // reaches a host-networked service with no machine-specific address in
+  // desired state. An older agent resolves it like any other name, fails
+  // and skips it, so Keystone withholds it from one.
   repeated string host_aliases = 12;
 
   // The following five fields (protocol minor 18, ADR-W039 Phase 6/H1)
