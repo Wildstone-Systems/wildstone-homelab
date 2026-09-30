@@ -147,8 +147,9 @@ Deployment flags, the same shape as `-ntfy-url` and `-calendar-url`. No flag eve
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `-speech-mode` | `off` | `off`, `local`, `local-then-cloud` or `cloud`. `local-then-cloud` still obeys §2.2 step 4 on every turn. |
-| `-speech-url` | empty | The local engine, e.g. `http://127.0.0.1:18000/v1`. Empty means no local engine. |
+| `-speech-mode` | `off` | `off`, `local`, `local-then-cloud` or `cloud`. `local-then-cloud` still obeys §2.2 step 4 on every turn. Not given, it is `off` until `speech-speaches` is installed on Keystone's node, then `local` (§3.4). |
+| `-speech-url` | empty | The local engine, e.g. `http://127.0.0.1:18000/v1`. Empty means the installed `speech-speaches` engine, if any (§3.4). |
+| `-node-id` | short host name | The Wardstone node Keystone runs on. The installer sets it to its `--node-id`. Used to check where `speech-speaches` is installed. |
 | `-speech-model` | `Systran/faster-whisper-small` | The local model. `Systran/faster-distil-whisper-small.en` suits an English-only house. |
 | `-speech-cloud-model` | `gpt-4o-mini-transcribe` | The OpenAI model. |
 | `-speech-language` | `auto` | Two-letter hint, e.g. `en`. |
@@ -158,6 +159,15 @@ Deployment flags, the same shape as `-ntfy-url` and `-calendar-url`. No flag eve
 A value that cannot mean anything stops Keystone at startup. An engine that is named but not usable yet (no key, container not up) is only a warning: Keystone starts, and the Router answers "not available" until it is.
 
 Moving the mode into the Console, and a per-Connection voice switch, are follow-ups once slices 2–4 show what households actually change.
+
+### 3.4 Installing the engine turns dictation on (#408)
+
+Installing `speech-speaches` is the household asking for voice, so it needs no `KEYSTONE_ARGS` edit and no restart. Keystone finds the package's `speaches` Container in desired state at startup, after every plan approval, and once a minute, and reads the host port it publishes for container port 8000. It then hands `http://127.0.0.1:<port>/v1` to the Router (`SetInstalled`), which fetches the model in the background exactly as it does at startup.
+
+- **Explicit choices win.** The installed engine switches the mode to `local` only when `-speech-mode` was not given. An explicit mode, including `off`, is kept. A `-speech-url` is used in place of the installed engine. When a flag keeps the engine unused, the package's Services entry lists a blocker naming the flag to change.
+- **Local only.** It never turns on the cloud engine or spoken replies. `-speech-replies local` with no `-speech-url` does use the installed engine as its voice.
+- **Placement.** The engine is reachable only on Keystone's own node. An install on another node is refused, but only when Keystone's `-node-id` is a joined node. Otherwise nothing is refused on a guess.
+- **Status.** The Services entry reports the model as `starting` (engine not answering yet), `downloading`, `ready` or `failed`. Until it is ready, a recording is answered with "try again shortly".
 
 ---
 

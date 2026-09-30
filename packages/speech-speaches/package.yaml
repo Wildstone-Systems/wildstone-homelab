@@ -14,13 +14,20 @@
 # transcribed.
 #
 # INSTALL IT ON KEYSTONE'S OWN NODE, for that reason: a loopback port on
-# another machine is not reachable from Keystone.
+# another machine is not reachable from Keystone, and Keystone refuses
+# an install on a node it knows is not its own (-node-id).
 #
-# To turn voice on after installing, add to KEYSTONE_ARGS
-#   -speech-mode local -speech-url http://127.0.0.1:18000/v1
-# (with the port you chose here). Keystone asks this container to
-# download its model (-speech-model) at startup and retries until the
-# container is up; the first download is a few hundred MB.
+# Installing it turns local dictation on (#408). Keystone finds this
+# Container in desired state, reads the port chosen here, and asks the
+# engine to download its model (-speech-model), retrying until the
+# container is up; the first download is a few hundred MB. The Services
+# page shows the model starting, downloading, ready or failed. No
+# KEYSTONE_ARGS edit or restart is needed, and nothing leaves the house:
+# the cloud engine and spoken replies stay off until chosen by flag.
+#
+# A choice already made by flag is kept: -speech-mode off or cloud
+# leaves this engine unused, and a -speech-url is used instead of it.
+# The Services page says which flag to change.
 #
 # To have replies read aloud as well, add
 #   -speech-replies local
@@ -46,7 +53,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: speech-speaches
-  version: 1.0.1
+  version: 1.0.2
   capability: speech
   profile: speaches
 requires:

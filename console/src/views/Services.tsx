@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { DirectoryPicker } from "../ui/DirectoryPicker";
 import {
   ArrowCircleUp,
@@ -7,7 +7,7 @@ import {
   Info,
   WarningCircle,
 } from "@phosphor-icons/react";
-import { api, EnablePreview, PackageView, ResourceView } from "../api";
+import { api, EnablePreview, PackageView, ResourceView, SpeechStatus } from "../api";
 import { ErrorLine, useAction, useLoad } from "../lib";
 import { Group, GROUPS, groupOf, hostOf, RANK } from "../services";
 import { Dot, Kind, StatusPill } from "../ui/status";
@@ -38,6 +38,15 @@ export function Services() {
   // Removing a capability proposes deleting everything it owns, and
   // only the statefile knows what that is.
   const resources = useLoad(() => api.resources(), []);
+  // A speech model downloads for minutes after the install that started
+  // it; keep asking until it settles, so the callout moves on its own.
+  const speechSettling = (list.data ?? []).some((p) => p.speech?.state && p.speech.state !== "ready");
+  const reloadList = list.reload;
+  useEffect(() => {
+    if (!speechSettling) return;
+    const t = window.setInterval(reloadList, 5000);
+    return () => window.clearInterval(t);
+  }, [speechSettling, reloadList]);
   if (list.error) return <ErrorLine error={list.error} />;
   return (
     <ServicesView
@@ -507,6 +516,35 @@ export function CatalogCard({
   );
 }
 
+// What an installed speech engine's model is doing, in words: until it
+// is ready, a recording is answered with "try again shortly" (#408).
+function SpeechCallout({ status }: { status: SpeechStatus }) {
+  const model = status.model ? <code>{status.model}</code> : "the speech model";
+  switch (status.state) {
+    case "ready":
+      return <div className="callout">Dictation is on. {model} is ready, and recordings stay in the house.</div>;
+    case "downloading":
+      return (
+        <div className="callout callout-warn">
+          Downloading {model}. Dictation works once it finishes; the first download is a few hundred MB.
+        </div>
+      );
+    case "failed":
+      return (
+        <div className="callout callout-bad">
+          The engine could not fetch {model}
+          {status.detail ? `: ${status.detail}` : ""}. Keystone keeps retrying.
+        </div>
+      );
+    default:
+      return (
+        <div className="callout callout-warn">
+          Waiting for the speech engine to start. Keystone then fetches {model} on its own.
+        </div>
+      );
+  }
+}
+
 // Everything the installed tile used to carry on its face, in the panel
 // the tile opens. This is the answer to "which port is this on", which
 // before the addresses endpoint existed only in <prefix>/routes/ on the
@@ -543,6 +581,7 @@ export function InstalledDetail({
           <strong>Will not work here.</strong> {b}
         </div>
       ))}
+      {pkg.speech?.state && <SpeechCallout status={pkg.speech} />}
 
       <div className="sect" style={{ marginTop: "var(--space-6)" }}>
         <span className="eyebrow">Where it answers</span>

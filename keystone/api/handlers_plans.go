@@ -253,6 +253,9 @@ func (s *Server) approvePlan(r *http.Request, id principal.Identity) (any, int, 
 	if s.OnApproved != nil {
 		s.OnApproved()
 	}
+	// Installing or removing the speech engine turns dictation on or
+	// off now, not at the next restart (#408).
+	s.RefreshSpeech()
 	rec, err = s.DB.GetPlan(planID)
 	if err != nil {
 		return nil, http.StatusInternalServerError, err

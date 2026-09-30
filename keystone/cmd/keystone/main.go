@@ -126,8 +126,9 @@ func main() {
 	calendarUser := flag.String("calendar-user", "", "directory account the calendar actions sign in to the CalDAV collection as; its password comes from CALENDAR_PASSWORD")
 	pantryURL := flag.String("pantry-url", "", "PantryOS address for the pantry.* actions, e.g. https://pantry.example.internal (ADR-W044). Empty leaves them unregistered, so a Butler does not offer the household a pantry this deployment has not got. The agent key comes ONLY from PANTRY_AGENT_KEY, never a flag")
 	householdIngress := flag.String("household-ingress", "", "comma-separated EXACT remote addresses of the identity proxy (Authelia). Empty fails closed. This names ONE trust boundary and it now gates TWO things: the household review page (ADR-W030 A8.1), and Console sign-in by forwarded identity (ADR-W032) — a request from one of these addresses carrying Remote-User and a Remote-Groups list containing console_users, who is an active Owner Person with a fresh Console sign-in (OIDC, ADR-W033 A4.1), is authenticated as that person, with admin authority. Setting this does not by itself grant anyone the Console: they must also be in the console_users directory group, which packages/wildstone-console declares, and be an active Owner")
-	speechMode := flag.String("speech-mode", "off", "how voice messages are transcribed (ADR-W042): off | local | local-then-cloud | cloud. local never sends audio out of the house; cloud and local-then-cloud use OpenAI only for a conversation whose Agent may use a cloud model. The OpenAI key comes ONLY from OPENAI_API_KEY or the Console, never a flag")
-	speechURL := flag.String("speech-url", "", "base URL of the local speech-to-text engine, e.g. http://127.0.0.1:18000/v1 (the speech-speaches package, installed on this node); empty means no local engine")
+	speechMode := flag.String("speech-mode", "off", "how voice messages are transcribed (ADR-W042): off | local | local-then-cloud | cloud. Unset, it is off until the speech-speaches package is installed on this node, then local (#408). local never sends audio out of the house; cloud and local-then-cloud use OpenAI only for a conversation whose Agent may use a cloud model. The OpenAI key comes ONLY from OPENAI_API_KEY or the Console, never a flag")
+	speechURL := flag.String("speech-url", "", "base URL of the local speech-to-text engine, e.g. http://127.0.0.1:18000/v1; empty means the speech-speaches package, found on its own once it is installed on this node")
+	nodeID := flag.String("node-id", shortHostname(), "the Wardstone node id of the machine Keystone runs on (wardstoned's --node-id; the installer's default is the short host name). Used to check that a package Keystone reaches over loopback, such as speech-speaches, is installed here")
 	speechModel := flag.String("speech-model", defaultSpeechModel, "local speech-to-text model; Keystone asks the engine to download it at startup")
 	speechCloudModel := flag.String("speech-cloud-model", defaultSpeechCloudModel, "OpenAI transcription model used when -speech-mode allows the cloud")
 	speechLanguage := flag.String("speech-language", "auto", "two-letter language hint for transcription, e.g. en, or auto to detect")
@@ -155,8 +156,10 @@ func main() {
 		fmt.Fprintf(os.Stderr, "keystone: -agent-runtime must be %s or %s, not %q\n", agentRuntimeLegacy, agentRuntimeNative, butlerCfg.AgentRuntime)
 		os.Exit(2)
 	}
+	speechModeSet := false
+	flag.Visit(func(f *flag.Flag) { speechModeSet = speechModeSet || f.Name == "speech-mode" })
 	speechRtr, speechWarnings, err := speechRouter(speechConfig{
-		Mode: *speechMode, URL: *speechURL, Model: *speechModel, CloudModel: *speechCloudModel,
+		Mode: *speechMode, ModeSet: speechModeSet, URL: *speechURL, Model: *speechModel, CloudModel: *speechCloudModel,
 		Language: *speechLanguage, MaxSeconds: *speechMaxSeconds, Timeout: *speechTimeout,
 		ReplyMode: *speechReplies, ReplyModel: *speechReplyModel, ReplyVoice: *speechReplyVoice,
 		ReplyCloudModel: *speechReplyCloudModel, ReplyCloudVoice: *speechReplyCloudVoice,
@@ -178,6 +181,7 @@ func main() {
 		HostOpsEnabled:    *hostOpsEnabled,
 		AgentHeartbeatTTL: *agentHeartbeatTTL,
 		Speech:            speechRtr,
+		NodeID:            strings.TrimSpace(*nodeID),
 	}
 	if err := run(*listen, *apiListen, *joinTokens, *hosts, *dataDir, *ingestEvery, *reconcileEvery, *managedPrefix, *backupEvery, *resticImage, *consoleDir, *catalogDir, *wallpaperDir, butlerCfg, householdCfg, log); err != nil {
 		fmt.Fprintln(os.Stderr, "keystone:", err)
@@ -347,6 +351,8 @@ type householdConfig struct {
 	// Speech transcribes voice messages (ADR-W042). Its Mode is off
 	// unless the deployment turned it on; nil (a test's config) is off.
 	Speech *speech.Router
+	// NodeID is the node Keystone runs on (-node-id).
+	NodeID string
 }
 
 // confirmWindow is how long a confirm-tier question stays open, and
@@ -1237,6 +1243,16 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	// read aloud) now rather than when somebody first speaks;
 	// the engine may still be starting, so this retries in the background.
 	go householdCfg.Speech.Warm(context.Background(), log)
+	// An installed speech-speaches engine turns dictation on without a
+	// flag (#408). Approvals refresh it at once; the timer catches any
+	// other change to desired state.
+	apiSrv.NodeID = householdCfg.NodeID
+	apiSrv.RefreshSpeech()
+	go func() {
+		for range time.Tick(time.Minute) {
+			apiSrv.RefreshSpeech()
+		}
+	}()
 	apiSrv.HouseholdLoc = householdLoc
 	apiSrv.HouseholdZone = householdZone
 	// An Agent that hears the household's clock is wrong can propose the

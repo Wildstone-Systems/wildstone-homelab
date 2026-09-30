@@ -50,6 +50,10 @@ type Client struct {
 
 	mu      sync.Mutex
 	warming bool
+	// state and detail are what the last attempt to fetch or use the
+	// model found, for the Console to show (#408).
+	state  ModelState
+	detail string
 }
 
 // Processing implements Transcriber.
@@ -124,6 +128,9 @@ func (c *Client) Transcribe(ctx context.Context, audio []byte, mimeType, languag
 		c.startWarming()
 		return "", ErrWarming
 	}
+	if resp.StatusCode/100 == 2 {
+		c.setState(ModelReady, "")
+	}
 	if resp.StatusCode/100 != 2 {
 		return "", fmt.Errorf("speech: %s engine answered %d: %s", c.Where, resp.StatusCode, engineMessage(resp.Body))
 	}
@@ -156,7 +163,7 @@ func (c *Client) EnsureModel(ctx context.Context) error {
 	c.authorize(req)
 	resp, err := c.http().Do(req)
 	if err != nil {
-		return fmt.Errorf("speech: local engine unreachable: %w", err)
+		return fmt.Errorf("%w: %w", errUnreachable, err)
 	}
 	defer resp.Body.Close()
 	// 200 downloaded now, 201 already there.
@@ -165,6 +172,10 @@ func (c *Client) EnsureModel(ctx context.Context) error {
 	}
 	return nil
 }
+
+// errUnreachable is a download that could not reach the engine at all:
+// the container is still starting, or is not there.
+var errUnreachable = errors.New("speech: local engine unreachable")
 
 // errDownloading reports that a model download is already running for
 // this engine, started by somebody else.
@@ -182,13 +193,42 @@ func (c *Client) download(ctx context.Context) error {
 		return errDownloading
 	}
 	c.warming = true
+	c.state, c.detail = ModelDownloading, ""
 	c.mu.Unlock()
-	defer func() {
-		c.mu.Lock()
-		c.warming = false
-		c.mu.Unlock()
-	}()
-	return c.EnsureModel(ctx)
+	err := c.EnsureModel(ctx)
+	c.mu.Lock()
+	c.warming = false
+	switch {
+	case err == nil:
+		c.state, c.detail = ModelReady, ""
+	case ctx.Err() != nil && c.state == ModelDownloading:
+		// Stopped rather than failed: Keystone is shutting down or the
+		// engine was replaced. Nothing is known either way.
+		c.state, c.detail = ModelStarting, ""
+	case errors.Is(err, errUnreachable):
+		c.state, c.detail = ModelStarting, "the speech engine is not answering yet"
+	default:
+		c.state, c.detail = ModelFailed, err.Error()
+	}
+	c.mu.Unlock()
+	return err
+}
+
+// modelState reports what is known about the model. A Client nobody
+// has asked yet is starting: its engine may not be up.
+func (c *Client) modelState() (ModelState, string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.state == "" {
+		return ModelStarting, ""
+	}
+	return c.state, c.detail
+}
+
+func (c *Client) setState(st ModelState, detail string) {
+	c.mu.Lock()
+	c.state, c.detail = st, detail
+	c.mu.Unlock()
 }
 
 // startWarming fetches the model in the background, unless a download

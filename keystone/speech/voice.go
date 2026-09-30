@@ -110,14 +110,18 @@ func (c *Client) Speak(ctx context.Context, text string) ([]byte, error) {
 // aloud. A caller uses it to decide whether to offer a speaker button,
 // and whether to ask for a voice reply at all.
 func (r *Router) CanSpeak(allowCloud bool) bool {
-	return r != nil && r.ReplyMode != ModeOff && len(r.voices(allowCloud)) > 0
+	if r == nil {
+		return false
+	}
+	cfg := r.current()
+	return cfg.replyMode != ModeOff && len(r.voices(cfg, allowCloud)) > 0
 }
 
 // SpeaksAtAll reports whether spoken replies are on and any engine is
 // configured, whatever a given Agent may use.
 func (r *Router) SpeaksAtAll() bool { return r.CanSpeak(true) }
 
-func (r *Router) voices(allowCloud bool) []Speaker {
+func (r *Router) voices(cfg view, allowCloud bool) []Speaker {
 	var out []Speaker
 	add := func(s Speaker) {
 		if s == nil || (s.Processing() != Local && !allowCloud) {
@@ -125,10 +129,10 @@ func (r *Router) voices(allowCloud bool) []Speaker {
 		}
 		out = append(out, s)
 	}
-	if r.ReplyMode.usesLocal() {
-		add(r.LocalVoice)
+	if cfg.replyMode.usesLocal() {
+		add(cfg.voice)
 	}
-	if r.ReplyMode.usesCloud() {
+	if cfg.replyMode.usesCloud() {
 		add(r.CloudVoice)
 	}
 	return out
@@ -139,14 +143,18 @@ func (r *Router) voices(allowCloud bool) []Speaker {
 // leave the house and has no local voice gets ErrUnavailable, never the
 // cloud (AC12). The text is made speakable first (SpeakableText).
 func (r *Router) Speak(ctx context.Context, allowCloud bool, text string) (Spoken, error) {
-	if r == nil || r.ReplyMode == ModeOff {
+	if r == nil {
+		return Spoken{}, ErrOff
+	}
+	cfg := r.current()
+	if cfg.replyMode == ModeOff {
 		return Spoken{}, ErrOff
 	}
 	text = SpeakableText(text)
 	if text == "" {
 		return Spoken{}, ErrEmpty
 	}
-	voices := r.voices(allowCloud)
+	voices := r.voices(cfg, allowCloud)
 	if len(voices) == 0 {
 		return Spoken{}, ErrUnavailable
 	}

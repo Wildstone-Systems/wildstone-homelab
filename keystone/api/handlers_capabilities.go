@@ -15,6 +15,7 @@ import (
 	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
 	"github.com/chickenrat17/wildstone-homelab/keystone/reconcile"
 	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
+	"github.com/chickenrat17/wildstone-homelab/keystone/speech"
 )
 
 // packageIcon is the app's own logo slug, or the generic fallback for a
@@ -251,6 +252,9 @@ type capabilityDetail struct {
 	// Distinct from providedSecrets, which the form already collects:
 	// these cannot be answered by filling in a field.
 	Blockers []string `json:"blockers,omitempty"`
+	// Speech is how far an installed speech engine's model has got, so
+	// a household can tell when dictation is usable (#408).
+	Speech *speech.Status `json:"speech,omitempty"`
 }
 
 // packageIsTheInstalledOne reports whether THIS package is the profile
@@ -318,6 +322,10 @@ func (s *Server) describeCapability(pkg *pkgspec.Package, current []resource.Res
 	})
 	sort.Slice(d.Addresses, func(i, j int) bool { return d.Addresses[i].Route < d.Addresses[j].Route })
 	d.Blockers = capabilityBlockers(pkg, posture)
+	if pkg.Metadata.Name == speechEnginePackage {
+		d.Blockers = append(d.Blockers, s.speechEngineBlockers(current)...)
+		d.Speech = s.speechEngineStatus(pkg, current)
+	}
 	return d
 }
 
@@ -710,6 +718,9 @@ func (s *Server) enableCapability(r *http.Request, id principal.Identity) (any, 
 	}
 	if err := claimedByAnotherCapability(pkg, current, rendered); err != nil {
 		return nil, http.StatusConflict, err
+	}
+	if err := s.refuseMisplacedSpeechEngine(pkg, rendered); err != nil {
+		return nil, http.StatusBadRequest, err
 	}
 	docs := make([]string, 0, len(rendered))
 	for _, res := range rendered {

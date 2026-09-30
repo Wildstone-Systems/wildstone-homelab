@@ -404,6 +404,18 @@ export interface PackageView {
   addresses?: ServiceAddress[];
   resources?: ResourceRef[];
   blockers?: string[];
+  // How far an installed speech engine's model has got (#408), so the
+  // household can tell when dictation is usable.
+  speech?: SpeechStatus;
+}
+
+export interface SpeechStatus {
+  mode: string;
+  source?: "flag" | "package";
+  url?: string;
+  model?: string;
+  state?: "starting" | "downloading" | "ready" | "failed";
+  detail?: string;
 }
 
 // EnablePreview is a dry run: the plan a proposal WOULD make, and the

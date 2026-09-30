@@ -1792,6 +1792,14 @@ if [ "$ROLE" = keystone ]; then
     KEYSTONE_ARGS="$KEYSTONE_ARGS -household-timezone $HOUSEHOLD_TZ"
     KEYSTONE_ARGS_SET=1
   fi
+  # Keystone's own node id, the one wardstoned joins as. Keystone checks
+  # packages it reaches over loopback (speech-speaches) are installed
+  # here; without it, a custom --node-id leaves it guessing from the
+  # host name (#408).
+  if [ -n "$NODE_ID" ] && ! keystone_arg_named -node-id; then
+    KEYSTONE_ARGS="$KEYSTONE_ARGS -node-id $NODE_ID"
+    KEYSTONE_ARGS_SET=1
+  fi
   if tailscale ip -4 >/dev/null 2>&1 && ! keystone_arg_named -api-listen; then
     KEYSTONE_ARGS="$KEYSTONE_ARGS -api-listen 0.0.0.0:9441"
     KEYSTONE_ARGS_SET=1
