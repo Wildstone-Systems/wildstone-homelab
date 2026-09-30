@@ -246,32 +246,43 @@ func extractMarkup(input string, base *url.URL, markdown bool) (string, bool, er
 		if !entering {
 			return ast.WalkContinue, nil
 		}
-		start, end := -1, -1
+		var segments []mdtext.Segment
 		switch n := node.(type) {
 		case *ast.RawHTML:
-			if n.Segments.Len() > 0 {
-				start = n.Segments.At(0).Start
-				end = n.Segments.At(n.Segments.Len() - 1).Stop
+			for i := 0; i < n.Segments.Len(); i++ {
+				segments = append(segments, n.Segments.At(i))
 			}
 		case *ast.HTMLBlock:
-			if n.Lines().Len() > 0 {
-				start = n.Lines().At(0).Start
-				end = n.Lines().At(n.Lines().Len() - 1).Stop
+			for i := 0; i < n.Lines().Len(); i++ {
+				segments = append(segments, n.Lines().At(i))
 			}
 			if n.HasClosure() {
-				if start < 0 {
-					start = n.ClosureLine.Start
-				}
-				end = n.ClosureLine.Stop
+				segments = append(segments, n.ClosureLine)
 			}
 		}
-		if start < position || end < start {
+		if len(segments) == 0 {
+			return ast.WalkContinue, nil
+		}
+		start, end := segments[0].Start, segments[len(segments)-1].Stop
+		if start < position {
 			return ast.WalkContinue, nil
 		}
 		if filter.suppressed == "" {
 			out.write(input[position:start])
 		}
-		if err := filter.feed(input[start:end], true); err != nil {
+		// Container prefixes (quotes/list indentation) are not HTML. Segment
+		// values reconstruct the logical tag, including parser padding, while
+		// gaps remain inert Markdown outside the HTML tokenizer.
+		var raw strings.Builder
+		previous := start
+		for _, segment := range segments {
+			if filter.suppressed == "" {
+				out.write(input[previous:segment.Start])
+			}
+			raw.Write(segment.Value(source))
+			previous = segment.Stop
+		}
+		if err := filter.feed(raw.String(), true); err != nil {
 			return ast.WalkStop, err
 		}
 		position = end

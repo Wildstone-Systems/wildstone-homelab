@@ -284,3 +284,24 @@ func TestLinkExpansionIsBoundedBeforeFinalTruncation(t *testing.T) {
 		}
 	}
 }
+
+func TestMarkdownHTMLSegmentsInContainers(t *testing.T) {
+	for _, body := range []string{
+		"> before <input\n> type=password> after",
+		"- before <input\n  type=password> after",
+		"> <form>\n> <input\n> type=password>\n> </form>",
+	} {
+		if _, err := Extract(input("text/markdown", body)); err != publicfetch.ErrBlocked {
+			t.Fatalf("missed logical challenge %q: %v", body, err)
+		}
+	}
+	body := "> before <a\n> href=\"/help\">Help</a> after"
+	d, err := Extract(input("text/markdown", body))
+	if err != nil || !strings.Contains(d.Text, "https://example.com/help") || !strings.Contains(d.Text, "Help") || strings.Count(d.Text, ">") != 2 {
+		t.Fatalf("lost link/container: %q %v", d.Text, err)
+	}
+	d, err = Extract(input("text/markdown", "> <script>\n> evil()\n> </script>\n\nafter"))
+	if err != nil || strings.Contains(d.Text, "evil") || !strings.HasSuffix(d.Text, "after") {
+		t.Fatalf("active block: %q %v", d.Text, err)
+	}
+}
