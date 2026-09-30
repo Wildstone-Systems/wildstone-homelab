@@ -88,6 +88,7 @@ one mechanism, which is worth deciding before any of them individually.
 | `home-assistant` | home-assistant | Home Assistant, run here on the host's network (LAN discovery; port 8123 on the LAN); `mqtt_enabled` switches on `mqtt:broker`; `bluetooth` is `proxy` (default, ESPHome proxies, no host access), `host-bluez` or `off` — see [Bluetooth](#bluetooth-home-assistant) | own |
 | `mqtt-mosquitto` | mqtt | Mosquitto broker, password-only, on one private LAN address; provides `mqtt:broker` | internal |
 | `zigbee-zigbee2mqtt` | zigbee | Zigbee2MQTT over a USB stick or a network coordinator; requires `mqtt:broker` on its node | proxy |
+| `matter-matterjs` | matter | Matter.js Server (the current Matter controller, not the archived Python one) on host networking; WebSocket on loopback only for a Home Assistant on the same machine, provides `matter:server`; fabric backed up as critical | — |
 | `zwave-zwave-js-ui` | zwave | Z-Wave JS UI on a USB stick (by `/dev/serial/by-id/`); WS server for Home Assistant on one private address, provides `zwave:server`; MQTT gateway off | proxy |
 | `thread-otbr` | thread | OpenThread Border Router on a local USB Thread radio, host-networked; REST on 127.0.0.1:8081 for Home Assistant on the same node, no Route | — |
 | `cameras-frigate` | cameras | Frigate NVR (CPU, Coral or GPU); `mqtt_enabled` switches on `mqtt:broker` | proxy |
@@ -524,7 +525,7 @@ Five things to know:
 
 - The template renders over **your own** params (`.Params`), the
   requesting capability's name (`.Consumer`), and the functions `origin`,
-  `sessionDomain`, `publishedHost` and `publishedPort`.
+  `sessionDomain`, `publishedHost`, `publishedPort` and `hostNetworkEnv`.
 - **An export cannot see the params you were INSTALLED with** — only your
   declared defaults (ADR-W025 Part B item 4). A fact that lives in a
   required param, such as the address a listener was bound to, is read
@@ -532,7 +533,13 @@ Five things to know:
   <port>` and `publishedPort` answer where your own container publishes
   that TCP port in the deployment's desired state, and render empty
   before you are installed. Under `wild pkg lint` they answer from your
-  params' defaults and examples.
+  params' defaults and examples. A container on `networkMode: host`
+  publishes nothing, so for one of those `hostNetworkEnv "<container>"
+  "<KEY>"` reads back an env value it was installed with — the
+  listen address and port it was told to use — and never a secret
+  reference. An export that is a URL on loopback holds its consumer to
+  the provider's node and to host networking, the way an exported secret
+  holds it to the secret's node.
 - **Use `origin`, never string concatenation.** It answers where a host is
   actually *served*, which under the tailnet posture is the node's one
   certified name plus a port — not the host you declared (ADR-W019 A10).
@@ -616,6 +623,35 @@ daily with it) and never appear in params, secrets or a plan. The
 package is not instanced — one controller, one server, one
 `zwave:server` — and its header covers first install, moving an
 existing controller over, and NVM backups.
+
+### The Matter server (`matter:server`)
+
+`matter-matterjs` provides it. Home Assistant's Matter integration
+wants one URL:
+
+```yaml
+requires:
+  - { trait: matter, mode: server }
+# ...
+url: "{{ .Resolved.MatterWsURL }}"   # ws://127.0.0.1:5580/ws
+```
+
+`MatterWsHost` and `MatterWsPort` are the same address split. Unlike
+the Z-Wave server, this one runs on host networking (Matter is mDNS and
+IPv6 link-local), so it cannot be published on one chosen address: the
+WebSocket, which has no authentication and can commission or remove
+every device, is bound to 127.0.0.1 through the image's own
+`LISTEN_ADDRESS`. A consumer must therefore be host-networked and on
+the same node; the engine refuses one on another node, or one on the
+Wildstone bridge, with both named. Matter's own UDP (5540, mDNS 5353)
+stays on every interface — it is authenticated and encrypted under the
+fabric, and devices must reach it. There is no Route: the dashboard
+shares the WebSocket's port (`ssh -L 5580:127.0.0.1:5580` to open it).
+The fabric in `matter-data` is identity-bearing — a server on an empty
+volume makes a new fabric no device belongs to — so its BackupPlan is
+`critical`, removal keeps it, and a restore goes in before the first
+start. The package header covers the HAOS support boundary, host
+requirements and firewalling.
 
 ### Before you open a PR
 

@@ -90,7 +90,7 @@ func TestTheHouseholdIsNeverOfferedTheOperatorsCapabilities(t *testing.T) {
 		switch pkg {
 		case "identity", "ingress", "ingress-tailnet", "ingress-tailnet-ts", "ingress-tailnet-public",
 			"dns-adguard", "dns-pihole", "vpn-gluetun", "mqtt-mosquitto", "zigbee-zigbee2mqtt",
-			"zwave-zwave-js-ui", "thread-otbr",
+			"zwave-zwave-js-ui", "thread-otbr", "matter-matterjs",
 			"metrics-grafana", "metrics-prometheus", "monitoring", "monitoring-beszel",
 			"indexers-prowlarr", "downloads-qbittorrent", "subtitles-bazarr",
 			"movies-radarr", "tv-sonarr", "music-lidarr", "captcha-flaresolverr",

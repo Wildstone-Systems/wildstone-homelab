@@ -204,7 +204,34 @@ func TestZwaveServerCarriesTheConsumerContract(t *testing.T) {
 	}
 }
 
-// TestExportContextNamesTheConsumer: .Consumer is what lets a provider
+// TestMatterServerCarriesTheConsumerContract pins the keys Home
+// Assistant renders its Matter connection from (#442). No key may carry
+// fabric key material: that belongs to the server, not its clients.
+func TestMatterServerCarriesTheConsumerContract(t *testing.T) {
+	tr, ok := Lookup("matter")
+	if !ok {
+		t.Fatal("trait matter is missing")
+	}
+	if tr.Structural {
+		t.Error("matter is satisfied by a Matter server package, not by the system")
+	}
+	m, ok := tr.LookupMode("server")
+	if !ok {
+		t.Fatal("matter has no server mode")
+	}
+	want := []string{"MatterWsHost", "MatterWsPort", "MatterWsURL"}
+	if got := strings.Join(m.ExportKeys(), ","); got != strings.Join(want, ",") {
+		t.Errorf("matter:server exports %s, want %s", got, strings.Join(want, ","))
+	}
+	for _, k := range m.ExportKeys() {
+		l := strings.ToLower(k)
+		if strings.Contains(l, "key") || strings.Contains(l, "secret") || strings.Contains(l, "fabric") {
+			t.Errorf("matter:server export %s looks like fabric material; it never leaves the server", k)
+		}
+	}
+}
+
+// TestExportContextNamesTheConsumer:.Consumer is what lets a provider
 // issue per-consumer credentials; losing it from the declared context
 // would make pkgspec refuse the shipped broker.
 func TestExportContextNamesTheConsumer(t *testing.T) {

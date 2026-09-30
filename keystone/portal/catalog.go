@@ -53,6 +53,7 @@ var operatorOnly = map[string]bool{
 	"zigbee":        true,
 	"zwave":         true,
 	"thread":        true,
+	"matter":        true,
 	"notifications": true,
 	// Fetching things off the internet on the household's behalf. An
 	// indexer is a legal and a bandwidth decision, not a preference, and

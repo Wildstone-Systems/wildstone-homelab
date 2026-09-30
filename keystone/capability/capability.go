@@ -317,6 +317,12 @@ func (e *Engine) Expand(pkg *pkgspec.Package, params map[string]string, catalog 
 	if err := checkExportedSecrets(out, resolved, exportedBy, catalog); err != nil {
 		return nil, err
 	}
+	// The same holds for a URL a provider exports on loopback: it means
+	// the provider's own node, from its host network. See
+	// checkExportedLoopback.
+	if err := checkExportedLoopback(out, resolved, exportedBy, catalog); err != nil {
+		return nil, err
+	}
 
 	return out, nil
 }
@@ -625,6 +631,9 @@ func exportFuncs(p ingressorigin.Posture, installed func() []resource.Resource) 
 			return ""
 		}
 		return strconv.FormatUint(uint64(m.HostPort), 10)
+	}
+	fm["hostNetworkEnv"] = func(container, key any) string {
+		return hostNetworkEnv(installed(), fmt.Sprint(container), fmt.Sprint(key))
 	}
 	return fm
 }

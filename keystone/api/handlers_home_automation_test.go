@@ -733,8 +733,8 @@ func TestHomeAutomationDegradedController(t *testing.T) {
 	}
 }
 
-// Against the real catalog: the packages still to come report
-// unavailable with a reason, and the shipped ones are offered.
+// Against the real catalog: each protocol component names its shipped
+// package and is offered (matter-matterjs landed with #442).
 func TestHomeAutomationRealCatalog(t *testing.T) {
 	f := newHAFixture(t)
 	c, err := catalog.LoadDir("../../packages")
@@ -747,14 +747,9 @@ func TestHomeAutomationRealCatalog(t *testing.T) {
 		t.Errorf("real zwave = %s %v %+v", zw.State, zw.RadioCandidates, zw.Blockers)
 	}
 	for id, want := range map[string]string{haMQTT: "mqtt-mosquitto", haHomeAssistant: "home-assistant", haExternalHA: "home-automation-hass",
-		haZigbee: "zigbee-zigbee2mqtt", haZWave: "zwave-zwave-js-ui", haThread: "thread-otbr"} {
+		haZigbee: "zigbee-zigbee2mqtt", haZWave: "zwave-zwave-js-ui", haThread: "thread-otbr", haMatter: "matter-matterjs"} {
 		if c := v.comp(t, id); c.Package != want || c.State == haUnavailable {
 			t.Errorf("%s = %s %s", id, c.Package, c.State)
-		}
-	}
-	for _, id := range []string{haMatter} {
-		if c := v.comp(t, id); c.State != haUnavailable {
-			t.Errorf("%s = %s, want unavailable until its package exists", id, c.State)
 		}
 	}
 	if z := v.comp(t, haZigbee); !haContains(z.Requires, haMQTT) {

@@ -1,0 +1,215 @@
+# Matter capability, profile "matterjs": runs the Open Home Foundation's
+# Matter.js Server — the Matter controller Home Assistant's Matter
+# integration talks to — on this machine's own network. It owns the
+# household's Matter FABRIC: the root certificate authority every Matter
+# device the household commissions is enrolled under.
+#
+# THIS IS THE CURRENT SERVER. matter-js/matterjs-server is the same
+# foundation's rewrite of the Python Matter Server on matter.js, and a
+# drop-in replacement for it; the Python server is archived and is not
+# used here. The WebSocket API is the same, so Home Assistant needs
+# nothing special: its Matter integration connects to
+# ws://<host>:5580/ws.
+#
+# HOST NETWORKING, AND WHAT IS ON THE LAN. Matter finds and reaches
+# devices by IPv6 link-local addressing and mDNS, neither of which
+# crosses into a Docker bridge, so the container runs with
+# networkMode: host, as upstream requires. That puts two kinds of socket
+# on this machine's own interfaces:
+#
+#   - Matter itself (UDP 5540, and mDNS on UDP 5353) listens on EVERY
+#     interface, LAN included. That is the protocol, not an admin surface:
+#     every message on it is authenticated and encrypted under the fabric's
+#     certificates, and it is what devices and Thread border routers must
+#     reach. Nothing here narrows it.
+#   - The WebSocket API and the dashboard (TCP 5580, one port, /ws and /)
+#     have NO authentication of their own — anything that reaches them can
+#     commission, remove and control every Matter device in the house. So
+#     they are bound to 127.0.0.1 ONLY, through the image's own
+#     LISTEN_ADDRESS setting (matter-server's --listen-address; its
+#     healthcheck reads the same variable). Verified against the image:
+#     the server logs "Webserver listening on http://127.0.0.1:5580", and
+#     the machine's LAN and Docker-bridge addresses refuse the connection
+#     (TestMatterServerServesHomeAssistant).
+#
+# WHO CAN REACH THE WEBSOCKET, THEN: a process on this machine, in its
+# own network namespace — which is exactly Home Assistant on host
+# networking (the home-assistant package, 2.x) installed on THIS node.
+# The matter:server trait hands a consumer ws://127.0.0.1:5580/ws, and
+# Keystone refuses a consumer that would dial it from another node or
+# from a container on the Wildstone bridge (whose 127.0.0.1 is itself),
+# naming both, instead of installing one that never connects. A Home
+# Assistant running elsewhere is not supported by this package: exposing
+# the WebSocket beyond loopback would be exposing the fabric.
+#
+# NO ROUTE. The dashboard is a real admin surface — commissioning, the
+# node list, Thread/Wi-Fi network graphs, log level — but it shares its
+# port with the unauthenticated WebSocket, and the proxy could reach it
+# only if the server also listened on the Docker bridge's gateway, where
+# every container on the machine could reach the WebSocket too. So it is
+# not proxied. To open it, from your own machine:
+#
+#     ssh -L 5580:127.0.0.1:5580 <this machine>
+#
+# and browse http://localhost:5580/. Everyday commissioning happens in
+# Home Assistant (Settings > Devices & services > Matter), which needs
+# neither.
+#
+# THE LAN INTERFACE. By default matter.js uses every interface for mDNS
+# and link-local addressing — on a Docker host that includes docker0,
+# every bridge and tailscale0, which works but is noisy and can pick the
+# wrong scope for fe80:: addresses. Set primary_interface to the LAN
+# interface (the node's home-automation readiness probe,
+# GET /api/v1/nodes/<node>/probes/home-automation, lists the candidates
+# and whether each has IPv6 and multicast). Keystone cannot fill this in
+# itself: it does not know a node's interface names when it renders.
+#
+# HOST REQUIREMENTS. IPv6 enabled, with an address on that interface,
+# and the interface up and multicast-capable — the readiness probe
+# reports each. Thread devices are reached through routes their border
+# router advertises, which the host must accept: with IPv6 forwarding on
+# (the probe reports it), that takes accept_ra=2 on the LAN interface,
+# which the probe does not check. Thread devices additionally need a Thread border router on the LAN
+# (an OTBR package, Apple/Google hubs), which this package is not.
+# Bluetooth commissioning (BLE proxy, local adapters) is a separate
+# slice; without it, commission Wi-Fi/Thread devices from the Home
+# Assistant companion app, which does the BLE step on the phone.
+#
+# THE FABRIC IS IDENTITY-BEARING STATE. /data (the matter-data volume)
+# holds the fabric's root CA key and operational certificates, the
+# fabric id, and every commissioned node's credentials and ACLs. It is
+# not configuration that can be regenerated: a server that starts on an
+# empty /data creates a NEW fabric, and every device enrolled in the old
+# one is unreachable until it is factory-reset and commissioned again.
+# Hence:
+#
+#   - the BackupPlan below is class CRITICAL (irreplaceable) and daily;
+#   - restart, image upgrade, changing primary_interface, and removing
+#     this package all keep the volume (ADR-W004 A4);
+#   - RESTORING means restoring matter-data BEFORE the server's first
+#     start on a new machine (or with it stopped), never alongside a
+#     server that has already made a fresh fabric; and never run two
+#     servers from copies of the same fabric at once — both would answer
+#     for the same node ids.
+#
+# SUPPORT BOUNDARY VERSUS HOME ASSISTANT OS. Upstream supports this
+# server as a Home Assistant OS add-on and ships the container image
+# "as-is and without official support" (docs/docker.md): HAOS tunes the
+# host's IPv6, multicast and Thread routing for it, and a general Linux
+# host is the operator's to get right. Wildstone runs the same image the
+# way upstream documents for Docker (host network, /data volume,
+# unprivileged UID 1000, read-only root), checks the host prerequisites
+# it can see through the readiness probe, and leaves the rest — Thread
+# routing, firewalls that expire UDP conntrack entries (sleepy devices
+# dropping every 15-30 minutes), IPv6 RA — documented rather than
+# managed.
+#
+# FIREWALLING. Nothing is needed for the WebSocket (loopback only). Allow
+# UDP 5353 (mDNS) and UDP 5540 (Matter) in from the LAN, and keep any
+# stateful firewall's UDP timeout above the devices' report interval
+# (upstream docs/os_requirements.md). If this machine also faces the
+# internet, drop 5540/5353 on that interface.
+#
+# PINGING DEVICES. The image grants ping CAP_NET_RAW as a file
+# capability, which no-new-privileges (set below) does not honour. Home
+# Assistant's "ping node" therefore relies on the host allowing
+# unprivileged ICMP (net.ipv4.ping_group_range covering GID 1000, the
+# default on current Debian/Ubuntu/Fedora). Nothing else uses it.
+#
+# Image digest is REAL, resolved 2026-09-30 via the GHCR registry API:
+#   ghcr.io/matter-js/matterjs-server:1.4.0 (= stable = latest)
+#     -> sha256:54232d0d...b236 (multi-arch index: amd64, arm64)
+# Upstream Dockerfile at v1.4.0: ENTRYPOINT ["node", "--enable-source-maps",
+# ".../matter-server/dist/esm/MatterServer.js"], USER 1000:1000, /data
+# owned by 1000, config by env (STORAGE_PATH, PORT, LISTEN_ADDRESS,
+# PRIMARY_INTERFACE, LOG_LEVEL). No command is set: the image's own
+# entrypoint runs, configured entirely by env.
+apiVersion: wildstone.dev/v1
+kind: Package
+metadata:
+  name: matter-matterjs
+  version: 1.0.0
+  capability: matter
+  profile: matterjs
+provides:
+  # WHAT A CONSUMER RENDERS AGAINST (keystone/trait, matter:server): what
+  # the installed container was told to listen on, read back from its env
+  # — a host-networked container publishes no ports for publishedHost to
+  # read. Before this package is installed these render empty and are not
+  # published, so a consumer fails on a missing key rather than connecting
+  # somewhere nobody chose.
+  - trait: matter
+    mode: server
+    exports:
+      MatterWsHost: '{{ hostNetworkEnv "matter-server" "LISTEN_ADDRESS" }}'
+      MatterWsPort: '{{ hostNetworkEnv "matter-server" "PORT" }}'
+      MatterWsURL: '{{ with hostNetworkEnv "matter-server" "LISTEN_ADDRESS" }}ws://{{ . }}:{{ hostNetworkEnv "matter-server" "PORT" }}/ws{{ end }}'
+params:
+  - { name: node, required: true, description: "Which machine to install this on. It must be the machine Home Assistant runs on: the Matter server only answers Home Assistant on the same machine.", source: node }
+  - { name: timezone, default: UTC, source: timezone, validate: iana_timezone, description: "Your timezone, e.g. Europe/London." }
+  - { name: primary_interface, default: "", example: "eth0", validate: interface_name, description: "Advanced: the network interface this machine's LAN is on, e.g. eth0 or enp3s0. Matter uses it for device discovery and IPv6 link-local addressing. Leave empty to let Matter use every interface. The machine's home-automation readiness check lists the candidates." }
+policies:
+  classifications: [internal_only]
+  dataSensitivity: high
+templates:
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: restic-matter, node: "{{ .Params.node }}" }
+    spec: { name: restic-matter, purpose: "Encrypts the Matter fabric's backups (its root CA key and every device's credentials)." }
+  # The fabric. Empty on first install: Docker fills an empty named
+  # volume from the image's /data, which carries its ownership (UID
+  # 1000, the user the server runs as). Nothing is seeded into it for
+  # the same reason — a file the node writes first would be root's.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: matter-data, node: "{{ .Params.node }}" }
+    spec: { name: matter-data }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: matter-backup-repo, node: "{{ .Params.node }}" }
+    spec: { name: matter-backup-repo }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: matter-server, node: "{{ .Params.node }}" }
+    spec:
+      image: "ghcr.io/matter-js/matterjs-server@sha256:54232d0d3e7dff5a54759469d2753399270412b4c30c55b31750a4595e4cb236"
+      # The machine's own network namespace: Matter's mDNS and IPv6
+      # link-local traffic reach it (see header).
+      networkMode: host
+      env:
+        TZ: "{{ .Params.timezone }}"
+        STORAGE_PATH: /data
+        # The WebSocket and dashboard on loopback only. Read by the server
+        # AND by the image's healthcheck, which is why this is env rather
+        # than --listen-address.
+        LISTEN_ADDRESS: "127.0.0.1"
+        # What Home Assistant's Matter integration expects.
+        PORT: "5580"
+        LOG_LEVEL: info
+        {{- with .Params.primary_interface }}
+        PRIMARY_INTERFACE: "{{ . }}"
+        {{- end }}
+      mounts:
+        - { source: matter-data, target: /data }
+      # Upstream's own compose file runs the image read-only; the server
+      # writes only under /data.
+      readOnlyRootfs: true
+      noNewPrivileges: true
+      restart: unless-stopped
+  # The fabric: losing it means factory-resetting and re-commissioning
+  # every Matter device in the house.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: BackupPlan
+    metadata: { name: matter, node: "{{ .Params.node }}" }
+    spec:
+      volumes: [matter-data]
+      repository: matter-backup-repo
+      passwordSecret: secret/restic-matter
+      schedule: daily
+      class: critical
+      retention: { keepDaily: 7, keepWeekly: 4, keepMonthly: 12 }
