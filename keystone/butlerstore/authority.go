@@ -75,6 +75,11 @@ type Authority struct {
 
 // AuthorizeTool resolves one dispatch.
 func (a *Authority) AuthorizeTool(q butler.ToolAuthorityQuery) (butler.ToolDecision, error) {
+	if q.Resource.Kind == "workspace" {
+		if d, err := a.AdmitResource(q); err != nil || !d.Allowed {
+			return d, err
+		}
+	}
 	if q.Caller == butler.CallerRoutine {
 		if d, ok := a.routineLayer(q); !ok {
 			return d, nil
@@ -272,6 +277,19 @@ func (a *Authority) personLayer(q butler.ToolAuthorityQuery) (butler.ToolDecisio
 // AdmitResource implements butler.ResourceAuthorizer: layer 2, one rule
 // per resource kind and no general answer for a kind that has none.
 func (a *Authority) AdmitResource(q butler.ToolAuthorityQuery) (butler.ToolDecision, error) {
+	if q.Resource.Kind == "workspace" {
+		denied := butler.ToolDecision{Reason: runtimedb.ErrWorkspaceDenied.Error()}
+		if a == nil || a.DB == nil || q.Caller != butler.CallerPersonFacing || q.RoutinePlanID != "" || q.RoutineName != "" {
+			return denied, nil
+		}
+		if err := a.DB.CheckWorkspaceTask(q.Person, a.Butler, q.TaskID, q.Connection, q.Resource.ID); err != nil {
+			if errors.Is(err, runtimedb.ErrWorkspaceDenied) {
+				return denied, nil
+			}
+			return denied, err
+		}
+		return butler.ToolDecision{Allowed: true}, nil
+	}
 	if q.Caller == butler.CallerRoutine {
 		return a.RoutineResources.AdmitResource(q)
 	}
