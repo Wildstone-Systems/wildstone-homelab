@@ -232,3 +232,21 @@ to the runtime:
 Conversations are sent as a fresh job each turn: the earlier turns' text
 travels in `Job.Conversation`, as `Runner.History` does, and a parked task
 resumes on the next message exactly as it does on `Runner`.
+
+## Proposed W047 companion extension: native capability consumers
+
+Pending acceptance of [ADR-W047](ADR-W047-native-agent-research-and-workspaces.md)
+and its [v1 interface contract](../design/native-agent-capability-contract-v1.md).
+No runtime implementation or live conformance is claimed by this extension.
+
+The native loop consumes Keystone-owned research/workspace/export tools through
+the current tool adapter and Agent API. Preserve BeforeModel authority/privacy/
+coordinator checks and per-run/task budgets; new research counters do not reset
+existing Invoke budgets. Large extracted pages/reports use bounded cursors and
+staged writes, not an enlarged untrusted-result channel or sidecar file mount.
+
+Keystone persists source/receipt/checkpoint references. Interrupted work resumes
+from verified evidence without duplicating artifact/export effects. Report
+publication and user notification are separate outcomes; failed notification
+does not erase the saved artifact. Native fixture and opt-in live DDGS/model
+evidence must prove actual tool use separately from Hermes runtime behavior.
