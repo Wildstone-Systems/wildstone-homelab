@@ -395,3 +395,18 @@ func (db *DB) IsResearchBudgetWait(taskID string) (bool, error) {
  WHERE b.task=? AND t.state='waiting' AND w.task=t.seq AND w.reason='budget-exhausted' AND w.resolved_at=''`, task).Scan(&n)
 	return n == 1, err
 }
+
+// ResearchWaitWasContinued recognizes a delayed acknowledgement after a human
+// continuation. It is not permission to resume work: it only prevents the old
+// runtime wait from undoing a continuation already committed by policy.
+func (db *DB) ResearchWaitWasContinued(taskID string) (bool, error) {
+	task, err := parseButlerTaskID(taskID)
+	if err != nil {
+		return false, err
+	}
+	var n int
+	err = db.sql.QueryRow(`SELECT count(*) FROM research_budgets b JOIN butler_tasks t ON t.seq=b.task
+ WHERE b.task=? AND t.state='running' AND b.wait_seq IS NULL
+ AND EXISTS(SELECT 1 FROM research_continuations c WHERE c.task=b.task)`, task).Scan(&n)
+	return n == 1, err
+}

@@ -160,6 +160,15 @@ func (g *Gateway) Wait(ctx context.Context, w agentapi.WorkWait) error {
 		if parked {
 			return nil
 		}
+		if w.Detail == runtimedb.ErrResearchBudgetExhausted.Error() {
+			continued, err := g.DB.ResearchWaitWasContinued(s.hc.Task.ID)
+			if err != nil {
+				return err
+			}
+			if continued {
+				return nil
+			}
+		}
 	}
 	return g.Ledger.Wait(s.hc.Task.ID, string(w.Reason), w.Detail)
 }

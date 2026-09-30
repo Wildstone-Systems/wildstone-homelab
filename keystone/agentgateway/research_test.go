@@ -90,4 +90,21 @@ func TestResearchBudgetParksThroughLegacySliceAndCanonicalGateway(t *testing.T) 
 	if err != nil || current.State != runtimedb.ButlerTaskWaiting {
 		t.Fatalf("task=%+v %v", current, err)
 	}
+	// A human may continue after the admission transaction but before Slice's
+	// acknowledgement arrives. The late acknowledgement must not park it again.
+	budget, err := f.db.GetResearchBudget(task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = f.db.ContinueResearch(task, "test-human", budget.Revision, runtimedb.ResearchLimits{Searches: 2, Fetches: 2}); err != nil {
+		t.Fatal(err)
+	}
+	if err = f.g.Wait(ctx, agentapi.WorkWait{Handle: h, Reason: agentapi.WorkWaitBudgetExhausted, Detail: runtimedb.ErrResearchBudgetExhausted.Error()}); err != nil {
+		t.Fatal(err)
+	}
+	current, err = f.db.GetButlerTask(task)
+	if err != nil || current.State != runtimedb.ButlerTaskRunning {
+		t.Fatalf("late acknowledgement undid continuation: %+v %v", current, err)
+	}
+
 }
