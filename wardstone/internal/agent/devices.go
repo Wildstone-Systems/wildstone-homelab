@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -249,4 +250,77 @@ func describeDevices(ds []*wsv1.DeviceMapping) string {
 		parts = append(parts, fmt.Sprintf("%s->%s", d.GetHostPath(), d.GetContainerPath()))
 	}
 	return strings.Join(parts, ",")
+}
+
+// DeviceSourcesLabel records, on a container the agent creates, each
+// device's host path AS REQUESTED — the /dev/serial/by-id alias, not
+// the node it resolved to — keyed by the path inside the container.
+//
+// checkDevice hands Docker the resolved node (/dev/ttyUSB1), and Docker
+// keeps that in HostConfig for every later start: its own restart
+// policy after a crash or a reboot, and ensureContainer's docker start
+// of a stopped container whose spec has not changed. The by-id alias
+// is the stable thing; the ttyUSB number is not. Unplug two sticks and
+// plug them back in the other order and the stored node is now the
+// OTHER stick: Zigbee2MQTT restarted against a Thread RCP, a second
+// owner for one radio (#435) with nothing in the spec to show it. The
+// label is what lets the agent notice: re-resolve the alias, compare
+// with what Docker will actually hand over.
+const DeviceSourcesLabel = "dev.wildstone.device-sources"
+
+// deviceSourcesLabel encodes requested[i] (the op's host paths) against
+// the container paths checkDevice settled on, in the same order. Empty
+// when there are no devices, so no label is written.
+func deviceSourcesLabel(requested []*wsv1.DeviceMapping, checked []deviceMapping) string {
+	if len(checked) == 0 {
+		return ""
+	}
+	m := make(map[string]string, len(checked))
+	for i, d := range checked {
+		m[d.PathInContainer] = requested[i].GetHostPath()
+	}
+	b, _ := json.Marshal(m)
+	return string(b)
+}
+
+// currentDeviceMappings re-resolves a container's recorded device
+// sources now. A source that no longer resolves (the stick is
+// unplugged) is left out: there is nothing to compare it with, and
+// re-creating the container would only fail checkDevice's NOT_FOUND.
+// A container without the label (created before it existed, or with no
+// devices) yields nothing, and so is never reported stale.
+func currentDeviceMappings(ci *containerInspect) []deviceMapping {
+	raw := ci.Config.Labels[DeviceSourcesLabel]
+	if raw == "" {
+		return nil
+	}
+	var sources map[string]string
+	if json.Unmarshal([]byte(raw), &sources) != nil {
+		return nil
+	}
+	var out []deviceMapping
+	for inContainer, host := range sources {
+		resolved, err := evalSymlinks(host)
+		if err != nil {
+			continue
+		}
+		out = append(out, deviceMapping{PathOnHost: resolved, PathInContainer: inContainer})
+	}
+	return out
+}
+
+// staleDevice reports the first wanted mapping whose host node differs
+// from what Docker has stored for the same container path, or "" when
+// every one matches.
+func staleDevice(ci *containerInspect, want []deviceMapping) string {
+	have := make(map[string]string, len(ci.HostConfig.Devices))
+	for _, d := range ci.HostConfig.Devices {
+		have[d.PathInContainer] = d.PathOnHost
+	}
+	for _, d := range want {
+		if got := have[d.PathInContainer]; got != d.PathOnHost {
+			return fmt.Sprintf("%s is %s now, but the container still maps %q", d.PathInContainer, d.PathOnHost, got)
+		}
+	}
+	return ""
 }

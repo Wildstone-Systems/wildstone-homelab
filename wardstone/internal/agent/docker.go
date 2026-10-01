@@ -90,6 +90,10 @@ type containerInspect struct {
 		// NetworkMode is Docker's own record of the namespace the
 		// container runs in: "host", or a bridge/network name.
 		NetworkMode string `json:"NetworkMode"`
+		// Devices is what Docker will hand the container on its next
+		// start: the RESOLVED host node, fixed when it was created. See
+		// staleDevice for why that can stop matching the stick.
+		Devices []deviceMapping `json:"Devices"`
 	} `json:"HostConfig"`
 	// Networks is keyed by Docker network name; a container attached to
 	// several has an address on each. Parsed because Keystone has to
