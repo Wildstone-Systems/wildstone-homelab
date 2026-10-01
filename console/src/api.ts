@@ -554,6 +554,60 @@ export interface HomeAutomationPlanAnswer {
   plan?: PlanRecord;
 }
 
+// Home-automation continuity (GET /api/v1/home-automation/continuity,
+// #451): per INSTALLED component, its data and backup class (from the
+// BackupPlans the package rendered), what moving or replacing its radio
+// keeps, and what removing it stops and keeps. Explanations come from
+// here, never from the Console's own guesses.
+export interface HomeAutomationDataVolume {
+  volume: string;
+  // A local backup copy rather than the data itself.
+  repository?: boolean;
+  backupPlan?: string;
+  // critical, important or rebuildable.
+  class?: string;
+  schedule?: string;
+}
+
+export interface HomeAutomationRadioOutcome {
+  // kept: devices keep working; restore: kept by restoring a backup.
+  outcome: "kept" | "restore";
+  summary: string;
+  steps?: string[];
+  // What happens when the restore is not possible.
+  otherwise?: string;
+}
+
+export interface HomeAutomationContinuity {
+  component: HomeAutomationComponentId;
+  package?: string;
+  node?: string;
+  holds?: string;
+  data: HomeAutomationDataVolume[];
+  radio?: {
+    networkOn: "machine" | "radio_and_machine";
+    moved: HomeAutomationRadioOutcome;
+    replaced: HomeAutomationRadioOutcome;
+    // The package param a replacement radio's path goes in, and the free
+    // suitable radios with the path each would be given.
+    param?: string;
+    replacements: { radioId: string; path: string }[];
+  };
+  removal: {
+    // A setting of another package (Bluetooth): turned off, not removed.
+    setting?: boolean;
+    stops: string[];
+    keeps: string[];
+    dependents: HomeAutomationComponentId[];
+    consequence: string;
+  };
+}
+
+export interface HomeAutomationContinuityView {
+  generatedAt: string;
+  components: HomeAutomationContinuity[];
+}
+
 export interface JoinTokenResponse {
   joinToken: string;
   caFingerprint?: string;
@@ -2711,6 +2765,8 @@ export const api = {
     call<HomeAutomationPlanAnswer>("POST", "/api/v1/home-automation/preview", req),
   homeAutomationPropose: (req: HomeAutomationPlanRequest) =>
     call<HomeAutomationPlanAnswer>("POST", "/api/v1/home-automation/propose", req),
+  homeAutomationContinuity: () =>
+    call<HomeAutomationContinuityView>("GET", "/api/v1/home-automation/continuity"),
   probeHttp: (node: string, url: string) =>
     call<ProbeResult>(
       "GET",
