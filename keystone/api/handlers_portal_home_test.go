@@ -975,3 +975,21 @@ func TestClearableIsNotTheUnreadCount(t *testing.T) {
 		t.Errorf("clearable = %d, want only the one Clear would acknowledge", got.Clearable)
 	}
 }
+
+// Watch this mailbox has a Homepage page (epic #326 S07): a Person who
+// is not an Owner has no Console, so the Homepage's door serves it, and
+// only to a member that door admits.
+func TestTheMailboxPageIsServedOnTheHomepageDoor(t *testing.T) {
+	h := homeHarness(t)
+	res := h.member(http.MethodGet, "/home/mail/", "sandy", "homepage_users", nil, "")
+	body, _ := io.ReadAll(res.Body)
+	res.Body.Close()
+	if res.StatusCode != http.StatusOK || !strings.Contains(string(body), "Watch this mailbox") {
+		t.Fatalf("status %d: the mailbox page is not served to a household member", res.StatusCode)
+	}
+	res = h.member(http.MethodGet, "/home/mail/", "sandy", "filedrop_users,assistant_users", nil, "")
+	res.Body.Close()
+	if res.StatusCode != http.StatusForbidden {
+		t.Fatalf("status %d for a member outside the Homepage group, want 403", res.StatusCode)
+	}
+}
