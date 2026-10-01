@@ -373,7 +373,7 @@ JSON), or `ready` for the checks as a table.
    sudo sysctl -a 2>/dev/null | sort > /tmp/sysctl-before
    api /api/v1/nodes/$NODE/probes/home-automation > /dev/null
    sudo sysctl -a 2>/dev/null | sort > /tmp/sysctl-after
-   diff /tmp/sysctl-before /tmp/sysctl-after | grep -v -E 'random|entropy|dentry|inode|file-nr|ns_last_pid|uuid|stat' | head
+   diff /tmp/sysctl-before /tmp/sysctl-after | grep -v -E 'random|entropy|dentry|inode|file-nr|ns_last_pid|uuid|stat|quota' | grep -v -E '^(---|[0-9,]+c[0-9,]+)$' | head
    ```
 
    **Expect:** no lines (only ever-changing counters, which the grep hides).
@@ -420,11 +420,12 @@ JSON), or `ready` for the checks as a table.
    repeat with `select=matter`. **Expect:** matter blocked with
    `ipv6_missing` and a manual-step instruction. Undo with `=0`, repeat:
    the blocker clears.
-3. **1.3.3** (changes the VM, then undoes it) Agent offline: count plans
-   first (`api /api/v1/plans | jq length`), then
+3. **1.3.3** (changes the VM, then undoes it) Agent offline: note the
+   newest plan first (`api /api/v1/plans | jq -r '.[0].id'`; the list
+   stops at 50, so its length proves nothing), then
    `sudo systemctl stop wardstoned`, repeat 1.3.1.
-   **Expect:** `node_offline` blockers; plan count unchanged (nothing was
-   proposed). Then `sudo systemctl start wardstoned`.
+   **Expect:** `node_offline` blockers; the newest plan is still the same
+   one (nothing was proposed). Then `sudo systemctl start wardstoned`.
 
 ### 1.4 The MQTT broker (#438)
 
@@ -666,12 +667,15 @@ SLZB-06M, Home Assistant Connect ZBT-1 with Zigbee firmware), `deconz`
 
    ```sh
    sudo docker logs zigbee2mqtt 2>&1 | grep -i -E 'mqtt|error' | tail -5
-   sudo docker inspect zigbee2mqtt --format '{{json .HostConfig.Devices}}'
+   sudo docker inspect zigbee2mqtt --format '{{json .HostConfig.Devices}} {{index .Config.Labels "dev.wildstone.device-sources"}}'
    sudo docker inspect zigbee2mqtt --format '{{range .Config.Env}}{{println .}}{{end}}' | grep -E 'MQTT_(SERVER|USER)|SERIAL'
    ```
 
    **Expect:** "Connected to MQTT server" and no "Not authorized"; the
-   device mapping from your by-id path to `/dev/zigbee`;
+   device mapping from the node your by-id path points at today (the
+   `/dev/ttyUSBn` in `ls -l /dev/serial/by-id/`: the agent hands Docker
+   the resolved node) to `/dev/zigbee`, and the by-id path itself in the
+   `dev.wildstone.device-sources` label;
    `ZIGBEE2MQTT_CONFIG_MQTT_SERVER=mqtt://<LAN_IP>:1883`, `USER=zigbee`,
    `SERIAL_PORT=/dev/zigbee`.
 4. **2.1.4** No container-name addresses: `sudo grep -r 'mosquitto:1883' /etc/wildstone/ ; echo exit=$?`.
@@ -690,6 +694,16 @@ SLZB-06M, Home Assistant Connect ZBT-1 with Zigbee firmware), `deconz`
    (2.1.3's log line again), the device still responds in Home Assistant.
 8. **2.1.8** (optional, needs a second node) Installing Zigbee2MQTT on
    another node is refused naming both nodes and `mqtt-zigbee`.
+9. **2.1.9** (changes the VM; best with two sticks, before 2.3) Swapped
+   sticks. In Proxmox unplug **both** sticks, plug the **Zigbee** stick
+   back first, wait 5 seconds, then the other one. `ls -l /dev/serial/by-id/`
+   should show the ttyUSB numbers swapped. Zigbee2MQTT stops ("Adapter
+   disconnected"); approve the drift repair Wildstone proposes.
+   **Expect:** `zigbee2mqtt` is re-created (2.1.3's `docker inspect` now
+   shows the Zigbee stick's new node), it logs
+   `zigbee-herdsman started (resumed)` with your devices, and the device
+   responds again. It must never be started against the other stick's
+   node.
 
 ### 2.2 Z-Wave (#444)
 
@@ -815,13 +829,31 @@ before forwarding, so the VM keeps its own IPv6 address and route):
    echo ip6table_filter | sudo tee /etc/modules-load.d/wildstone-otbr.conf
    ```
 
+   **If `networkctl status $NIC` says the interface is configured by
+   systemd-networkd** (Ubuntu with netplan, for one): leave out the two
+   `accept_ra` lines. networkd handles router advertisements itself and
+   keeps the kernel's `accept_ra` at 0; tell it to keep accepting them
+   with forwarding on instead, then check the IPv6 default route survives:
+
+   ```sh
+   printf 'network:\n  version: 2\n  ethernets:\n    %s:\n      accept-ra: true\n' "$NIC" | sudo tee /etc/netplan/60-wildstone-otbr.yaml
+   sudo chmod 600 /etc/netplan/60-wildstone-otbr.yaml
+   sudo netplan generate && sudo netplan apply
+   ip -6 route show default
+   ```
+
+   (The `ethernets` key must match the one in your existing netplan
+   file; the preflight's `WARN [accept_ra]` for `accept_ra is 0` then
+   names this case and can be ignored once the route is there.)
+
    (Only if you will try `nat64=on` in 2.3.12: also
    `echo 'net.ipv4.ip_forward = 1' | sudo tee -a /etc/sysctl.d/60-wildstone-otbr.conf && sudo sysctl --system`.)
 
    **Expect:** the probe now shows `ipv6_forwarding` ready, and within
    Docker's restart back-off the log shows
    `wildstone-otbr preflight: ok (backbone <NIC>, radio /dev/ttyRCP)` then
-   `Starting thread border agent otbr-agent`, and no `WARN [accept_ra]`.
+   `Starting thread border agent otbr-agent`, and no `WARN [accept_ra]`
+   (on a networkd host, the `accept_ra is 0` form of it).
    Without `ip6table_filter` it would say `FAIL [ip6tables]`.
 
 **Step D: healthy checks.**
@@ -910,14 +942,15 @@ before forwarding, so the VM keeps its own IPv6 address and route):
    sudo docker logs matter-server 2>&1 | grep -i 'listening on'
    ss -ltn | grep 5580
    curl -s http://127.0.0.1:5580/health; echo
-   ss -lun | grep -E ':5540|:5353'
+   ss -lun | grep -E ':5353'
    sudo docker inspect -f '{{.State.Health.Status}}' matter-server
    sudo docker exec matter-server ls -ln /data
    ```
 
    **Expect:** `http://127.0.0.1:5580` only; 5580 on `127.0.0.1` only;
-   health JSON with `"version":"1.4.0"`; Matter UDP on all interfaces
-   (that is expected: it is encrypted); `healthy`; `/data` owned by
+   health JSON with `"version":"1.4.0"`; mDNS (5353) on all interfaces
+   (Matter's own UDP is on ephemeral ports, not 5540: 5540 is where
+   Matter *devices* listen, and this is a controller); `healthy`; `/data` owned by
    `1000`. **From your laptop:** `curl -m3 http://<LAN_IP>:5580/health`
    **Expect:** connection refused.
 3. **2.4.3** **In Home Assistant:** Add integration → Matter → untick
@@ -1428,6 +1461,7 @@ Thread RCP settings (baud / flow control):
 2.1.5  device paired, in HA, controllable        :
 2.1.7  mqtt-zigbee rotation reconnects           :
 2.1.8  other-node Zigbee refused (optional)      :
+2.1.9  swapped sticks: re-created on the new node :
 2.2.1  Z-Wave plan: no keys                      :
 2.2.2  /dev/zwave, keys generated once, :3000 LAN:
 2.2.3  UI behind sign-in                         :
