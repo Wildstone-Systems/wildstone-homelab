@@ -144,10 +144,21 @@ jobs:
         # collides ("a release with the same tag name already exists") and
         # the release ships with zero assets. Fall back to uploading onto
         # the existing release instead.
+        #
+        # A release-candidate tag (anything with "-rc." in it, such as
+        # v0.1.13-rc.mail1, cut from a feature branch to test on a VM) is
+        # published as a PRE-release, so it never becomes "latest": the
+        # installer's default (releases/latest) keeps pointing at the last
+        # real release, and only an explicit --version installs the
+        # candidate. Ordinary tags, -alpha ones included, are unchanged.
         run: |
+          prerelease=()
+          case "${GITHUB_REF_NAME}" in
+            *-rc.*) prerelease=(--prerelease) ;;
+          esac
           if ! gh release create "${GITHUB_REF_NAME}" dist/* \
             --title "${GITHUB_REF_NAME}" \
-            --generate-notes; then
+            --generate-notes "${prerelease[@]}"; then
             echo "release exists; uploading assets onto it"
             gh release upload "${GITHUB_REF_NAME}" dist/* --clobber
           fi
