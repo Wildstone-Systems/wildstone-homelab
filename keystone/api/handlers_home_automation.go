@@ -592,8 +592,10 @@ func (b *haBuild) isInstalled(spec haComponentSpec) bool {
 
 // pendingFor is the newest open plan touching this component: an install
 // or upgrade whose origin names one of its packages, or a removal of
-// resources it owns. For a mode component only a change of its mode
-// counts.
+// resources it owns, or the reconcile loop's drift repair while one of
+// its resources waits on it — a crashed or drifted service waits on that
+// approval, not on an observation. For a mode component only a change of
+// its mode counts.
 func (b *haBuild) pendingFor(spec haComponentSpec) *haPlan {
 	pkgs := map[string]bool{}
 	for _, p := range b.catalogPackages(spec.Capability) {
@@ -626,6 +628,18 @@ func (b *haBuild) pendingFor(spec haComponentSpec) *haPlan {
 			for _, d := range p.stored.Delete {
 				if owned[[2]string{d.Kind, d.Name}] {
 					hit = true
+				}
+			}
+			// A drift proposal names no resources (it commits nothing;
+			// approving it authorizes the next tick's repair), and at
+			// most one is open at a time. The loop marks each resource
+			// that repair is waiting on as awaiting approval, so that
+			// mark is the link.
+			if p.stored.Drift {
+				for k := range owned {
+					if b.health[k[0]+"/"+k[1]].AwaitingApproval {
+						hit = true
+					}
 				}
 			}
 		}
@@ -1283,9 +1297,12 @@ func (b *haBuild) evaluate(spec haComponentSpec) *haComponent {
 	if p := b.pendingFor(spec); p != nil {
 		c.PendingPlan = planRef(p)
 		c.Actions = append(c.Actions, haAction{Kind: "open_plan", Label: "Review the plan", PlanID: p.rec.ID})
-		if p.rec.State == runtimedb.PlanProposed {
+		switch {
+		case p.rec.State == runtimedb.PlanProposed && p.stored.Drift:
+			c.State, c.Reason = haAwaitingApproval, c.Title+" has drifted from what Wildstone asked for; a repair plan is waiting for your approval."
+		case p.rec.State == runtimedb.PlanProposed:
 			c.State, c.Reason = haAwaitingApproval, "A plan is waiting for your approval."
-		} else {
+		default:
 			c.State, c.Reason = haApplying, "An approved plan is being applied."
 		}
 		return c

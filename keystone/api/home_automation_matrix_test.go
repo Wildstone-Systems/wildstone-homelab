@@ -140,8 +140,15 @@ func (st *haStack) survivesRestartAndFailure(req haOrchRequest) {
 	if c := mustContainer(st, "matter-server"); c.Running || out.DriftProposed == "" {
 		t.Fatalf("crash: running %v, tick %+v", c.Running, out)
 	}
-	if o := st.orch("preview", req, http.StatusOK); o.Complete || o.Next.Component != haMatter {
+	// What waits is that approval, not an observation: both the
+	// aggregate and the next step point at the drift plan (#452).
+	if o := st.orch("preview", req, http.StatusOK); o.Complete || o.Next.Component != haMatter ||
+		o.Next.Action != haStepAwaitApproval || o.Next.PlanID != out.DriftProposed {
 		t.Fatalf("crashed matter: next %+v", o.Next)
+	}
+	if c := st.view("").comp(t, haMatter); c.State != haAwaitingApproval || c.PendingPlan == nil ||
+		c.PendingPlan.ID != out.DriftProposed || !hasPlanAction(c.Actions, out.DriftProposed) {
+		t.Fatalf("crashed matter: state %s, pending %+v, actions %+v", c.State, c.PendingPlan, c.Actions)
 	}
 	st.approveDrift(out.DriftProposed)
 	st.running("matter-server")
@@ -525,4 +532,14 @@ func TestHomeAutomationCatalogWiring(t *testing.T) {
 			t.Errorf("%s: no shipped package provides capability %s", spec.ID, spec.Capability)
 		}
 	}
+}
+
+// hasPlanAction reports whether actions offer to open plan id.
+func hasPlanAction(actions []haAction, id string) bool {
+	for _, a := range actions {
+		if a.Kind == "open_plan" && a.PlanID == id {
+			return true
+		}
+	}
+	return false
 }
