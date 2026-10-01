@@ -152,7 +152,7 @@ func startRun(t *testing.T, fk *fakeKeystone, setEnv func(map[string]string), ro
 		srv.Close()
 		t.Fatal(err)
 	}
-	c.rootCAs = roots
+	c.RootCAs = roots
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- run(ctx, c, slog.New(slog.NewTextHandler(io.Discard, nil))) }()
