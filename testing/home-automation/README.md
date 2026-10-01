@@ -147,7 +147,7 @@ Docker only (no Go or Node to install).
 
    ```sh
    cd ~
-   gh repo clone chickenrat17/wildstone-homelab     # first time only
+   gh repo clone chickenrat17/wildstone_homelab-control-plane wildstone-homelab   # first time only
    cd ~/wildstone-homelab
    git fetch origin
    git checkout claude/dreamy-einstein-9c5ory        # the branch under test
