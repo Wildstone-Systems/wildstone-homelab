@@ -22,6 +22,7 @@ import {
 } from "../api";
 import { ago, ErrorLine, useLoad } from "../lib";
 import { Kind, StatusPill } from "../ui/status";
+import { SetupState, SetupStep } from "./HomeAutomationSetup";
 
 // Home Automation (#448, epic #431): the household's way in to Home
 // Assistant and its radios, instead of four package forms and a device
@@ -38,10 +39,11 @@ import { Kind, StatusPill } from "../ui/status";
 //
 // The flow is steps so later slices slot in without reshaping it:
 // "choose" is this slice (#448); "readiness" is where the prerequisite
-// evidence and radio picker land (#449); the setup sequence (#450) and
-// the composed status page (#451) follow it.
+// evidence and radio picker land (#449); "setup" drives the ordered plan
+// sequence (#450, HomeAutomationSetup.tsx); the composed status page
+// (#451) follows it.
 
-export type Step = "choose" | "readiness";
+export type Step = "choose" | "readiness" | "setup";
 
 // A goal is what a household asks for, which is not always one
 // component: Matter over Thread needs the Matter server AND a Thread
@@ -116,6 +118,13 @@ export const BLUETOOTH_COPY: Record<BluetoothChoice, { title: string; body: stri
 // the setup sequence proposes with. `manualRadios` is the advanced
 // escape hatch — a device path typed by hand for a radio the inventory
 // does not list — and is only ever set from that explicit affordance.
+//
+// `options` are package params only the household knows, typed on the
+// setup step when the orchestration asks for one (provide_option).
+// `confirmedSteps` are "<component>/<step id>" steps in Home Assistant
+// the person says they have done: Wildstone cannot see them, so they
+// are the person's word, kept here and sent on every call — never a
+// verification, and always undoable.
 export interface Draft {
   topology?: HomeAutomationTopology;
   node?: string;
@@ -124,6 +133,8 @@ export interface Draft {
   step: Step;
   radios?: Partial<Record<HomeAutomationComponentId, string>>;
   manualRadios?: Partial<Record<HomeAutomationComponentId, string>>;
+  options?: Partial<Record<HomeAutomationComponentId, Record<string, string>>>;
+  confirmedSteps?: string[];
 }
 
 const COMPONENT_IDS: HomeAutomationComponentId[] = [
@@ -140,6 +151,35 @@ function componentMap(v: unknown): Partial<Record<HomeAutomationComponentId, str
     if (typeof x === "string" && x) out[id] = x;
   }
   return Object.keys(out).length ? out : undefined;
+}
+
+// Per-component param values from storage: known component ids, each a
+// map of param-shaped names to non-empty strings.
+function optionMap(v: unknown): Draft["options"] {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return undefined;
+  const out: NonNullable<Draft["options"]> = {};
+  for (const id of COMPONENT_IDS) {
+    const x = (v as Record<string, unknown>)[id];
+    if (!x || typeof x !== "object" || Array.isArray(x)) continue;
+    const params: Record<string, string> = {};
+    for (const [k, val] of Object.entries(x as Record<string, unknown>)) {
+      if (/^[A-Za-z0-9_]+$/.test(k) && typeof val === "string" && val) params[k] = val;
+    }
+    if (Object.keys(params).length) out[id] = params;
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
+// Confirmations from storage: "<known component>/<step id>" only.
+function confirmedList(v: unknown): string[] | undefined {
+  if (!Array.isArray(v)) return undefined;
+  const out = v.filter(
+    (k): k is string =>
+      typeof k === "string" &&
+      /^[a-z-]+\/[A-Za-z0-9_.-]+$/.test(k) &&
+      COMPONENT_IDS.includes(k.split("/")[0] as HomeAutomationComponentId),
+  );
+  return out.length ? [...new Set(out)] : undefined;
 }
 
 export const EMPTY_DRAFT: Draft = { goals: [], bluetooth: "none", step: "choose" };
@@ -160,13 +200,22 @@ export function loadDraft(storage: Pick<Storage, "getItem"> | undefined = safeLo
       : [];
     const bluetooth: BluetoothChoice =
       r.bluetooth === "host-bluez" || r.bluetooth === "proxy" ? r.bluetooth : "none";
-    const step: Step = r.step === "readiness" && topology === "managed" ? "readiness" : "choose";
+    const step: Step =
+      r.step === "readiness" && topology === "managed"
+        ? "readiness"
+        : r.step === "setup" && topology
+          ? "setup"
+          : "choose";
     const node = typeof r.node === "string" && r.node ? r.node : undefined;
     const d: Draft = { topology, node, goals, bluetooth, step };
     const radios = componentMap(r.radios);
     const manualRadios = componentMap(r.manualRadios);
     if (radios) d.radios = radios;
     if (manualRadios) d.manualRadios = manualRadios;
+    const options = optionMap(r.options);
+    const confirmedSteps = confirmedList(r.confirmedSteps);
+    if (options) d.options = options;
+    if (confirmedSteps) d.confirmedSteps = confirmedSteps;
     return d;
   } catch {
     return EMPTY_DRAFT;
@@ -293,6 +342,7 @@ export function HomeAutomationView({
   onOpenPackage,
   onOpenServices,
   onNavigate,
+  setup,
 }: {
   status: HomeAutomationStatus;
   draft: Draft;
@@ -303,6 +353,8 @@ export function HomeAutomationView({
   onOpenPackage: (pkg: string) => void;
   onOpenServices: () => void;
   onNavigate?: Navigate;
+  // The setup step's state, for the render check; the screen fetches it.
+  setup?: SetupState;
 }) {
   const topology = effectiveTopology(draft, status);
   const comps = useMemo(() => new Map(status.components.map((c) => [c.id, c])), [status.components]);
@@ -322,7 +374,26 @@ export function HomeAutomationView({
         </div>
       ))}
 
-      {draft.step === "readiness" && topology === "managed" ? (
+      {draft.step === "setup" && topology ? (
+        <SetupStep
+          status={status}
+          topology={topology}
+          draft={draft}
+          onDraft={onDraft}
+          handlers={{
+            // Back to where the choices it proposes from are made: the
+            // radio picker on the managed path, the choices otherwise.
+            onBack: () => onDraft({ ...draft, topology, step: topology === "managed" ? "readiness" : "choose" }),
+            onChooseRadio: topology === "managed" ? () => onDraft({ ...draft, topology, step: "readiness" }) : undefined,
+            onRefresh,
+            loading,
+            onOpenPackage,
+            onOpenServices,
+            onNavigate,
+          }}
+          setup={setup}
+        />
+      ) : draft.step === "readiness" && topology === "managed" ? (
         <ReadinessStep
           status={status}
           comps={comps}
@@ -330,6 +401,7 @@ export function HomeAutomationView({
           onDraft={onDraft}
           handlers={{
             onBack: () => onDraft({ ...draft, step: "choose" }),
+            onContinue: () => onDraft({ ...draft, step: "setup" }),
             onRefresh,
             loading,
             onOpenPackage,
@@ -359,6 +431,7 @@ export function HomeAutomationView({
                 draft={draft}
                 comps={comps}
                 onReadiness={() => onDraft({ ...draft, topology, step: "readiness" })}
+                onSetup={() => onDraft({ ...draft, topology, step: "setup" })}
                 onOpenPackage={onOpenPackage}
               />
             </>
@@ -433,7 +506,7 @@ export function componentStanding(c: HomeAutomationComponent): { kind: Kind; lab
   return { kind: "mute", label: "Not installed" };
 }
 
-function ComponentPill({ c }: { c: HomeAutomationComponent }) {
+export function ComponentPill({ c }: { c: HomeAutomationComponent }) {
   const s = componentStanding(c);
   return (
     <StatusPill kind={s.kind} title={c.reason}>
@@ -658,12 +731,14 @@ function NextStep({
   draft,
   comps,
   onReadiness,
+  onSetup,
   onOpenPackage,
 }: {
   topology: HomeAutomationTopology;
   draft: Draft;
   comps: Map<HomeAutomationComponentId, HomeAutomationComponent>;
   onReadiness: () => void;
+  onSetup: () => void;
   onOpenPackage: (pkg: string) => void;
 }) {
   // What the API added because something chosen needs it (an MQTT
@@ -681,8 +756,8 @@ function NextStep({
         <h3>Next: the Home Assistant connector</h3>
         <div className="muted">
           {installed
-            ? "The connector is installed. Its settings and the steps left in Home Assistant are on its service page."
-            : "The connector is an ordinary package: its form asks for this machine and where your Home Assistant is, and shows you the plan before anything changes."}
+            ? "The connector is installed. The guided setup shows what is left, including the steps in Home Assistant."
+            : "The guided setup proposes the connector, and anything you chose, one plan at a time for you to approve. The connector is also an ordinary package with its own form."}
         </div>
         {conn && conn.state === "unavailable" && <div className="callout callout-warn">{conn.reason}</div>}
         <DependencyNote deps={deps} />
@@ -690,11 +765,16 @@ function NextStep({
           <button
             type="button"
             className="btn btn-primary"
-            disabled={!pkg || conn?.state === "unavailable"}
-            onClick={() => pkg && onOpenPackage(pkg)}
+            disabled={conn?.state === "unavailable" && !installed}
+            onClick={onSetup}
           >
-            {installed ? "Open the connector" : "Set up the connector"} <ArrowRight size={14} aria-hidden />
+            {installed ? "Continue setup" : "Set up the connector"} <ArrowRight size={14} aria-hidden />
           </button>
+          {pkg && (
+            <button type="button" className="btn btn-ghost" onClick={() => onOpenPackage(pkg)}>
+              {installed ? "Open the connector" : "Use the package form instead"}
+            </button>
+          )}
         </div>
       </div>
     );
@@ -853,7 +933,7 @@ export function selectedRadios(draft: Draft, status: HomeAutomationStatus): Part
   return out;
 }
 
-function selectedNode(status: HomeAutomationStatus): HomeAutomationNode | undefined {
+export function selectedNode(status: HomeAutomationStatus): HomeAutomationNode | undefined {
   return status.nodes.find((n) => n.id === status.node);
 }
 
@@ -865,11 +945,16 @@ export function manualPathProblem(path: string): string | undefined {
   return undefined;
 }
 
-type Navigate = (view: "plans" | "backups" | "nodes") => void;
+export type Navigate = (view: "plans" | "backups" | "nodes") => void;
 
-interface ActionHandlers {
+export interface ActionHandlers {
   onRefresh: () => void;
   onBack: () => void;
+  // Readiness: on to the setup sequence.
+  onContinue?: () => void;
+  // Setup: a radio remedy goes to the picker on the readiness step,
+  // since the picker is not on the setup page.
+  onChooseRadio?: (component?: HomeAutomationComponentId) => void;
   onOpenPackage: (pkg: string) => void;
   onOpenServices: () => void;
   onNavigate?: Navigate;
@@ -951,6 +1036,11 @@ function ReadinessStep({
         <button type="button" className="btn btn-secondary" onClick={handlers.onBack}>
           Back to choices
         </button>
+        {handlers.onContinue && involved.length > 0 && (
+          <button type="button" className="btn btn-primary" onClick={handlers.onContinue}>
+            Continue to setup <ArrowRight size={14} aria-hidden />
+          </button>
+        )}
       </div>
     </section>
   );
@@ -1418,7 +1508,7 @@ function RadioPicker({
 
 // One blocker: what was found (kept on screen through every "Check
 // again" until the evidence changes), and the remedies the API permits.
-function BlockerCard({
+export function BlockerCard({
   b,
   handlers,
   checkedAt,
@@ -1493,7 +1583,12 @@ function ActionButton({ a, handlers }: { a: HomeAutomationAction; handlers: Acti
     case "retry_probe":
       return btn(handlers.onRefresh, handlers.loading);
     case "select_radio":
+      if (handlers.onChooseRadio) return btn(() => handlers.onChooseRadio!(a.component));
       return a.component ? jump(`#ha-radio-${a.component}`) : null;
+    case "choose_mode":
+    case "provide_option":
+      // Answered by the setup step's own fields under the blocker.
+      return null;
     case "resolve_dependency":
       return a.component ? jump(`#ha-comp-${a.component}`) : null;
     case "choose_node":

@@ -281,7 +281,11 @@ export type HomeAutomationActionKind =
   | "open_backups"
   | "choose_node"
   | "pair_node"
-  | "resolve_dependency";
+  | "resolve_dependency"
+  // The orchestration's own remedies (#447): pick a mode component's
+  // mode, or give a package param only the household knows.
+  | "choose_mode"
+  | "provide_option";
 
 export interface HomeAutomationEvidence {
   // node, readiness, radios, observed, plan, catalog, statefile, backup,
