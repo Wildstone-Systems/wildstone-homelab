@@ -347,6 +347,23 @@ func TestThreadOTBRPreflightWarnsAboutAcceptRA(t *testing.T) {
 	}
 }
 
+// accept_ra=0 is the kernel leaving router advertisements to a network
+// manager (systemd-networkd pins it there), so "set it to 2" must not
+// be the only advice: the live run's netplan VM needed accept-ra: true.
+func TestThreadOTBRPreflightAcceptRAZeroPointsAtTheNetworkManager(t *testing.T) {
+	root := otbrFixtureRoot(t)
+	otbrWrite(t, root, "proc/sys/net/ipv6/conf/enp1s0/accept_ra", "0\n")
+	out, ok := runOTBRPreflight(t, otbrPreflight(t, nil), root, nil)
+	if !ok {
+		t.Fatalf("a warning stopped the server:\n%s", out)
+	}
+	for _, want := range []string{"WARN [accept_ra]", "systemd-networkd", "accept-ra: true"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("accept_ra=0 output lacks %q:\n%s", want, out)
+		}
+	}
+}
+
 func otbrWrite(t *testing.T, root, p, content string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(p)), []byte(content), 0o644); err != nil {
