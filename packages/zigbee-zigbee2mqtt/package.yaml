@@ -59,7 +59,9 @@ metadata:
   # credential, and the mqtt_server param is gone.
   # 2.0.1: a USB stick is /dev/zigbee inside the container, so a real
   # by-id name no longer sits in env. Params and the volume are unchanged.
-  version: 2.0.1
+  # 2.0.2: the backup is class critical (the network key is
+  # irreplaceable). Nothing that runs changes.
+  version: 2.0.2
   capability: zigbee
   profile: zigbee2mqtt
 requires:
@@ -122,6 +124,11 @@ templates:
       upstream: "container/zigbee2mqtt:8080"
       auth: authelia_oidc
       classification: admin_tailscale
+  # The data volume is the Zigbee network's identity: the network key,
+  # PAN ids and channel (configuration.yaml), every pairing
+  # (database.db) and the coordinator's own backup
+  # (coordinator_backup.json). Losing it means re-pairing every device,
+  # so it is critical.
   - |
     apiVersion: wildstone.dev/v1
     kind: BackupPlan
@@ -131,5 +138,5 @@ templates:
       repository: zigbee-backup-repo
       passwordSecret: secret/restic-zigbee
       schedule: daily
-      class: important
+      class: critical
       retention: { keepDaily: 7, keepWeekly: 4 }

@@ -23,3 +23,13 @@ a fixture that trips it is a bug even if the value is "only" semi-secret.
 Failure fixtures (for Butler diagnostics, E12): broken OIDC secret, dead
 database, full disk, detached NFS, and friends — built alongside the happy
 paths.
+
+## home-automation/
+
+The opt-in real-hardware runbook for the home-automation packages
+(#453): a Zigbee coordinator, a Thread RCP, a Z-Wave stick, Matter
+devices and an optional ESP32 Bluetooth proxy on a test VM. Nothing in
+it runs in CI. `build-dist.sh` builds release-shaped artifacts from a
+branch (Docker only) for `install.sh --artifact-dir`; `vm-check.sh` is
+a read-only helper that prints the facts each step compares, with USB
+serials and MACs redacted.

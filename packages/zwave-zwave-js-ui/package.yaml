@@ -110,7 +110,9 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: zwave-zwave-js-ui
-  version: 1.0.0
+  # 1.0.1: the backup is class critical (the security keys are
+  # irreplaceable). Nothing that runs changes.
+  version: 1.0.1
   capability: zwave
   profile: zwave-js-ui
 requires:
@@ -317,7 +319,8 @@ templates:
       auth: authelia_oidc
       classification: admin_tailscale
   # The store holds the security keys, the node table and the nightly
-  # NVM backups: losing it means re-including every secure device.
+  # NVM backups: losing it means re-including every secure device, so
+  # it is critical.
   - |
     apiVersion: wildstone.dev/v1
     kind: BackupPlan
@@ -327,5 +330,5 @@ templates:
       repository: zwave-backup-repo
       passwordSecret: secret/restic-zwave
       schedule: daily
-      class: important
+      class: critical
       retention: { keepDaily: 7, keepWeekly: 4, keepMonthly: 6 }
