@@ -452,6 +452,9 @@ func (s *Server) Handler() http.Handler {
 	// the capability pipeline. Never approves, never waits.
 	mux.Handle("POST /api/v1/home-automation/preview", s.handle(principal.VerbPropose, s.homeAutomationPreview))
 	mux.Handle("POST /api/v1/home-automation/propose", s.handle(principal.VerbPropose, s.homeAutomationPropose))
+	// What each installed part keeps where (#451): its data and backup
+	// class, what a radio swap preserves, what removal stops and keeps.
+	mux.Handle("GET /api/v1/home-automation/continuity", s.handle(principal.VerbRead, s.homeAutomationContinuity))
 
 	// Container logs (ADR-W015 A2): read verb; the response passes the
 	// redacting encoder like everything else.

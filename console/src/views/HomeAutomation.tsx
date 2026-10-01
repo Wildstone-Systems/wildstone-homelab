@@ -8,6 +8,7 @@ import {
   HomeAutomationBlocker,
   HomeAutomationComponent,
   HomeAutomationComponentId,
+  HomeAutomationContinuityView,
   HomeAutomationEvidence,
   HomeAutomationNode,
   HomeAutomationQuery,
@@ -23,6 +24,7 @@ import {
 import { ago, ErrorLine, useLoad } from "../lib";
 import { Kind, StatusPill } from "../ui/status";
 import { SetupState, SetupStep } from "./HomeAutomationSetup";
+import { CareClient, Panel, present, StatusPage } from "./HomeAutomationStatus";
 
 // Home Automation (#448, epic #431): the household's way in to Home
 // Assistant and its radios, instead of four package forms and a device
@@ -40,10 +42,12 @@ import { SetupState, SetupStep } from "./HomeAutomationSetup";
 // The flow is steps so later slices slot in without reshaping it:
 // "choose" is this slice (#448); "readiness" is where the prerequisite
 // evidence and radio picker land (#449); "setup" drives the ordered plan
-// sequence (#450, HomeAutomationSetup.tsx); the composed status page
-// (#451) follows it.
+// sequence (#450, HomeAutomationSetup.tsx). Once anything is installed
+// the screen opens on the composed status page instead (#451,
+// HomeAutomationStatus.tsx): "choose" then means "status", and the
+// choices are reached as "add", for adding a kind of device later.
 
-export type Step = "choose" | "readiness" | "setup";
+export type Step = "choose" | "add" | "readiness" | "setup" | "status";
 
 // A goal is what a household asks for, which is not always one
 // component: Matter over Thread needs the Matter server AND a Thread
@@ -64,6 +68,10 @@ const GOAL_COMPONENTS: Record<Goal, HomeAutomationComponentId[]> = {
 // a household would use when deciding. These are consequences to weigh,
 // not a verdict about THIS machine: whether a radio is present, suitable
 // or already owned comes from the API on the readiness step.
+export function goalComponents(g: Goal): HomeAutomationComponentId[] {
+  return GOAL_COMPONENTS[g];
+}
+
 export const GOAL_COPY: Record<Goal, { title: string; body: string }> = {
   zigbee: {
     title: "Zigbee",
@@ -205,7 +213,11 @@ export function loadDraft(storage: Pick<Storage, "getItem"> | undefined = safeLo
         ? "readiness"
         : r.step === "setup" && topology
           ? "setup"
-          : "choose";
+          : r.step === "add" && topology
+            ? "add"
+            : r.step === "status"
+              ? "status"
+              : "choose";
     const node = typeof r.node === "string" && r.node ? r.node : undefined;
     const d: Draft = { topology, node, goals, bluetooth, step };
     const radios = componentMap(r.radios);
@@ -299,6 +311,14 @@ export function HomeAutomation({
     }
   }, [key]);
 
+  // What each installed part keeps where, for the status page's radio
+  // and removal explanations. Asked again whenever the aggregate is.
+  const established = !!status.data?.components.some(present);
+  const continuity = useLoad(
+    async () => (established ? api.homeAutomationContinuity() : null),
+    [established, status.data?.generatedAt],
+  );
+
   // Drop a remembered machine the API no longer knows, so the draft
   // stops asking about it.
   const nodes = status.data?.nodes;
@@ -327,6 +347,8 @@ export function HomeAutomation({
       onOpenPackage={onOpenPackage}
       onOpenServices={onOpenServices}
       onNavigate={onNavigate}
+      continuity={continuity.data}
+      continuityError={continuity.error}
     />
   );
 }
@@ -343,6 +365,10 @@ export function HomeAutomationView({
   onOpenServices,
   onNavigate,
   setup,
+  continuity = null,
+  continuityError = null,
+  care,
+  panel,
 }: {
   status: HomeAutomationStatus;
   draft: Draft;
@@ -355,9 +381,28 @@ export function HomeAutomationView({
   onNavigate?: Navigate;
   // The setup step's state, for the render check; the screen fetches it.
   setup?: SetupState;
+  continuity?: HomeAutomationContinuityView | null;
+  continuityError?: string | null;
+  // The status page's repair calls and an open panel, for the render check.
+  care?: CareClient;
+  panel?: Panel;
 }) {
   const topology = effectiveTopology(draft, status);
   const comps = useMemo(() => new Map(status.components.map((c) => [c.id, c])), [status.components]);
+  // Once anything is installed or on its way, the screen is its status;
+  // the choices are for adding to it.
+  const established = status.components.some(present);
+  const step: Step =
+    draft.step === "choose" && established ? "status" : draft.step === "status" && !established ? "choose" : draft.step;
+  const chooseStep: Step = established ? "add" : "choose";
+  const actionHandlers: ActionHandlers = {
+    onBack: () => onDraft({ ...draft, step: chooseStep }),
+    onRefresh,
+    loading,
+    onOpenPackage,
+    onOpenServices,
+    onNavigate,
+  };
 
   return (
     <div className="ha">
@@ -367,14 +412,32 @@ export function HomeAutomationView({
         approve a plan.
       </div>
       <ErrorLine error={error} />
-      <InstalledNow status={status} />
+      {established && step !== "status" && (
+        <div className="row ha-back">
+          <button type="button" className="btn btn-ghost btn-sm" onClick={() => onDraft({ ...draft, step: "status" })}>
+            Back to status
+          </button>
+        </div>
+      )}
+      {step !== "status" && <InstalledNow status={status} />}
       {status.blockers.map((b) => (
         <div key={b.code} className={b.severity === "blocking" ? "callout callout-bad" : "callout callout-warn"} role="note">
           {b.message}
         </div>
       ))}
 
-      {draft.step === "setup" && topology ? (
+      {step === "status" ? (
+        <StatusPage
+          status={status}
+          continuity={continuity}
+          continuityError={continuityError}
+          draft={draft}
+          onDraft={onDraft}
+          handlers={actionHandlers}
+          client={care}
+          initialPanel={panel}
+        />
+      ) : step === "setup" && topology ? (
         <SetupStep
           status={status}
           topology={topology}
@@ -383,7 +446,7 @@ export function HomeAutomationView({
           handlers={{
             // Back to where the choices it proposes from are made: the
             // radio picker on the managed path, the choices otherwise.
-            onBack: () => onDraft({ ...draft, topology, step: topology === "managed" ? "readiness" : "choose" }),
+            onBack: () => onDraft({ ...draft, topology, step: topology === "managed" ? "readiness" : chooseStep }),
             onChooseRadio: topology === "managed" ? () => onDraft({ ...draft, topology, step: "readiness" }) : undefined,
             onRefresh,
             loading,
@@ -393,14 +456,14 @@ export function HomeAutomationView({
           }}
           setup={setup}
         />
-      ) : draft.step === "readiness" && topology === "managed" ? (
+      ) : step === "readiness" && topology === "managed" ? (
         <ReadinessStep
           status={status}
           comps={comps}
           draft={draft}
           onDraft={onDraft}
           handlers={{
-            onBack: () => onDraft({ ...draft, step: "choose" }),
+            onBack: () => onDraft({ ...draft, step: chooseStep }),
             onContinue: () => onDraft({ ...draft, step: "setup" }),
             onRefresh,
             loading,
@@ -411,20 +474,34 @@ export function HomeAutomationView({
         />
       ) : (
         <>
-          <TopologyChoice
-            value={topology}
-            comps={comps}
-            onChange={(t) => onDraft({ ...draft, topology: t, step: "choose" })}
-          />
+          {step === "add" && topology ? (
+            // Adding to what runs: how Home Assistant runs and on which
+            // machine are already decided by what is installed.
+            <div className="card ha-card">
+              <h3>Add to your home automation</h3>
+              <div className="muted">
+                {topology === "managed" ? "Home Assistant runs here" : "Connected to your own Home Assistant"}
+                {status.node ? `, on ${status.node}` : ""}. Choose what to add; what is installed stays as it is.
+              </div>
+            </div>
+          ) : (
+            <TopologyChoice
+              value={topology}
+              comps={comps}
+              onChange={(t) => onDraft({ ...draft, topology: t, step: chooseStep })}
+            />
+          )}
           {topology && (
             <>
-              <NodeChoice
-                status={status}
-                value={draft.node}
-                // Radio picks name one machine's radios, so another
-                // machine starts without them.
-                onChange={(n) => onDraft({ ...draft, node: n, radios: undefined, manualRadios: undefined })}
-              />
+              {step !== "add" && (
+                <NodeChoice
+                  status={status}
+                  value={draft.node}
+                  // Radio picks name one machine's radios, so another
+                  // machine starts without them.
+                  onChange={(n) => onDraft({ ...draft, node: n, radios: undefined, manualRadios: undefined })}
+                />
+              )}
               <GoalChoice draft={draft} topology={topology} comps={comps} onDraft={onDraft} />
               <NextStep
                 topology={topology}

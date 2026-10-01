@@ -2719,14 +2719,21 @@ check("Bluetooth is only offered where Home Assistant runs here",
   !haRender(haStatus(), { ...haManagedDraft, topology: "external" }).includes('name="ha-bluetooth"'));
 
 // Installed is the API's word, not the draft's.
-const haInstalled = haRender(haStatus({ topology: "managed" }, {
+const haInstalledStatus = haStatus({ topology: "managed" }, {
   "home-assistant": { selection: "installed", state: "ready" },
   zigbee: { selection: "installed", state: "degraded" },
   zwave: { selection: "pending", state: "awaiting_approval" },
   thread: { selection: "requested", state: "unavailable", reason: "No catalog package provides thread." },
-}), { ...EMPTY_DRAFT });
-check("a house already running Home Assistant opens on that topology",
-  haInput(haInstalled, 'value="managed"').includes('checked=""'), haInstalled.slice(0, 1200));
+});
+// A house already running something opens on its status (#451); the
+// choices are for adding to it, on the topology it already runs.
+const haInstalledHome = haRender(haInstalledStatus, { ...EMPTY_DRAFT });
+check("a house already running Home Assistant opens on its status, not the choices",
+  haInstalledHome.includes("Your home automation") && !haInstalledHome.includes('name="ha-topology"'), haInstalledHome.slice(0, 1200));
+const haInstalled = haRender(haInstalledStatus, { ...EMPTY_DRAFT, step: "add" });
+check("adding to it keeps the topology it runs and does not ask again",
+  haInstalled.includes("Add to your home automation") && haInstalled.includes("Home Assistant runs here") &&
+  !haInstalled.includes('name="ha-topology"') && haInstalled.includes("Back to status"), haInstalled.slice(0, 1200));
 check("installed parts are listed under set up now",
   haInstalled.includes("Home Assistant (runs here)") && haInstalled.includes("Installed, needs attention"));
 check("a pending plan reads as waiting, not installed", haInstalled.includes("Plan waiting for approval"));
@@ -3364,6 +3371,248 @@ async function haSetupChecks() {
     ext.includes('for="ha-opt-home-automation-ha_url"') && ext.includes('placeholder="http://homeassistant.example.internal:8123"') &&
     ext.includes("Where your Home Assistant answers."), ext);
 }
+
+// Home automation status, repair and migration (#451). Once anything is
+// installed the screen is a composed status page: every fixture here is
+// the aggregate's answer plus the continuity read, and every repair on
+// screen must be one the API offered.
+import {
+  RadioReplaceView, RemovalView, addGoalDraft, backupLine, lastHealthy, removalSteps, replacementParams,
+} from "../src/views/HomeAutomationStatus";
+import type { CareClient } from "../src/views/HomeAutomationStatus";
+import type {
+  HomeAutomationContinuity, HomeAutomationContinuityView, HomeAutomationRadioOwner, PackageView as HAPackage, PlanRecord as HAPlanRecord,
+} from "../src/api";
+
+const haNow = new Date().toISOString();
+const haRes = (name: string, healthy = true, appHealth = "healthy") =>
+  ({ kind: "Container", name, node: "node-a", observed: true, healthy, appHealth, observedAt: haNow });
+const haSvc = (pkg: string) => ({ kind: "open_service" as const, label: "Open the service", package: pkg });
+const haZigbeeOwner: HomeAutomationRadioOwner = { device: haZigbeeRadio.byIdPaths[0], radioId: haZigbeeRadio.id,
+  container: "zigbee2mqtt", component: "zigbee", package: "zigbee-zigbee2mqtt", source: haZigbeeRadio.byIdPaths[0] };
+const haInstalledAs = (pkg: string, over: Partial<HomeAutomationComponent> = {}): Partial<HomeAutomationComponent> => ({
+  selection: "installed", state: "ready", reason: "Installed and healthy.", node: "node-a", package: pkg,
+  version: "2.0.1", installedVersion: "2.0.1", actions: [haSvc(pkg)], ...over,
+});
+const haHealthy: Parameters<typeof haStatus>[1] = {
+  mqtt: haInstalledAs("mqtt-mosquitto", { resources: [haRes("mosquitto")] }),
+  "home-assistant": haInstalledAs("home-assistant", {
+    resources: [haRes("home-assistant")],
+    addresses: [{ route: "home-assistant", url: "https://home.example.internal", healthy: true }],
+    backup: { plans: ["home-assistant"], volumes: ["home-assistant-config"], uncovered: [], lastSuccessAt: haNow, lastRunStatus: "succeeded" },
+  }),
+  zigbee: haInstalledAs("zigbee-zigbee2mqtt", {
+    resources: [haRes("zigbee2mqtt")], radios: [haZigbeeOwner],
+    backup: { plans: ["zigbee"], volumes: ["zigbee2mqtt-data"], uncovered: [], lastSuccessAt: haNow, lastRunStatus: "succeeded" },
+  }),
+};
+const haZigbeeCont: HomeAutomationContinuity = {
+  component: "zigbee", package: "zigbee-zigbee2mqtt", node: "node-a", holds: "the Zigbee network key and every paired device",
+  data: [{ volume: "zigbee2mqtt-data", backupPlan: "zigbee", class: "important", schedule: "daily" }, { volume: "zigbee-backup-repo", repository: true }],
+  radio: {
+    networkOn: "radio_and_machine", param: "usb_device",
+    moved: { outcome: "kept", summary: "The same stick in another USB port keeps every device." },
+    replaced: { outcome: "restore", summary: "A new stick of the same chip family takes the network over from Zigbee2MQTT's own coordinator backup.",
+      steps: ["Unplug the old stick and plug in the new one."], otherwise: "A stick of a different chip family starts a new network: every Zigbee device has to be paired again." },
+    replacements: [{ radioId: haSpareZigbee.id, path: "/dev/ttyACM1" }],
+  },
+  removal: { stops: ["zigbee2mqtt"], keeps: ["zigbee-backup-repo", "zigbee2mqtt-data"], dependents: [],
+    consequence: "Zigbee devices stop answering Home Assistant. They stay paired to the network kept on this machine, and reinstalling picks them back up." },
+};
+const haMqttCont: HomeAutomationContinuity = { component: "mqtt", package: "mqtt-mosquitto", node: "node-a", data: [],
+  removal: { stops: ["mosquitto"], keeps: [], dependents: ["zigbee"], consequence: "Everything that talks through MQTT stops reaching Home Assistant." } };
+const haHassCont: HomeAutomationContinuity = { component: "home-assistant", package: "home-assistant", node: "node-a",
+  holds: "your automations, dashboards, history and integrations",
+  data: [{ volume: "home-assistant-config", backupPlan: "home-assistant", class: "important", schedule: "daily" }],
+  removal: { stops: ["home-assistant"], keeps: ["home-assistant-config"], dependents: ["bluetooth"], consequence: "Home Assistant stops." } };
+const haCont: HomeAutomationContinuityView = { generatedAt: haNow, components: [haMqttCont, haHassCont, haZigbeeCont] };
+const haNoCare: CareClient = {
+  packages: () => Promise.reject(new Error("not in the render check")),
+  previewCapability: () => Promise.reject(new Error("no")), enableCapability: () => Promise.reject(new Error("no")),
+  previewDisablePackage: () => Promise.reject(new Error("no")), disablePackage: () => Promise.reject(new Error("no")),
+};
+const haPage = (comps: Parameters<typeof haStatus>[1], extra: Record<string, unknown> = {}, node = haNodeOk({}, [haZigbeeRadio, haSpareZigbee])) => {
+  const status = haStatus({ topology: "managed", nodes: [node] }, comps);
+  const html = text(renderToString(h(HomeAutomationView, { status, draft: { ...EMPTY_DRAFT }, onDraft: () => {}, onOpenPackage: () => {},
+    onOpenServices: () => {}, onNavigate: () => {}, continuity: haCont, care: haNoCare, ...extra })));
+  return { html, seen: haVisible(html).replace(/ ([.,)])/g, "$1"), status };
+};
+const haButton = (html: string, label: string) => new RegExp(`<button[^>]*>(?:<svg.*?</svg>)?\\s*${label}\\s*<`).exec(html)?.[0] ?? "";
+const haCount = (s: string, sub: string) => s.split(sub).length - 1;
+
+// 1. Healthy.
+const haOk = haPage(haHealthy);
+check("status: an installed house opens on its status page", haOk.seen.includes("Your home automation") && !haOk.html.includes('name="ha-topology"'), haOk.seen);
+check("status: healthy reads as everything running", haOk.seen.includes("Everything is running: all 3 parts installed are healthy."), haOk.seen);
+check("status: each part has its card", ["MQTT broker", "Home Assistant (runs here)", "Zigbee"].every((t) => haOk.html.includes(`>${t}</h3>`)));
+check("status: where it runs, how it is reached, and when it was last seen",
+  haOk.seen.includes("Machine node-a") && haOk.seen.includes("https://home.example.internal") && haOk.seen.includes("Answering") &&
+  haOk.seen.includes("Healthy, last checked"), haOk.seen);
+check("status: the radio is named, not a device path", haOk.seen.includes("Radio Example Zigbee Coordinator"), haOk.seen);
+check("status: backup coverage and how much the data matters, from the package's backup class",
+  haOk.seen.includes("Backed up") && haOk.seen.includes("Its data is painful to rebuild"), haOk.seen);
+check("status: what the part keeps, from the continuity read", haOk.seen.includes("Keeps the Zigbee network key and every paired device"));
+check("status: healthy offers no repair, only the service, radio and removal",
+  !haOk.html.includes("callout-bad") && haCount(haOk.seen, "Open the service") === 3 &&
+  haOk.seen.includes("Replace or move the radio") && haCount(haOk.seen, "Remove…") === 3, haOk.seen);
+check("status: the radio swap is offered only where there is a radio", haCount(haOk.seen, "Replace or move the radio") === 1);
+check("status: the generic Services detail stays one click away", haOk.seen.includes("Open Services"));
+check("status: protocols not installed can be added", haOk.seen.includes("Add Z-Wave") && haOk.seen.includes("Add Matter over Wi-Fi") && !haOk.seen.includes("Add Zigbee"), haOk.seen);
+check("status: a fresh house still gets the choices, not a status page",
+  !haRender(haStatus(), { ...EMPTY_DRAFT, step: "status" }).includes("Your home automation"));
+
+// 2. One degraded controller.
+const haDegraded = haPage({ ...haHealthy, zigbee: { ...haHealthy.zigbee, state: "degraded",
+  reason: "Container/zigbee2mqtt is running but reports itself unhealthy.", resources: [haRes("zigbee2mqtt", true, "unhealthy")],
+  blockers: [{ code: "app_unhealthy", severity: "blocking", message: "Container/zigbee2mqtt is running but reports itself unhealthy.",
+    evidence: [{ source: "observed", subject: "Container/zigbee2mqtt", state: "healthy", value: "unhealthy" }],
+    actions: [{ kind: "open_service", label: "Open the service", package: "zigbee-zigbee2mqtt" }] }] } });
+check("status: one degraded controller is named, the rest still healthy",
+  haDegraded.seen.includes("Zigbee needs attention") && haDegraded.html.includes("callout callout-bad") &&
+  haDegraded.seen.includes("Not healthy when last checked") && haCount(haDegraded.seen, "Healthy, last checked") === 2, haDegraded.seen);
+check("status: its blocker shows what was found and opens the service", haDegraded.seen.includes("Container/zigbee2mqtt: healthy — unhealthy") &&
+  haCount(haDegraded.seen, "Open the service") === 4, haDegraded.seen);
+
+// 3. Missing radio: the stick was unplugged. The remedy opens the
+// replacement panel, which explains what a swap keeps.
+const haMissingComps = { ...haHealthy, zigbee: { ...haHealthy.zigbee, state: "degraded" as const, reason: "The radio is not plugged in.",
+  radios: [{ ...haZigbeeOwner, radioId: undefined }],
+  blockers: [{ code: "radio_missing", severity: "blocking" as const, message: "The radio Zigbee was given is not plugged into node-a.",
+    evidence: [{ source: "radios", subject: haZigbeeOwner.source, state: "absent" }],
+    actions: [{ kind: "select_radio" as const, label: "Choose a replacement radio", component: "zigbee" as const, radioIds: [haSpareZigbee.id] },
+      haRetry] }] } };
+const haMissing = haPage(haMissingComps, { panel: { kind: "radio", component: "zigbee" } }, haNodeOk({}, [haSpareZigbee]));
+check("status: a missing radio says it is not plugged in", haMissing.seen.includes("Not plugged in") &&
+  haMissing.seen.includes("The radio Zigbee was given is not plugged into node-a."), haMissing.seen);
+check("status: its remedies are the API's: choose a replacement, check again",
+  haMissing.seen.includes("Choose a replacement radio") && haMissing.seen.includes("Check again"));
+check("radio: the panel says where the network lives and what each kind of swap keeps",
+  haMissing.seen.includes("Replacing or moving the Zigbee radio") &&
+  haMissing.seen.includes("lives partly on the radio itself and partly on node-a") &&
+  haMissing.seen.includes("Devices keep working") && haMissing.seen.includes("Kept by restoring a backup") &&
+  haMissing.seen.includes("every Zigbee device has to be paired again"), haMissing.seen);
+check("radio: the free replacement is offered by name with the path it would be given",
+  haMissing.seen.includes("Spare Zigbee Stick") && haMissing.seen.includes("/dev/ttyACM1"), haMissing.seen);
+check("radio: nothing can be previewed or proposed before a radio is chosen",
+  haButton(haMissing.html, "Preview the change").includes('disabled=""') && haButton(haMissing.html, "Propose this change").includes('disabled=""'),
+  haButton(haMissing.html, "Preview the change"));
+const haZigbeeComp = haComp("zigbee", "Zigbee", haMissingComps.zigbee);
+const haRadioView = (state: Record<string, unknown>, cont = haZigbeeCont, c = haZigbeeComp) => {
+  const html = text(renderToString(h(RadioReplaceView, { c, cont, node: haNodeOk({}, [haSpareZigbee]), state,
+    handlers: { onRefresh: () => {}, onBack: () => {}, onOpenPackage: () => {}, onOpenServices: () => {}, onNavigate: () => {}, loading: false },
+    onChoose: () => {}, onPreview: () => {}, onPropose: () => {} })));
+  return { html, seen: haVisible(html).replace(/ ([.,)])/g, "$1") };
+};
+const haPreviewed = haRadioView({ choice: haSpareZigbee.id, preview: { plan: { summary: "reconfigure zigbee",
+  steps: [{ kind: "Container", name: "zigbee2mqtt", action: "update", description: "Container/zigbee2mqtt: update" }] }, providedSecrets: [] } });
+check("radio: once previewed, the plan is shown and can be proposed, never approved",
+  haPreviewed.seen.includes("What the change does") && !haButton(haPreviewed.html, "Propose this change").includes('disabled=""') &&
+  haPreviewed.seen.includes("keeps its current radio until you approve it") && !haPreviewed.seen.includes("Approve"), haPreviewed.seen);
+const haFiled = haRadioView({ choice: haSpareZigbee.id, filed: { id: "plan-12", seq: 12, createdAt: haNow, principal: "o", summary: "s", risk: "low", state: "proposed" } });
+check("radio: a filed change points at Plans", haFiled.seen.includes("Plan plan-12 is filed") && haFiled.seen.includes("Open Plans"));
+const haNoBackupRadio = haRadioView({}, haZigbeeCont, haComp("zigbee", "Zigbee", { ...haMissingComps.zigbee, backup: undefined }));
+check("radio: with no finished backup, the swap says to take one first", haNoBackupRadio.seen.includes("has no finished backup to fall back on") &&
+  haNoBackupRadio.seen.includes("Open backups"), haNoBackupRadio.seen);
+const haThreadRadio = haRadioView({}, { ...haZigbeeCont, component: "thread", radio: { ...haZigbeeCont.radio!, networkOn: "machine",
+  replaced: { outcome: "kept", summary: "A new dongle joins the same Thread network." }, replacements: [] } },
+  haComp("thread", "Thread border router", { selection: "installed", state: "ready", node: "node-a", backup: haHealthy.zigbee!.backup }));
+check("radio: Thread keeps its network on the machine, so a new dongle keeps devices",
+  haThreadRadio.seen.includes("lives on node-a, not on the radio") && !haThreadRadio.seen.includes("Kept by restoring") &&
+  haThreadRadio.seen.includes("No free Thread border router radio is plugged into node-a"), haThreadRadio.seen);
+const haPortBound = haRadioView({}, haZigbeeCont, haComp("zigbee", "Zigbee", { ...haHealthy.zigbee, radios: [{ ...haZigbeeOwner, radioId: "sysfs:/devices/usb1/1-2" }] }));
+check("radio: a radio known only by its port is warned about before it is moved", haPortBound.seen.includes("recognised by the USB port it is in"));
+const haPkgParams: HAPackage = { name: "zigbee-zigbee2mqtt", version: "2.0.1", capability: "zigbee", enabled: true, params: [
+  { name: "node", installed: "node-a" }, { name: "usb_device", installed: haZigbeeRadio.byIdPaths[0] },
+  { name: "coordinator_adapter", installed: "ember" }, { name: "timezone", default: "UTC" }] };
+const haParams = replacementParams(haPkgParams, "usb_device", "/dev/ttyACM1");
+check("radio: a replacement keeps every installed param and changes only the radio",
+  JSON.stringify(haParams) === JSON.stringify({ node: "node-a", usb_device: "/dev/ttyACM1", coordinator_adapter: "ember" }), JSON.stringify(haParams));
+
+// 4. Stale package (an upgrade is available).
+const haStalePkg = haPage({ ...haHealthy, zigbee: { ...haHealthy.zigbee, installedVersion: "2.0.0", stale: true,
+  actions: [haSvc("zigbee-zigbee2mqtt"), { kind: "upgrade_package", label: "Preview the upgrade", package: "zigbee-zigbee2mqtt" }],
+  blockers: [{ code: "stale_package", severity: "warning", message: "Zigbee runs zigbee-zigbee2mqtt 2.0.0; the catalog now has 2.0.1.",
+    evidence: [{ source: "catalog", subject: "zigbee-zigbee2mqtt", value: "2.0.1" }],
+    actions: [{ kind: "upgrade_package", label: "Preview the upgrade", package: "zigbee-zigbee2mqtt" }] }] } });
+check("status: a stale package says an update is available", haStalePkg.seen.includes("Update available: 2.0.1") &&
+  haStalePkg.seen.includes("zigbee-zigbee2mqtt 2.0.0"), haStalePkg.seen);
+check("status: the upgrade is offered once, as a warning not a failure",
+  haCount(haStalePkg.seen, "Preview the upgrade") === 1 && haStalePkg.html.includes("callout callout-warn") && !haStalePkg.html.includes("callout callout-bad"), haStalePkg.seen);
+
+// 5. Missing backup.
+const haNoBackup = haPage({ ...haHealthy, "home-assistant": { ...haHealthy["home-assistant"],
+  backup: { plans: [], volumes: ["home-assistant-config"], uncovered: ["home-assistant-config"] },
+  blockers: [{ code: "backup_missing", severity: "warning", message: "Home Assistant (runs here) keeps data no backup plan covers: home-assistant-config.",
+    evidence: [{ source: "backup", subject: "home-assistant-config", state: "uncovered" }], actions: [{ kind: "open_backups", label: "Open backups" }] }] } });
+check("status: missing backup coverage is named, with the way to Backups",
+  haNoBackup.seen.includes("Not backed up: home-assistant-config") && haNoBackup.seen.includes("Open backups") &&
+  haNoBackup.seen.includes("Home Assistant (runs here) needs attention"), haNoBackup.seen);
+check("backup: a failed newest run is not read as backed up",
+  backupLine(haComp("zigbee", "Zigbee", { backup: { plans: ["z"], volumes: ["v"], uncovered: [], lastRunStatus: "failed" } }))!.kind === "bad");
+check("health: no observation reads as nothing, not as healthy", lastHealthy(haComp("zigbee", "Zigbee", { resources: [] })) === undefined);
+
+// 6. Pending repair: a reconfigure waits for approval.
+const haPending = haPage({ ...haHealthy, zigbee: { ...haHealthy.zigbee, state: "awaiting_approval", reason: "A plan is waiting for your approval.",
+  pendingPlan: { id: "plan-7", state: "proposed", summary: "reconfigure zigbee", package: "zigbee-zigbee2mqtt" },
+  actions: [haSvc("zigbee-zigbee2mqtt"), { kind: "open_plan", label: "Review the plan", planId: "plan-7" }] } });
+check("status: a pending repair says what is in flight and waits on approval",
+  haPending.seen.includes("In flight reconfigure zigbee (plan plan-7, waiting for your approval)") &&
+  haPending.seen.includes("Installed, a change waits for approval"), haPending.seen);
+check("status: it leads to Plans and back into setup, approving nothing itself",
+  haCount(haPending.seen, "Review the plan") === 1 && haPending.seen.includes("Zigbee: a change is in flight") && haPending.seen.includes("Continue setup") && !haPending.html.includes(">Approve"), haPending.seen);
+
+// 7. Protocol addition: only that slice is re-entered.
+const haAddDraft = addGoalDraft({ ...EMPTY_DRAFT }, haPage(haHealthy).status, "managed", "zwave");
+check("add: adding Z-Wave goes to the readiness check for Z-Wave alone, on the machine already in use",
+  haAddDraft.step === "readiness" && haAddDraft.goals.join() === "zwave" && haAddDraft.node === "node-a" && haAddDraft.topology === "managed",
+  JSON.stringify(haAddDraft));
+check("add: on an existing Home Assistant it goes straight to the setup sequence",
+  addGoalDraft({ ...EMPTY_DRAFT }, haPage(haHealthy).status, "external", "zwave").step === "setup");
+check("add: the draft asks the API about Z-Wave only", queryOf(haAddDraft).select?.join() === "zwave");
+const haAdding = haReadiness(haNodeOk(), { ...haHealthy, zwave: { selection: "requested", state: "blocked", reason: "No Z-Wave radio is plugged into node-a.",
+  blockers: [haNoRadioBlocker("Z-Wave", "blocking")] } }, haAddDraft);
+check("add: the slice shows what is added beside what is installed, and leads back to status",
+  haAdding.seen.includes("No Z-Wave radio is plugged into node-a.") && haAdding.seen.includes("Back to status") &&
+  haAdding.seen.includes("Installed"), haAdding.seen);
+
+// 8. Removal: household words, data kept, the dry run is the authority.
+const haTitles = new Map(haStatus().components.map((c) => [c.id, c.title]));
+const haRemove = (cont: HomeAutomationContinuity, c: HomeAutomationComponent, extra: Record<string, unknown> = {}) => {
+  const html = text(renderToString(h(RemovalView, { c, cont, titles: haTitles,
+    handlers: { onRefresh: () => {}, onBack: () => {}, onOpenPackage: () => {}, onOpenServices: () => {}, onNavigate: () => {}, loading: false },
+    preview: null, onPropose: () => {}, onClose: () => {}, ...extra })));
+  return { html, seen: haVisible(html).replace(/ ([.,)])/g, "$1") };
+};
+const haDryRun = (steps: { kind: string; name: string }[]): HAPlanRecord =>
+  ({ id: "dry", seq: 0, createdAt: haNow, principal: "o", summary: "disable zigbee", risk: "low", state: "proposed", plan: { steps } });
+const haZigbeeInstalled = haComp("zigbee", "Zigbee", haHealthy.zigbee);
+const haRm = haRemove(haZigbeeCont, haZigbeeInstalled, { preview: haDryRun([{ kind: "Container", name: "zigbee2mqtt" }, { kind: "Route", name: "zigbee" }, { kind: "Secret", name: "restic-zigbee" }]) });
+check("removal: says what stops and what the household loses, in its words",
+  haRm.seen.includes("Removing Zigbee") && haRm.seen.includes("Zigbee devices stop answering Home Assistant") && haRm.seen.includes("Stops zigbee2mqtt"), haRm.seen);
+check("removal: stored data stays, named with what it holds",
+  haRm.seen.includes("zigbee2mqtt-data (the Zigbee network key and every paired device)") && haRm.seen.includes("zigbee-backup-repo (its backup copies)") &&
+  haRm.seen.includes("Wildstone never deletes stored data"), haRm.seen);
+check("removal: exactly what the plan removes comes from the dry run", haRm.seen.includes("Exactly what the plan removes (3 items)") &&
+  !haButton(haRm.html, "Propose removing Zigbee").includes('disabled=""'), haRm.seen);
+const haRmData = haRemove(haZigbeeCont, haZigbeeInstalled, { preview: haDryRun([{ kind: "Container", name: "zigbee2mqtt" }, { kind: "Volume", name: "zigbee2mqtt-data" }]) });
+check("removal: a plan that would delete stored data is refused, never offered",
+  haRmData.seen.includes("would delete stored data") && haButton(haRmData.html, "Propose removing Zigbee").includes('disabled=""'), haRmData.seen);
+check("removal: the data check reads the dry run's steps", removalSteps(haDryRun([{ kind: "SeedFile", name: "x" }])).touchesData);
+const haRmErr = haRemove(haZigbeeCont, haZigbeeInstalled, { previewError: "keystone unreachable" });
+check("removal: without a dry run nothing is proposed", haRmErr.seen.includes("cannot be proposed from here") &&
+  haButton(haRmErr.html, "Propose removing Zigbee").includes('disabled=""'), haRmErr.seen);
+const haRmMqtt = haRemove(haMqttCont, haComp("mqtt", "MQTT broker", haHealthy.mqtt), { preview: haDryRun([{ kind: "Container", name: "mosquitto" }]) });
+check("removal: what depends on it is named before it goes", haRmMqtt.seen.includes("Zigbee needs MQTT broker, and will stop working too"), haRmMqtt.seen);
+const haRmBt = haRemove({ component: "bluetooth", package: "home-assistant", data: [],
+  removal: { setting: true, stops: [], keeps: [], dependents: [], consequence: "Turning Bluetooth off is a change to Home Assistant's settings; nothing is deleted and nothing else stops." } },
+  haComp("bluetooth", "Bluetooth", { selection: "installed", state: "ready", package: "home-assistant" }));
+check("removal: Bluetooth is turned off in Home Assistant's settings, not removed",
+  haRmBt.seen.includes("Turning off Bluetooth") && haRmBt.seen.includes("Open Home Assistant's settings") && !haRmBt.html.includes("btn-danger"), haRmBt.seen);
+const haRmFiled = haRemove(haZigbeeCont, haZigbeeInstalled, { filed: { ...haDryRun([]), id: "plan-9" } });
+check("removal: a filed removal removes nothing until approved", haRmFiled.seen.includes("Removal proposed as plan plan-9. Nothing is removed until you approve it"));
+const haRmPage = haPage(haHealthy, { panel: { kind: "remove", component: "zigbee" } });
+check("removal: on the page, nothing is offered before the dry run answers",
+  haRmPage.seen.includes("Working out exactly what the removal would delete") && haButton(haRmPage.html, "Propose removing Zigbee").includes('disabled=""'), haRmPage.seen);
 
 haSetupChecks().then(
   () => {
