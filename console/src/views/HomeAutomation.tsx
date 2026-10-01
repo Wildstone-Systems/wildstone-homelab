@@ -269,6 +269,13 @@ export function queryOf(d: Draft): HomeAutomationQuery {
 // The topology to preselect when nothing has been chosen here yet: what
 // the API says is already installed or pending, so a household that
 // already runs one is not offered a blank page.
+// The draft after a choose_topology remedy: the other topology, back on
+// the choices (the add page once something is installed), where the
+// machine for it is picked. Goals are kept; nothing is proposed.
+export function withTopology(d: Draft, t: HomeAutomationTopology, established: boolean): Draft {
+  return { ...d, topology: t, step: established ? "add" : "choose" };
+}
+
 function effectiveTopology(d: Draft, status: HomeAutomationStatus | null): HomeAutomationTopology | undefined {
   if (d.topology) return d.topology;
   switch (status?.topology) {
@@ -395,8 +402,14 @@ export function HomeAutomationView({
   const step: Step =
     draft.step === "choose" && established ? "status" : draft.step === "status" && !established ? "choose" : draft.step;
   const chooseStep: Step = established ? "add" : "choose";
+  // choose_topology (#446: Matter and Thread answer only on the machine's
+  // own loopback, so they need a Home Assistant Wildstone runs): switch
+  // the draft's topology and go back to the choices, where the machine
+  // for it is picked. Nothing is proposed by the switch itself.
+  const onChooseTopology = (t: HomeAutomationTopology) => onDraft(withTopology(draft, t, established));
   const actionHandlers: ActionHandlers = {
     onBack: () => onDraft({ ...draft, step: chooseStep }),
+    onChooseTopology,
     onRefresh,
     loading,
     onOpenPackage,
@@ -448,6 +461,7 @@ export function HomeAutomationView({
             // radio picker on the managed path, the choices otherwise.
             onBack: () => onDraft({ ...draft, topology, step: topology === "managed" ? "readiness" : chooseStep }),
             onChooseRadio: topology === "managed" ? () => onDraft({ ...draft, topology, step: "readiness" }) : undefined,
+            onChooseTopology,
             onRefresh,
             loading,
             onOpenPackage,
@@ -465,6 +479,7 @@ export function HomeAutomationView({
           handlers={{
             onBack: () => onDraft({ ...draft, step: chooseStep }),
             onContinue: () => onDraft({ ...draft, step: "setup" }),
+            onChooseTopology,
             onRefresh,
             loading,
             onOpenPackage,
@@ -1032,6 +1047,8 @@ export interface ActionHandlers {
   // Setup: a radio remedy goes to the picker on the readiness step,
   // since the picker is not on the setup page.
   onChooseRadio?: (component?: HomeAutomationComponentId) => void;
+  // A choose_topology remedy: switch how Home Assistant runs.
+  onChooseTopology?: (t: HomeAutomationTopology) => void;
   onOpenPackage: (pkg: string) => void;
   onOpenServices: () => void;
   onNavigate?: Navigate;
@@ -1225,15 +1242,16 @@ function PrerequisiteCard({ node, involved }: { node: HomeAutomationNode; involv
   const r = node.readiness;
   const problem = probeProblem(node, r?.probe, r?.detail);
   // A row is red or amber only when a component the person chose has a
-  // blocker for that check (codes are <check>_<state>): the API decides
-  // what matters for which choice, and a missing thing nothing chosen
-  // needs is shown as a fact, not an alarm.
+  // blocker for that check — the blocker's own `check` reference, never
+  // its code — and, when the reference names a row, for that row: the
+  // API decides what matters for which choice, and a missing thing
+  // nothing chosen needs is shown as a fact, not an alarm.
   const severityFor = (check: string, subject: string): "blocking" | "warning" | undefined => {
     let sev: "blocking" | "warning" | undefined;
     for (const c of involved)
       for (const b of c.blockers) {
-        if (!b.code.startsWith(check + "_")) continue;
-        if (b.evidence.length > 0 && !b.evidence.some((e) => e.subject === subject || e.subject === check)) continue;
+        if (b.check?.check !== check) continue;
+        if (b.check.subject && b.check.subject !== subject) continue;
         if (b.severity === "blocking") return "blocking";
         sev = "warning";
       }
@@ -1668,6 +1686,8 @@ function ActionButton({ a, handlers }: { a: HomeAutomationAction; handlers: Acti
       return null;
     case "resolve_dependency":
       return a.component ? jump(`#ha-comp-${a.component}`) : null;
+    case "choose_topology":
+      return a.topology && handlers.onChooseTopology ? btn(() => handlers.onChooseTopology!(a.topology!)) : null;
     case "choose_node":
       return btn(handlers.onBack);
     case "install_package":

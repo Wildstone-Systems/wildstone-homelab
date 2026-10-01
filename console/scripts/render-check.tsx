@@ -2935,7 +2935,7 @@ check("an offline machine offers no radio to pick", !haOffline.html.includes('na
 
 // Missing IPv6: exact instructions, and Check again keeps the evidence.
 const haIpv6Blocker: HomeAutomationBlocker = { code: "ipv6_forwarding_missing", severity: "blocking",
-  message: "Thread border router: IPv6 forwarding is missing on node-a.",
+  message: "Thread border router: IPv6 forwarding is missing on node-a.", check: { check: "ipv6_forwarding", subject: "all" },
   evidence: [{ source: "readiness", subject: "all", state: "missing", value: "0", detail: "net.ipv6.conf.all.forwarding" }],
   actions: [{ kind: "manual_step", label: "How to fix this", node: "node-a", component: "thread", instructions: [
     "IPv6 forwarding is off on node-a; a Thread border router routes IPv6 between Thread and your LAN.",
@@ -2965,7 +2965,7 @@ const haBtAdapter: HomeAutomationRadio = { ...haZigbeeRadio, id: "sysfs:/devices
   suitableFor: [{ component: "bluetooth", fit: "detected" }] };
 const haBlueZ = haReadiness(haNodeOk({}, [haBtAdapter], haWithChecks({ bluez_service: { state: "missing", value: "inactive" } })), {
   bluetooth: { selection: "requested", state: "blocked", reason: "blocked", mode: "host-bluez", blockers: [{
-    code: "bluez_service_missing", severity: "blocking", message: "Bluetooth: BlueZ Bluetooth service is missing on node-a.",
+    code: "bluez_service_missing", severity: "blocking", check: { check: "bluez_service", subject: "bluetooth.service" }, message: "Bluetooth: BlueZ Bluetooth service is missing on node-a.",
     evidence: [{ source: "readiness", subject: "bluetooth.service", state: "missing", value: "inactive" }],
     actions: [{ kind: "manual_step", label: "How to fix this", node: "node-a", component: "bluetooth", instructions: [
       "The BlueZ Bluetooth service is not running on node-a.",
@@ -3613,6 +3613,46 @@ check("removal: a filed removal removes nothing until approved", haRmFiled.seen.
 const haRmPage = haPage(haHealthy, { panel: { kind: "remove", component: "zigbee" } });
 check("removal: on the page, nothing is offered before the dry run answers",
   haRmPage.seen.includes("Working out exactly what the removal would delete") && haButton(haRmPage.html, "Propose removing Zigbee").includes('disabled=""'), haRmPage.seen);
+
+// API follow-ups (#446/#447): readiness rows are matched by the
+// blocker's `check` reference, never by parsing its code; and
+// choose_topology switches the draft rather than proposing anything.
+import { BlockerCard as HABlockerCard, withTopology } from "../src/views/HomeAutomation";
+const haNoRef = haReadiness(haIpv6Node, { thread: { ...haIpv6Comps.thread, blockers: [{ ...haIpv6Blocker, check: undefined }] } }, { goals: ["matter-thread"] });
+check("readiness: a blocker without a check reference marks no row, whatever its code says",
+  !/IPv6 forwarding[^]*?st-bad[^>]*>Missing/.test(haNoRef.html) && haNoRef.seen.includes("Thread border router: IPv6 forwarding is missing"), haNoRef.seen);
+const haWrongRow = haReadiness(haIpv6Node, { thread: { ...haIpv6Comps.thread, blockers: [{ ...haIpv6Blocker, check: { check: "ipv6_forwarding", subject: "eth9" } }] } }, { goals: ["matter-thread"] });
+check("readiness: a check reference for another row does not mark this one", !/IPv6 forwarding[^]*?st-bad[^>]*>Missing/.test(haWrongRow.html));
+
+const haTopoBlocker: HomeAutomationBlocker = { code: "requires_managed_home_assistant", severity: "blocking",
+  message: "Matter answers only at ws://127.0.0.1:5580/ws, so it needs a Home Assistant Wildstone runs on the same machine.",
+  evidence: [{ source: "component", subject: "home-automation", state: "external", value: "ws://127.0.0.1:5580/ws" }],
+  actions: [{ kind: "choose_topology", label: "Let Wildstone run Home Assistant", component: "matter", topology: "managed" }] };
+const haTopoHandlers = { onRefresh: () => {}, onBack: () => {}, onOpenPackage: () => {}, onOpenServices: () => {}, loading: false };
+const haTopoCard = haVisible(text(renderToString(h(HABlockerCard, { b: haTopoBlocker, handlers: { ...haTopoHandlers, onChooseTopology: () => {} } }))));
+check("topology: requires_managed_home_assistant offers the switch the API names", haTopoCard.includes("Let Wildstone run Home Assistant") &&
+  haTopoCard.includes("needs a Home Assistant Wildstone runs"), haTopoCard);
+check("topology: no switch is drawn where the screen cannot make it",
+  !haVisible(text(renderToString(h(HABlockerCard, { b: haTopoBlocker, handlers: haTopoHandlers })))).includes("Let Wildstone run Home Assistant"));
+const haSwitched = withTopology({ ...EMPTY_DRAFT, topology: "external", goals: ["matter-wifi"], step: "setup" }, "managed", false);
+check("topology: the switch changes the draft's topology, keeps the goals and returns to the choices",
+  haSwitched.topology === "managed" && haSwitched.goals.join() === "matter-wifi" && haSwitched.step === "choose", JSON.stringify(haSwitched));
+check("topology: once something is installed the switch lands on the add page", withTopology({ ...EMPTY_DRAFT }, "managed", true).step === "add");
+const haExtSetup = haRender(haStatus({}, {}), { ...EMPTY_DRAFT, topology: "external", goals: ["matter-wifi"], step: "setup" }, { setup: { answer: {
+  generatedAt: haNow, topology: "external", node: "node-a", complete: false, sequence: [], externalSteps: [],
+  next: { id: "matter:resolve_blockers", component: "matter", title: "Matter", action: "resolve_blockers", status: "current",
+    reason: haTopoBlocker.message, blockers: [haTopoBlocker], actions: [] } } } });
+check("topology: the setup step renders the switch on its blocker", haExtSetup.includes("Let Wildstone run Home Assistant"), haExtSetup);
+
+// Thread RCP firmware cannot be verified: a warning with the API's steps.
+const haRcp = haPage({ ...haHealthy, thread: haInstalledAs("thread-otbr", { resources: [haRes("otbr")], blockers: [{
+  code: "thread_rcp_firmware_unverified", severity: "warning", message: "Wildstone cannot see which firmware the Thread radio runs.",
+  evidence: [{ source: "radios", subject: "thread", state: "unverified" }],
+  actions: [{ kind: "manual_step", label: "Check the radio's firmware", node: "node-a", component: "thread",
+    instructions: ["Flash OpenThread RCP firmware onto the dongle."] }] }] }) });
+check("status: an unverifiable Thread firmware is a warning with its steps, not a failure",
+  haRcp.seen.includes("Wildstone cannot see which firmware the Thread radio runs.") && haRcp.seen.includes("Flash OpenThread RCP firmware") &&
+  haRcp.seen.includes("Thread border router needs attention") && !haRcp.html.includes("callout callout-bad"), haRcp.seen);
 
 haSetupChecks().then(
   () => {
