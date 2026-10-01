@@ -100,3 +100,60 @@ func TestTailnetRouteGateRequiresHTTPSNotOnlyAnOpenPort(t *testing.T) {
 		t.Fatal("a reachable HTTPS front door should pass")
 	}
 }
+
+// urlProbeAgent answers ProbeHttp per URL, so a test can make the front
+// door answer while the service behind it does not.
+type urlProbeAgent struct {
+	up   map[string]bool
+	urls []string
+}
+
+func (a *urlProbeAgent) Apply(_ context.Context, _ string, op *wsv1.Operation) (*wsv1.OpResult, error) {
+	if o, ok := op.GetOp().(*wsv1.Operation_ProbeHttp); ok {
+		u := o.ProbeHttp.GetUrl()
+		a.urls = append(a.urls, u)
+		return &wsv1.OpResult{Result: &wsv1.OpResult_ProbeHttp{
+			ProbeHttp: &wsv1.ProbeHttpResult{Reachable: a.up[u], StatusCode: 302},
+		}}, nil
+	}
+	return &wsv1.OpResult{}, nil
+}
+
+// TestTailnetHostRouteGateChecksTheHostServiceToo: under the tailnet
+// posture the front door answers (302 to the sign-in page, or 502) with
+// nothing behind it, so a host/<port> Route must also pass #433's probe
+// of the service on the node. The live run (§1.7.6) applied a Route
+// change against a stopped host service because this returned early.
+func TestTailnetHostRouteGateChecksTheHostServiceToo(t *testing.T) {
+	front := "https://node.example.ts.net:10443/"
+	service := "http://127.0.0.1:18123/"
+	agent := &urlProbeAgent{up: map[string]bool{front: true}}
+	r := &Reconciler{Applier: agent, HealthGateAttempts: 1}
+	r.posture = ingressPosture{
+		tls: "tailscale", tailnetName: "node.example.ts.net",
+		tailnetPorts: map[string]int{"hostroute.wildstone.internal": 10443},
+	}
+	spec := &resource.RouteSpec{Host: "hostroute.wildstone.internal", Upstream: "host/18123"}
+
+	if r.probeRoute(context.Background(), "n1", spec) {
+		t.Fatalf("passed with the host service down; probed %q", agent.urls)
+	}
+	agent.up[service] = true
+	agent.urls = nil
+	if !r.probeRoute(context.Background(), "n1", spec) {
+		t.Fatalf("failed with the front door and the host service both up; probed %q", agent.urls)
+	}
+	if len(agent.urls) != 2 || agent.urls[0] != front || agent.urls[1] != service {
+		t.Errorf("probed %q, want the front door then the host service", agent.urls)
+	}
+
+	// A container upstream still stops at the front door: the agent
+	// cannot dial a container by name.
+	agent.urls = nil
+	if !r.probeRoute(context.Background(), "n1", &resource.RouteSpec{Host: "hostroute.wildstone.internal", Upstream: "container/app:80"}) {
+		t.Fatal("container upstream with the front door up should pass")
+	}
+	if len(agent.urls) != 1 {
+		t.Errorf("container upstream probed %q, want only the front door", agent.urls)
+	}
+}
