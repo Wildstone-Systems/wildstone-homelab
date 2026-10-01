@@ -145,6 +145,8 @@ type haFixture struct {
 	// addr is eth0's IPv4 address, the node's host address.
 	addr   string
 	radios []*wsv1.Radio
+	// noDefaultRoute reports eth0 without the default route.
+	noDefaultRoute bool
 }
 
 func allReadyChecks() []*wsv1.ReadinessCheck {
@@ -194,7 +196,7 @@ func newHAFixture(t *testing.T) *haFixture {
 			return &wsv1.OpResult{Result: &wsv1.OpResult_HomeAutomationReadiness{HomeAutomationReadiness: &wsv1.HomeAutomationReadinessResult{
 				PlatformSupported: true,
 				Interfaces: []*wsv1.NodeInterface{
-					{Name: "eth0", Addresses: []string{f.addr, "fe80::1/64"}, Up: true, Multicast: true, DefaultRoute: true},
+					{Name: "eth0", Addresses: []string{f.addr, "fe80::1/64"}, Up: true, Multicast: true, DefaultRoute: !f.noDefaultRoute},
 					{Name: "wlan0", Up: true},
 				},
 				Checks: f.checks,

@@ -285,7 +285,8 @@ export type HomeAutomationActionKind =
   // The orchestration's own remedies (#447): pick a mode component's
   // mode, or give a package param only the household knows.
   | "choose_mode"
-  | "provide_option";
+  | "provide_option"
+  | "choose_topology";
 
 export interface HomeAutomationEvidence {
   // node, readiness, radios, observed, plan, catalog, statefile, backup,
@@ -302,6 +303,8 @@ export interface HomeAutomationAction {
   kind: HomeAutomationActionKind;
   label: string;
   component?: HomeAutomationComponentId;
+  // choose_topology: the topology to switch to.
+  topology?: "managed" | "external";
   package?: string;
   capability?: string;
   node?: string;
@@ -318,12 +321,17 @@ export interface HomeAutomationBlocker {
   // <check>_<missing|unsupported|unknown> (e.g. ipv6_forwarding_missing),
   // dependency_not_ready, dependency_unavailable, no_radio, radio_in_use,
   // radio_conflict, radio_missing, unhealthy, app_unhealthy, plan_failed,
-  // stale_package, backup_missing, backup_failed, service_blocker.
+  // stale_package, backup_missing, backup_failed, service_blocker,
+  // requires_managed_home_assistant, dependency_on_other_node,
+  // thread_rcp_firmware_unverified (warning).
   code: string;
   severity: "blocking" | "warning";
   message: string;
   evidence: HomeAutomationEvidence[];
   actions: HomeAutomationAction[];
+  // Set on blockers derived from a readiness check: the check and the
+  // row's subject, matching the node's readiness.checks.
+  check?: { check: ReadinessCheckName; subject?: string };
 }
 
 export interface HomeAutomationExternalStep {
