@@ -301,7 +301,6 @@ func (m *mailE2E) denialMatrix(t *testing.T, samC runtimedb.MailCandidate, samVi
 	}
 }
 
-
 // captureChecks hunts every credential and full body everywhere it
 // could have leaked.
 func (m *mailE2E) captureChecks(t *testing.T) {
