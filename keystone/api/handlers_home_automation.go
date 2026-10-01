@@ -1046,9 +1046,18 @@ func (b *haBuild) evaluate(spec haComponentSpec) *haComponent {
 		return c
 	}
 	mode := c.Mode
-	if !c.installed || mode == "" || !haContains(spec.OnModes, mode) {
-		if h := b.modeHint[spec.ID]; h != "" {
+	// switching: installed in one on-mode, asked for another. Judged as
+	// the mode asked for — its prerequisites, its steps — and offered as
+	// a reconfigure, never reported ready in a mode nobody chose (#452:
+	// Home Assistant installs with its default bluetooth: proxy, so a
+	// setup asking for host-bluez otherwise ended "ready" in proxy mode).
+	switching := false
+	if h := b.modeHint[spec.ID]; h != "" {
+		switch {
+		case !c.installed || mode == "" || !haContains(spec.OnModes, mode):
 			mode = h
+		case h != mode && haContains(spec.OnModes, h):
+			mode, switching = h, true
 		}
 	}
 
@@ -1195,6 +1204,14 @@ func (b *haBuild) evaluate(spec haComponentSpec) *haComponent {
 			})
 		}
 		failed = b.failedPlan(installedPkg)
+		if failed != nil && convergedSince(c.Resources, failed.rec.ResolvedAt) {
+			// The failure is history: everything the package declares has
+			// since been observed as asked — after the household fixed
+			// the host and approved the drift plan that re-applied it.
+			// Without this the component stayed degraded for good, since
+			// re-proposing the same params is refused as a no-op (#452).
+			failed = nil
+		}
 		if failed != nil {
 			c.FailedPlan = planRef(failed)
 			c.Blockers = append(c.Blockers, haBlocker{
@@ -1274,6 +1291,13 @@ func (b *haBuild) evaluate(spec haComponentSpec) *haComponent {
 		return c
 	}
 	switch {
+	case switching && !offline && failed == nil:
+		if blocking {
+			c.State, c.Reason = haBlocked, firstBlocking(c.Blockers)
+		} else {
+			c.State, c.Reason = haReadyToPropose, fmt.Sprintf("%s is set to %s; switching it to %s is ready to preview.", spec.Title, c.Mode, mode)
+			c.Actions = append(c.Actions, b.proposeAction(spec, c, mode))
+		}
 	case c.installed:
 		c.Actions = append(c.Actions, openService)
 		switch {
@@ -1663,6 +1687,21 @@ func (b *haBuild) resources(spec haComponentSpec, pkg *pkgspec.Package) ([]haRes
 // failedPlan is the newest attempt at this package when that attempt
 // failed. An older failure a later plan applied over is history, not a
 // blocker.
+// convergedSince reports whether every resource was observed in its
+// desired state, and healthy by its own account, after the given time.
+func convergedSince(rs []haResource, since time.Time) bool {
+	if len(rs) == 0 || since.IsZero() {
+		return false
+	}
+	for _, r := range rs {
+		if !r.Observed || !r.Healthy || r.AwaitingApproval || r.AppHealth == "unhealthy" || r.AppHealth == "starting" ||
+			r.ObservedAt == nil || !r.ObservedAt.After(since) {
+			return false
+		}
+	}
+	return true
+}
+
 func (b *haBuild) failedPlan(pkg *pkgspec.Package) *haPlan {
 	if pkg == nil {
 		return nil

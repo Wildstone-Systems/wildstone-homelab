@@ -16,6 +16,7 @@ to configs shaped like these.
 | `lldap/` | `deployments/infra-services/lldap/` | LLDAP with file-sourced secrets and custom base DN |
 | `immich/` | `deployments/media-services/immich/` | Immich OIDC wiring against Authelia (env side transcribed; `authelia-oidc-client.yml` is RECONSTRUCTED — see its header) |
 | `jellyfin/` | `deployments/media-services/jellyfin/` | Jellyfin LDAP-Auth plugin against LLDAP over Tailscale; note the `{username}` (not `{0}`) search-filter placeholder and the exact `LDAP-Auth.xml` filename requirement |
+| `home-automation/` | Synthetic (#452) | The reference home-automation node's readiness and radio inventory, served by `keystone/internal/fakenode` to the hardware-free end-to-end matrix; see its README for both test tiers |
 | `gluetun/` | `deployments/media-services/gluetun/` | VPN egress container: firewall input ports for the *arr stack, LAN outbound subnet carve-out, DoT, health target |
 
 ## Placeholder mapping (scrub rule)
