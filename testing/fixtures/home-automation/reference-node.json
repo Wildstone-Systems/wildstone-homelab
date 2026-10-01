@@ -1,0 +1,59 @@
+{
+  "comment": "The reference home-automation node (#452): what a current wardstoned reports on a Debian/Ubuntu machine with IPv6 forwarding on, BlueZ running, an Aeotec Z-Stick Gen5 (identified as Z-Wave by its USB id), a Home Assistant Connect ZBT-1 flashed with OpenThread RCP firmware (a CP210x bridge, so the inventory cannot tell its protocol: unknown) and a USB Bluetooth adapter. Zigbee uses a network coordinator, so there is no Zigbee stick. Readiness and radios are protojson of HomeAutomationReadinessResult and ListRadiosResult. Scrubbed: the RFC 1918 example LAN the package docs use (a TEST-NET address is refused as not private, as it would be on a real node), 2001:db8::/32 IPv6, REPLACED-SERIAL serials.",
+  "id": "ha1",
+  "protocolMinor": 26,
+  "readiness": {
+    "platformSupported": true,
+    "interfaces": [
+      {"name": "eth0", "addresses": ["192.168.1.10/24", "2001:db8:10::10/64", "fe80::10/64"], "up": true, "multicast": true, "defaultRoute": true},
+      {"name": "wlan0", "up": true}
+    ],
+    "checks": [
+      {"check": "ipv6", "state": "READINESS_STATE_READY", "subject": "/proc/sys/net/ipv6/conf/all/disable_ipv6", "value": "0"},
+      {"check": "interface_ipv6", "state": "READINESS_STATE_READY", "subject": "eth0", "value": "2001:db8:10::10/64 fe80::10/64"},
+      {"check": "interface_ipv6", "state": "READINESS_STATE_MISSING", "subject": "wlan0", "detail": "no IPv6 address"},
+      {"check": "ipv6_forwarding", "state": "READINESS_STATE_READY", "subject": "/proc/sys/net/ipv6/conf/all/forwarding", "value": "1"},
+      {"check": "multicast", "state": "READINESS_STATE_READY", "subject": "eth0", "value": "UP,BROADCAST,MULTICAST"},
+      {"check": "dbus_system_bus", "state": "READINESS_STATE_READY", "subject": "/run/dbus/system_bus_socket", "value": "socket"},
+      {"check": "bluez_service", "state": "READINESS_STATE_READY", "subject": "bluetooth.service", "value": "load=loaded active=active sub=running"},
+      {"check": "bluetooth_adapter", "state": "READINESS_STATE_READY", "subject": "hci0", "value": "up"},
+      {"check": "tun", "state": "READINESS_STATE_READY", "subject": "/dev/net/tun", "value": "char 10:200"}
+    ]
+  },
+  "radios": {
+    "platformSupported": true,
+    "radios": [
+      {
+        "id": "serial-by-id:usb-0658_0200-if00",
+        "kind": "RADIO_KIND_ZWAVE",
+        "kindReason": "USB id 0658:0200 (Sigma Designs Z-Wave)",
+        "kernelName": "ttyACM0",
+        "devPath": "/dev/ttyACM0",
+        "byIdPaths": ["/dev/serial/by-id/usb-0658_0200-if00"],
+        "bus": "usb",
+        "driver": "cdc_acm",
+        "usbVendorId": "0658",
+        "usbProductId": "0200"
+      },
+      {
+        "id": "serial-by-id:usb-Nabu_Casa_Home_Assistant_Connect_ZBT-1_REPLACED-SERIAL-if00-port0",
+        "kind": "RADIO_KIND_UNKNOWN",
+        "kindReason": "generic USB-serial bridge 10c4:ea60",
+        "kernelName": "ttyUSB0",
+        "devPath": "/dev/ttyUSB0",
+        "byIdPaths": ["/dev/serial/by-id/usb-Nabu_Casa_Home_Assistant_Connect_ZBT-1_REPLACED-SERIAL-if00-port0"],
+        "bus": "usb",
+        "driver": "cp210x",
+        "usbVendorId": "10c4",
+        "usbProductId": "ea60"
+      },
+      {
+        "id": "sysfs:/sys/class/bluetooth/hci0",
+        "kind": "RADIO_KIND_BLUETOOTH",
+        "kernelName": "hci0",
+        "bus": "usb",
+        "driver": "btusb"
+      }
+    ]
+  }
+}
