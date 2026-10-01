@@ -378,9 +378,9 @@ func (m *mailE2E) captureChecks(t *testing.T) {
 	}
 }
 
-func countRows(t *testing.T, m *mailE2E, q string) int {
+func countRows(t *testing.T, m *mailE2E, q string, args ...any) int {
 	t.Helper()
-	n, err := m.s.DB.CountForTest(q)
+	n, err := m.s.DB.CountForTest(q, args...)
 	if err != nil {
 		t.Fatal(err)
 	}
