@@ -34,7 +34,7 @@ downloads-qbittorrent 1.0.2 663381e9d95edce0
 feeds-freshrss 1.0.2 d1e80a90969a95cc
 filedrop-wildstone 1.2.0 8e69efa33ff62a5b
 files-filebrowser 1.0.2 266e96f7d1c1a945
-home-assistant 2.0.0 d68cca7a81500440
+home-assistant 2.1.0 3b9e945b6ea291fd
 home-automation 1.0.3 08e9b3aa603b35a1
 homepage-wildstone 1.0.1 743bd19598b58400
 identity 1.2.0 a0464ffe5909a85a
@@ -77,5 +77,5 @@ tools-it-tools 1.0.0 08d30d25834cb937
 tv-sonarr 1.0.3 6ceff474d5acd38f
 vpn-gluetun 1.0.1 6e37d2b00dace21f
 wildstone-console 1.1.0 cb9c6f5dad6d36e7
-zigbee-zigbee2mqtt 2.0.1 c3ae351db2390519
-zwave-zwave-js-ui 1.0.0 8265cdb909989bc0
+zigbee-zigbee2mqtt 2.0.2 7fc229d8a620fe2c
+zwave-zwave-js-ui 1.0.1 18bbe1eaa857a29e
