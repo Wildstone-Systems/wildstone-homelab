@@ -61,7 +61,9 @@ metadata:
   # by-id name no longer sits in env. Params and the volume are unchanged.
   # 2.0.2: the backup is class critical (the network key is
   # irreplaceable). Nothing that runs changes.
-  version: 2.0.2
+  # 2.0.3: Z2M_ONBOARD_NO_SERVER, so a fresh install starts the stick
+  # instead of waiting on Zigbee2MQTT's onboarding page.
+  version: 2.0.3
   capability: zigbee
   profile: zigbee2mqtt
 requires:
@@ -111,6 +113,13 @@ templates:
         ZIGBEE2MQTT_CONFIG_FRONTEND_PORT: "8080"
         ZIGBEE2MQTT_CONFIG_HOMEASSISTANT_ENABLED: "true"
         ZIGBEE2MQTT_CONFIG_ADVANCED_LOG_LEVEL: info
+        # Zigbee2MQTT 2.x serves an onboarding page instead of starting
+        # whenever data/configuration.yaml is missing, which on a fresh
+        # install it always is: this package configures through env, so
+        # nothing writes that file first. The page waits for a form
+        # submit, so the stick is never opened and MQTT never connected.
+        # Everything it would ask is already decided above.
+        Z2M_ONBOARD_NO_SERVER: "1"
       mounts:
         - { source: zigbee2mqtt-data, target: /app/data }
       devices: {{ with .Params.usb_device }}[{ source: "{{ . }}", target: /dev/zigbee }]{{ else }}[]{{ end }}
