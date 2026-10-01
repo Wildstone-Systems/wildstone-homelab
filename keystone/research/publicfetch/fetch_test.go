@@ -399,3 +399,52 @@ func TestIPv6PinnedLiteral(t *testing.T) {
 		t.Fatalf("%v %q", err, p.Body)
 	}
 }
+
+func TestExtractionMetadataAndAuthenticationChallenges(t *testing.T) {
+	for _, status := range []int{401, 403, 407} {
+		f, _ := fixture(t, func(*http.Request) string {
+			return fmt.Sprintf("HTTP/1.1 %d Blocked\r\nContent-Length: 0\r\n\r\n", status)
+		})
+		if _, err := f.Fetch(context.Background(), "http://example.com/"); err != ErrBlocked {
+			t.Fatalf("%d: %v", status, err)
+		}
+	}
+	f, _ := fixture(t, func(*http.Request) string {
+		return "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=windows-1252\r\nLast-Modified: Wed, 30 Sep 2026 10:00:00 GMT\r\nContent-Length: 1\r\n\r\nx"
+	})
+	p, err := f.Fetch(context.Background(), "http://example.com/")
+	if err != nil || p.Charset != "windows-1252" || p.SourceDate.Format(time.RFC3339) != "2026-09-30T10:00:00Z" {
+		t.Fatalf("%+v %v", p, err)
+	}
+	f, _ = fixture(t, func(*http.Request) string {
+		return "HTTP/1.1 200 OK\r\nWWW-Authenticate: Basic\r\nContent-Length: 0\r\n\r\n"
+	})
+	if _, err = f.Fetch(context.Background(), "http://example.com/"); err != ErrBlocked {
+		t.Fatal(err)
+	}
+}
+
+func TestRedirectAuthenticationChallengeDoesNotFollow(t *testing.T) {
+	f, calls := fixture(t, func(*http.Request) string {
+		return "HTTP/1.1 302 Found\r\nLocation: /login\r\nWWW-Authenticate: Basic\r\nContent-Length: 0\r\n\r\n"
+	})
+	if _, err := f.Fetch(context.Background(), "http://example.com/"); err != ErrBlocked || *calls != 1 {
+		t.Fatalf("challenge followed: calls=%d err=%v", *calls, err)
+	}
+}
+
+func TestEveryAuthenticationHeaderValueIsInspected(t *testing.T) {
+	for _, status := range []int{200, 302} {
+		for _, headers := range []string{
+			"WWW-Authenticate: \r\nWWW-Authenticate: Basic\r\n",
+			"WWW-Authenticate: \t\r\nWWW-Authenticate: \r\nWWW-Authenticate: Bearer\r\n",
+		} {
+			f, calls := fixture(t, func(*http.Request) string {
+				return fmt.Sprintf("HTTP/1.1 %d Response\r\nLocation: /login\r\n%sContent-Length: 0\r\n\r\n", status, headers)
+			})
+			if _, err := f.Fetch(context.Background(), "http://example.com/"); err != ErrBlocked || *calls != 1 {
+				t.Fatalf("%d challenge followed: calls=%d err=%v", status, *calls, err)
+			}
+		}
+	}
+}
