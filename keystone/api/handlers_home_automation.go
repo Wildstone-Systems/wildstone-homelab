@@ -82,12 +82,15 @@ type haEvidence struct {
 // haAction is a permitted next action. Kind is closed: retry_probe,
 // install_package, reconfigure_package, upgrade_package, open_plan,
 // open_service, select_radio, manual_step, mint_publisher, open_backups,
-// choose_node, pair_node, resolve_dependency. None of them is performed
-// by this read; each names what the Console may offer and with what.
+// choose_node, pair_node, resolve_dependency, choose_topology. None of
+// them is performed by this read; each names what the Console may offer
+// and with what.
 type haAction struct {
-	Kind         string            `json:"kind"`
-	Label        string            `json:"label"`
-	Component    string            `json:"component,omitempty"`
+	Kind      string `json:"kind"`
+	Label     string `json:"label"`
+	Component string `json:"component,omitempty"`
+	// Topology is the topology a choose_topology action switches to.
+	Topology     string            `json:"topology,omitempty"`
 	Package      string            `json:"package,omitempty"`
 	Capability   string            `json:"capability,omitempty"`
 	Node         string            `json:"node,omitempty"`
@@ -103,6 +106,15 @@ type haBlocker struct {
 	Message  string       `json:"message"`
 	Evidence []haEvidence `json:"evidence"`
 	Actions  []haAction   `json:"actions"`
+	// Check names the readiness check (and its row's subject) a blocker
+	// derived from one comes from, so a reader matches it to the node's
+	// readiness rows without parsing the code.
+	Check *haCheckRef `json:"check,omitempty"`
+}
+
+type haCheckRef struct {
+	Check   string `json:"check"`
+	Subject string `json:"subject,omitempty"`
 }
 
 type haStep struct {
@@ -275,9 +287,11 @@ type haBuild struct {
 	pending    []haPlan
 	backupRuns []runtimedb.BackupRun
 	node       string
-	selection  map[string]string
-	modeHint   map[string]string
-	requires   map[string][]string
+	// goalTopology is the topology asked about, empty when none was.
+	goalTopology string
+	selection    map[string]string
+	modeHint     map[string]string
+	requires     map[string][]string
 	// provider maps a catalog trait to the component whose packages
 	// provide it.
 	provider map[string]string
@@ -353,7 +367,7 @@ func (s *Server) evaluateHomeAutomation(ctx context.Context, goals haGoals) (*ha
 		return nil, haView{}, http.StatusInternalServerError, fmt.Errorf("loading statefile: %w", err)
 	}
 	b := &haBuild{s: s, current: current, health: map[string]runtimedb.Observed{},
-		modeHint: modeHint, comps: map[string]*haComponent{}, nodes: map[string]*haNode{}}
+		modeHint: modeHint, comps: map[string]*haComponent{}, nodes: map[string]*haNode{}, goalTopology: topology}
 	if obs, err := s.DB.ListObserved(); err == nil {
 		for _, o := range obs {
 			b.health[o.Kind+"/"+o.Name] = o
@@ -874,7 +888,7 @@ func (b *haBuild) annotateRadios(n *haNode) {
 			r.Owners = append(r.Owners, ownerView(c))
 		}
 		for _, spec := range haComponents {
-			if spec.RadioKind == "" {
+			if spec.RadioKind == "" || !spec.RadioClaims {
 				continue
 			}
 			switch {
@@ -1107,6 +1121,21 @@ func (b *haBuild) evaluate(spec haComponentSpec) *haComponent {
 			Actions:  []haAction{{Kind: "resolve_dependency", Label: "Set up " + d.Title, Component: dep}},
 		})
 	}
+	if spec.HostLocalEndpoint != "" && c.Selection != "none" {
+		c.Blockers = append(c.Blockers, b.hostLocalBlockers(spec, c)...)
+	}
+	if c.Selection != "none" && !c.installed {
+		facts := b.facts(c.Node)
+		for _, note := range spec.PreInstall {
+			c.Blockers = append(c.Blockers, haBlocker{
+				Code: note.Code, Severity: haWarning, Message: note.Message,
+				Evidence: []haEvidence{{Source: "radios", Subject: nodeOr(c.Node), State: "unverified",
+					Detail: "Wildstone cannot observe this; it is never reported done"}},
+				Actions: []haAction{{Kind: "manual_step", Label: note.Label, Component: spec.ID, Node: c.Node,
+					Instructions: note.Instructions(facts)}},
+			})
+		}
+	}
 
 	// A Wildstone-run Home Assistant this component feeds must carry
 	// the settings it needs; offered as a reconfigure of that package.
@@ -1332,6 +1361,37 @@ func (b *haBuild) proposeAction(spec haComponentSpec, c *haComponent, mode strin
 		Package: c.Package, Capability: spec.Capability, Node: c.Node, RadioIDs: c.RadioCandidates}
 }
 
+// hostLocalBlockers judge a component Home Assistant reaches only on
+// loopback (spec.HostLocalEndpoint) against where Home Assistant is. An
+// existing Home Assistant (topology external, with none run here) can
+// never reach it, whatever machine it is on; a Wildstone-run one must be
+// on the component's machine. Either is blocking: a plan for it would
+// install something nothing can use.
+func (b *haBuild) hostLocalBlockers(spec haComponentSpec, c *haComponent) []haBlocker {
+	hass := b.comps[haHomeAssistant]
+	managed := hass != nil && hass.Selection != "none"
+	external := b.goalTopology == haTopologyExternal || (b.goalTopology == "" && b.selection[haExternalHA] != "")
+	switch {
+	case !managed && external:
+		return []haBlocker{{
+			Code: "requires_managed_home_assistant", Severity: haBlocking,
+			Message: fmt.Sprintf("%s needs a Home Assistant that Wildstone runs on the same machine: it answers only at %s, which an existing Home Assistant cannot reach.",
+				spec.Title, spec.HostLocalEndpoint),
+			Evidence: []haEvidence{{Source: "component", Subject: haExternalHA, State: haTopologyExternal, Value: spec.HostLocalEndpoint,
+				Detail: "loopback only; reachable from a host-networked Home Assistant on " + nodeOr(c.Node)}},
+			Actions: []haAction{{Kind: "choose_topology", Label: "Let Wildstone run Home Assistant", Component: spec.ID, Topology: haTopologyManaged}},
+		}}
+	case managed && (hass.installed || hass.PendingPlan != nil) && hass.Node != "" && c.Node != "" && hass.Node != c.Node:
+		return []haBlocker{{
+			Code: "dependency_on_other_node", Severity: haBlocking,
+			Message:  fmt.Sprintf("%s runs on %s, so %s must run there too: it answers only at %s.", hass.Title, hass.Node, spec.Title, spec.HostLocalEndpoint),
+			Evidence: []haEvidence{{Source: "component", Subject: haHomeAssistant, Value: hass.Node, Detail: "chosen node " + c.Node}},
+			Actions:  []haAction{{Kind: "choose_node", Label: "Use " + hass.Node, Component: spec.ID, Node: hass.Node}},
+		}}
+	}
+	return nil
+}
+
 // checkBlockers turns this component's readiness needs into blockers.
 // When the mode is not yet known, mode-specific needs are warnings: the
 // household can still pick the mode that does not need them.
@@ -1384,6 +1444,7 @@ func (b *haBuild) checkBlockers(spec haComponentSpec, mode string, c *haComponen
 				Message:  n.ID + " did not report " + title + ".",
 				Evidence: []haEvidence{{Source: "readiness", Subject: need.Check, State: "unknown"}},
 				Actions:  []haAction{retryProbe(n.ID)},
+				Check:    &haCheckRef{Check: need.Check},
 			})
 			continue
 		}
@@ -1416,6 +1477,7 @@ func (b *haBuild) checkBlockers(spec haComponentSpec, mode string, c *haComponen
 				Code: need.Check + "_" + row.State, Severity: sev, Message: msg,
 				Evidence: []haEvidence{{Source: "readiness", Subject: row.Subject, State: row.State, Value: row.Value, Detail: row.Detail}},
 				Actions:  actions,
+				Check:    &haCheckRef{Check: need.Check, Subject: row.Subject},
 			})
 		}
 	}

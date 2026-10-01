@@ -59,9 +59,11 @@ type haComponentSpec struct {
 	ModeParams []string
 	OnModes    []string
 	// RadioKind is the ListRadios kind this component drives. Radio
-	// candidates and ownership are evaluated only for RadioClaims
-	// components; a Bluetooth adapter is reached through BlueZ, not
-	// handed to a container, so it is judged by readiness checks instead.
+	// suitability, candidates and ownership exist only for RadioClaims
+	// components: a Bluetooth adapter is reached through BlueZ, not handed
+	// to a container, so it is never offered for assignment (Bluetooth
+	// has no RadioKind) and is judged by the bluetooth_adapter readiness
+	// check instead.
 	RadioKind     string
 	RadioClaims   bool
 	RadioRequired bool
@@ -70,6 +72,18 @@ type haComponentSpec struct {
 	Checks []haCheckNeed
 	// Steps are what somebody must do outside Wildstone, in order.
 	Steps []haStepSpec
+	// PreInstall are things somebody must do before installing that
+	// Wildstone cannot observe at all. Each is a warning on the component
+	// while it is selected and not installed — never blocking, since no
+	// read could ever clear it, and never reported as verified.
+	PreInstall []haNoteSpec
+	// HostLocalEndpoint, when set, is the loopback-only address Home
+	// Assistant must reach this component on. Only a Home Assistant
+	// Wildstone runs, host-networked on the same machine, can: with an
+	// existing Home Assistant (topology external) the component is
+	// blocked with requires_managed_home_assistant, and on a machine
+	// other than Home Assistant's with dependency_on_other_node.
+	HostLocalEndpoint string
 	// ManagedHAParams are settings a Wildstone-run Home Assistant needs
 	// for this component to reach it (Zigbee2MQTT needs Home Assistant's
 	// own MQTT login). Checked only when that package declares the param.
@@ -96,6 +110,14 @@ type haStepSpec struct {
 	Verify func(b *haBuild, c *haComponent) (status string, evidence []haEvidence)
 	// Action is what the Console may do about a pending step.
 	Action func(c *haComponent) *haAction
+}
+
+// haNoteSpec is one pre-install warning (PreInstall).
+type haNoteSpec struct {
+	Code         string
+	Message      string
+	Label        string
+	Instructions func(f haFacts) []string
 }
 
 // haFacts are the deployment-specific values a step's instructions name.
@@ -211,7 +233,8 @@ var haComponents = []haComponentSpec{
 	},
 	{
 		ID: haMatter, Title: "Matter", Capability: "matter", Topology: haTopologyShared, Protocol: true,
-		Checks: readinessIPv6Needs,
+		Checks:            readinessIPv6Needs,
+		HostLocalEndpoint: "ws://127.0.0.1:5580/ws",
 		Steps: []haStepSpec{{
 			ID: "ha_matter_integration", Title: "Add the Matter integration in Home Assistant",
 			Instructions: func(f haFacts) []string {
@@ -231,13 +254,32 @@ var haComponents = []haComponentSpec{
 		ID: haThread, Title: "Thread border router", Capability: "thread", Topology: haTopologyShared, Protocol: true,
 		RadioKind: "thread", RadioClaims: true, RadioRequired: true,
 		Checks: []haCheckNeed{{Check: "ipv6"}, {Check: "interface_ipv6"}, {Check: "ipv6_forwarding"}, {Check: "multicast"}, {Check: "tun"}},
+		// thread-otbr (#443) leaves otbr-agent's REST API on its
+		// loopback default.
+		HostLocalEndpoint: "http://127.0.0.1:8081",
+		PreInstall: []haNoteSpec{{
+			Code:    "thread_rcp_firmware_unverified",
+			Message: "Wildstone cannot see which firmware the Thread radio runs. It must be OpenThread RCP firmware, flashed before installing.",
+			Label:   "Flash and check the RCP firmware",
+			Instructions: func(f haFacts) []string {
+				return []string{
+					"The radio inventory identifies a stick, not the firmware on it, so Wildstone cannot check this for you.",
+					"Flash the Thread radio with OpenThread RCP (radio co-processor) firmware — not Zigbee coordinator, Zigbee/Thread multiprotocol or Thread device firmware. A Home Assistant Connect ZBT-1/ZBT-2 takes \"OpenThread RCP\" from the Home Assistant Connect web flasher; other sticks take their vendor's OpenThread RCP build (an nRF52840 dongle: ot-rcp).",
+					"The firmware's serial speed and flow control must match the border router's baud_rate (default 460800, what most RCP builds use) and flow_control (default hardware) settings.",
+					fmt.Sprintf("After installing, check on %s: docker logs otbr 2>&1 | grep \"RCP version\". A line like \"RCP version: OPENTHREAD/...\" means the border router is talking to RCP firmware; repeated spinel errors or \"Failed to communicate with RCP\" mean the firmware or the baud rate is wrong.", nodeOr(f.Node)),
+				}
+			},
+		}},
 		Steps: []haStepSpec{
 			{
 				ID: "ha_otbr_integration", Title: "Add the Open Thread Border Router integration in Home Assistant",
 				Instructions: func(f haFacts) []string {
+					// Like Matter's WebSocket, the REST API answers only on
+					// the border router's own machine.
 					return []string{
 						"In Home Assistant: Settings → Devices & services → Add integration → Open Thread Border Router.",
-						fmt.Sprintf("Enter http://%s:8081.", f.host()),
+						"Enter http://127.0.0.1:8081.",
+						fmt.Sprintf("That address works only for a Home Assistant running on %s itself, on the host's network (the Home Assistant Wildstone runs is); the border router's REST API does not listen anywhere else.", nodeOr(f.Node)),
 					}
 				},
 			},
@@ -257,7 +299,6 @@ var haComponents = []haComponentSpec{
 		Requires:   []string{haHomeAssistant},
 		ModeParams: []string{"bluetooth", "bluetooth_mode"},
 		OnModes:    []string{"host-bluez", "proxy"},
-		RadioKind:  "bluetooth",
 		Checks: []haCheckNeed{
 			{Check: "dbus_system_bus", Mode: "host-bluez"},
 			{Check: "bluez_service", Mode: "host-bluez"},
