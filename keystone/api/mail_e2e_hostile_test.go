@@ -10,10 +10,13 @@ package api
 // her; and a "yes" typed against her review approves nothing.
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 )
@@ -119,5 +122,35 @@ func TestHostileEmailCannotAlterAuthorityMemoryRoutinesOrApproval(t *testing.T) 
 	// the review, or a response.
 	if strings.Contains(string(m.dbBytes(t)), "attacker@example.invalid") {
 		t.Fatal("the attacker's address reached the runtime database")
+	}
+}
+
+// Epic #326 S08: a restored (quarantined) database revives nothing
+// before its journal is replayed: no scheduled read is dispatched, no
+// adapter can claim, no approval writes to a calendar.
+func TestQuarantineRevivesNoMailboxAccessBeforeReplay(t *testing.T) {
+	m := newMailE2E(t, "sam")
+	m.cycle(t)
+	to := "sam@example.internal"
+	m.provider.Deliver(to, "INBOX", m.schoolNight(to))
+	m.cycle(t)
+	c := m.titled(t, "School family night")
+	tokens := m.tokens(t, c.ID)
+
+	if err := m.s.DB.EnterRestoreQuarantine("restored from the nightly backup", time.Now().Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	m.clock.advance(time.Hour)
+	if out, err := m.sched.TickScheduled(context.Background()); !errors.Is(err, runtimedb.ErrQuarantined) || out.Dispatched != 0 {
+		t.Fatalf("a quarantined database dispatched %d mailbox reads (%v)", out.Dispatched, err)
+	}
+	if _, err := m.adapters["sam-mail"].runner.RunOnce(context.Background()); err == nil {
+		t.Fatal("an adapter claimed against a quarantined database")
+	}
+	if code, _ := m.home("sam", http.MethodPost, "/api/v1/home/mail/act", map[string]string{"token": tokens["add"]}, nil); code == http.StatusOK {
+		t.Fatal("an approval wrote while quarantined")
+	}
+	if ev := m.events(); len(ev) != 0 {
+		t.Fatalf("events while quarantined: %v", ev)
 	}
 }

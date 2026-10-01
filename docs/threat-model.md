@@ -113,6 +113,61 @@ the test that pins it.
   gateway refuses it at dispatch — so a rule that reached the engine by
   some path nobody anticipated still cannot restart a container.
 
+### Mailbox monitoring (epic #326; ADR-W030 A5.2–A5.9)
+
+A Person's mailbox is the most attacker-reachable input Wildstone reads:
+anyone can send mail to it. The monitor is built so that what arrives can
+propose an event to its Person and nothing else.
+
+- **Read-only, structurally.** The adapter (`wild-mail-adapter`) answers
+  four read queries; the mail integration domain declares no action, the
+  work queue refuses a mutating name at dispatch, and the IMAP reader only
+  EXAMINEs, SEARCHes and FETCHes with BODY.PEEK. The fake provider in the
+  tests records any mutating command as a violation.
+- **One Person, one connection, one key.** Each connection has its own
+  credential, cursor, keyed fingerprints and references. A reference minted
+  for one mailbox is refused by every other, an adapter principal is bound
+  to one connection on one node and claims only while that node holds the
+  lease, and every candidate, review, notice and effect read resolves the
+  caller to the owning Person (an Owner, another Person or an Agent gets
+  "not found"). The cross-Person denial matrix
+  (`keystone/api/mail_e2e_test.go`) covers message, candidate, notice,
+  approval, calendar and health/status.
+- **Two keys to run, either withdraws.** Background reads need the
+  Person's authorization AND an Owner-approved subscription of that exact
+  version, re-checked live at dispatch and again before anything is
+  recorded. Revocation, offboarding, credential replacement and package
+  removal fence first — the lease epoch moves and queued or claimed reads
+  are withdrawn — then remove the adapter container, then erase the
+  credential with node evidence. Unproven erasure leaves the connection
+  `degraded` (`erasure_unverified`) and visible.
+- **Hostile mail.** Headers and bodies are untrusted evidence. A model
+  sees a bounded excerpt of normalized text (at most 12 KiB) as quoted
+  evidence, with no tools, and must return one strict JSON object that
+  Keystone validates; it cannot set the target calendar, audience, state
+  or an approval. Nothing in a message can write memory, create a
+  routine, change an authorization or approve: an approval is a
+  single-use token bound to the Person, the exact revision and fields,
+  the target calendar and the delivery route, and a typed "yes" answers
+  nothing.
+- **What is kept.** Only a cursor, keyed fingerprints, minimal event
+  fields and a sealed excerpt of at most 300 bytes while a candidate is
+  unresolved. No full body, subject or sender is stored, logged, returned
+  by the API, or written to a backup; mail answers are scrubbed from the
+  work queue once processed and from every backup copy. The excerpt key
+  (`<DataDir>/mail-excerpts.key`) is in no backup, so a database copy holds
+  only unreadable ciphertext, and a restore discards every excerpt. The
+  mail paths log through `redact.LogHandler`.
+- **Calendar effects at most once.** A deterministic event UID, a
+  conditional create, and a lookup by UID before any resend; the crash
+  tests (`keystone/api/mail_e2e_crash_test.go`) kill the path at every
+  durable boundary.
+- **Residual.** A provider that cannot issue a read-only credential gives
+  the app password wider power upstream than Wildstone uses; the
+  credential lives on the placement nodes and in the running adapter's
+  environment, so a compromised node can read it. Recovery does not
+  restore Personal credentials: each Person re-enters theirs.
+
 ### LLM (the Butler) — treated as a confused deputy, not a trusted user
 
 ADR-W006/W017; the red-team suite (`keystone/butler/redteam_test.go`,
