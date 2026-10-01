@@ -9,8 +9,10 @@ package api
 
 import (
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/capability"
 	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
@@ -113,5 +115,72 @@ func TestRemovingTheMailPackageFencesThenRemovesThenErases(t *testing.T) {
 		if !strings.Contains(rec.PlanJSON, capability.AdapterContainerName("mail", "sam-mail", n)) {
 			t.Fatalf("the removal Plan leaves sam's adapter on %s: %s", n, rec.PlanJSON)
 		}
+	}
+}
+
+// Epic #326 S08: a restore's replay that revokes a Person's monitor
+// re-files the adapter render, so desired state is brought into line by
+// a Plan an Owner approves rather than left rendering an adapter the
+// replayed authority no longer allows. The replay also proves the
+// credential erased on the nodes before anything is released.
+func TestRestoreReplayReFilesTheAdapterRender(t *testing.T) {
+	c := newCredentialHarness(t)
+	installMailForTest(t, c)
+	if code, body := c.consoleCall(c.mika, http.MethodPost, "/api/v1/integrations/sam-mail/adapter/render", nil, nil); code != http.StatusOK {
+		t.Fatalf("render = %d %s", code, body)
+	}
+	if code, body := c.homeCall("sam", http.MethodPost, "/api/v1/home/integrations/sam-mail/credential",
+		map[string]string{"login": "sam@example.internal", "password": appPassword}, nil); code != http.StatusOK {
+		t.Fatalf("intake = %d %s", code, body)
+	}
+	authorizeSam(t, c)
+	renders := proposedRenders(t, c, "sam-mail")
+	if len(renders) != 1 {
+		t.Fatalf("%d render plans", len(renders))
+	}
+	c.approve(t, renders[0].ID)
+	if got := adapterResources(t, c, "sam-mail"); len(got) == 0 {
+		t.Fatal("the approved render left nothing in desired state")
+	}
+	a, err := c.s.DB.LiveBackgroundAuthorization("sam-mail")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The restored database: quarantined, and the (current) journal says
+	// sam revoked her monitor and its credential after the snapshot.
+	if err := c.s.DB.EnterRestoreQuarantine("restored from the nightly backup", time.Now().Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.s.DB.Journal("grant", "background-authorization/"+strconv.FormatInt(a.Seq, 10), "revoked", "sam", "stop"); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.s.DB.Journal("secret", "pc.sam-mail.v1", "revoked", "sam", "stop"); err != nil {
+		t.Fatal(err)
+	}
+	var out struct {
+		Replayed           int                         `json:"replayed"`
+		CredentialErasures map[string][]erasureOutcome `json:"credentialErasures"`
+	}
+	if code, body := c.consoleCall(c.mika, http.MethodPost, "/api/v1/restore/reconcile",
+		map[string]any{"journalCurrent": true}, &out); code != http.StatusOK {
+		t.Fatalf("reconcile = %d %s", code, body)
+	}
+	if _, err := c.s.DB.LiveBackgroundAuthorization("sam-mail"); err == nil {
+		t.Fatal("the replay left sam's authorization live")
+	}
+	for _, n := range []string{"n1", "n2"} {
+		if _, ok := c.nodes.holds(n, "pc.sam-mail.v1"); ok {
+			t.Fatalf("the replayed revocation left the credential on %s", n)
+		}
+	}
+	// Still quarantined (release was not asked for), and a removal render
+	// waits for an Owner.
+	if err := c.s.DB.CheckQuarantine(); err == nil {
+		t.Fatal("reconciling released the quarantine on its own")
+	}
+	renders = proposedRenders(t, c, "sam-mail")
+	if len(renders) != 1 || !strings.Contains(renders[0].Summary, "remove") {
+		t.Fatalf("after the replay: %+v", renders)
 	}
 }
