@@ -293,7 +293,8 @@ func TestResearchDoesNotResumeUnrelatedWait(t *testing.T) {
 }
 
 func TestResearchMigrationRetainsExistingLedger(t *testing.T) {
-	// Component upgrade evidence only until the parent lands real 0099/0100.
+	// Upgrade the genuine pre-privacy/pre-budget schema. Current task writers
+	// require origin_conversation, which S03 adds after this historical boundary.
 	db, err := openUnmigrated(filepath.Join(t.TempDir(), "upgrade.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -303,8 +304,47 @@ func TestResearchMigrationRetainsExistingLedger(t *testing.T) {
 		t.Fatal(err)
 	}
 	record(t, db, "mika")
-	task, a := researchTask(t, db)
-	before, err := db.GetButlerTask(task)
+	if _, err = db.AcquireCoordinator("research-test"); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.AdmitButlerMember("mika", "test-admin"); err != nil {
+		t.Fatal(err)
+	}
+	person, err := db.GetButlerMember("mika")
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent, err := db.sql.Exec(`INSERT INTO conversation_work(owner_person_id,created_at,updated_at) VALUES(?,?,?)`, person.PersonID, now(), now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	parentID, err := parent.LastInsertId()
+	if err != nil {
+		t.Fatal(err)
+	}
+	row, err := db.sql.Exec(`INSERT INTO butler_tasks(created_at,updated_at,kind,state,author_person_id,owner_person_id,surface,agent_class,audience,objective,completion_criteria,retention,envelope_version,objective_kind,conversation_work)
+ VALUES(?,?,'conversation','pending',?,?,'admin','operator','aud_owner','historical research task','fixture retained','manual',?,?,?)`, now(), now(), person.PersonID, person.PersonID, TaskEnvelopeVersion, ObjectiveInformational, parentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seq, err := row.LastInsertId()
+	if err != nil {
+		t.Fatal(err)
+	}
+	task := butlerTaskID(seq)
+	if err = db.TransitionButlerTask(task, ButlerTaskRunning, "test", ""); err != nil {
+		t.Fatal(err)
+	}
+	step, err := db.AppendButlerTaskStep(task, ButlerTaskStep{Kind: ButlerStepTool, Name: "research-fixture"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, err := db.StartButlerAttempt(step)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := ButlerTask{ID: task}
+	err = db.sql.QueryRow(`SELECT objective,lease_epoch FROM butler_tasks WHERE seq=?`, seq).Scan(&before.Objective, &before.LeaseEpoch)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -318,12 +358,16 @@ func TestResearchMigrationRetainsExistingLedger(t *testing.T) {
 	if err != nil || before.ID != after.ID || before.Objective != after.Objective || before.LeaseEpoch != after.LeaseEpoch {
 		t.Fatalf("task changed: %+v %v", after, err)
 	}
-	if _, _, err = db.ReserveResearchAttempt(context.Background(), task, a, "search", DefaultResearchLimits()); err != nil {
+	if _, _, err = db.ReserveResearchAttempt(context.Background(), task, a.Seq, "search", DefaultResearchLimits()); err != nil {
 		t.Fatal(err)
 	}
 	steps, err := db.ListButlerTaskSteps(task)
 	if err != nil || len(steps) != 1 {
 		t.Fatalf("ledger changed: %+v %v", steps, err)
+	}
+	var toolCalls int
+	if err = db.sql.QueryRow(`SELECT tool_calls FROM conversation_work WHERE seq=?`, parentID).Scan(&toolCalls); err != nil || toolCalls != 1 {
+		t.Fatalf("conversation ledger changed: %d %v", toolCalls, err)
 	}
 }
 
