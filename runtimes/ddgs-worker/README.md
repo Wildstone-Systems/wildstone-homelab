@@ -58,8 +58,8 @@ and live conformance (#509) remain separate slices.
 Python 3.12.14, DDGS 9.16.0 and aiohttp 3.14.3 are pinned. `requirements.txt`
 locks transitive versions and distribution hashes (generated with uv 0.12.19).
 Updates require regenerating the lock and rerunning the pinned-engine fixtures.
-The container base has an exact Python version tag; managed image publication
-and deployment digest pinning belong to #493.
+The container base has an exact Python version tag; managed builds require a base digest as described in [RELEASE.md](RELEASE.md).
+The release image has not yet been built or verified.
 
 The worker uses DDGS's DuckDuckGo payload builder and result parser directly.
 Its generic dispatcher can silently fall back to `auto` for invalid backend
@@ -88,12 +88,15 @@ The service requires no privileged mode, credentials, persistent volume,
 Agent workspace mount or shell capability. Its image supports a read-only
 root filesystem, dropped Linux capabilities and `no-new-privileges`.
 
-For #493, run exactly one container and explicitly set `DDGS_LISTEN_HOST` to
-its isolated internal interface (for example `0.0.0.0` **only inside that
-network**). Restrict service access to Keystone using the managed network and
-identity controls before enabling it. Do not publish port 8080 on a host or
-public proxy: this worker does not implement user authentication. Container
-resource/PID limits and deployment image digest pinning belong to packaging.
+The `research-ddgs` package runs exactly one container, binds its internal
+listener to `0.0.0.0`, and publishes only `127.0.0.1:<port>:8080` on Keystone's
+node. It creates no public Route, credentials, volumes or sidecar mounts.
+The maintainer accepted the trusted homelab-network boundary in #493 on
+2026-09-30: the shared bridge and host processes can reach this unauthenticated
+worker directly and bypass Keystone permissions, budgets and audit. Loopback
+publication does not establish per-app or Keystone-process-only isolation.
+This is a documented limitation (#191); do not expose it to the public Internet.
+See [RELEASE.md](RELEASE.md) for the outstanding image/readiness evidence.
 
 Keystone retains per-Agent opt-in grants, current Person/surface restrictions,
 provider selection, privacy/provenance checks, task budgets, fallback policy

@@ -16,6 +16,7 @@ import (
 	"github.com/chickenrat17/wildstone-homelab/keystone/plan"
 	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
 	"github.com/chickenrat17/wildstone-homelab/keystone/reconcile"
+	"github.com/chickenrat17/wildstone-homelab/keystone/research"
 	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
 	"github.com/chickenrat17/wildstone-homelab/keystone/speech"
 	"github.com/chickenrat17/wildstone-homelab/keystone/workspace"
@@ -735,6 +736,11 @@ func (s *Server) enableCapability(r *http.Request, id principal.Identity) (any, 
 	}
 	if err := s.refuseMisplacedSpeechEngine(pkg, rendered); err != nil {
 		return nil, http.StatusBadRequest, err
+	}
+	if pkg.Metadata.Name == research.ManagedPackage {
+		if _, err := research.ManagedEndpoint(rendered, s.NodeID, research.ManagedEndpointRef); err != nil {
+			return nil, http.StatusBadRequest, err
+		}
 	}
 	if pkg.Metadata.Name == workspace.Package {
 		if _, err := workspace.Read(rendered, s.NodeID); err != nil {

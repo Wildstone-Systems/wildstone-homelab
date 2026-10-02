@@ -329,8 +329,13 @@ message}}` with an appropriate non-success HTTP status. Health is
 Worker responses are byte-bounded; Keystone generates source IDs/revisions
 after validation. Keystone, not the worker,
 chooses fallback, enforces task budgets/privacy and retains evidence. Internal
-service access is limited to Keystone using existing managed-network/identity
-controls; do not publish an unauthenticated public search proxy.
+service access uses the trusted homelab-network boundary accepted by the
+maintainer in #493 (2026-09-30). Publish only on host loopback, with no public
+Route. This is not Keystone-only caller isolation: reachable sibling containers
+and local processes can call the unauthenticated worker directly, bypassing
+Keystone permissions, task budgets and audit. Per-app/process isolation is a
+known limitation (#191), not part of epic #471. Do not expose this service to
+the public Internet. All Keystone-mediated authority checks remain required.
 
 Adapters implement capability discovery, bounded cancellable search and
 normalized source metadata/errors. Public fetch/extraction is a separate

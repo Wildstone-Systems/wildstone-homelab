@@ -1,0 +1,38 @@
+# ADR-W047 / #493. One shared worker; installing it grants no Agent tools.
+# Trusted homelab boundary: loopback publication avoids LAN/public listeners,
+# but sibling containers and local processes can call the unauthenticated
+# worker directly, bypassing Keystone permissions, budgets and audit (#191).
+# No Route, credentials, workspace mounts, or automatically installed service.
+apiVersion: wildstone.dev/v1
+kind: Package
+metadata:
+  name: research-ddgs
+  version: 0.1.0
+  capability: web-research
+  profile: ddgs
+params:
+  - { name: node, required: true, source: node, description: "Keystone's own node; the service is reached over loopback." }
+  - name: worker_image
+    required: true
+    description: "Verified published DDGS worker image, repository@sha256:digest. No release image is supplied yet; see runtimes/ddgs-worker/RELEASE.md."
+    # Shape-only lint fixture, never a default or a claimed published artifact.
+    example: "registry.example.internal/wildstone-ddgs@sha256:1111111111111111111111111111111111111111111111111111111111111111"
+  - { name: port, default: "18080", description: "Loopback TCP port used by Keystone." }
+policies:
+  classifications: [internal_only]
+  dataSensitivity: high
+templates:
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: ddgs, node: "{{ .Params.node }}" }
+    spec:
+      image: "{{ .Params.worker_image }}"
+      env:
+        DDGS_LISTEN_HOST: "0.0.0.0"
+      ports: ["127.0.0.1:{{ .Params.port }}:8080"]
+      readOnlyRootfs: true
+      capDrop: [ALL]
+      noNewPrivileges: true
+      resources: { memory: "512m", cpus: "2", pidsLimit: 64 }
+      restart: unless-stopped
