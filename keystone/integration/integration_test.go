@@ -52,3 +52,29 @@ func TestLookups(t *testing.T) {
 		t.Fatal("person has no declared domain")
 	}
 }
+
+// The mail domain is read-only by construction (epic #326): no action at
+// all, and no query whose name reads like a write. A mutating mail
+// operation is a new decision, not a vocabulary addition.
+func TestMailIsReadOnly(t *testing.T) {
+	if len(Mail.Actions) != 0 {
+		t.Fatalf("mail declares actions %+v; the mailbox surface is read-only", Mail.Actions)
+	}
+	mutating := regexp.MustCompile(`(send|reply|draft|move|archive|delete|expunge|flag|mark|seen|store|copy|append|rule|create|rename|subscribe)`)
+	for _, q := range Mail.Queries {
+		if mutating.MatchString(strings.TrimPrefix(q.Name, "mail.")) {
+			t.Errorf("mail query %q reads like a write", q.Name)
+		}
+	}
+	for _, name := range []string{"mail.send", "mail.move", "mail.delete", "mail.mark_read", "mail.draft"} {
+		if IsQuery(name) || IsAction(name) {
+			t.Errorf("%s is declared", name)
+		}
+	}
+	if q, ok := LookupQuery("mail.message"); !ok || len(q.Params) != 1 || !q.Params[0].Required {
+		t.Fatalf("LookupQuery(mail.message) = %+v, %v", q, ok)
+	}
+	if _, ok := Lookup("mail"); !ok {
+		t.Fatal("Lookup(mail)")
+	}
+}

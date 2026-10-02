@@ -2644,5 +2644,225 @@ check("back from a password confirmation, the move is one click from done",
     .includes("Password confirmed. Move now to finish."));
 clearStepUp();
 
+// Watch this mailbox (epic #326 S07). Every setup step is decided from
+// the server's read model, so each one renders from a fixture of it;
+// the two approvals are always two states; the password field never
+// holds a value; every unhealthy state names a recovery; and the
+// household list is an Owner's alone.
+import {
+  CandidateCard,
+  awaitsYou,
+  MAIL_OUTCOME_NOTE,
+  openReview,
+  healthOf as mailHealthOf,
+  MailWatchView,
+  stageOf,
+  choiceFromMatch,
+  durationMs,
+  connectionNameFor,
+  MailWatchEntry,
+} from "../src/views/MailWatch";
+import type { AgentSubscription, MailCandidateRow, MailMonitor, MailReview, MailSetup } from "../src/api";
+
+const mailNow = new Date("2026-10-01T12:00:00Z");
+const mailMatch = JSON.stringify({
+  connection: "sam-mail", authorization: "sha256:abc", agent: 7, targetCalendar: "family",
+  processingLocation: "local", conflictCalendars: ["household", "family"],
+  scope: { folders: ["INBOX", "School"], senders: ["school.example.internal"] },
+});
+const mailSub = (over: Partial<AgentSubscription> = {}): AgentSubscription => ({
+  id: 41, agent: "hobson", trigger: "schedule", matchKind: "mail.changes", match: mailMatch,
+  capabilities: ["mail.changes"], cadence: "15m0s", source: "sam-mail", person: "sam", version: 1,
+  approvedVersion: 1, awaitingApproval: false, enabled: true,
+  schedule: { consecutiveFailures: 0, lastRunAt: "2026-10-01T11:50:00Z", lastSuccessAt: "2026-10-01T11:50:00Z",
+    lastOutcome: "ok", nextDueAt: "2026-10-01T12:05:00Z" },
+  checkpoint: { version: 3, committedAt: "2026-10-01T11:50:00Z" },
+  ...over,
+});
+const mailConn = {
+  seq: 1, name: "sam-mail", adapter: "wild-mail-adapter", ownership: "personal" as const, owner: "sam",
+  audience: "private" as never, actionsEnabled: false, indexingEnabled: false, cloudAllowed: false,
+  state: "ready" as const, leaseEpoch: 1, executable: "mail-roundcube@1.1.1/wild-mail-adapter",
+};
+const mailCred = {
+  seq: 2, connection: "sam-mail", member: "sam", need: "mailbox-app-password", version: 1,
+  login: "sam@example.internal", secretRef: "pc.sam-mail.v1", state: "active", createdAt: "2026-10-01T10:00:00Z", copies: [],
+};
+const mailAuth = {
+  seq: 9, connection: "sam-mail", person: "sam", credentialVersion: 1, scope: { folders: ["INBOX", "School"] },
+  processingLocation: "local", agent: 7, targetCalendar: "family", executable: mailConn.executable,
+  subscription: 41, digest: "sha256:abc", createdAt: "2026-10-01T11:00:00Z",
+};
+const mon = (over: Partial<MailMonitor> = {}): MailMonitor => ({
+  connection: mailConn, nodes: ["n1"], credential: mailCred, authorization: mailAuth,
+  subscriptions: [mailSub()], pendingPlans: [], ...over,
+});
+const mailSetup = (over: Partial<MailSetup> = {}): MailSetup => ({
+  member: "sam", owner: false,
+  provider: { package: "mail-roundcube", version: "1.1.1",
+    settings: { imap_host: "imap.example.internal", imap_port: "993", imap_encryption: "ssl", username_domain: "example.internal" } },
+  monitors: [mon()],
+  agents: [{ seq: 7, name: "hobson" }],
+  calendars: [{ id: "household", name: "Household", writable: true }, { id: "family", name: "Sam's family", writable: true },
+    { id: "work", name: "Work", writable: false }],
+  cadence: { default: "15m0s", min: "5m0s", max: "24h0m0s" },
+  ...over,
+});
+const renderMail = (setup: MailSetup, extra: Record<string, unknown> = {}) =>
+  text(renderToString(h(MailWatchView, { setup, candidates: [], onChanged: () => {}, onNavigate: () => {}, now: mailNow, ...extra })));
+
+check("a Go duration reads in milliseconds", durationMs("1h30m0s") === 90 * 60_000 && durationMs("15m0s") === 900_000);
+check("a member's connection name is a slug", connectionNameFor("Sam.O") === "sam-o-mail");
+check("the choices come back out of the subscription's match",
+  choiceFromMatch(mailMatch)?.scope.folders.join() === "INBOX,School" && choiceFromMatch(mailMatch)?.agent === 7);
+
+// Resuming from server state: each step from the read model alone.
+check("no email installed is its own state", stageOf(mailSetup({ provider: undefined })).stage === "not-installed");
+check("no connection yet", stageOf(mailSetup({ monitors: [] })).stage === "no-connection");
+check("adapter not prepared", stageOf(mailSetup(), mon({ connection: { ...mailConn, executable: undefined } })).stage === "not-rendered");
+check("no password yet", stageOf(mailSetup(), mon({ credential: undefined, subscriptions: [], authorization: undefined })).stage === "credential");
+check("password saved, nothing chosen", stageOf(mailSetup(), mon({ subscriptions: [], authorization: undefined })).stage === "choose");
+const filed = stageOf(mailSetup(), mon({ subscriptions: [], authorization: undefined,
+  pendingPlans: [{ id: "p-12", kind: "subscription", summary: "sam watches the mailbox", match: JSON.parse(mailMatch) }] }));
+check("filed and undecided is waiting for the Owner, with the form restored from the Plan",
+  filed.stage === "awaiting-owner" && filed.owner === "waiting" && filed.personal === "not-given" &&
+  filed.choice?.targetCalendar === "family", JSON.stringify(filed));
+const approved = stageOf(mailSetup(), mon({ authorization: undefined }));
+check("approved by an Owner is not authorized by the Person",
+  approved.stage === "authorize" && approved.owner === "approved" && approved.personal === "not-given");
+check("an authorization for another digest is not this one's",
+  stageOf(mailSetup(), mon({ authorization: { ...mailAuth, digest: "sha256:other" } })).personal === "not-given");
+check("both given, the render Plan pending",
+  stageOf(mailSetup(), mon({ pendingPlans: [{ id: "p-13", kind: "render", summary: "adapter placement" }] })).stage === "awaiting-render");
+check("an edit waiting for the Owner, already authorized",
+  stageOf(mailSetup(), mon({ subscriptions: [mailSub({ awaitingApproval: true, version: 2 })] })).stage === "awaiting-owner");
+check("a disabled monitor is set up again",
+  stageOf(mailSetup(), mon({ subscriptions: [mailSub({ enabled: false })], authorization: undefined })).wasDisabled);
+check("watching", stageOf(mailSetup(), mon()).stage === "watching");
+
+const waitingOut = renderMail(mailSetup({ monitors: [mon({ subscriptions: [], authorization: undefined,
+  pendingPlans: [{ id: "p-12", kind: "subscription", summary: "s", match: JSON.parse(mailMatch) }] })] }));
+check("waiting for Owner approval and not yet authorized are two separate states",
+  waitingOut.includes("Waiting for Owner approval") && waitingOut.includes("Not yet authorized by you"), waitingOut);
+check("waiting says the approval is not the Person's authorization", waitingOut.includes("Their approval is not your authorization"));
+const watchingOut = renderMail(mailSetup());
+check("watching shows both, each in its own words",
+  watchingOut.includes("Approved by an Owner") && watchingOut.includes("Authorized by you"));
+check("the provider settings are shown read-only",
+  watchingOut.includes("imap.example.internal") && watchingOut.includes("mail provider settings (read-only)") &&
+  !watchingOut.includes('id="imap_host"'));
+check("health shows last run, saved position and next check",
+  watchingOut.includes("Last run") && watchingOut.includes("checkpoint 3") && watchingOut.includes("Next check"));
+check("the controls are all there",
+  ["Pause", "Edit settings", "Replace password", "Stop watching", "Remove password"].every((l) => watchingOut.includes(l)));
+check("a Person is not shown the household's monitors", !watchingOut.includes("Household monitors"));
+const ownerOut = renderMail(mailSetup({ owner: true }), {
+  household: [mailSub(), mailSub({ id: 42, person: "olive", source: "olive-mail", awaitingApproval: true })],
+  pendingMailPlans: [{ id: "p-1", seq: 1, createdAt: "", principal: "keystone", summary: "adapter placement for integration/olive-mail: run", risk: "low", state: "proposed" }],
+});
+check("an Owner sees the household's monitors and is sent to Plans to decide",
+  ownerOut.includes("Household monitors") && ownerOut.includes("olive-mail") && ownerOut.includes("Review in Plans"), ownerOut);
+
+const credOut = renderMail(mailSetup({ monitors: [mon({ credential: undefined, subscriptions: [], authorization: undefined })] }));
+check("the password is asked for in the protected input, empty",
+  credOut.includes('aria-label="mailbox app password"') && credOut.includes('type="password"') &&
+  /id="mail-app-password"[^>]*value=""/.test(credOut), credOut);
+check("it steers toward a separate, revocable app password", credOut.includes("app password") && credOut.includes("easy to revoke"));
+const chooseOut = renderMail(mailSetup({ monitors: [mon({ subscriptions: [], authorization: undefined })] }));
+check("folders default to INBOX", chooseOut.includes(">INBOX</textarea>"), chooseOut);
+check("local processing is the default and cloud is off unless chosen",
+  /name="mail-location" checked=""/.test(chooseOut) && chooseOut.includes("Cloud stays off unless you choose it"));
+check("cloud cannot be chosen where an Owner has not allowed it", /name="mail-location" disabled=""/.test(chooseOut));
+check("only writable calendars can be the target", chooseOut.includes('value="family"') && !/<option value="work"/.test(chooseOut));
+check("any readable calendar can be checked for conflicts", chooseOut.includes("Work"));
+
+// Every unhealthy state is distinct and names the next safe action.
+const hs = (m: MailMonitor, s: AgentSubscription) => mailHealthOf(m, s, mailNow);
+const cases: [string, ReturnType<typeof mailHealthOf>, string, string | undefined][] = [
+  ["empty", hs(mon(), mailSub({ schedule: { ...mailSub().schedule!, lastOutcome: "empty" } })), "empty", undefined],
+  ["unavailable", hs(mon(), mailSub({ schedule: { ...mailSub().schedule!, lastOutcome: "unavailable", consecutiveFailures: 4 } })), "unavailable", "contact-owner"],
+  ["stale outcome", hs(mon(), mailSub({ schedule: { ...mailSub().schedule!, lastOutcome: "stale" } })), "stale", undefined],
+  ["stale cursor", hs(mon(), mailSub({ checkpoint: { version: 3, committedAt: "2026-09-30T08:00:00Z" } })), "stale", "contact-owner"],
+  ["auth_failed", hs(mon(), mailSub({ schedule: { ...mailSub().schedule!, hold: "auth_failed", lastOutcome: "auth_failed" } })), "auth_failed", "reenter-password"],
+  ["erasure_unverified", hs(mon({ connection: { ...mailConn, state: "degraded", degradedReason: "erasure_unverified: n2" } }), mailSub()), "erasure_unverified", "contact-owner"],
+  ["degraded", hs(mon({ connection: { ...mailConn, state: "degraded", degradedReason: "fallback not ready" } }), mailSub()), "degraded", "contact-owner"],
+  ["paused", hs(mon(), mailSub({ schedule: { ...mailSub().schedule!, hold: "paused" } })), "paused", "resume"],
+  ["not authorized", hs(mon({ authorization: undefined }), mailSub()), "not-authorized", "reauthorize"],
+  ["never run", hs(mon(), mailSub({ schedule: { consecutiveFailures: 0 }, checkpoint: { version: 0 } })), "waiting-first-run", undefined],
+];
+for (const [label, got, state, recovery] of cases) {
+  check(`health: ${label}`, got.state === state && got.recovery === recovery, JSON.stringify(got));
+}
+const authFailedOut = renderMail(mailSetup({ monitors: [mon({ subscriptions: [mailSub({ schedule: { ...mailSub().schedule!, hold: "auth_failed" } })] })] }));
+check("a refused password offers a new one", authFailedOut.includes("Enter a new app password"));
+const erasureOut = renderMail(mailSetup({ monitors: [mon({ connection: { ...mailConn, state: "degraded", degradedReason: "erasure_unverified" } })] }));
+check("an unproven erasure sends a Person to an Owner", erasureOut.includes("Ask an Owner"));
+check("and offers an Owner the retry",
+  renderMail(mailSetup({ owner: true, monitors: [mon({ connection: { ...mailConn, state: "degraded", degradedReason: "erasure_unverified" } })] }))
+    .includes("Retry the erasure"));
+
+// Candidate review (S06's contract): rows carry their latest review; the
+// review's own actions decide the buttons; needs_details holds Add;
+// conflicts come from the review; update and cancel offer Apply.
+const review = (over: Partial<MailReview> = {}): MailReview => ({
+  id: "mr_1", candidate: "c1", revision: 2, kind: "create", targetCalendar: "family", fieldsDigest: "d",
+  route: "notice", availability: "busy", checkedCalendars: ["family", "Household"],
+  conflicts: [{ calendar: "Household", title: "Soccer", start: "2026-10-15T23:30:00Z" }],
+  issuedAt: "2026-10-01T11:50:00Z", expiresAt: "2026-10-04T11:50:00Z", state: "open",
+  actions: ["add", "edit", "dismiss"], ...over,
+});
+const cand = (over: Partial<MailCandidateRow> = {}): MailCandidateRow => ({
+  id: "c1", revision: 2, connection: "sam-mail", targetCalendar: "family", state: "proposed",
+  fields: { title: "Family night", start: "2026-10-15T23:00:00Z", end: "2026-10-16T00:30:00Z", allDay: false,
+    tz: "America/Chicago", location: "School", confidence: 0.9, missing: [], ambiguous: [] },
+  review: review(), createdAt: "2026-10-01T11:50:00Z", ...over,
+});
+const candCard = (c: MailCandidateRow) =>
+  text(renderToString(h(CandidateCard, { candidate: c, onChanged: () => {}, now: mailNow })));
+const candReady = candCard(cand());
+check("a ready candidate offers Add, Edit and Dismiss",
+  candReady.includes(">Add<") && candReady.includes(">Edit<") && candReady.includes(">Dismiss<") &&
+  !candReady.includes(">Apply<") && !/<button[^>]*disabled=""[^>]*>Add</.test(candReady), candReady);
+check("its conflicts are named", candReady.includes("Soccer on Household"));
+const held = candCard(cand({ state: "needs_details",
+  review: review({ availability: "not_checked", conflicts: null, actions: ["edit", "dismiss"] }),
+  fields: { ...cand().fields, start: undefined, end: undefined, missing: ["start", "timezone"] } }));
+check("a candidate that needs details cannot be added", /<button[^>]*disabled=""[^>]*>Add</.test(held), held);
+check("and says what is missing", held.includes("missing start time, time zone"));
+check("and opens the details to fill in", held.includes("Save details"));
+const upd = candCard(cand({ review: review({ kind: "update", actions: ["apply", "edit", "dismiss"], conflicts: [] }) }));
+check("an update review offers Apply, not Add",
+  upd.includes(">Apply<") && !upd.includes(">Add<") && upd.includes("change to an added event") &&
+  upd.includes("No conflicts on family, Household"), upd);
+const cancelRow = cand({ state: "created", updatePending: "cancel",
+  review: review({ kind: "cancel", actions: ["apply", "dismiss"], conflicts: null, availability: "not_checked" }) });
+const canc = candCard(cancelRow);
+check("a cancel review offers Apply or Dismiss (keep)",
+  canc.includes(">Apply<") && canc.includes(">Dismiss<") && !canc.includes(">Edit<") && canc.includes("Dismiss keeps it"), canc);
+check("an added event with an open cancel review awaits the Person", awaitsYou(cancelRow, mailNow));
+check("a resolved candidate with no open review does not",
+  !awaitsYou(cand({ state: "created", review: review({ state: "used" }) }), mailNow));
+check("an expired review offers nothing of its own",
+  openReview(cand({ review: review({ expiresAt: "2026-10-01T00:00:00Z" }) }), mailNow) === undefined);
+check("a review of an older revision is not this one's",
+  openReview(cand({ review: review({ revision: 1 }) }), mailNow) === undefined);
+check("the calendar being unreachable is said, not hidden",
+  candCard(cand({ review: review({ availability: "unavailable", conflicts: [] }) })).includes("could not be checked"));
+check("every outcome has words",
+  (["added", "updated", "cancelled", "dismissed", "kept", "revised", "returned_to_review", "pending_reconciliation"] as const)
+    .every((o) => !!MAIL_OUTCOME_NOTE[o]));
+check("with no candidates it says nothing is added without you",
+  renderMail(mailSetup()).includes("Nothing is ever added to a calendar without you"));
+check("before the review API exists it says so rather than failing",
+  renderMail(mailSetup(), { reviewUnavailable: true }).includes("not available on this Keystone yet"));
+
+check("the email capability's panel leads to Watch this mailbox",
+  text(renderToString(h(MailWatchEntry, { onOpen: () => {} }))).includes("Watch this mailbox"));
+const mailPkg = { name: "mail-roundcube", version: "1.1.1", capability: "mail", enabled: true, params: [] };
+check("the installed email detail carries the entry",
+  text(renderToString(h(InstalledDetail, { pkg: mailPkg as never, onReconfigure: () => {}, onWatchMailbox: () => {} })))
+    .includes("stays off until that person turns it on"));
+
+
 console.log(failures === 0 ? "\nALL CHECKS PASSED" : `\n${failures} CHECK(S) FAILED`);
 process.exit(failures === 0 ? 0 : 1);

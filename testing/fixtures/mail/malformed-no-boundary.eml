@@ -1,0 +1,12 @@
+From: broken@example.internal
+To: ada@example.internal
+Subject: Broken multipart
+Message-ID: <broken-1@example.internal>
+MIME-Version: 1.0
+Content-Type: multipart/mixed
+
+--whatever
+Content-Type: text/plain
+
+this multipart declared no boundary
+--whatever--

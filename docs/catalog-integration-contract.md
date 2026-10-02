@@ -267,6 +267,16 @@ else; everything below is the same for every adapter.
    scope. Found is not enabled — W030 A5 and W025's amendment both say
    so, and the package's declaration remains the ceiling.
 
+The four statuses are closed, so an adapter that needs to say more says
+it in two places, never by inventing a status. *Which* unavailability
+goes in the error text as a stable code (`not_configured`,
+`auth_failed`, `provider_unavailable`, `bad_request`, …), because an
+`unavailable` result carries no data. Anything the caller must act on —
+a cursor to commit — goes in an `ok` or `empty` result's data, with an
+`outcome` field. The mail adapter is the worked case: a UIDVALIDITY
+change is `ok` with `outcome: cursor_reset` and a restarted cursor
+(W030 A5.3).
+
 Catalog-side follow-ons, both already on W025's Part B list:
 `wild pkg new --adapter` (extends A5's scaffold) and the adapter chapter
 of `packages/AUTHORING.md` (Part B item 2).
@@ -526,7 +536,13 @@ assumed.
 4. **Who owns the well-known event list per domain** — `keystone/integration`
    alongside the queries, or `keystone/household` with the envelope? The
    second is closer to where event semantics already live.
-5. **Does `integrates.domain` allow more than one per package?**
+5. **Resolved (epic #326 S01): `integrates:` is a list of blocks.** As
+   implemented in `keystone/pkgspec/integrates.go`, each entry carries
+   `domain`, `shape`, an `adapter` block (`contract`, pinned `image`,
+   shipped `program`, `inherits`, `needs`) and `answers`, and the block
+   fails closed rather than loading against an older vocabulary. The
+   original question follows.
+   **Does `integrates.domain` allow more than one per package?**
    `mail-roundcube` wants `calendar` *and* `mail` at different shapes,
    which argues for a list. That in turn argues `integrates:` is a list
    of blocks, not one block — cheap now, expensive later.

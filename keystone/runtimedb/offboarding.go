@@ -20,6 +20,7 @@ package runtimedb
 // lie about who wanted what.
 
 import (
+	"errors"
 	"fmt"
 	"time"
 )
@@ -281,8 +282,13 @@ func (db *DB) OffboardMember(member, actor, administrator string) (OffboardingRe
 		if err != nil {
 			return result, err
 		}
+		managed := false
 		for _, s := range secrets {
 			if s.Member != member || !s.RevokedAt.IsZero() {
+				continue
+			}
+			if s.Managed() {
+				managed = true
 				continue
 			}
 			if err := db.RevokeConnectionSecret(c.Name, s.Seq); err != nil {
@@ -301,6 +307,60 @@ func (db *DB) OffboardMember(member, actor, administrator string) (OffboardingRe
 			if err := db.journal("secret", s.SecretRef, "revoked", actor, "owner offboarded"); err != nil {
 				return result, err
 			}
+		}
+		// A Personal credential onboarded through the intake is fenced
+		// here — revoked, its background authorization with it — and its
+		// copies become erasures the API proves against the nodes. Until
+		// each is proven the connection says erasure_unverified.
+		if c.Owner == member && c.Ownership == OwnershipPersonal {
+			if err := db.RevokeBackgroundAuthorization(c.Name, actor, "owner offboarded"); err == nil {
+				result.Stores["background-authorizations-revoked"]++
+			} else if !errors.Is(err, ErrNotFound) {
+				return result, err
+			}
+		}
+		if managed {
+			n, err := db.RevokePersonalCredentials(c.Name, actor, "owner offboarded")
+			if err != nil {
+				return result, err
+			}
+			result.Stores["credentials-revoked"] += n
+			pending, err := db.OutstandingCredentialErasures(c.Name)
+			if err != nil {
+				return result, err
+			}
+			if len(pending) > 0 {
+				result.Stores["credential-erasures-pending"] += len(pending)
+				if err := db.recordOffboarding(member, actor, "credential-erasures-pending", len(pending),
+					fmt.Sprintf("%s: %d credential copies await verified erasure", c.Name, len(pending))); err != nil {
+					return result, err
+				}
+			}
+		}
+	}
+
+	// 8b. What their mailbox monitors learned. Only now — after step 5
+	//     moved the epochs and step 8 revoked the authorizations and
+	//     credentials — so nothing is recording while it goes: their
+	//     candidates, reviews, excerpts, effects, dedupe state and
+	//     checkpoints are deleted, and journalled so a restore deletes
+	//     them again (epic #326 S08).
+	for _, c := range connections {
+		if c.Owner != member || c.Ownership != OwnershipPersonal {
+			continue
+		}
+		erased, err := db.EraseMailConnectionState(c.Name, actor, "owner offboarded", time.Now().UTC())
+		if err != nil {
+			return result, fmt.Errorf("runtimedb: erasing %s's mailbox state: %w", c.Name, err)
+		}
+		if erased.Total() == 0 {
+			continue
+		}
+		result.Stores["mail-state-erased"] += erased.Total()
+		if _, err := db.sql.Exec(`INSERT OR IGNORE INTO offboarding_resource_dispositions
+		 (person_id,resource_kind,resource_ref,disposition,decided_at,decided_by)
+		 VALUES(?,'mail-monitor',?,'deleted',?,?)`, memberPerson, c.Name, now(), actor); err != nil {
+			return result, err
 		}
 	}
 

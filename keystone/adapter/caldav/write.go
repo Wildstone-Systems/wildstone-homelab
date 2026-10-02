@@ -436,6 +436,42 @@ func (u *Upstream) do(req *http.Request) (*http.Response, error) {
 // deleted, or was never there.
 var ErrNoEvent = errors.New("caldav: there is no event")
 
+// ErrPreconditionFailed is a conditional write the calendar refused
+// (412): for a create under If-None-Match: *, the address is already
+// taken; for an update under If-Match, the event changed since it was
+// read. Either way nothing was written by this request.
+var ErrPreconditionFailed = errors.New("caldav: the calendar refused a conditional write")
+
+// ErrWriteForbidden is a write this credential may not make (401/403).
+var ErrWriteForbidden = errors.New("caldav: this calendar credential may not write here")
+
+// EventByUID reads the event this adapter wrote under uid — the
+// deterministic resource <uid>.ics — returning it with its address and
+// ETag, or (nil, "", nil) when there is none. It is how an indeterminate
+// write (a timeout, a lost response, a crash) is reconciled before
+// anything is retried: the UID, not the response, says whether the
+// event exists.
+func (u *Upstream) EventByUID(ctx context.Context, uid string) (*Event, string, error) {
+	href, err := u.resolveHref(EventWrite{UID: uid})
+	if err != nil {
+		return nil, "", err
+	}
+	raw, etag, err := u.get(ctx, href)
+	if errors.Is(err, ErrNoEvent) {
+		return nil, "", nil
+	}
+	if err != nil {
+		return nil, "", err
+	}
+	events := parseICS(raw, u.location())
+	if len(events) == 0 {
+		return nil, "", fmt.Errorf("%w: %s holds no VEVENT", adapter.ErrUnavailable, href)
+	}
+	ev := events[0]
+	ev.Href = href
+	return &ev, etag, nil
+}
+
 // EventAt reads the one event at href, as a read reported it or a
 // create returned it. A missing event is (nil, nil) rather than an
 // error: to a caller following an appointment it links to, "somebody
@@ -523,10 +559,10 @@ func writeStatus(res *http.Response, what string) error {
 	case res.StatusCode >= 200 && res.StatusCode < 300:
 		return nil
 	case res.StatusCode == http.StatusPreconditionFailed:
-		return fmt.Errorf("caldav: %s was refused because the event changed since it was read — read it again "+
-			"and re-apply the change", what)
+		return fmt.Errorf("%w: %s was refused because the event changed since it was read — read it again "+
+			"and re-apply the change", ErrPreconditionFailed, what)
 	case res.StatusCode == http.StatusUnauthorized || res.StatusCode == http.StatusForbidden:
-		return fmt.Errorf("caldav: %s was refused: this calendar credential may not write here", what)
+		return fmt.Errorf("%w: %s was refused", ErrWriteForbidden, what)
 	default:
 		snippet, _ := io.ReadAll(io.LimitReader(res.Body, 256))
 		return fmt.Errorf("%w: %s answered %s: %s", adapter.ErrUnavailable, what,

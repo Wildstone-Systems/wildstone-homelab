@@ -307,3 +307,13 @@ func OpenThroughForTest(path, last string) (*DB, error) {
 func (db *DB) ExecForTest(query string, args ...any) (sql.Result, error) {
 	return db.sql.Exec(query, args...)
 }
+
+// CountForTest runs a raw single-integer query (a COUNT). It exists so
+// tests in other packages can assert that a table holds nothing it must
+// not — the capture checks' "no task trace was opened". Nothing in
+// production calls it.
+func (db *DB) CountForTest(query string, args ...any) (int, error) {
+	var n int
+	err := db.sql.QueryRow(query, args...).Scan(&n)
+	return n, err
+}

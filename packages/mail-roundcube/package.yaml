@@ -91,6 +91,28 @@
 # The job re-runs when its spec hash changes, which is what an image
 # upgrade with new migrations is.
 #
+# THE MAILBOX ADAPTER, AND WHY INSTALLING THIS READS NO MAIL. The
+# package carries a dormant, read-only mailbox adapter (epic #326): the
+# `integrates:` block below. It is a DECLARATION, not a template —
+# nothing in it is rendered when this package is installed or upgraded,
+# so an install creates no container, no connection, no credential and
+# no mailbox read. The adapter program (keystone/cmd/wild-mail-adapter)
+# ships with every release and the installer puts it on each node at
+# /srv/wildstone/bin, exactly as the chat adapter is shipped. It runs
+# only once a Person chooses "Watch this mailbox": their Personal
+# connection's approved placement renders one adapter container per
+# prepared node (capability.Engine.ExpandAdapter), inheriting the IMAP
+# endpoint configured here and never a password from these params.
+#
+# Its surface is read-only by construction: the mail domain in
+# keystone/integration declares no action, the four queries below are
+# the whole of what it answers, and the adapter refuses every action.
+# No send, reply, draft, mark-read, move, archive, delete or rule.
+#
+# Roundcube's own message cache must stay off (see
+# docs/catalog-integration-contract.md §7.1): roundcube-db is backed up,
+# and the adapter keeps mail at the provider on purpose.
+#
 # Image digests are REAL, resolved 2026-09-08 via the OCI registry API:
 #   roundcube/roundcubemail:latest        -> sha256:8a4f8884...fb89 (1.7.4-apache)
 #   ghcr.io/tchapi/davis-standalone:latest -> sha256:18c38a54...ce8b (Caddy + php-fpm, port 9000)
@@ -98,7 +120,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: mail-roundcube
-  version: 1.0.5
+  version: 1.1.1
   capability: mail
   profile: roundcube
 requires:
@@ -123,6 +145,34 @@ params:
 policies:
   classifications: [family_private]
   dataSensitivity: high
+# The dormant mailbox adapter; see "THE MAILBOX ADAPTER" in the header.
+# connection-only because the mailbox is the provider's, not Wildstone's;
+# the adapter runtime is still Wildstone-managed (ADR-W030 A5.1).
+integrates:
+  - domain: mail
+    shape: connection-only
+    adapter:
+      contract: 1
+      # Google's distroless static base, the same pin the chat packages
+      # use: CA certificates for IMAPS, no shell, non-root.
+      image: "gcr.io/distroless/static-debian12@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab"
+      program: wild-mail-adapter
+      # The provider endpoint this install already knows. V1 has one
+      # provider per installation; several Persons, several accounts.
+      inherits: [imap_host, imap_port, imap_encryption, username_domain]
+      needs:
+        secrets:
+          - name: mailbox-app-password
+            scope: member
+            purpose: "Reads this Person's own selected mail, read-only. Onboarded by that Person through the protected secret input, never chat; an app password they can revoke is strongly preferred, because the provider grants it full mailbox power."
+          - name: mailbox-fingerprint-key
+            scope: member
+            purpose: "This connection's own random key (at least 32 bytes) for message fingerprints and references, so two Persons on the same provider cannot compare or trade them. Not a provider credential; generated for the connection when it is onboarded, never shown to anyone."
+    answers:
+      - { query: mail.capabilities, deadline: 5s }
+      - { query: mail.changes, deadline: 30s, supports: [folder, cursor, limit] }
+      - { query: mail.message, deadline: 30s, supports: [ref] }
+      - { query: mail.search, deadline: 30s, supports: [folders, from, subject, since, before, limit] }
 templates:
   # ---- Secrets (ADR-W020 / F37). All three are generated on the node;
   # none of them is a person's password, and no mail credential is ever

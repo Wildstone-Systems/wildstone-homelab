@@ -46,7 +46,7 @@ ingress-tailnet-ts 1.1.2 8c527da33c6f53ca
 inventory-homebox 1.1.1 e41d648d88be7ac2
 knowledge-wildstone 1.0.0 b5a489b55e24c813
 lists-wildstone 1.0.0 0d908ac2d2b01860
-mail-roundcube 1.0.5 37527182b65e8639
+mail-roundcube 1.1.1 352ea787b61ac3da
 matrix-element 1.0.0 38ed3c2159679e0e
 matrix-synapse 1.0.11 da584120c8dda562
 media-jellyfin 1.0.4 80043d9f2536a2b7

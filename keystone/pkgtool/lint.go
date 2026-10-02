@@ -200,10 +200,35 @@ func Lint(dir string, opts LintOptions) ([]Issue, error) {
 // and anything else is a typo nothing downstream would ever match.
 // Namespaces with no declared domain stay open (ADR-W024).
 func integrationIssues(pkg *pkgspec.Package) []Issue {
-	if pkg.Publishes == nil {
-		return nil
-	}
 	var issues []Issue
+	// An answered query's `supports:` must be a subset of the params the
+	// closed query defines (docs/catalog-integration-contract.md §4).
+	// The domain and query names themselves are Validate's, which fails
+	// closed on them.
+	for i, in := range pkg.Integrates {
+		for j, a := range in.Answers {
+			q, ok := integration.LookupQuery(a.Query)
+			if !ok {
+				continue
+			}
+			params := map[string]bool{}
+			names := []string{}
+			for _, p := range q.Params {
+				params[p.Name] = true
+				names = append(names, p.Name)
+			}
+			for k, s := range a.Supports {
+				if !params[s] {
+					issues = append(issues, Issue{Rule: "integration", Msg: fmt.Sprintf(
+						"integrates[%d].answers[%d].supports[%d]: %q is not a param of %s (%s)",
+						i, j, k, s, q.Name, strings.Join(names, ", "))})
+				}
+			}
+		}
+	}
+	if pkg.Publishes == nil {
+		return issues
+	}
 	for i, ev := range pkg.Publishes.Events {
 		domain, ok := integration.DomainOf(ev.Type)
 		if !ok || integration.IsEvent(ev.Type) {

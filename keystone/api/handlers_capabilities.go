@@ -1,7 +1,9 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/chickenrat17/wildstone-homelab/keystone/ingressorigin"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
@@ -53,7 +55,12 @@ type packageView struct {
 	Provides   []pkgspec.Provide      `json:"provides,omitempty"`
 	Requires   []pkgspec.Requirement  `json:"requires,omitempty"`
 	Publishes  *pkgspec.PublishesSpec `json:"publishes,omitempty"`
-	Enabled    bool                   `json:"enabled"`
+	// Integrates is the package's integration declaration, shown so an
+	// Owner can inspect exactly which queries a bundled adapter offers
+	// before anyone enables it. Offered is not enabled: nothing here runs
+	// until a connection is created and placed (epic #326).
+	Integrates []pkgspec.IntegrationSpec `json:"integrates,omitempty"`
+	Enabled    bool                      `json:"enabled"`
 	// ProvidedSecrets are the secrets this package declares that only an
 	// operator can supply. A form that collects them must ask for THESE
 	// names: they differ per package (a Telegram bot token, a Matrix
@@ -428,6 +435,7 @@ func (s *Server) listPackages(r *http.Request, id principal.Identity) (any, int,
 			Capability: p.Metadata.Capability, Profile: p.Metadata.Profile,
 			Params: resolveParams(p.Params, facts, installedParamsForPackage(installedParams, p)), Provides: p.Provides, Requires: p.Requires,
 			Publishes:       p.Publishes,
+			Integrates:      p.Integrates,
 			ProvidedSecrets: pkgspec.ProvidedSecrets(p),
 			Icon:            packageIcon(p),
 			// Whether THIS PACKAGE is installed, not whether its
@@ -871,10 +879,115 @@ func (s *Server) disableCapability(r *http.Request, id principal.Identity) (any,
 		return nil, http.StatusBadRequest, fmt.Errorf("%s has nothing installed to remove", capName)
 	}
 
-	return s.submitProposalOpts(id, proposalRequest{
+	// A bundled adapter's containers are owned by integration/<connection>,
+	// not by the capability, so the removal above never reaches them. The
+	// connections it serves are fenced, their containers removed and their
+	// credentials erased here, and their rendered resources join the Plan.
+	fenced, adapterDeletes, erasures := s.retireBundledAdapters(r.Context(), pkg, current, actingMember(id), req.DryRun)
+	deletes = append(deletes, adapterDeletes...)
+
+	view, code, err := s.submitProposalOpts(id, proposalRequest{
 		Summary: fmt.Sprintf("disable %s (%d resource(s) removed)", capName, len(deletes)),
 		Delete:  deletes,
 	}, proposalOpts{DryRun: req.DryRun})
+	if err != nil || len(fenced) == 0 {
+		return view, code, err
+	}
+	// The Plan's own view stays the top level, as every caller reads it;
+	// what happened to the adapters is added beside it.
+	raw, merr := json.Marshal(view)
+	out := map[string]any{}
+	if merr != nil || json.Unmarshal(raw, &out) != nil {
+		out = map[string]any{"plan": view}
+	}
+	key := "adapterFenced"
+	if req.DryRun {
+		key = "adapterWouldFence"
+	}
+	out[key] = fenced
+	out["credentialErasures"] = erasures
+	return out, code, nil
+}
+
+// retireBundledAdapters is what removing a package that bundles an
+// adapter does to the Personal connections that adapter serves (epic
+// #326 S08; ADR-W030 A5.9). In the order A5.1 requires: FENCE first —
+// the lease epoch moves, queued and claimed reads are cancelled, the
+// Person's background authorization and credential are revoked — then
+// REMOVE each placement's adapter container (it holds the credential in
+// its environment), then ERASE every credential copy with node evidence.
+// Anything unproven leaves the connection degraded (erasure_unverified),
+// visible, never assumed done. The rendered resources are returned for
+// the removal Plan, so desired state follows once an Owner approves it.
+//
+// Withdrawing access needs no approval (ADR-W033 D1), so this happens
+// when the removal is proposed, not when it is approved: a credential
+// left on a node until somebody got round to a Plan is the wrong way to
+// be wrong. A dry run changes nothing and names what it would fence.
+func (s *Server) retireBundledAdapters(ctx context.Context, pkg *pkgspec.Package, current []resource.Resource, actor string, dryRun bool) ([]string, []deletionRef, map[string][]erasureOutcome) {
+	erasures := map[string][]erasureOutcome{}
+	if len(pkg.Integrates) == 0 {
+		return nil, nil, erasures
+	}
+	connections, err := s.DB.ListConnections()
+	if err != nil {
+		s.Log.Error("listing connections to retire a bundled adapter", "package", pkg.Metadata.Name, "err", err)
+		return nil, nil, erasures
+	}
+	var fenced []string
+	var deletes []deletionRef
+	for _, c := range connections {
+		if c.Ownership != runtimedb.OwnershipPersonal || !servesConnection(pkg, c) {
+			continue
+		}
+		fenced = append(fenced, c.Name)
+		owner := capability.AdapterOwner(c.Name)
+		for _, r := range current {
+			if r.Metadata.Owner == owner {
+				deletes = append(deletes, deletionRef{Kind: string(r.Kind), Name: r.Metadata.Name})
+			}
+		}
+		if dryRun {
+			continue
+		}
+		reason := fmt.Sprintf("the %s package that runs this mailbox's adapter is being removed", pkg.Metadata.Name)
+		if _, err := s.DB.RevokePersonalCredentials(c.Name, actor, reason); err != nil && !errors.Is(err, runtimedb.ErrNotFound) {
+			s.Log.Error("fencing a bundled adapter's connection", "connection", c.Name, "err", err)
+		}
+		var out []erasureOutcome
+		if placements, err := s.DB.ListPlacements(c.Name); err == nil {
+			for _, p := range placements {
+				if why := s.removeAdapterContainer(ctx, c.Adapter, c.Name, p.Node); why != "" {
+					out = append(out, erasureOutcome{Node: p.Node, Detail: why})
+				}
+			}
+		}
+		out = append(out, s.eraseCredentialCopies(ctx, c.Name, true)...)
+		if len(out) > 0 {
+			erasures[c.Name] = out
+		}
+		// Nothing renders for it any more; an undecided render Plan
+		// would put back what this removes.
+		s.supersedeAdapterPlans(c.Name, "")
+		s.event("integration.adapter_retired", c.Name, principal.Identity{Name: adapterRenderPrincipal, ActingFor: actor},
+			"its package is being removed; the connection is fenced and its credential erased")
+	}
+	sort.Strings(fenced)
+	return fenced, deletes, erasures
+}
+
+// servesConnection reports whether pkg's bundled adapter is the one a
+// connection runs: the connection's domain is one pkg declares an
+// adapter for, and its recorded executable (when it has one) is pkg's.
+func servesConnection(pkg *pkgspec.Package, c runtimedb.IntegrationConnection) bool {
+	in, ok := pkg.AdapterFor(adapterDomainOf(c.Adapter))
+	if !ok {
+		return false
+	}
+	if strings.HasPrefix(c.Adapter, "wild-") && in.Adapter.Program != c.Adapter {
+		return false
+	}
+	return c.Executable == "" || strings.HasPrefix(c.Executable, pkg.Metadata.Name+"@")
 }
 
 // packagesUnder lists the packages with resources under a capability.

@@ -11,6 +11,8 @@ User and operator docs (E13, ADR-W018):
 - `concepts.md` — Statefile, plans, reconcile, principals, capabilities, secrets, backups, and the Butler ceiling.
 - `recovery.md` — recovery contract and total-host-loss runbook.
 - `threat-model.md` — threat model refreshed against as-built behavior.
+- `household-secrets.md` — household and Personal secret storage, including mailbox app passwords.
+- `mail-monitoring-test-vm.md` — testing mailbox monitoring on a VM from a pre-release tag.
 - `vision.md` — product direction and standing principles.
 - `migration.md` — dogfood migration runbook and cutover rules.
 - `friction-log.md` — dogfood friction and alpha-exit cleanup.

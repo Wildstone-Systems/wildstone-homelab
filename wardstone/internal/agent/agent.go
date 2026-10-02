@@ -114,7 +114,14 @@ import (
 // 21: adds IPC_LOCK to the closed capability allowlist (#441). An older
 // agent refuses it as FORBIDDEN, so Keystone gates a spec adding it on
 // this minor (resource.IPCLockProtocolMinor).
-const ProtocolMinor = 21
+//
+// 22: adds EraseSecret, the version-fenced erase of one node secret with
+// absent-after-erase evidence (ADR-W030 A5.1, epic #326 S02). An older
+// agent answers it as an unknown operation; Keystone treats that as
+// erasure UNVERIFIED and keeps the connection degraded, never as done.
+// Personal integration credentials (secreterase.PersonalPrefix) are also
+// left out of the recovery export from this minor on.
+const ProtocolMinor = 22
 
 // maxUpdateMsgBytes is the gRPC message size cap on both ends of the
 // session/join connections (ADR-W003 W5). SelfUpdate ships the new binary

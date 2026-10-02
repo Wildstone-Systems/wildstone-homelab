@@ -118,6 +118,11 @@ func (a *Agent) dispatchOp(ctx context.Context, opID string, op *wsv1.Operation)
 		if r, oerr = a.listSecrets(); oerr == nil {
 			res.Result = r
 		}
+	case *wsv1.Operation_EraseSecret:
+		var r *wsv1.OpResult_EraseSecret
+		if r, oerr = a.eraseSecret(o.EraseSecret); oerr == nil {
+			res.Result = r
+		}
 	case *wsv1.Operation_ExportSecretBundle:
 		var r *wsv1.OpResult_ExportSecretBundle
 		if r, oerr = a.exportSecretBundle(o.ExportSecretBundle); oerr == nil {
