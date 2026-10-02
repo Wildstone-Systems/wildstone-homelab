@@ -107,8 +107,8 @@ Candidate verification as prepared:
   Fresh migration checks pass on the final fixture version (29.562s).
 - Workspace/publication/storage, research/adapter/extraction/public-fetch and
   startup regressions pass; the broad run's complete agentgateway suite passes
-  (211.325s). Full five-module race verification remains running and is not a
-  completed-pass claim.
+  (211.325s). Proto, Wardstone, CLI and e2e complete race suites pass. Full Keystone
+  race verification remains running and is not a completed-pass claim.
 - Five-module vet, Keystone native/ARM64 builds and formatting/diff checks pass.
   Console build/render/contrast pass; native sidecar typecheck and 12 tests pass.
 - DDGS hash-locked install and 31 worker/release tests pass on repeat. The first
@@ -120,8 +120,8 @@ Candidate verification as prepared:
 
 Earlier #523 evidence included portal `/dev/shm` storage-unavailable failure and
 e2e F-158-12 evidence/count failures. Preserve those historical results. Main now
-includes audit correction `7205551`; the combined e2e result must be checked
-afresh rather than assuming that older failure persists or claiming it passed.
+includes audit correction `7205551`; the combined e2e race suite passes
+(1.880s). That new result does not erase the earlier failed evidence.
 Current combined CI/review, full race completion, publication prerequisites on
 the actually merged feature tree and final main integration remain gates.
 
