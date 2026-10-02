@@ -610,7 +610,11 @@ func TestCancellationDuringAuthorizationRemainsDistinct(t *testing.T) {
 func TestMarkdownLiteralRestorationHonorsRCDATA(t *testing.T) {
 	for _, media := range []string{"text/html", "text/markdown"} {
 		d, err := Extract(input(media, "before <textarea>A &amp; B &lt;input type=password&gt;</textarea> after"))
-		if err != nil || d.Text != "before A & B <input type=password> after" {
+		want := "before\nA & B <input type=password>\nafter"
+		if media == "text/markdown" {
+			want = "before\n A & B <input type=password>\n after"
+		}
+		if err != nil || d.Text != want {
 			t.Fatalf("%s RCDATA: %q %v", media, d.Text, err)
 		}
 		for _, tag := range []string{"textarea", "title"} {
@@ -631,7 +635,7 @@ func TestMarkdownLiteralRestorationHonorsRCDATA(t *testing.T) {
 		}
 	}
 	d, err := Extract(input("text/markdown", "before <textarea>&amp;#x1b;</textarea> after"))
-	if err != nil || d.Text != "before &#x1b; after" {
+	if err != nil || d.Text != "before\n &#x1b;\n after" {
 		t.Fatalf("double-decoded RCDATA: %q %v", d.Text, err)
 	}
 }
@@ -881,6 +885,61 @@ func TestControlAndStructuralBoundariesPreserveNewlines(t *testing.T) {
 				if err != nil || d.Source.Truncated || utf8.RuneCountInString(d.Text) != MaxCharacters || !strings.HasSuffix(d.Text, "B") {
 					t.Fatalf("%s structural cap: %d %+v %v", media, utf8.RuneCountInString(d.Text), d.Source, err)
 				}
+			}
+		}
+	}
+}
+
+func TestDeclarativeShadowRootPasswordDetection(t *testing.T) {
+	for _, media := range []string{"text/html", "text/markdown"} {
+		for _, tc := range []struct {
+			name, body string
+			blocked    bool
+		}{
+			{"open", `<div><template shadowrootmode="open"><input type="password"></template></div>`, true},
+			{"closed", `<span><template shadowrootmode="closed"><input type="password"></template></span>`, true},
+			{"mixed-case-mode", `<div><template SHADOWROOTMODE="OPEN"><input type="password"></template></div>`, true},
+			{"custom-host", `<example-widget><template shadowrootmode="open"><input type="password"></template></example-widget>`, true},
+			{"nested-root", `<div><template shadowrootmode="open"><section><template shadowrootmode="closed"><input type="password"></template></section></template></div>`, true},
+			{"ordinary-template", `<div><template><input type="password"></template></div>`, false},
+			{"invalid-mode", `<div><template shadowrootmode="invalid"><input type="password"></template></div>`, false},
+			{"unsupported-host", `<button><template shadowrootmode="open"><input type="password"></template></button>`, false},
+			{"inert-ancestor", `<template><div><template shadowrootmode="open"><input type="password"></template></div></template>`, false},
+			{"ordinary-template-in-shadow", `<div><template shadowrootmode="open"><template><input type="password"></template></template></div>`, false},
+			{"second-root-inert", `<div><template shadowrootmode="open">First</template><template shadowrootmode="closed"><input type="password"></template></div>`, false},
+			{"rcdata-in-shadow", `<div><template shadowrootmode="open"><textarea><input type="password"></textarea></template></div>`, false},
+		} {
+			t.Run(media+"/"+tc.name, func(t *testing.T) {
+				_, err := Extract(input(media, tc.body))
+				if tc.blocked && err != publicfetch.ErrBlocked || !tc.blocked && err != nil {
+					t.Fatalf("blocked=%v err=%v", tc.blocked, err)
+				}
+			})
+		}
+		body := strings.Repeat("x", MaxCharacters+1) + `<div><template shadowrootmode="open"><input type="password"></template></div>`
+		if _, err := Extract(input(media, body)); err != publicfetch.ErrBlocked {
+			t.Fatalf("%s challenge beyond cap: %v", media, err)
+		}
+	}
+}
+
+func TestAdjacentTextareasRemainSeparate(t *testing.T) {
+	for _, media := range []string{"text/html", "text/markdown"} {
+		for _, separator := range []string{"", "\n"} {
+			body := "<textarea>Allow</textarea>" + separator + "<textarea>Deny</textarea>"
+			d, err := Extract(input(media, body))
+			if err != nil || d.Text != "Allow\nDeny" {
+				t.Fatalf("%s %q: %q %v", media, separator, d.Text, err)
+			}
+			body = strings.Replace(body, "Allow", strings.Repeat("x", MaxCharacters-5), 1)
+			d, err = Extract(input(media, body))
+			if err != nil || d.Source.Truncated || utf8.RuneCountInString(d.Text) != MaxCharacters || !strings.HasSuffix(d.Text, "\nDeny") {
+				t.Fatalf("%s exact cap: %d %+v %v", media, utf8.RuneCountInString(d.Text), d.Source, err)
+			}
+			body = strings.Replace(body, "Deny", "Denyy", 1)
+			d, err = Extract(input(media, body))
+			if err != nil || !d.Source.Truncated || utf8.RuneCountInString(d.Text) != MaxCharacters || !strings.HasSuffix(d.Text, "\nDeny") {
+				t.Fatalf("%s over cap: %d %+v %v", media, utf8.RuneCountInString(d.Text), d.Source, err)
 			}
 		}
 	}
