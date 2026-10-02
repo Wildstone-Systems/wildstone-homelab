@@ -182,7 +182,7 @@ func (db *DB) OffboardMember(member, actor, administrator string) (OffboardingRe
 			// and keeping the association is what that takes.
 			if _, err := db.sql.Exec(
 				`UPDATE butler_tasks
-				 SET owner_person_id = ?, origin_connection = '', origin_connection_ref = 0,
+				 SET owner_person_id = ?, origin_connection = '', origin_connection_ref = 0, origin_conversation = '',
 				     updated_at = ?
 				 WHERE seq = ?`,
 				adminPerson, now(), t.Seq); err != nil {
