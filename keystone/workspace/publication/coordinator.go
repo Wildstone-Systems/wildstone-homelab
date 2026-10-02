@@ -43,10 +43,13 @@ type Coordinator struct {
 }
 type BeginRequest struct {
 	WorkspaceID, ArtifactID, Path, ExpectedRevision, Key string
-	TaskID                                               int64
-	Privacy                                              string
-	TrustedOnly                                          bool
-	Provenance                                           []runtimedb.WorkspaceProvenance
+	// ArgumentHash binds an adapter's additional operation arguments (such as
+	// patch text) without persisting content in the session metadata.
+	ArgumentHash string `json:"argumentHash,omitempty"`
+	TaskID       int64
+	Privacy      string
+	TrustedOnly  bool
+	Provenance   []runtimedb.WorkspaceProvenance
 }
 type Receipt struct{ ID, Operation, ArtifactID, Revision string }
 
@@ -111,7 +114,7 @@ func (c *Coordinator) inject(point string) error {
 }
 func (c *Coordinator) Begin(ctx context.Context, r BeginRequest) (Session, error) {
 	var s Session
-	if !validKey(r.Key) || r.TaskID <= 0 || r.WorkspaceID == "" || (r.ArtifactID == "") != (r.ExpectedRevision == "") || len(r.Provenance) > 128 {
+	if !validKey(r.Key) || r.TaskID <= 0 || r.WorkspaceID == "" || (r.ArtifactID == "") != (r.ExpectedRevision == "") || len(r.Provenance) > 128 || (r.ArgumentHash != "" && len(r.ArgumentHash) != 64) {
 		return s, ErrInput
 	}
 	if err := storage.ValidatePath(r.Path, false); err != nil {

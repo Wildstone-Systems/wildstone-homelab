@@ -619,7 +619,7 @@ func TestPermitsRefusesAnyMutatingToolWhenReadOnly(t *testing.T) {
 // resources require an explicitly reviewed rule and inventory entry.
 func TestNoShippedToolReachesAResourceWithoutARule(t *testing.T) {
 	check := func(name, kind string) {
-		if name == "workspace_list" || name == "workspace_read" || name == "workspace_search" {
+		if name == "workspace_list" || name == "workspace_read" || name == "workspace_search" || name == "workspace_patch" || name == "workspace_write_begin" || name == "workspace_write_chunk" || name == "workspace_write_commit" {
 			if kind != "workspace" {
 				t.Errorf("%s lost its workspace resource rule", name)
 			}

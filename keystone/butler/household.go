@@ -157,8 +157,10 @@ type HouseholdActionCall struct {
 // withheld from the offered set and refused at dispatch, and the model
 // is told plainly that this deployment does not have it.
 type HouseholdSeams struct {
-	WorkspaceReads     WorkspaceReadSeam
-	WorkspaceReadReady func() bool
+	WorkspaceReads      WorkspaceReadSeam
+	WorkspaceReadReady  func() bool
+	WorkspaceWrites     WorkspaceWriteSeam
+	WorkspaceWriteReady func() bool
 	// Events retrieves household facts (ADR-W024 A2).
 	//
 	// The household timeline is shared by design — it is the house's
@@ -453,6 +455,7 @@ func NewHouseholdGateway(member string, seams HouseholdSeams) *HouseholdGateway 
 			},
 		}
 	}
+	registerHouseholdWorkspaceWrites(gw)
 	return gw
 }
 
@@ -574,6 +577,9 @@ func (gw *HouseholdGateway) withActions(spec provider.Tool) provider.Tool {
 // deployment.
 func (gw *HouseholdGateway) wired(name string) bool {
 	switch name {
+	case "workspace_patch", "workspace_write_begin", "workspace_write_chunk", "workspace_write_commit":
+		return !gw.group && gw.seams.WorkspaceWrites != nil && (gw.seams.WorkspaceWriteReady == nil || gw.seams.WorkspaceWriteReady())
+
 	case "workspace_list", "workspace_read", "workspace_search":
 		return gw.seams.WorkspaceReads != nil && !gw.group && (gw.seams.WorkspaceReadReady == nil || gw.seams.WorkspaceReadReady())
 	case "get_household_events":

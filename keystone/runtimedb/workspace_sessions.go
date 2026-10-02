@@ -338,6 +338,25 @@ func (db *DB) SealWorkspaceWrite(s WorkspaceWriteSession, hash, mediaType, key s
 			return p, err
 		}
 	}
+	// Freeze the current inherited policy at sealing, including reads made
+	// after begin. The native coordinator's authority seam admits this graph
+	// before each effect; immutable capture triggers retain its exact inputs.
+	policy, err := contentPrivacy(tx, fmt.Sprintf("t:%d", current.TaskID))
+	if err != nil {
+		return p, err
+	}
+	if current.BaseRevision != "" {
+		base, err := contentPrivacy(tx, "wr:"+current.BaseRevision)
+		if err != nil {
+			return p, err
+		}
+		policy.LocalOnly = policy.LocalOnly || base.LocalOnly
+		policy.TrustedOnly = policy.TrustedOnly || base.TrustedOnly
+	}
+	if policy.LocalOnly {
+		current.Privacy = "local-only"
+	}
+	current.TrustedOnly = current.TrustedOnly || policy.TrustedOnly
 	_, err = tx.Exec(`INSERT INTO workspace_revisions(id,artifact_id,task_id,hash,size_bytes,media_type,privacy,trusted_only,created_at) VALUES(?,?,?,?,?,?,?,?,?)`, s.ID, current.ArtifactID, current.TaskID, hash, size, mediaType, current.Privacy, current.TrustedOnly, now())
 	if err != nil {
 		return p, err
