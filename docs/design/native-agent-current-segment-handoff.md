@@ -153,6 +153,37 @@ historical-fixture correction and handoff update need current review/CI.
 PR #535 is the draft main-target integration. Green current CI/review, actual
 ordered prerequisite merges and final main integration remain gates.
 
+## Integration CI follow-up
+
+Final-head CI run `37035841442` on `1816c16f` failed in amd64 job
+`110933857192`; its exit drill passed. The race detector found concurrent
+`SetAuthorizer`, `SetSessionTask` and `SetCaller` writes in the agentgateway test
+fixture, which cached a mutable ToolGateway per Butler. The production factory
+already builds/copies a surface per session (`cmd/keystone/main.go`). The fixture
+now rebuilds the session surface per call and shares only synchronized dispatch
+counts and in-flight hooks. The eight concurrent callers, one-winner and exact
+ledger-budget assertions remain; losing-call budget waits and exact dispatch
+counts are also asserted. Ten focused race repetitions passed in 136.581s.
+The complete agentgateway race suite also passed; focused vet, formatting and
+diff checks were clean.
+
+Mailmonitor and mailreview reached the package-wide 30-minute ceiling while
+executing SQLite schema migrations in fixture setup. Their active cases had
+run only 23s (`TestMalformedModelOutput/bad_clock`) and 3s
+(`TestConflictCalendarsComeFromTheScopeAndTheApprovedMatch`), respectively;
+neither captured stack was waiting on an application lock or external request.
+Three isolated race repetitions of each captured case passed: mailmonitor
+53.921s and mailreview 51.953s. Combined with the prior complete local package
+passes, this supports cumulative runner contention rather than a demonstrated
+case deadlock. Runtimedb likewise timed out during migration setup in a test
+only 16s old; its prior full local run and corrected historical-fixture rerun
+remain the evidence above. No timeout, detector, migration or test gate was
+relaxed. These results do not substitute for green final-head remote CI.
+
+The parent coordinates the requested #518 failed-job retry before another
+heavy integration run, and retains all remote merges. PR #535 remains draft
+pending final-head CI and review.
+
 ## DDGS release boundary and next executor
 
 #493 remains open. An Owner may explicitly supply a digest and approve the

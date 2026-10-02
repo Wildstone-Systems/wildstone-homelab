@@ -31,16 +31,19 @@ var migrated = dbtemplate.New(func(path string) error {
 	return db.Close()
 })
 
-// counting wraps a real surface and counts what was REALLY dispatched,
-// forwarding the scoping calls so the gateway can bind it exactly as
-// it binds the surface underneath.
-type counting struct {
-	butler.Toolset
+// dispatchCounts survives per-call surface rebuilds; it contains no session scope.
+type dispatchCounts struct {
 	mu    sync.Mutex
 	calls map[string]int
 	// during, when set, runs inside Execute — a hook for what happens
 	// while a tool is in flight.
 	during func()
+}
+
+// counting wraps a fresh session surface and shares only synchronized observations.
+type counting struct {
+	butler.Toolset
+	*dispatchCounts
 }
 
 func (c *counting) Execute(ctx context.Context, name string, input map[string]any, readOnly bool) (butler.ToolOutcome, error) {
@@ -49,14 +52,21 @@ func (c *counting) Execute(ctx context.Context, name string, input map[string]an
 		c.calls = map[string]int{}
 	}
 	c.calls[name]++
+	during := c.during
 	c.mu.Unlock()
-	if c.during != nil {
-		c.during()
+	if during != nil {
+		during()
 	}
 	return c.Toolset.Execute(ctx, name, input, readOnly)
 }
 
-func (c *counting) count(name string) int {
+func (c *dispatchCounts) setDuring(hook func()) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.during = hook
+}
+
+func (c *dispatchCounts) count(name string) int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.calls[name]
@@ -84,11 +94,10 @@ type fixture struct {
 	ledger *butlerstore.Ledger
 	store  *statefile.Store
 	g      *Gateway
-	// surfaces keeps one wrapped surface per Butler for the lifetime
-	// of the test, as butlerlive_test does, so a dispatch count
-	// survives the per-call rebuild.
+	// surfaces keeps observations per Butler, while the factory rebuilds
+	// each session surface just as the production factory does.
 	mu       sync.Mutex
-	surfaces map[string]*counting
+	surfaces map[string]*dispatchCounts
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -149,7 +158,7 @@ func newFixture(t *testing.T) *fixture {
 	// Connection is refused by a ledger that cannot confirm it.
 	ledger := butlerstore.New(db, lease)
 	ledger.DerivedAuthorityChecks()
-	f := &fixture{db: db, ledger: ledger, store: store, surfaces: map[string]*counting{}}
+	f := &fixture{db: db, ledger: ledger, store: store, surfaces: map[string]*dispatchCounts{}}
 	f.g = &Gateway{
 		DB:     db,
 		Ledger: f.ledger,
@@ -157,12 +166,12 @@ func newFixture(t *testing.T) *fixture {
 		Gateways: butlerlive.GatewayFunc(func(b runtimedb.Butler, turn butlerlive.Turn) (butler.Toolset, error) {
 			f.mu.Lock()
 			defer f.mu.Unlock()
-			if c, ok := f.surfaces[b.Name]; ok {
-				return c, nil
+			c := f.surfaces[b.Name]
+			if c == nil {
+				c = &dispatchCounts{}
+				f.surfaces[b.Name] = c
 			}
-			c := &counting{Toolset: f.surfaceFor(b, turn)}
-			f.surfaces[b.Name] = c
-			return c, nil
+			return &counting{Toolset: f.surfaceFor(b, turn), dispatchCounts: c}, nil
 		}),
 	}
 	return f
@@ -184,7 +193,7 @@ func (f *fixture) surfaceFor(b runtimedb.Butler, turn butlerlive.Turn) butler.To
 	}
 }
 
-func (f *fixture) surface(name string) *counting {
+func (f *fixture) surface(name string) *dispatchCounts {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.surfaces[name]

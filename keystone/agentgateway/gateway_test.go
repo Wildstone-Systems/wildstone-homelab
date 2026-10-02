@@ -371,11 +371,11 @@ func TestAFencedTaskIsRefused(t *testing.T) {
 	if _, err := f.g.Manifest(ctx, h2); err != nil {
 		t.Fatalf("priming the surface: %v", err)
 	}
-	f.surface("alfred").during = func() {
+	f.surface("alfred").setDuring(func() {
 		if _, err := f.ledger.FenceAttempts(taskID); err != nil {
 			t.Error(err)
 		}
-	}
+	})
 	res, err = f.g.Invoke(ctx, agentapi.InvokeRequest{Handle: h2, Tool: "describe_capabilities"})
 	if err != nil {
 		t.Fatalf("Invoke: %v", err)
@@ -586,7 +586,12 @@ func TestConcurrentCallsCannotOverspendTheBudget(t *testing.T) {
 	for res := range outcomes {
 		if res.Outcome == agentapi.OutcomeOK {
 			ok++
+		} else if res.Outcome != agentapi.OutcomeWaiting || res.WaitReason != agentapi.WaitBudgetExhausted {
+			t.Errorf("losing racer = %+v; want waiting on the budget", res)
 		}
+	}
+	if n := f.surface("alfred").count("describe_capabilities"); n != limit {
+		t.Errorf("%d dispatches, want exactly the budget of %d", n, limit)
 	}
 	if ok != 1 {
 		t.Fatalf("%d concurrent calls ran on the budget's one remaining slot, want 1", ok)
