@@ -75,6 +75,22 @@ type Authority struct {
 
 // AuthorizeTool resolves one dispatch.
 func (a *Authority) AuthorizeTool(q butler.ToolAuthorityQuery) (butler.ToolDecision, error) {
+	// Layer 1 first, and on its own. Everything below this point is
+	// about the AGENT — its narrowings, its assignments, the grants
+	// issued to it — and none of it says anything about the person who
+	// is asking (§18.6). Folding the two together is exactly how an
+	// Agent's grant becomes a person's permission.
+	if q.Caller == butler.CallerPersonFacing {
+		if d, ok := a.personLayer(q); !ok {
+			return d, nil
+		}
+	}
+
+	if q.Resource.Kind == "workspace" {
+		if d, err := a.AdmitResource(q); err != nil || !d.Allowed {
+			return d, err
+		}
+	}
 	if q.Caller == butler.CallerRoutine {
 		if d, ok := a.routineLayer(q); !ok {
 			return d, nil
@@ -87,16 +103,6 @@ func (a *Authority) AuthorizeTool(q butler.ToolAuthorityQuery) (butler.ToolDecis
 			if err != nil || !d.Allowed {
 				return d, err
 			}
-		}
-	}
-	// Layer 1 first, and on its own. Everything below this point is
-	// about the AGENT — its narrowings, its assignments, the grants
-	// issued to it — and none of it says anything about the person who
-	// is asking (§18.6). Folding the two together is exactly how an
-	// Agent's grant becomes a person's permission.
-	if q.Caller == butler.CallerPersonFacing {
-		if d, ok := a.personLayer(q); !ok {
-			return d, nil
 		}
 	}
 
@@ -252,7 +258,7 @@ func (a *Authority) AdmitPerson(q butler.ToolAuthorityQuery) (butler.ToolDecisio
 // personLayer is the one copy of layer 1, shared by AdmitPerson and
 // AuthorizeTool so the two can never drift.
 func (a *Authority) personLayer(q butler.ToolAuthorityQuery) (butler.ToolDecision, bool) {
-	if a.PersonAuthority == nil {
+	if a == nil || a.PersonAuthority == nil {
 		return butler.ToolDecision{
 			Allowed: false,
 			Reason: fmt.Sprintf(
@@ -272,6 +278,29 @@ func (a *Authority) personLayer(q butler.ToolAuthorityQuery) (butler.ToolDecisio
 // AdmitResource implements butler.ResourceAuthorizer: layer 2, one rule
 // per resource kind and no general answer for a kind that has none.
 func (a *Authority) AdmitResource(q butler.ToolAuthorityQuery) (butler.ToolDecision, error) {
+	if q.Resource.Kind == "workspace" {
+		denied := butler.ToolDecision{Reason: runtimedb.ErrWorkspaceDenied.Error()}
+		if a == nil || a.DB == nil || q.Caller != butler.CallerPersonFacing || q.RoutinePlanID != "" || q.RoutineName != "" {
+			return denied, nil
+		}
+		if q.Resource.ID == "" {
+			_, err := a.DB.ResolvePrivateWorkspaceTask(q.Person, a.Butler, q.TaskID, q.Connection)
+			if errors.Is(err, runtimedb.ErrWorkspaceDenied) {
+				return denied, nil
+			}
+			if err != nil {
+				return denied, err
+			}
+			return butler.ToolDecision{Allowed: true}, nil
+		}
+		if err := a.DB.CheckWorkspaceTask(q.Person, a.Butler, q.TaskID, q.Connection, q.Resource.ID); err != nil {
+			if errors.Is(err, runtimedb.ErrWorkspaceDenied) {
+				return denied, nil
+			}
+			return denied, err
+		}
+		return butler.ToolDecision{Allowed: true}, nil
+	}
 	if q.Caller == butler.CallerRoutine {
 		return a.RoutineResources.AdmitResource(q)
 	}

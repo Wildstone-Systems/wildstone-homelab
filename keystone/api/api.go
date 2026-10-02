@@ -31,6 +31,7 @@ import (
 	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
 	"github.com/chickenrat17/wildstone-homelab/keystone/reconcile"
 	"github.com/chickenrat17/wildstone-homelab/keystone/redact"
+	"github.com/chickenrat17/wildstone-homelab/keystone/research"
 	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 	"github.com/chickenrat17/wildstone-homelab/keystone/speech"
@@ -41,6 +42,14 @@ import (
 // Server serves the public plane. All fields are required except Log and
 // OnApproved.
 type Server struct {
+	// ResearchTest tests stored, validated configuration using a bounded context.
+	// The adapter must resolve service/secret references and check their current
+	// revisions. Nil is deliberately unavailable. Production wiring also requires a verified
+	// release pin and fresh Wardstone dependency inspection.
+	ResearchTest func(context.Context, research.Provider) error
+	// Serializes bounded provider probes against infrastructure approval writes.
+	researchServiceMu sync.RWMutex
+
 	SecretVault *runtimedb.SecretVault
 	// MailReview is the private review of mail event candidates (epic
 	// #326 S06). nil leaves the candidate routes reading only.
@@ -712,6 +721,16 @@ func (s *Server) Handler() http.Handler {
 	// route for the bytes at all — it only manages them.
 	mux.Handle("PUT /api/v1/appearance/themes/{name}/background", s.handle(principal.VerbManage, s.themeBackgroundSet))
 	mux.Handle("DELETE /api/v1/appearance/themes/{name}/background", s.handle(principal.VerbManage, s.themeBackgroundClear))
+	// Research administration is never accessible to model/runtime principals.
+	mux.Handle("GET /api/v1/research/providers", s.handle(principal.VerbManage, s.listResearchProviders))
+	mux.Handle("POST /api/v1/research/providers", s.handle(principal.VerbManage, s.proposeResearchProvider))
+	mux.Handle("GET /api/v1/research/providers/{provider}", s.handle(principal.VerbManage, s.getResearchProvider))
+	mux.Handle("PATCH /api/v1/research/providers/{provider}", s.handle(principal.VerbManage, s.proposeResearchProvider))
+	mux.Handle("DELETE /api/v1/research/providers/{provider}", s.handle(principal.VerbManage, s.proposeResearchProvider))
+	mux.Handle("POST /api/v1/research/providers/{provider}/test", s.handle(principal.VerbManage, s.testResearchProvider))
+	mux.Handle("PUT /api/v1/research/default-provider", s.handle(principal.VerbManage, s.selectResearchProvider))
+	mux.Handle("GET /api/v1/agents/{agent}/research-provider", s.handle(principal.VerbManage, s.getResearchSelection))
+	mux.Handle("PUT /api/v1/agents/{agent}/research-provider", s.handle(principal.VerbManage, s.selectResearchProvider))
 	mux.Handle("GET /api/v1/butler/models", s.handle(principal.VerbRead, s.listModels))
 	mux.Handle("PUT /api/v1/butler/models", s.handle(principal.VerbManage, s.upsertModel))
 

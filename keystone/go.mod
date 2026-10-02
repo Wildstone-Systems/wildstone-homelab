@@ -7,6 +7,7 @@ require (
 	github.com/emersion/go-imap/v2 v2.0.0-beta.8
 	golang.org/x/net v0.40.0
 	golang.org/x/text v0.25.0
+	github.com/yuin/goldmark v1.7.13
 	google.golang.org/grpc v1.74.2
 	google.golang.org/protobuf v1.36.7
 	gopkg.in/yaml.v3 v3.0.1

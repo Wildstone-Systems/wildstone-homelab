@@ -15,13 +15,22 @@ type PrivacyPolicy struct {
 
 var ErrPrivacy = errors.New("privacy restriction: this content needs a local model or a trusted household screen; change the destination or model to continue")
 
-func (db *DB) contentPrivacy(object string) (PrivacyPolicy, error) {
+// privacySources includes durable workspace reads in the same graph as memory.
+// UNION (not UNION ALL) terminates cycles without dropping restrictions.
+const privacySources = `WITH RECURSIVE edges(child,parent) AS (
+ SELECT child,parent FROM privacy_edges UNION SELECT child,parent FROM workspace_privacy_edges
+), sources(object) AS (SELECT ? UNION SELECT e.parent FROM edges e JOIN sources s ON e.child=s.object) `
+
+type privacyReader interface{ QueryRow(string, ...any) *sql.Row }
+
+func contentPrivacy(q privacyReader, object string) (PrivacyPolicy, error) {
 	var p PrivacyPolicy
-	err := db.sql.QueryRow(`WITH RECURSIVE sources(object) AS (
- SELECT ? UNION SELECT e.parent FROM privacy_edges e JOIN sources s ON e.child=s.object
- ) SELECT COALESCE(MAX(p.local_only),0),COALESCE(MAX(p.trusted_only),0)
- FROM sources s LEFT JOIN content_privacy p ON p.object=s.object`, object).Scan(&p.LocalOnly, &p.TrustedOnly)
+	err := q.QueryRow(privacySources+`SELECT COALESCE(MAX(p.local_only),0),COALESCE(MAX(p.trusted_only),0)
+ FROM sources s LEFT JOIN (SELECT * FROM content_privacy UNION ALL SELECT * FROM workspace_content_privacy) p ON p.object=s.object`, object).Scan(&p.LocalOnly, &p.TrustedOnly)
 	return p, err
+}
+func (db *DB) contentPrivacy(object string) (PrivacyPolicy, error) {
+	return contentPrivacy(db.sql, object)
 }
 func (p PrivacyPolicy) Check(model string, d MemoryDestination) error {
 	if p.LocalOnly && model != ModelLocal {
@@ -167,12 +176,27 @@ func (p *PrivacyTurn) Check() error {
 	if p.failure != nil {
 		return p.failure
 	}
+	if p.task != 0 {
+		policy, err := p.db.contentPrivacy(fmt.Sprintf("t:%d", p.task))
+		if err != nil {
+			return err
+		}
+		if err = policy.Check(p.model, p.destination); err != nil {
+			return err
+		}
+		if err = p.db.checkWorkspaceHistoryAuthority(fmt.Sprintf("t:%d", p.task), p.task, 0, p.destination); err != nil {
+			return err
+		}
+	}
 	if p.session != 0 {
 		policy, err := p.db.contentPrivacy(fmt.Sprintf("s:%d", p.session))
 		if err != nil {
 			return err
 		}
 		if err = policy.Check(p.model, p.destination); err != nil {
+			return err
+		}
+		if err = p.db.checkWorkspaceHistoryAuthority(fmt.Sprintf("s:%d", p.session), p.task, p.session, p.destination); err != nil {
 			return err
 		}
 	}
@@ -219,12 +243,27 @@ func CheckPrivacyDelivery(ctx context.Context, d MemoryDestination) error {
 	if p.failure != nil {
 		return p.failure
 	}
+	if p.task != 0 {
+		policy, err := p.db.contentPrivacy(fmt.Sprintf("t:%d", p.task))
+		if err != nil {
+			return err
+		}
+		if err = policy.Check(p.model, d); err != nil {
+			return err
+		}
+		if err = p.db.checkWorkspaceHistoryAuthority(fmt.Sprintf("t:%d", p.task), p.task, p.session, d); err != nil {
+			return err
+		}
+	}
 	if p.session != 0 {
 		policy, err := p.db.contentPrivacy(fmt.Sprintf("s:%d", p.session))
 		if err != nil {
 			return err
 		}
 		if err = policy.Check(p.model, d); err != nil {
+			return err
+		}
+		if err = p.db.checkWorkspaceHistoryAuthority(fmt.Sprintf("s:%d", p.session), p.task, p.session, d); err != nil {
 			return err
 		}
 	}
@@ -243,11 +282,67 @@ func (db *DB) CheckSessionPrivacy(id, model string, d MemoryDestination) error {
 	if err != nil {
 		return err
 	}
-	p, err := db.contentPrivacy(fmt.Sprintf("s:%d", s.Seq))
+	return db.checkHistoryPrivacy(fmt.Sprintf("s:%d", s.Seq), 0, s.Seq, model, d, false)
+}
+
+// CheckTaskPrivacy also covers first-turn workspace inputs before a session
+// exists. Task-backed delivery must not infer an empty policy from no session.
+func (db *DB) CheckTaskPrivacy(id, model string, d MemoryDestination) error {
+	t, err := db.GetButlerTask(id)
 	if err != nil {
 		return err
 	}
-	return p.Check(model, d)
+	return db.checkHistoryPrivacy(fmt.Sprintf("t:%d", t.Seq), t.Seq, 0, model, d, false)
+}
+
+// CheckTaskDeliveryPrivacy repeats the live binding gate within the same
+// transaction as source authority and privacy. A separate earlier admission
+// check cannot authorize a later, incompatible source-policy snapshot.
+func (db *DB) CheckTaskDeliveryPrivacy(id, model string, d MemoryDestination) error {
+	t, err := db.GetButlerTask(id)
+	if err != nil {
+		return err
+	}
+	return db.checkHistoryPrivacy(fmt.Sprintf("t:%d", t.Seq), t.Seq, 0, model, d, true)
+}
+
+func (db *DB) checkHistoryPrivacy(object string, task, session int64, model string, d MemoryDestination, delivery bool) error {
+	tx, err := db.sql.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if delivery && d.ConnectionRef != 0 {
+		var owner, conversation string
+		if err = tx.QueryRow(`SELECT p.member,t.origin_conversation FROM butler_tasks t JOIN butler_members p ON p.person_id=t.owner_person_id WHERE t.seq=? AND t.origin_connection_ref=?`, task, d.ConnectionRef).Scan(&owner, &conversation); err != nil || conversation == "" {
+			return ErrPrivacy
+		}
+		// Re-read room discovery inside this transaction. An earlier gateway
+		// lookup can become stale before this snapshot starts; source type
+		// must not determine whether a known shared destination is refused.
+		var room bool
+		if err = tx.QueryRow(`SELECT EXISTS (
+ SELECT 1 FROM chat_rooms r
+ WHERE r.connection=? AND r.conversation=?)`, d.ConnectionRef, conversation).Scan(&room); err != nil || room || d.Group {
+			return ErrPrivacy
+		}
+		admitted, err := hasLivePersonChatConversation(tx, d.ConnectionRef, owner, conversation)
+		if err != nil || !admitted {
+			return ErrPrivacy
+		}
+	}
+
+	p, err := contentPrivacy(tx, object)
+	if err != nil {
+		return err
+	}
+	if err = p.Check(model, d); err != nil {
+		return err
+	}
+	if err = db.checkWorkspaceHistoryAuthorityIn(tx, object, task, session, d); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // includeTaskSources runs under mu. A newly remembered fact is still in this

@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/butler"
 	"github.com/chickenrat17/wildstone-homelab/keystone/butler/provider"
@@ -974,5 +975,56 @@ func TestOrdinaryAnsweredQuestionCompletesOnTheServingPath(t *testing.T) {
 	}
 	if task.State != runtimedb.ButlerTaskCompleted || answer.FinalText != f.local.reply {
 		t.Fatalf("ordinary answer blocked: %s %s", task.State, answer.FinalText)
+	}
+}
+
+func TestWorkspaceTaskPinsDistinctConversation(t *testing.T) {
+	f := newFixture(t)
+	b, err := f.db.GetButler("alfred")
+	if err != nil {
+		t.Fatal(err)
+	}
+	at, err := f.db.ChatConnectionAt("telegram", "chat-telegram-alfred")
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := f.db.InsertButlerSession(runtimedb.ButlerSession{Principal: "butler", ActingFor: "mika", Butler: "alfred", Surface: runtimedb.ButlerSurfaceAdmin, Mode: runtimedb.ButlerModeFull})
+	if err != nil {
+		t.Fatal(err)
+	}
+	turn := f.turn("alfred", "synthetic question")
+	turn.SessionID = session
+	if err := f.db.InsertChatClaimCode("synthetic-binding-hash", runtimedb.ChatClaimCode{Connection: at.Seq, Identity: "mika", CreatedBy: "root-admin", ExpiresAt: time.Now().Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	binding, err := f.db.RedeemChatClaimCode("synthetic-binding-hash", at, "synthetic-account", "synthetic", "previous-room")
+	if err != nil {
+		t.Fatal(err)
+	}
+	turn.Connection = ConnectionScope{Name: at.Name(), Ref: at.Seq, Conversation: "synthetic-distinct-room", BindingID: binding.ID}
+	task, resumed, err := f.butlers.task(b, turn)
+	if err != nil || resumed {
+		t.Fatalf("open: %v %v", resumed, err)
+	}
+	stored, err := f.db.GetButlerTask(task.ID)
+	if err != nil || stored.OriginConversation != turn.Connection.Conversation || stored.OriginConnectionRef != at.Seq {
+		t.Fatalf("stored origin: %+v %v", stored, err)
+	}
+	// Reusing the admitted task keeps the original identity, without a late
+	// mutation of either its task origin or a newer binding conversation.
+	if err := f.db.TouchChatBinding(binding.ID, "newer-room"); err != nil {
+		t.Fatal(err)
+	}
+	same, reused, err := f.butlers.task(b, turn)
+	if err != nil || !reused || same.OriginConversation != stored.OriginConversation {
+		t.Fatalf("resume changed pinned origin: %+v %v", same, err)
+	}
+	latest, err := f.db.LookupChatBinding(at, "synthetic-account")
+	if err != nil || latest.Conversation != "newer-room" {
+		t.Fatalf("resume rewrote current binding: %+v %v", latest, err)
+	}
+	turn.Connection.Conversation = "different-room"
+	if _, _, err := f.butlers.task(b, turn); err == nil {
+		t.Fatal("resumed a task from another conversation")
 	}
 }
