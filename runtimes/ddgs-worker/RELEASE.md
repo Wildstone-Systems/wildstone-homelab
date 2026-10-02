@@ -47,8 +47,9 @@ on an escalated retry. No worker image was produced. No registry publication,
 container smoke test, reproducibility comparison or live conformance passed.
 The supported release workflow cannot supply that missing build. A publisher
 with permitted registry access is still required.
-Publication to the authorized private destination
-`ghcr.io/chickenrat17/wildstone-ddgs-worker` is deferred. The verified pinned
+The proposed private destination is
+`ghcr.io/chickenrat17/wildstone-ddgs-worker`; publication awaits approval and
+remains deferred. The verified pinned
 base, real multi-architecture image, pull/health/shutdown evidence and matching
 package-default/`ManagedReleaseImage` pins remain outstanding.
 
