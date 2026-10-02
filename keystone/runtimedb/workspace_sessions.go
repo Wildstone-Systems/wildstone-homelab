@@ -188,7 +188,7 @@ func (db *DB) JournalWorkspaceChunk(s WorkspaceWriteSession, c WorkspaceWriteChu
 	}
 	_, err = tx.Exec(`INSERT INTO workspace_reservations(id,workspace_id,task_id,size_bytes,purpose,created_at) VALUES(?,?,?,?,'scratch',?)`, c.ReservationID, s.WorkspaceID, s.TaskID, c.SizeBytes, now())
 	if err != nil {
-		return c, err
+		return c, workspaceQuotaError(err)
 	}
 	_, err = tx.Exec(`INSERT INTO workspace_write_chunks(session_id,chunk_index,object_id,hash,size_bytes,reservation_id) VALUES(?,?,?,?,?,?)`, s.ID, c.Index, c.ObjectID, c.Hash, c.SizeBytes, c.ReservationID)
 	if err != nil {
@@ -344,7 +344,7 @@ func (db *DB) SealWorkspaceWrite(s WorkspaceWriteSession, hash, mediaType, key s
 	}
 	_, err = tx.Exec(`INSERT INTO workspace_reservations(id,workspace_id,task_id,size_bytes,purpose,created_at) VALUES(?,?,?,?,'publication',?)`, s.ID, s.WorkspaceID, s.TaskID, size, now())
 	if err != nil {
-		return p, err
+		return p, workspaceQuotaError(err)
 	}
 	_, err = tx.Exec(`INSERT INTO workspace_publications(id,workspace_id,artifact_id,revision_id,base_revision,task_id,reservation_id,effect_key,created_at,updated_at) VALUES(?,?,?,?,NULLIF(?,''),?,?,?,?,?)`, s.ID, s.WorkspaceID, current.ArtifactID, s.ID, current.BaseRevision, s.TaskID, s.ID, key, now(), now())
 	if err != nil {

@@ -88,6 +88,9 @@ func (c *Coordinator) check(ctx context.Context, s Session) (workspace.Settings,
 	if settings.Revision == "" || (s.ConfigRevision != "" && settings.Revision != s.ConfigRevision) {
 		return settings, workspace.ErrSettings
 	}
+	if err := c.DB.SetWorkspaceQuotaPolicy(s.WorkspaceID, settings.QuotaBytes, settings.Revision); err != nil {
+		return settings, err
+	}
 	return settings, nil
 }
 func (c *Coordinator) store(s Session, settings workspace.Settings) (*storage.Store, error) {
