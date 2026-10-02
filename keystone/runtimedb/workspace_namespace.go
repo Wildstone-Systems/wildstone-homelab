@@ -366,9 +366,24 @@ func (db *DB) CommitWorkspaceNamespace(workspaceID, id string) (WorkspaceNamespa
 // AbortWorkspaceNamespace only releases metadata reservation. Recovery must
 // first resolve uncertain filesystem effects; this method cannot undo them.
 func (db *DB) AbortWorkspaceNamespace(workspaceID, id string) error {
+	return db.abortWorkspaceNamespace(workspaceID, id, db.sql.Begin)
+}
+
+func (db *DB) abortWorkspaceNamespace(workspaceID, id string, begin func() (*sql.Tx, error)) error {
 	if err := db.CheckHouseholdExecution(); err != nil {
 		return err
 	}
-	result, err := db.sql.Exec(`UPDATE workspace_namespace_intents SET state='aborted' WHERE workspace_id=? AND id=? AND state='prepared'`, workspaceID, id)
-	return workspaceChanged(result, err)
+	tx, err := begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err = db.checkWorkspaceExecutionTx(tx); err != nil {
+		return err
+	}
+	result, err := tx.Exec(`UPDATE workspace_namespace_intents SET state='aborted' WHERE workspace_id=? AND id=? AND state='prepared'`, workspaceID, id)
+	if err = workspaceChanged(result, err); err != nil {
+		return err
+	}
+	return tx.Commit()
 }

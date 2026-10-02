@@ -1,12 +1,57 @@
 package runtimedb
 
 import (
+	"database/sql"
 	"errors"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
+
+func TestWorkspaceNamespaceAbortRechecksFenceAtTransactionBoundary(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		change func(*DB) error
+		want   error
+	}{
+		{"promotion", func(db *DB) error { _, err := db.PromoteCoordinator("replacement"); return err }, ErrCoordinatorFenced},
+		{"stop", func(db *DB) error {
+			_, err := db.sql.Exec(`UPDATE household_execution_stop SET active=1 WHERE singleton=1`)
+			return err
+		}, ErrHouseholdStopped},
+		{"quarantine", func(db *DB) error { return db.EnterRestoreQuarantine("test restore", time.Now()) }, ErrQuarantined},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db, w, task := namespaceFixture(t)
+			n, err := db.PrepareWorkspaceNamespace(WorkspaceNamespaceRequest{WorkspaceID: w.ID, TaskID: task, Operation: "workspace_mkdir", Path: "reserved", Key: "prepare"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			began := false
+			err = db.abortWorkspaceNamespace(w.ID, n.ID, func() (*sql.Tx, error) {
+				// This runs after the initial execution check and before BEGIN,
+				// deterministically reproducing the previously unguarded interval.
+				began = true
+				if err := tc.change(db); err != nil {
+					t.Fatal(err)
+				}
+				return db.sql.Begin()
+			})
+			if !began || !errors.Is(err, tc.want) {
+				t.Fatalf("abort boundary: began=%v error=%v, want %v", began, err, tc.want)
+			}
+			pending, err := db.WorkspaceNamespaceIntent(w.ID, n.ID)
+			if err != nil || pending.State != "prepared" {
+				t.Fatalf("reservation released after authority changed: %+v %v", pending, err)
+			}
+			if _, err := db.sql.Exec(`INSERT INTO workspace_artifacts(id,workspace_id,path,state,created_at) VALUES('blocked',?,'reserved/file.txt','pending',?)`, w.ID, now()); !errors.Is(namespaceError(err), ErrWorkspaceConflict) {
+				t.Fatalf("prepared reservation no longer blocks descendant creation: %v", err)
+			}
+		})
+	}
+}
 
 func namespaceFixture(t *testing.T) (*DB, Workspace, int64) {
 	t.Helper()
