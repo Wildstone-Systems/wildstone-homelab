@@ -58,9 +58,10 @@ type artifactPreviewResponse struct {
 	Truncated  bool         `json:"truncated"`
 }
 
-// The normal encoder still redacts paths and content. Only authoritative
-// artifact selectors, canonical links and server-issued cursor handles survive
-// secret-shape heuristics; these identify resources but authorize nothing.
+// Metadata still passes through normal redaction. Authoritative artifact
+// selectors, canonical links and server-issued cursors authorize nothing.
+// Preview text is redacted in full before pagination; its escaped HTML and text
+// must not be redacted again as fragments by the typed preview encoder.
 func restoreArtifactSelectors(out *artifactInfo, original artifactInfo) {
 	out.ArtifactID, out.Revision = original.ArtifactID, original.Revision
 	out.PreviewURL, out.DownloadURL = original.PreviewURL, original.DownloadURL
@@ -81,17 +82,19 @@ func (v artifactListResponse) redacted() ([]byte, error) {
 	return json.Marshal(out)
 }
 func (v artifactPreviewResponse) redacted() ([]byte, error) {
-	raw, err := json.Marshal(v)
+	// Independently redact metadata, preserving only authoritative selectors.
+	// Text/HTML were derived from the complete redacted source, so preserve their
+	// stable pagination instead of running secret heuristics on page fragments.
+	raw, err := (artifactListResponse{Items: []artifactInfo{v.File}}).redacted()
 	if err != nil {
 		return nil, err
 	}
-	var out artifactPreviewResponse
-	if err = json.Unmarshal([]byte(redact.String(string(raw))), &out); err != nil {
+	var metadata artifactListResponse
+	if err = json.Unmarshal(raw, &metadata); err != nil {
 		return nil, err
 	}
-	restoreArtifactSelectors(&out.File, v.File)
-	out.NextCursor = v.NextCursor
-	return json.Marshal(out)
+	v.File = metadata.Items[0]
+	return json.Marshal(v)
 }
 
 func (s *Server) registerArtifactRoutes(mux *http.ServeMux) {
@@ -234,16 +237,21 @@ func (s *Server) personArtifacts(w http.ResponseWriter, r *http.Request, member 
 		_, _ = w.Write(data)
 		return nil, http.StatusOK, nil
 	}
-	if cursor.Offset < 0 || cursor.Offset > len(data) {
+	// Redact the complete preview before splitting it: a value crossing a
+	// page boundary must not survive as individually unrecognizable fragments.
+	// Cursor offsets address this deterministic redacted text; downloads above
+	// retain the original authenticated revision bytes.
+	preview := redact.String(string(data))
+	if cursor.Offset < 0 || cursor.Offset > len(preview) {
 		return artifactInvalid()
 	}
-	end := min(len(data), cursor.Offset+artifactPreviewBytes)
-	for end < len(data) && !utf8.RuneStart(data[end]) {
+	end := min(len(preview), cursor.Offset+artifactPreviewBytes)
+	for end < len(preview) && !utf8.RuneStart(preview[end]) {
 		end--
 	}
-	text := string(data[cursor.Offset:end])
+	text := preview[cursor.Offset:end]
 	next := ""
-	if end < len(data) {
+	if end < len(preview) {
 		next, err = s.mintArtifactCursor(artifactCursor{Binding: binding, Snapshot: snapshot, Offset: end})
 		if err != nil {
 			return artifactUnavailable()
@@ -251,7 +259,7 @@ func (s *Server) personArtifacts(w http.ResponseWriter, r *http.Request, member 
 	}
 	// Every format, including Markdown, uses escaped text only. No raw HTML,
 	// script, link or remote embed is rendered; attachments remain inert bytes.
-	return artifactPreviewResponse{info, text, "<pre>" + html.EscapeString(text) + "</pre>", next, end < len(data)}, http.StatusOK, nil
+	return artifactPreviewResponse{info, text, "<pre>" + html.EscapeString(text) + "</pre>", next, end < len(preview)}, http.StatusOK, nil
 }
 
 func artifactInformation(agent string, e runtimedb.PersonWorkspaceEntry, household bool) artifactInfo {

@@ -31,9 +31,14 @@ preview as escaped text in `<pre>`; there is no Markdown HTML/link/embed rendere
 The `html` field contains only this fixed wrapper and escaped, normally redacted
 text. Clients must not run a separate Markdown/HTML renderer over `text`.
 Preview/path/attachment filename values retain normal secret-shape redaction.
-Only authoritative selectors, canonical links and server-issued cursor handles
-are preserved by the narrow typed response encoder. Authenticated downloads
-return the original revision bytes outside model context.
+Preview source text is redacted in full before pagination, so a value crossing
+a page boundary cannot survive as separate fragments. Preview cursor offsets
+address the redacted text; attachment bytes and committed size metadata remain
+the original revision's.
+The narrow typed response encoder preserves authoritative selectors, canonical
+links, server-issued cursors, and the already-redacted preview text/escaped HTML.
+It independently redacts file metadata and paths. Authenticated downloads return
+the original revision bytes outside model context.
 
 `cursor` is a server-issued opaque handle (15-minute expiry, bounded process-local
 store, invalid after restart), bound to Person, Agent, surface, route selectors

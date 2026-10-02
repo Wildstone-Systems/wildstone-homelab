@@ -1291,6 +1291,7 @@ func (s *Server) actingPersonMayStillHold(id principal.Identity) bool {
 // by mistake (ADR-W007 A5 — redaction is a serialization property). The
 // typed exceptions are minted tokens, authorized protected Household
 // reveal/submission review, artifact selectors/cursors and canonical links,
+// preview text/HTML already redacted in full before pagination,
 // and the admin-only password-reset link. Ordinary chat and tool replies cannot use those
 // response types.
 func (s *Server) writeJSON(w http.ResponseWriter, status int, body any) {

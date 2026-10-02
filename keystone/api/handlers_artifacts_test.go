@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"html"
 	"io"
 	"mime"
 	"net/http"
@@ -13,9 +14,66 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
+	"github.com/chickenrat17/wildstone-homelab/keystone/redact"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 )
+
+func TestArtifactPreviewRedactsBeforePageBoundaries(t *testing.T) {
+	for _, tc := range []struct {
+		name, value string
+		prefixBytes int
+	}{
+		{"hex-fragments", strings.Repeat("b", 32), artifactPreviewBytes - 16},
+		{"credential-value", "password: short-value-that-crosses-page", artifactPreviewBytes - 20},
+		{"credential-key", "password: short-value", artifactPreviewBytes - len("password: ")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, w, token, data := artifactFixture(t, true)
+			payload := strings.Repeat(" ", tc.prefixBytes) + tc.value + " " + strings.Repeat("é", 40)
+			a, r := publishArtifact(t, h, w, data, 0, "txt", payload)
+			base := "/api/v1/agents/writer/artifacts/" + a + "/revisions/" + r
+			var text, rendered strings.Builder
+			requestPath := base
+			pages := 0
+			for {
+				resp, body := artifactRequest(t, h, requestPath, token)
+				var page artifactPreviewResponse
+				if resp.StatusCode != 200 {
+					t.Fatalf("preview page: %d %s", resp.StatusCode, body)
+				}
+				if err := json.Unmarshal(body, &page); err != nil {
+					t.Fatal(err)
+				}
+				if !utf8.ValidString(page.Text) || len(page.Text) > artifactPreviewBytes || page.HTML != "<pre>"+html.EscapeString(page.Text)+"</pre>" {
+					t.Fatal("preview lost bounded UTF-8 or escaped HTML")
+				}
+				text.WriteString(page.Text)
+				rendered.WriteString(strings.TrimSuffix(strings.TrimPrefix(page.HTML, "<pre>"), "</pre>"))
+				pages++
+				if page.NextCursor == "" {
+					if page.Truncated {
+						t.Fatal("truncated page has no continuation")
+					}
+					break
+				}
+				if !page.Truncated || pages >= 2 {
+					t.Fatal("unexpected preview continuation")
+				}
+				requestPath = base + "?cursor=" + url.QueryEscape(page.NextCursor)
+			}
+			want := redact.String(payload)
+			if pages != 2 || text.String() != want || html.UnescapeString(rendered.String()) != want || !strings.Contains(want, redact.Placeholder) {
+				t.Fatal("preview pages reconstruct unredacted content or lose continuation text")
+			}
+			resp, body := artifactRequest(t, h, base+"/download", token)
+			if resp.StatusCode != 200 || string(body) != payload {
+				t.Fatal("authenticated attachment bytes changed")
+			}
+		})
+	}
+}
 
 func artifactFixture(t *testing.T, owner bool) (*harness, runtimedb.Workspace, string, map[string][]byte) {
 	t.Helper()
