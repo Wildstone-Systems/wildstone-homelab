@@ -28,7 +28,7 @@ func (f *fixture) openTaskOnConnection(t *testing.T, butlerName, owner, transpor
 	id, err := f.db.InsertButlerTask(runtimedb.ButlerTask{
 		Kind: runtimedb.ButlerTaskConversation, Author: owner, Owner: owner,
 		Surface: b.Surface, AgentClass: b.AgentClass, Audience: runtimedb.ButlerAudiencePrivate,
-		OriginConnection: transport + ":" + externalID, OriginConnectionRef: connSeq,
+		OriginConnection: transport + ":" + externalID, OriginConnectionRef: connSeq, OriginConversation: "synthetic-conversation",
 		Objective: "answer " + owner, ObjectiveKind: runtimedb.ObjectiveInformational,
 		Retention: runtimedb.ButlerRetentionConversation,
 	})

@@ -907,4 +907,18 @@ var Columns = []Column{
 		"0098: SetResearchSelection stores a search_providers.id selector or null inheritance; it grants no authority"},
 	{"research_selections", "config_revision", NotAPerson,
 		"0098: SetResearchSelection generates an opaque research.NewID selection generation"},
+	// 0099 (ADR-W047 / #475): provenance retains immutable revision
+	// identities. Person ownership remains on agent_workspaces.person_id.
+	{"workspace_task_sources", "revision", NotAPerson,
+		"0099: FK to workspace_revisions(id), supplied by an authorized read or explicit-base edit"},
+	{"workspace_session_sources", "revision", NotAPerson,
+		"0099: FK to workspace_revisions(id), copied from task sources by session-link triggers"},
+	{"workspace_revision_sessions", "revision", NotAPerson,
+		"0099: FK to workspace_revisions(id), pinned by revision/session creation triggers"},
+	{"workspace_revision_memories", "revision", NotAPerson,
+		"0099: FK to workspace_revisions(id), the derived revision whose memory inputs are captured"},
+	{"workspace_revision_inputs", "revision", NotAPerson,
+		"0099: FK to workspace_revisions(id), the derived revision whose source revisions are captured"},
+	{"workspace_revision_inputs", "source_revision", NotAPerson,
+		"0099: FK to workspace_revisions(id), an immutable source revision captured from task lineage"},
 }

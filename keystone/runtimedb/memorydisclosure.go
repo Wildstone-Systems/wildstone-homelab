@@ -48,6 +48,21 @@ func (db *DB) BindMemoryRead(person, agent string, destination MemoryDestination
 // assembled context. Audience, inherited constraints, scope and disclosure are
 // intersections in SQL, before LIMIT and before content enters the process.
 func (db *DB) memoryReadClause(alias, person, agent, indexedQuery string, read *MemoryReadContext) (string, []any, error) {
+	clause, args, err := db.memoryContentAuthorityClause(alias, person, agent, read)
+	if err != nil {
+		return "", nil, err
+	}
+	promotion, promotionArgs, err := db.memoryPromotionClause(alias, agent, person, indexedQuery)
+	if err != nil {
+		return "", nil, err
+	}
+	return clause + " AND " + alias + ".superseded_by IS NULL" + promotion, append(args, promotionArgs...), nil
+}
+
+// memoryContentAuthorityClause is shared by recall and retained derivatives.
+// Candidate selection (supersession and promotion deduplication) belongs only
+// to recall: historical sources still carry their live authority constraints.
+func (db *DB) memoryContentAuthorityClause(alias, person, agent string, read *MemoryReadContext) (string, []any, error) {
 	audience, args, err := db.visibleAudienceClause(alias+".audience", alias+".owner_person_id", person)
 	if err != nil {
 		return "", nil, err
@@ -57,14 +72,9 @@ func (db *DB) memoryReadClause(alias, person, agent, indexedQuery string, read *
 		return "", nil, err
 	}
 	scope, scopeArgs := memoryScopeClause(alias, agent, person)
-	promotion, promotionArgs, err := db.memoryPromotionClause(alias, agent, person, indexedQuery)
-	if err != nil {
-		return "", nil, err
-	}
-	clause := alias + ".forgotten_at = '' AND " + alias + ".superseded_by IS NULL AND " + audience + " AND " + inherited + scope + promotion
+	clause := alias + ".forgotten_at = '' AND " + audience + " AND " + inherited + scope
 	args = append(args, inheritedArgs...)
 	args = append(args, scopeArgs...)
-	args = append(args, promotionArgs...)
 	boundary, boundaryArgs := memoryBoundaryClause(person, agent, read)
 	clause += boundary
 	args = append(args, boundaryArgs...)

@@ -97,18 +97,18 @@ func (g *Gateway) disclosureAllowed(seq int64, class agentapi.ProcessingClass, d
 	return g.DB.CheckMemoryPrivacy(seq, disclosureModel(class), d)
 }
 
-// beginDisclosureTurn opens a call-scoped privacy turn for tracking
-// what ONE Manifest or Invoke call discloses, reusing
-// runtimedb.BeginPrivacyTurn/TrackMemoryPrivacy exactly as
-// butlerlive.Serve did for a whole conversation — but scoped to this
-// one call (session and task left unset) rather than the task's whole
-// history, because the gateway boundary is being checked here, not the
-// inference boundary a resumed conversation cares about. Any read a
-// Toolset makes under the returned context — today, butlerstore/
-// memory.go's recall and preamble seams — is tracked; a call that reads
-// nothing privacy-tagged always passes its later Check().
-func (g *Gateway) beginDisclosureTurn(ctx context.Context, class agentapi.ProcessingClass, d runtimedb.MemoryDestination) (context.Context, *runtimedb.PrivacyTurn, error) {
-	return g.DB.BeginPrivacyTurn(ctx, disclosureModel(class), d, "")
+// beginDisclosureTurn restores the originating task/session provenance as well
+// as tracking this call's reads. Call-scoped tracking alone loses workspace
+// source restrictions on retries and resumed tasks (ADR-W047 / #475).
+func (g *Gateway) beginDisclosureTurn(ctx context.Context, class agentapi.ProcessingClass, d runtimedb.MemoryDestination, task string) (context.Context, *runtimedb.PrivacyTurn, error) {
+	ctx, p, err := g.DB.BeginPrivacyTurn(ctx, disclosureModel(class), d, "")
+	if err != nil {
+		return ctx, nil, err
+	}
+	if err = p.SetTask(task); err != nil {
+		return ctx, nil, err
+	}
+	return ctx, p, nil
 }
 
 // disclosureRefusalError wraps a per-record refusal with the calling
@@ -216,10 +216,39 @@ func deliveryPrivacyCheck(db *runtimedb.DB, row runtimedb.AgentDelivery, model s
 			return nil
 		}
 		task, err := db.GetButlerTask(taskID)
-		if err != nil || task.SessionID == "" {
+		if err != nil {
 			return nil
 		}
-		return privacyRestriction(db.CheckSessionPrivacy(task.SessionID, model, destination))
+		// The queue recipient must be the Agent assigned to this task;
+		// a payload handle cannot redirect another Agent's private history.
+		agentName, err := db.TaskButler(task.ID)
+		if err != nil {
+			return runtimedb.ErrPrivacy
+		}
+		agent, err := db.GetButler(agentName)
+		if err != nil || agent.Seq != row.Butler {
+			return runtimedb.ErrPrivacy
+		}
+		destination = memoryDestinationForTask(task)
+		if destination.ConnectionRef != 0 {
+			at, err := db.ChatConnectionBySeq(destination.ConnectionRef)
+			if err != nil || at.Butler != agentName || at.Name() != task.OriginConnection {
+				return runtimedb.ErrPrivacy
+			}
+			// Binding is a delivery admission gate for every source type, not
+			// merely a disclosure-profile exception for recalled memories.
+			bound, err := db.HasLivePersonChatBinding(at.Seq, task.Owner)
+			if err != nil || !bound {
+				return runtimedb.ErrPrivacy
+			}
+		}
+		// Workspace reads can precede the first session. A resolved task
+		// must carry its own provenance through delivery, and a failed
+		// policy lookup must not turn a known task into unrestricted data.
+		if err := db.CheckTaskDeliveryPrivacy(task.ID, model, destination); err != nil {
+			return runtimedb.ErrPrivacy
+		}
+		return nil
 	default:
 		return nil
 	}

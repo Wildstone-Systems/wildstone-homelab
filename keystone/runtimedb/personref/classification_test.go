@@ -50,6 +50,7 @@ var dismissed = map[string]string{
 	"service":             "names a capability ('photos') — a thing the household runs, not a party (design §4, slice 8)",
 	"ldap_group":          "names a DIRECTORY group — a set of people, which is not itself a party; who is in it lives in projected_memberships.person_id (design §4)",
 	"origin_connection":   "names the CONNECTION a task arrived over ('console', 'matrix:!room:example.org') — a route into the house, not a party; who came through it is butler_tasks.author_person_id (design §8.1, §10.1)",
+	"origin_conversation": "names the chat CONVERSATION (room/thread id) a task arrived in, pinned from trusted ingress for delivery room checks — a route into the house, not a party; who came through it is butler_tasks.author_person_id (0099)",
 	"placed_at":           "a timestamp",
 	"paired_at":           "a timestamp",
 	"assigned_at":         "a timestamp",
