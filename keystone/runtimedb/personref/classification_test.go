@@ -87,6 +87,7 @@ var dismissed = map[string]string{
 	"completion_criteria": "names a machine, service or artifact, not a person",
 	"confidence":          "an enum or classification, not a party",
 	"connection":          "names a machine, service or artifact, not a person",
+	"config_revision":     "opaque revision of the Owner-approved workspace settings passed to SetWorkspaceQuotaPolicy, not a person reference",
 	"content":             "descriptive text, not a party",
 	"content_key":         "an identifier for a non-person entity",
 	"conversation":        "a transport's own conversation id, not a Wildstone handle",

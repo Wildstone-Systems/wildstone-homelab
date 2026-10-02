@@ -124,6 +124,35 @@ func reopen(t *testing.T, f *fixture) {
 	old := f.c
 	f.c = &Coordinator{DB: db, Settings: old.Settings, Authorize: old.Authorize}
 }
+
+func TestQuotaRefusesCommitWithoutLosingStagedOrPriorBytes(t *testing.T) {
+	f := setup(t)
+	settings := f.settings
+	settings.QuotaBytes = 7
+	settings.MaxFileBytes = 7
+	f.c.Settings = func() (workspace.Settings, error) { return settings, nil }
+	ctx := context.Background()
+	s := begin(t, f, "quota-begin", "four")
+	if _, err := f.c.Commit(ctx, s.WorkspaceID, s.ID, "quota-commit"); !errors.Is(err, runtimedb.ErrWorkspaceQuota) {
+		t.Fatalf("assembly reservation exceeded quota: %v", err)
+	}
+	if _, err := f.c.DB.WorkspaceArtifact(s.WorkspaceID, s.ArtifactID); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("quota failure published artifact: %v", err)
+	}
+	stats, err := f.c.DB.WorkspaceQuotaStats(s.WorkspaceID)
+	if err != nil || stats.HeldBytes != 4 || stats.CommittedBytes != 0 || stats.LimitBytes != 7 {
+		t.Fatalf("quota failure lost scratch reservation: %+v %v", stats, err)
+	}
+	reopen(t, &f)
+	stats, err = f.c.DB.WorkspaceQuotaStats(s.WorkspaceID)
+	if err != nil || stats.HeldBytes != 4 || stats.CommittedBytes != 0 {
+		t.Fatalf("restart lost reservation: %+v %v", stats, err)
+	}
+	if _, err := f.c.Commit(ctx, s.WorkspaceID, s.ID, "quota-commit"); !errors.Is(err, runtimedb.ErrWorkspaceQuota) {
+		t.Fatalf("retry bypassed quota: %v", err)
+	}
+}
+
 func TestWriteRetryReceiptVisibilityAndAuthority(t *testing.T) {
 	f := setup(t)
 	ctx := context.Background()

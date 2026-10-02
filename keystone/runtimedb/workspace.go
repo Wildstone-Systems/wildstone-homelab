@@ -80,7 +80,7 @@ func (db *DB) WorkspaceRevision(workspaceID, id string) (WorkspaceRevision, erro
 }
 func (db *DB) ReserveWorkspaceBytes(r WorkspaceReservation) error {
 	_, err := db.sql.Exec(`INSERT INTO workspace_reservations(id,workspace_id,task_id,size_bytes,purpose,created_at) VALUES(?,?,?,?,?,?)`, r.ID, r.WorkspaceID, r.TaskID, r.SizeBytes, r.Purpose, now())
-	return err
+	return workspaceQuotaError(err)
 }
 func (db *DB) ReleaseWorkspaceReservation(workspaceID, id string) error {
 	result, err := db.sql.Exec(`UPDATE workspace_reservations SET state='released' WHERE workspace_id=? AND id=? AND state='held'`, workspaceID, id)

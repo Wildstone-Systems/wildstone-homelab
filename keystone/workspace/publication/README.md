@@ -1,7 +1,7 @@
 # Journaled workspace publication
 
 ADR-W047 / #478 is dormant Keystone machinery. It registers no tools, HTTP
-routes, grants, provider configuration or configurable quota policy. Callers
+routes, grants or provider configuration. Callers
 supply trusted workspace/task identity, inherited privacy/provenance, a current
 settings loader, and a mandatory current resource-authority callback. The
 callback must check originating Person, Agent, task, surface, grants and privacy;
@@ -63,7 +63,20 @@ pending artifact at the same path without deleting its journal/history. The
 aborted session itself cannot resume. Retained bytes remain charged until the
 later lifecycle slice explicitly reconciles and removes them. Chunk copies are
 separately charged scratch; assembly staging/revision hard links share one
-reserved object. There is no automatic deletion or quota-policy expansion.
+reserved object. There is no automatic deletion.
+
+## Quota policy (S06)
+
+The current Owner-approved `quotaBytes` setting is installed as a per-Agent
+policy before each coordinated write or retry. The reservation insert trigger
+serializes capacity checks across private and shared workspaces for that Agent.
+Held scratch and publication reservations plus every committed revision,
+including history in trash, consume capacity. A missing policy retains the
+original 1 GiB ceiling. Lowering a limit below current usage preserves bytes
+but refuses new reservations. Aggregate usage stats contain no paths or content;
+callers must authorize the queried workspace before exposing them. Failed or
+uncertain publication keeps its reservation until coordinated recovery or the
+later cleanup slice resolves the retained bytes.
 
 ## Migration and verification
 
