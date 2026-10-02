@@ -273,7 +273,7 @@ func (g *Gateway) Invoke(ctx context.Context, req agentapi.InvokeRequest) (agent
 		Rejected:          outcome.Rejected,
 	}
 	body, _ := json.Marshal(result)
-	if err := g.Ledger.FinishAttempt(attempt.Seq, true, string(body), ""); errors.Is(err, runtimedb.ErrAttemptFenced) {
+	if err := g.Ledger.FinishAttempt(attempt.Seq, !outcome.Failed, string(body), ""); errors.Is(err, runtimedb.ErrAttemptFenced) {
 		// The lease moved while the tool ran: this attempt was fenced
 		// and its result is refused (§3.7, ADR-W030 A4). The step is
 		// failed rather than verified so no resume serves it.
@@ -287,7 +287,7 @@ func (g *Gateway) Invoke(ctx context.Context, req agentapi.InvokeRequest) (agent
 			Reason:  "the attempt was fenced while the tool ran, so its result was refused",
 		}, nil
 	}
-	if outcome.Rejected {
+	if outcome.Rejected || outcome.Failed {
 		_ = g.Ledger.SetStepState(step, butler.LedgerStepFailed)
 	} else {
 		_ = g.Ledger.SetStepState(step, butler.LedgerStepVerified)
@@ -323,6 +323,8 @@ func (g *Gateway) Invoke(ctx context.Context, req agentapi.InvokeRequest) (agent
 // can name the policy verdict directly.
 func resultFor(taskID string, step int64, tool string, outcome butler.ToolOutcome) agentapi.InvokeResult {
 	switch {
+	case outcome.Failed:
+		return agentapi.InvokeResult{Outcome: agentapi.OutcomeError, Content: outcome.Content, Reason: outcome.Content}
 	case outcome.Rejected && outcome.Plan != nil:
 		return agentapi.InvokeResult{Outcome: agentapi.OutcomeRejected, Content: outcome.Content, Reason: outcome.Content}
 	case outcome.Rejected:
