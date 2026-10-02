@@ -14,7 +14,12 @@ Unknown encodings, invalid UTF-8, binary controls, PDF and unsupported media
 are refused. Transport 401/403/407 and WWW-Authenticate challenges, plus HTML
 active HTML-namespace password inputs (including foreign integration points
 and object fallback), produce a specific `permission_denied` challenge error.
-Template/noscript contents and literal Markdown examples remain inert.
+Ordinary template/noscript contents and literal Markdown examples remain inert.
+The first declarative shadow-root template with an open/closed mode on an
+eligible HTML host is inspected for active controls, including nested roots;
+custom host candidates are checked conservatively without executing definitions.
+Template text remains suppressed. Adjacent textarea values retain a coalesced
+line boundary, including at the retained-text ceiling.
 This is conservative detection, not a promise to recognize every CAPTCHA or
 script-only login page. No authentication, browser, script or external asset
 request is attempted.

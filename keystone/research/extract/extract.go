@@ -233,6 +233,7 @@ func (f *markupFilter) feed(input string, preserve bool) error {
 		inert      bool
 		exit       bool
 	}
+	shadowHosts := make(map[*html.Node]bool)
 	stack := []frame{{node: root}}
 	for len(stack) > 0 {
 		item := stack[len(stack)-1]
@@ -247,12 +248,22 @@ func (f *markupFilter) feed(input string, preserve bool) error {
 			}
 		}
 		if n.Type == html.ElementNode {
-			if n.Namespace == "" && (n.Data == "template" || n.Data == "noscript") {
-				item.inert = true
+			if !item.exit && !item.inert && n.Namespace == "" {
+				switch n.Data {
+				case "noscript":
+					item.inert = true
+				case "template":
+					if declarativeShadowTemplate(n) && !shadowHosts[n.Parent] {
+						shadowHosts[n.Parent] = true
+					} else {
+						item.inert = true
+					}
+				}
 			}
 			// Retained-text suppression does not make rendered HTML controls
 			// inert: foreign integration points and object fallback can contain
-			// real HTML inputs. Template contents remain inert documentation.
+			// real HTML inputs. Ordinary templates remain inert documentation;
+			// declarative shadow roots can contain active password controls.
 			if !item.exit && !item.inert && n.Namespace == "" && n.Data == "input" {
 				for _, a := range n.Attr {
 					if a.Key == "type" && strings.EqualFold(a.Val, "password") {
@@ -322,7 +333,7 @@ func (f *markupFilter) feed(input string, preserve bool) error {
 					"dd", "details", "dialog", "dir", "div", "dl", "dt", "fieldset", "figcaption", "figure",
 					"footer", "form", "h1", "h2", "h3", "h4", "h5", "h6", "header", "hgroup", "hr",
 					"legend", "li", "main", "menu", "nav", "ol", "option", "optgroup", "p", "pre", "search", "section", "summary",
-					"table", "tbody", "tfoot", "thead", "tr", "ul":
+					"table", "tbody", "textarea", "tfoot", "thead", "tr", "ul":
 					f.out.boundary()
 				}
 			}
@@ -335,6 +346,30 @@ func (f *markupFilter) feed(input string, preserve bool) error {
 		}
 	}
 	return nil
+}
+
+// x/net/html retains declarative shadow templates as ordinary tree nodes.
+// Inspect the first root for each eligible host without executing custom-element
+// definitions. Hyphenated custom-host candidates are checked conservatively.
+func declarativeShadowTemplate(n *html.Node) bool {
+	host := n.Parent
+	if host == nil || host.Type != html.ElementNode || host.Namespace != "" {
+		return false
+	}
+	eligible := strings.Contains(host.Data, "-")
+	switch host.Data {
+	case "article", "aside", "blockquote", "body", "div", "footer", "h1", "h2", "h3", "h4", "h5", "h6", "header", "main", "nav", "p", "section", "span":
+		eligible = true
+	}
+	if !eligible {
+		return false
+	}
+	for _, attr := range n.Attr {
+		if attr.Namespace == "" && attr.Key == "shadowrootmode" {
+			return strings.EqualFold(attr.Val, "open") || strings.EqualFold(attr.Val, "closed")
+		}
+	}
+	return false
 }
 
 // Restore markers as data, never markup or recursively expanded markers.
