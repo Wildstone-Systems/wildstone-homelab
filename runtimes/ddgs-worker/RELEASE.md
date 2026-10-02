@@ -1,9 +1,14 @@
-# DDGS managed package: incomplete release evidence
+# Managed DDGS catalog, lifecycle and readiness scaffolding
 
-Issue #493 / ADR-W047. The package is catalog support, not an installed service
-or a tool grant. It requires an explicit `worker_image` repository digest;
-the example in YAML is a shape-only lint fixture and is not pullable evidence.
-No default image is supplied until an actual build is published and verified.
+Issue #493 / ADR-W047. Supported release unavailable; #493 remains open.
+The package supplies catalog, lifecycle and readiness scaffolding. An Owner can
+explicitly install the container by supplying a `worker_image` repository digest
+and approving its ordinary Plan. The empty `research.ManagedReleaseImage` blocks
+supported provider readiness before any probe or network call; it does not block
+that explicit Owner installation. Installation grants no Agent tools, selects no
+provider and does not make search ready. There is no default image or automatic
+installation. The YAML example is a shape-only lint fixture, not pullable
+evidence. A default image requires an actual published and verified build.
 
 ## Build and publication
 
@@ -41,7 +46,11 @@ Dockerfile failed on Docker Hub's Python manifest HEAD with `Forbidden`, also
 on an escalated retry. No worker image was produced. No registry publication,
 container smoke test, reproducibility comparison or live conformance passed.
 The supported release workflow cannot supply that missing build. A publisher
-with permitted registry access and an agreed artifact destination is required.
+with permitted registry access is still required.
+Publication to the authorized private destination
+`ghcr.io/chickenrat17/wildstone-ddgs-worker` is deferred. The verified pinned
+base, real multi-architecture image, pull/health/shutdown evidence and matching
+package-default/`ManagedReleaseImage` pins remain outstanding.
 
 ## Lifecycle and readiness
 
@@ -64,8 +73,9 @@ the synthetic search. The image and reconcile spec hash (including port/config/
 network/host-alias identity) must match, the container must be running, and any
 reported application health must be healthy. Old agents get no presence-only
 fallback. Changed committed or uncommitted desired state refuses readiness.
-The release pin is currently empty, so production remains unavailable without
-contacting the worker. Neither installation nor startup probes or grants tools.
+The release pin is currently empty, so supported provider readiness remains
+unavailable without contacting the worker. Explicit Owner container installation
+remains possible. Neither installation nor startup probes or grants tools.
 Removal invalidates any persisted successful test immediately on approved change.
 These fixtures verify wiring, not an actual published image or live upstream.
 
