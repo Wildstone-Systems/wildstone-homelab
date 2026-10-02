@@ -22,13 +22,18 @@ source head advances.
 | #518 | `143b6c8a7e3dbb90b9ce24ded852834558c0b341` | Workspace authority/privacy; in flight |
 | #523 | `b9dc8ae9cffc7c16f53ad9c297a7d0b718748e83` | Publication sessions, receipts and recovery; in flight |
 | #526 | `2743d1f312bdf90efd754b0fe12c904d5c6d30d3` | Research budgets and continuation checkpoints; in flight |
-| #534 | `5c9971ac14967da5b19998827305c4cec3d2cf00` | Extraction shadow-template/textarea fixes; in flight |
+| #534 | `5c9971ac14967da5b19998827305c4cec3d2cf00` | Extraction fixes; landed on feature as `6d613231f83286a76af7bd875b040013f6be3bb5` after CI/exit-drill/static review |
 | #525 | `d8325bb1f629c834bb89f36a172a6d33d3a31110` | Managed DDGS catalog/lifecycle/readiness scaffolding; in flight |
 
 The candidate combines main + feature, then #518 → #523 → #526, followed by
 #534 and #525. Resolutions retain main's IMAP/text dependencies, feature's
 Goldmark dependency, and every mailbox/workspace/research Person classification.
 Merge commits preserve the original PR heads for later merged-status accounting.
+After preparation, the parent merged #534 into feature at
+`6d613231f83286a76af7bd875b040013f6be3bb5`; its exact source head is already
+in the candidate, so this changes merge metadata only. Other in-flight PRs remain
+gated. The historical feature migration inventory above remains the exact
+preparation baseline, not a claim that the remote feature still points there.
 
 ## Foundation and remaining scope
 
