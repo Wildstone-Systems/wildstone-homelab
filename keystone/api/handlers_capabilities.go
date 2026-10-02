@@ -18,6 +18,7 @@ import (
 	"github.com/chickenrat17/wildstone-homelab/keystone/reconcile"
 	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
 	"github.com/chickenrat17/wildstone-homelab/keystone/speech"
+	"github.com/chickenrat17/wildstone-homelab/keystone/workspace"
 )
 
 // packageIcon is the app's own logo slug, or the generic fallback for a
@@ -329,6 +330,11 @@ func (s *Server) describeCapability(pkg *pkgspec.Package, current []resource.Res
 	})
 	sort.Slice(d.Addresses, func(i, j int) bool { return d.Addresses[i].Route < d.Addresses[j].Route })
 	d.Blockers = capabilityBlockers(pkg, posture)
+	// Catalog entries must remain installable before their configuration
+	// exists. Runtime storage readiness only applies to installed workspaces.
+	if pkg.Metadata.Name == workspace.Package && packageIsInstalled(pkg, current) {
+		d.Blockers = append(d.Blockers, s.workspaceBlockers(current)...)
+	}
 	if pkg.Metadata.Name == speechEnginePackage {
 		d.Blockers = append(d.Blockers, s.speechEngineBlockers(current)...)
 		d.Speech = s.speechEngineStatus(pkg, current)
@@ -729,6 +735,11 @@ func (s *Server) enableCapability(r *http.Request, id principal.Identity) (any, 
 	}
 	if err := s.refuseMisplacedSpeechEngine(pkg, rendered); err != nil {
 		return nil, http.StatusBadRequest, err
+	}
+	if pkg.Metadata.Name == workspace.Package {
+		if _, err := workspace.Read(rendered, s.NodeID); err != nil {
+			return nil, http.StatusBadRequest, err
+		}
 	}
 	docs := make([]string, 0, len(rendered))
 	for _, res := range rendered {

@@ -57,7 +57,30 @@ export interface EventRow {
   attrs?: Record<string, string>;
 }
 
+export interface ResearchChange {
+  operation: "create" | "update" | "delete";
+  providerId: string;
+  expectedConfigRevision: string;
+  config?: {
+    name: string;
+    kind: string;
+    endpointRef?: string;
+    credentialRef?: string;
+    backends: string[];
+    fallbackOrder: string[];
+    limits: {
+      searchesPerTask: number;
+      fetchesPerTask: number;
+      requestTimeoutSeconds: number;
+      downloadBytes: number;
+      extractedCharacters: number;
+      cacheSeconds: number;
+    };
+  };
+}
+
 export interface PlanRecord {
+  research?: ResearchChange;
   auditOnly?: boolean;
   seq: number;
   id: string;
