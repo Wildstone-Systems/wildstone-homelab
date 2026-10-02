@@ -474,7 +474,8 @@ func (s *Server) chatInbound(r *http.Request, id principal.Identity, msg inbound
 	// to look at something about the message to decide, and the looking
 	// is the disclosure. "Has anyone made a Butler yet" is answerable
 	// before a single byte of what was said is examined.
-	if s.butlersConfigured() {
+	namedButlerSession := s.butlersConfigured()
+	if namedButlerSession {
 		address, named, terr := butlerTargetFor(id, strings.TrimSpace(msg.Butler))
 		if terr != nil {
 			return nil, http.StatusForbidden, terr
@@ -486,7 +487,7 @@ func (s *Server) chatInbound(r *http.Request, id principal.Identity, msg inbound
 			// authority seam has one to carry (§10.1). No Permits: a
 			// chat Connection's ceiling is its Agent's surface, which
 			// RequireSurface below already enforces.
-			Connection: butlerlive.ConnectionScope{Name: at.Name(), Ref: at.Seq, Conversation: conversation},
+			Connection: butlerlive.ConnectionScope{Name: at.Name(), Ref: at.Seq, Conversation: conversation, BindingID: binding.ID},
 			Butler:     named,
 			Member:     binding.Identity,
 			Text:       text,
@@ -558,7 +559,13 @@ func (s *Server) chatInbound(r *http.Request, id principal.Identity, msg inbound
 		}
 		return nil, st, err
 	}
-	s.touchBinding(binding, conversation, msg.Group)
+	if namedButlerSession {
+		// Named chat task admission refreshed the conversation atomically.
+		// A late return must not overwrite a newer turn's direct room.
+		s.touchBinding(binding, "", true)
+	} else {
+		s.touchBinding(binding, conversation, msg.Group)
+	}
 
 	ask, _ := out.(askResponse)
 	if ask.SessionID != "" {

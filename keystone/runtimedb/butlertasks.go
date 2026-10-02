@@ -164,6 +164,9 @@ type ButlerTask struct {
 	// OriginConversation is the trusted inbound chat ID, distinct from the
 	// Connection account/address. Empty external identities fail delivery closed.
 	OriginConversation string `json:"-"`
+	// OriginBindingID is verified ingress context used only at task admission.
+	// It is not persisted or accepted from runtime task inputs.
+	OriginBindingID int64 `json:"-"`
 
 	// CorrelationID ties a routine run to the W024 household timeline.
 	// The timeline stays authoritative for deterministic outcomes;
@@ -291,6 +294,11 @@ func (db *DB) InsertButlerTask(t ButlerTask) (string, error) {
 	owner, err := resolvePersonID(tx, t.Owner)
 	if err != nil {
 		return "", fmt.Errorf("runtimedb: inserting butler task: the owner %w", err)
+	}
+	if t.OriginBindingID != 0 {
+		if err := refreshTaskChatBinding(tx, t, owner, stamp); err != nil {
+			return "", fmt.Errorf("runtimedb: admitting chat task: %w", err)
+		}
 	}
 	res, err := tx.Exec(
 		`INSERT INTO butler_tasks (created_at, updated_at, kind, state, author_person_id, owner_person_id,

@@ -163,3 +163,77 @@ func TestWorkspaceDeliveryRechecksRoomInTransaction(t *testing.T) {
 		})
 	}
 }
+
+func TestWorkspaceTaskBindingRefreshIsAtomic(t *testing.T) {
+	for _, scenario := range []string{"new room", "revoked binding", "foreign person", "foreign connection", "group", "person revoked", "agent retired", "connection revoked", "policy group", "access revoked", "insert failure", "refresh failure"} {
+		t.Run(scenario, func(t *testing.T) {
+			db, _, _ := workspaceAuthorityFixture(t)
+			at := connect(t, db, "alfred", "telegram", ButlerSurfaceAdmin)
+			binding := bind(t, db, at, "mika", "synthetic-account")
+			task := ButlerTask{Kind: ButlerTaskConversation, Author: "mika", Owner: "mika", Surface: ButlerSurfaceAdmin, AgentClass: AgentClassOwner, Audience: ButlerAudiencePrivate, Objective: "synthetic new room", OriginConnection: at.Name(), OriginConnectionRef: at.Seq, OriginConversation: "new-direct-room", OriginBindingID: binding.ID}
+			must := func(err error) {
+				t.Helper()
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			switch scenario {
+			case "revoked binding":
+				must(db.RevokeChatBinding(binding.ID))
+			case "foreign person":
+				task.Author, task.Owner = "sam", "sam"
+			case "foreign connection":
+				task.OriginConnectionRef = at.Seq + 100
+			case "group":
+				must(db.NoteChatRoom(at.Seq, task.OriginConversation))
+			case "person revoked":
+				must(db.AdmitButlerMember("sam", "root-admin"))
+				must(db.SetButlerMemberRole("sam", RoleOwner, "root-admin"))
+				_, err := db.sql.Exec(`UPDATE butler_members SET admitted=0 WHERE member='mika'`)
+				must(err)
+			case "agent retired":
+				_, err := db.sql.Exec(`UPDATE butlers SET retired_at='retired' WHERE name='alfred'`)
+				must(err)
+			case "connection revoked":
+				_, err := db.sql.Exec(`UPDATE butler_addresses SET revoked_at='revoked' WHERE seq=?`, at.Seq)
+				must(err)
+			case "policy group":
+				_, err := db.sql.Exec(`UPDATE connection_admission SET subject_kind='group' WHERE connection=?`, at.Seq)
+				must(err)
+			case "access revoked":
+				_, err := db.sql.Exec(`UPDATE butler_access SET revoked_at='revoked'`)
+				must(err)
+			case "insert failure":
+				_, err := db.sql.Exec(`CREATE TRIGGER fail_new_room_task BEFORE INSERT ON butler_tasks BEGIN SELECT RAISE(ABORT,'synthetic insert failure'); END`)
+				must(err)
+			case "refresh failure":
+				_, err := db.sql.Exec(`CREATE TRIGGER fail_binding_refresh BEFORE UPDATE ON chat_bindings BEGIN SELECT RAISE(ABORT,'synthetic refresh failure'); END`)
+				must(err)
+			}
+			var before int
+			must(db.sql.QueryRow(`SELECT COUNT(*) FROM butler_tasks`).Scan(&before))
+			id, err := db.InsertButlerTask(task)
+			var conversation string
+			must(db.sql.QueryRow(`SELECT conversation FROM chat_bindings WHERE id=?`, binding.ID).Scan(&conversation))
+			var after int
+			must(db.sql.QueryRow(`SELECT COUNT(*) FROM butler_tasks`).Scan(&after))
+			if scenario == "new room" {
+				must(err)
+				if conversation != task.OriginConversation || after != before+1 {
+					t.Fatalf("task/binding not atomic: conversation=%q delta=%d", conversation, after-before)
+				}
+				stored, e := db.GetButlerTask(id)
+				must(e)
+				if stored.OriginConversation != task.OriginConversation {
+					t.Fatal("origin was not pinned")
+				}
+				// Delivery admission is immediately usable, before any run returns or
+				// late API binding touch can execute.
+				must(db.SetTaskButler(id, "alfred"))
+				must(db.CheckTaskDeliveryPrivacy(id, ModelLocal, MemoryDestination{ConnectionRef: at.Seq}))
+			} else if err == nil || id != "" || after != before || conversation != binding.Conversation {
+				t.Fatalf("failed admission mutated task/binding: id=%q err=%v delta=%d conversation=%q", id, err, after-before, conversation)
+			}
+		})
+	}
+}

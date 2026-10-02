@@ -591,6 +591,9 @@ func (bs *Butlers) task(b runtimedb.Butler, t Turn) (runtimedb.ButlerTask, bool,
 		}
 	}
 
+	if t.Connection.Ref != 0 && t.Connection.Conversation != "" && t.Connection.BindingID == 0 {
+		return runtimedb.ButlerTask{}, false, fmt.Errorf("butlerlive: chat task needs its verified ingress binding")
+	}
 	audience := runtimedb.ButlerAudiencePrivate
 	if t.Group {
 		audience = runtimedb.ButlerAudienceShared
@@ -616,6 +619,7 @@ func (bs *Butlers) task(b runtimedb.Butler, t Turn) (runtimedb.ButlerTask, bool,
 		OriginConnection:    t.Connection.Name,
 		OriginConnectionRef: t.Connection.Ref,
 		OriginConversation:  t.Connection.Conversation,
+		OriginBindingID:     t.Connection.BindingID,
 		Objective:           conversationObjective(b.Name, t.Text),
 		// Recorded so a Handle-resolved call (the Agent Gateway) can
 		// rebuild this turn's AsOwner/SystemExtra later — neither is a

@@ -505,6 +505,8 @@ func (bs *Butlers) Sole(surface runtimedb.ButlerSurface, member string, asOwner 
 type ConnectionScope struct {
 	// Conversation is the trusted adapter conversation ID, not its account address.
 	Conversation string
+	// BindingID is the human-established binding verified by trusted ingress.
+	BindingID int64
 	// Name is what a refusal cites, e.g. "household_portal".
 	Name string
 	// Ref is the Connection ROW this arrived over, for the legs that

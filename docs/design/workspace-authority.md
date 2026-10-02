@@ -113,7 +113,10 @@ binding independently of memory provenance, including workspace-only sources.
 The task pins the trusted ingress conversation ID separately from the Connection
 account address. Delivery checks that exact Connection/Person/conversation tuple,
 including a matching live binding and room discovery, in the source-authority
-transaction. Unknown legacy conversation identities fail closed; mutable thread
+transaction. Trusted ingress carries the verified binding ID; a new admitted
+direct-chat task refreshes that binding and pins its origin in the same task
+insert transaction. Any admission or persistence failure rolls both back.
+Returning named chat turns cannot rewrite a newer binding conversation. Unknown legacy conversation identities fail closed; mutable thread
 pointers and an account address cannot supply a replacement identity.
 No content bounds, tool grants or runtime protocol fields are expanded.
 

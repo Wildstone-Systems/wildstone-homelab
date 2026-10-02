@@ -406,10 +406,42 @@ func TestChatTaskPinsConversationApartFromAccount(t *testing.T) {
 		t.Fatalf("status=%d", resp.StatusCode)
 	}
 	turn := capture.turn
-	if turn.Connection.Conversation != conversation || turn.Connection.Ref != at.Seq || turn.Connection.Name != at.Name() || turn.Member != "sam" {
+	if turn.Connection.Conversation != conversation || turn.Connection.Ref != at.Seq || turn.Connection.Name != at.Name() || turn.Member != "sam" || turn.Connection.BindingID == 0 {
 		t.Fatalf("incorrect trusted ingress tuple: %+v", turn)
 	}
 	if turn.Connection.Conversation == at.ExternalID {
 		t.Fatal("conversation substituted account address")
+	}
+}
+
+type newerRoomButlers struct {
+	failingButlers
+	db *runtimedb.DB
+}
+
+func (c *newerRoomButlers) Serve(_ context.Context, turn butlerlive.Turn) (butlerlive.Answer, error) {
+	// A newer admitted turn changes the binding before this earlier turn
+	// returns. Its pinned task origin must not rewrite the current binding.
+	if err := c.db.TouchChatBinding(turn.Connection.BindingID, "newer-direct-room"); err != nil {
+		return butlerlive.Answer{}, err
+	}
+	return butlerlive.Answer{Butler: "sandy", Surface: runtimedb.ButlerSurfaceFamily, Provider: "scripted", FinalText: "synthetic answer"}, nil
+}
+func TestChatLateReturnPreservesNewerBindingConversation(t *testing.T) {
+	h := newHarness(t)
+	at := h.agentAt(t, "family", "telegram")
+	h.person("sam")
+	h.bindAccount(t, "family", "sam", "telegram", "12345")
+	h.s.Butlers = &newerRoomButlers{db: h.s.DB}
+	resp, _ := h.send(runtimedb.RoleConcierge, map[string]any{"transport": "telegram", "account": "12345", "conversation": "older-direct-room", "text": "hello", "messageId": "late-return-test"})
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("status=%d", resp.StatusCode)
+	}
+	binding, err := h.s.DB.LookupChatBinding(at, "12345")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if binding.Conversation != "newer-direct-room" {
+		t.Fatalf("late return rewrote current conversation: %q", binding.Conversation)
 	}
 }

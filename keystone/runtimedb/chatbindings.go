@@ -404,3 +404,48 @@ func scanChatBinding(r rowScanner) (ChatBinding, error) {
 	}
 	return b, nil
 }
+
+// refreshTaskChatBinding refreshes only the human-established binding that
+// trusted ingress verified. The transaction also inserts its admitted task;
+// neither a failed insert nor a policy change may leave half of that decision.
+func refreshTaskChatBinding(tx *sql.Tx, task ButlerTask, owner, stamp string) error {
+	if task.Kind != ButlerTaskConversation || task.Audience != ButlerAudiencePrivate || task.Author != task.Owner || task.OriginConnectionRef == 0 || task.OriginConversation == "" {
+		return ErrNotAdmitted
+	}
+	var valid bool
+	err := tx.QueryRow(`SELECT EXISTS (
+ SELECT 1 FROM chat_bindings cb
+ JOIN butler_addresses c ON c.seq=cb.connection
+ JOIN butlers agent ON agent.seq=c.butler
+ WHERE cb.id=? AND cb.person_id=? AND cb.connection=? AND cb.revoked_at=''
+ AND c.revoked_at='' AND c.transport||':'||c.external_id=?
+ AND agent.enabled=1 AND agent.retired_at='' AND agent.agent_class=? AND agent.surface=?
+ AND EXISTS (SELECT 1 FROM butler_access access WHERE access.butler=agent.seq AND access.person_id=cb.person_id AND access.revoked_at='')
+ AND NOT EXISTS (SELECT 1 FROM chat_rooms room WHERE room.connection=c.seq AND room.conversation=?)
+ )`, task.OriginBindingID, owner, task.OriginConnectionRef, task.OriginConnection, task.AgentClass, task.Surface, task.OriginConversation).Scan(&valid)
+	if err != nil {
+		return err
+	}
+	if !valid {
+		return ErrNotAdmitted
+	}
+	admitted, err := hasLivePersonChatBinding(tx, task.OriginConnectionRef, task.Owner)
+	if err != nil {
+		return err
+	}
+	if !admitted {
+		return ErrNotAdmitted
+	}
+	result, err := tx.Exec(`UPDATE chat_bindings SET conversation=?,last_used_at=? WHERE id=? AND revoked_at=''`, task.OriginConversation, stamp, task.OriginBindingID)
+	if err != nil {
+		return err
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if count != 1 {
+		return ErrNotAdmitted
+	}
+	return nil
+}
