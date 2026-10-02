@@ -188,6 +188,20 @@ func (g *Gateway) Invoke(ctx context.Context, req agentapi.InvokeRequest) (agent
 			Type: butler.TraceToolResult, Step: step, Attempt: attempt.Seq,
 			Payload: jsonPayload(map[string]any{"error": true}),
 		})
+		// Research admission has already parked this task atomically with its
+		// durable counters. Preserve the existing waiting wire outcome so both
+		// native and legacy slices stop instead of treating exhaustion as a
+		// retriable upstream error. A typed error alone cannot invent a wait.
+		if errors.Is(err, runtimedb.ErrResearchBudgetExhausted) {
+			parked, checkErr := g.DB.IsResearchBudgetWait(taskID)
+			if checkErr != nil {
+				return agentapi.InvokeResult{}, checkErr
+			}
+			if parked {
+				return agentapi.InvokeResult{Outcome: agentapi.OutcomeWaiting,
+					WaitReason: agentapi.WaitBudgetExhausted, Reason: runtimedb.ErrResearchBudgetExhausted.Error()}, nil
+			}
+		}
 		return agentapi.InvokeResult{
 			Outcome: agentapi.OutcomeError,
 			Content: fmt.Sprintf("error: %v", err),

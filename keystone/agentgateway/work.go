@@ -149,6 +149,27 @@ func (g *Gateway) Wait(ctx context.Context, w agentapi.WorkWait) error {
 	if err := g.Ledger.Fence(); err != nil {
 		return fmt.Errorf("agentgateway: %w", err)
 	}
+	// Slice.Call acknowledges budget waits through Work.Wait. Research has
+	// already written its wait in the accounting transaction; acknowledging
+	// that exact open wait must not open a second wait or discard its detail.
+	if w.Reason == agentapi.WorkWaitBudgetExhausted {
+		parked, err := g.DB.IsResearchBudgetWait(s.hc.Task.ID)
+		if err != nil {
+			return err
+		}
+		if parked {
+			return nil
+		}
+		if w.Detail == runtimedb.ErrResearchBudgetExhausted.Error() {
+			continued, err := g.DB.ResearchWaitWasContinued(s.hc.Task.ID)
+			if err != nil {
+				return err
+			}
+			if continued {
+				return nil
+			}
+		}
+	}
 	return g.Ledger.Wait(s.hc.Task.ID, string(w.Reason), w.Detail)
 }
 
