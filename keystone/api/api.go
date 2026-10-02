@@ -43,8 +43,11 @@ import (
 type Server struct {
 	// ResearchTest tests stored, validated configuration using a bounded context.
 	// The adapter must resolve service/secret references and check their current
-	// revisions. Nil is deliberately unavailable until S19/S20 wire the service.
+	// revisions. Nil is deliberately unavailable. Production wiring also requires a verified
+	// release pin and fresh Wardstone dependency inspection.
 	ResearchTest func(context.Context, research.Provider) error
+	// Serializes bounded provider probes against infrastructure approval writes.
+	researchServiceMu sync.RWMutex
 
 	SecretVault *runtimedb.SecretVault
 	// PairingHTTP, when set, is the client pairing calls PantryOS with

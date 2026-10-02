@@ -188,3 +188,43 @@ func TestResearchPlansAndProbesFenceStaleResults(t *testing.T) {
 		t.Fatalf("unhealthy dependency blessed: %v", err)
 	}
 }
+
+func TestManagedServiceInvalidationFencesProbeAndPreservesSelections(t *testing.T) {
+	db := open(t)
+	config := research.Config{Name: "Research", Kind: research.DDGS, EndpointRef: research.ManagedEndpointRef}
+	p := researchApply(t, db, research.Change{Operation: "create", ProviderID: research.NewID(), Config: &config})
+	agent := researchAgent(t, db)
+	if err := db.SetResearchSelection(agent, &p.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	probe, err := db.BeginSearchProviderTest(p.ID, p.ConfigRevision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.InvalidateSearchService(research.ManagedEndpointRef); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.RecordSearchProviderTest(p.ID, p.ConfigRevision, probe, true); !errors.Is(err, research.ErrConflict) {
+		t.Fatalf("stale probe revived service: %v", err)
+	}
+	if _, why, err := db.ResolveSearchProvider(agent); err != nil || why == "" {
+		t.Fatalf("invalidated provider ready: %s %v", why, err)
+	}
+	selection, err := db.ResearchSelection(agent)
+	if err != nil || selection.ProviderID == nil || *selection.ProviderID != p.ID {
+		t.Fatal("invalidation changed selection")
+	}
+	researchReady(t, db, p)
+	if err := db.InvalidateSearchService("service/other"); err != nil {
+		t.Fatal(err)
+	}
+	if _, why, err := db.ResolveSearchProvider(agent); err != nil || why != "" {
+		t.Fatalf("unrelated service invalidated: %s %v", why, err)
+	}
+	if err := db.InvalidateSearchService(research.ManagedEndpointRef); err != nil {
+		t.Fatal(err)
+	}
+	if _, why, err := db.ResolveSearchProvider(agent); err != nil || why == "" {
+		t.Fatal("successful test survived removal")
+	}
+}

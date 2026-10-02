@@ -254,3 +254,11 @@ func (db *DB) ResolveSearchProvider(agent int64) (research.Provider, string, err
 	}
 	return p, "", nil
 }
+
+// InvalidateSearchService fences all current probes and successful tests bound
+// to a managed endpoint before its desired resource changes. It grants nothing,
+// keeps selections intact, and requires a new explicit Owner test after repair.
+func (db *DB) InvalidateSearchService(endpointRef string) error {
+	_, err := db.sql.Exec(`UPDATE search_providers SET state='unavailable',tested_config_revision='',test_revision='' WHERE json_extract(config_json,'$.endpointRef')=?`, endpointRef)
+	return err
+}

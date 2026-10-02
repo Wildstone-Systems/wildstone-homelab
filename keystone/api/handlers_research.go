@@ -158,6 +158,10 @@ func (s *Server) testResearchProvider(r *http.Request, id principal.Identity) (a
 	if p.EndpointRef == "" {
 		return nil, http.StatusConflict, errors.New("provider_unavailable: endpoint reference not configured")
 	}
+	// Only validated probes hold the service fence; request-body reads and
+	// rejected callers must not stall a DDGS removal.
+	s.researchServiceMu.RLock()
+	defer s.researchServiceMu.RUnlock()
 	// Invalidate before testing: a failed/cancelled probe cannot leave an old
 	// success usable. A later edit or test invalidates this probe's receipt.
 	probe, err := s.DB.BeginSearchProviderTest(p.ID, p.ConfigRevision)
