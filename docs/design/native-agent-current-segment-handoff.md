@@ -101,14 +101,24 @@ go -C keystone test -race -timeout 30m ./runtimedb -run '^TestCurrentSegmentMigr
 
 ## Checks and remaining verification
 
-Candidate verification as prepared:
+Candidate verification (full run completed; one integration fixture corrected):
 
 - Populated main/mailbox and feature/workspace upgrade checks pass (78.099s).
   Fresh migration checks pass on the final fixture version (29.562s).
 - Workspace/publication/storage, research/adapter/extraction/public-fetch and
-  startup regressions pass; the broad run's complete agentgateway suite passes
-  (211.325s). Proto, Wardstone, CLI and e2e complete race suites pass. Full Keystone
-  race verification remains running and is not a completed-pass claim.
+  startup regressions pass. Proto, Wardstone, CLI and e2e complete race suites
+  pass. The complete Keystone run finished: all packages pass except portal
+  and runtimedb. Portal reproduces the known mount failure; runtimedb finished
+  in 1089.272s with only `TestResearchMigrationRetainsExistingLedger` failing
+  because its historical schema lacks the current task writer's
+  `origin_conversation` column. Its fixture now seeds historical fields without
+  changing the migration boundary or retention assertions, adds a retained
+  conversation tool-count assertion, and passes alone under race (18.354s).
+  All research and current-segment migration compatibility regressions then
+  pass together under race (116.213s), including the corrected fixture. The
+  entire Keystone suite has not been rerun after this test-only correction;
+  the initial full-run failure remains recorded. Personref passes in 153.655s;
+  the complete mailbox-review suite passes in 612.645s.
 - Five-module vet, Keystone native/ARM64 builds and formatting/diff checks pass.
   Console build/render/contrast pass; native sidecar typecheck and 12 tests pass.
 - DDGS hash-locked install and 31 worker/release tests pass on repeat. The first
@@ -122,8 +132,21 @@ Earlier #523 evidence included portal `/dev/shm` storage-unavailable failure and
 e2e F-158-12 evidence/count failures. Preserve those historical results. Main now
 includes audit correction `7205551`; the combined e2e race suite passes
 (1.880s). That new result does not erase the earlier failed evidence.
-Current combined CI/review, full race completion, publication prerequisites on
-the actually merged feature tree and final main integration remain gates.
+A fresh test against unchanged main `3d03804` reproduces the exact portal
+`TestRequiredMountPinsTheActualFilesystem` failure at line 155 (storage
+unavailable, 0.033s). The integration does not fix or weaken that assertion.
+The full run and main-baseline failure are retained in
+`/tmp/integration-471-keystone-race.log` and
+`/tmp/integration-471-main-portal-baseline.log` in the preparation workspace;
+`/tmp/integration-471-final-db-regressions.log` records the successful corrected
+research/upgrade rerun. These local logs are evidence, not a shipped artifact.
+
+Independent static review of `4b1cece` found no findings and checked all five
+PR heads, the 422-entry classification union, retained `origin_conversation`,
+109 unchanged migration blobs and the exact historical inventories. The later
+historical-fixture correction and handoff update need current review/CI.
+PR #535 is the draft main-target integration. Green current CI/review, actual
+ordered prerequisite merges and final main integration remain gates.
 
 ## DDGS release boundary and next executor
 
@@ -147,4 +170,11 @@ the final candidate against actual merged refs, completes combined checks and
 reviews, and only then performs the authorized final main integration. Record
 the resulting commit and update pending evidence before the clean handoff. The
 next executor should select an eligible remaining child only after its actual
-prerequisites land; release/live gates require explicit maintainer evidence.
+prerequisites land. For #493, first obtain explicit approval for the proposed
+publication destination and publication action; an approved package installation
+Plan is not registry-push approval. Then produce and retain the verified image,
+architecture/pull/health/shutdown evidence and matching reviewed release pins.
+Publication approval alone is not image evidence or provider readiness. After
+that gate is satisfied, continue the eligible remaining slices and their fixture
+checks; live conformance and deployment still require explicit maintainer
+authorization and evidence.
