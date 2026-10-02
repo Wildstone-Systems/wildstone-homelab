@@ -737,6 +737,17 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 		return fmt.Errorf("taking the coordinator lease: %w", leaseErr)
 	}
 
+	// Roll back unsettled workspace metadata before any task can dispatch.
+	// Startup has no fresh per-task resource authorization, so it never invents
+	// publication success. Bytes/reservations and prior revisions remain intact.
+	if coordinating {
+		recovered, err := recoverWorkspaceAtStartup(db, log)
+		if err != nil {
+			return err
+		}
+		coordinating = recovered
+	}
+
 	// Heartbeats inform the human takeover decision; they never auto-promote.
 	if coordinating {
 		go func() {

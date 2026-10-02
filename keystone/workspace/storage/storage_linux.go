@@ -134,48 +134,81 @@ func (s *Store) Stage(logicalPath string, body io.Reader) (Object, error) {
 		return Object{}, err
 	}
 	obj := Object{ID: id, SHA256: digest(data), Size: int64(len(data))}
+	err = s.StageObject(logicalPath, obj, strings.NewReader(string(data)), func() error { return nil })
+	if err != nil && !errors.Is(err, ErrUncertain) {
+		return Object{}, err
+	}
+	return obj, err
+}
+
+// StageObject persists an object whose complete identity was already journaled.
+// The coordinator reserves capacity and records hash/size/ID before calling it.
+// A retry collision must be reconciled with SyncStage, never a fresh object ID.
+func (s *Store) StageObject(logicalPath string, obj Object, body io.Reader, fence func() error) error {
+	if fence == nil {
+		return ErrFence
+	}
+	if err := fence(); err != nil {
+		return err
+	}
+	if err := ValidatePath(logicalPath, false); err != nil {
+		return err
+	}
+	if !validObject(obj, s.settings.MaxFileBytes) {
+		return ErrPath
+	}
+	data, err := readText(body, s.settings.MaxFileBytes)
+	if err != nil {
+		return err
+	}
+	if int64(len(data)) != obj.Size || digest(data) != obj.SHA256 {
+		return ErrIntegrity
+	}
 	dir, err := s.directory("staging", true)
 	if err != nil {
-		return Object{}, err
+		return err
 	}
 	defer dir.Close()
 	if err = s.current(dir, "staging"); err != nil {
-		return Object{}, err
+		return err
 	}
 	// Unnamed inodes cannot be substituted and disappear after failed writes.
 	fd, err := unix.Openat(int(dir.Fd()), ".", unix.O_TMPFILE|unix.O_RDWR|unix.O_CLOEXEC, 0600)
 	if err != nil {
-		return Object{}, storageError(err)
+		return storageError(err)
 	}
 	f := os.NewFile(uintptr(fd), "workspace-stage")
 	defer f.Close()
 	if _, err = f.Write(data); err != nil {
-		return Object{}, storageError(err)
+		return storageError(err)
 	}
 	if err = f.Chmod(0400); err != nil {
-		return Object{}, storageError(err)
+		return storageError(err)
 	}
 	if err = s.sync(f); err != nil {
-		return Object{}, storageError(err)
+		return storageError(err)
 	}
 	if s.hooks.beforeLink != nil {
 		s.hooks.beforeLink()
 	}
-	if err = s.current(dir, "staging"); err != nil {
-		return Object{}, err
+	if err = fence(); err != nil {
+		return err
 	}
-	if err = s.link(f, dir, id); err != nil {
-		return Object{}, err
+	if err = s.current(dir, "staging"); err != nil {
+		return err
+	}
+	if err = s.link(f, dir, obj.ID); err != nil {
+		return err
 	}
 	if err = s.sync(dir); err != nil {
-		return obj, ErrUncertain
+		return ErrUncertain
 	}
 	// A pinned directory remains writable after an ancestor rename/unmount.
 	// Do not claim success if the effect landed in a detached namespace.
 	if err = s.current(dir, "staging"); err != nil {
-		return obj, ErrUncertain
+		return ErrUncertain
 	}
-	return obj, nil
+	return nil
 }
 func (s *Store) verified(kind string, obj Object) (*os.File, []byte, error) {
 	if !validObject(obj, s.settings.MaxFileBytes) {
@@ -257,5 +290,58 @@ func (s *Store) Read(obj Object) ([]byte, error) {
 		return nil, err
 	}
 	defer f.Close()
+	return data, nil
+}
+
+// SyncStage verifies a journaled chunk/assembly and establishes durability
+// after a crash or uncertain link. Missing/corrupt bytes remain unresolved.
+func (s *Store) SyncStage(obj Object, fence func() error) ([]byte, error) {
+	return s.syncObject("staging", obj, fence)
+}
+
+// SyncPublished reconciles an exact destination collision or interrupted
+// publication. Read alone is insufficient: the directory must be fsynced.
+func (s *Store) SyncPublished(obj Object, fence func() error) ([]byte, error) {
+	return s.syncObject("revisions", obj, fence)
+}
+func (s *Store) syncObject(kind string, obj Object, fence func() error) ([]byte, error) {
+	if fence == nil {
+		return nil, ErrFence
+	}
+	if err := fence(); err != nil {
+		return nil, err
+	}
+	f, data, err := s.verified(kind, obj)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	dir, err := s.directory(kind, false)
+	if err != nil {
+		return nil, err
+	}
+	defer dir.Close()
+	// Reopen from the synced directory and compare identity so a directory
+	// substitution between verification and sync cannot certify another object.
+	current, err := openAt(dir, obj.ID, unix.O_RDONLY|unix.O_NONBLOCK)
+	if err != nil {
+		return nil, err
+	}
+	defer current.Close()
+	if !sameFile(f, current) {
+		return nil, ErrIntegrity
+	}
+	if err := fence(); err != nil {
+		return nil, err
+	}
+	if err := s.sync(f); err != nil {
+		return nil, ErrUncertain
+	}
+	if err := s.sync(dir); err != nil {
+		return nil, ErrUncertain
+	}
+	if err := s.current(dir, kind); err != nil {
+		return nil, ErrUncertain
+	}
 	return data, nil
 }
