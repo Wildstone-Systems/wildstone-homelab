@@ -18,6 +18,7 @@ import (
 const searchTTL = 15 * time.Minute
 
 var ErrSearchRecord = errors.New("invalid_input: invalid research record")
+var ErrSearchExpired = errors.New("not_found: retained research expired; retry")
 
 // SearchScope is resolved from trusted current task/provider policy, never tool
 // JSON. Resource includes disclosure/surface scope; Revision is provider config.
@@ -209,6 +210,14 @@ func (s *Searches) Search(ctx context.Context, task string, attempt int64, reque
 			if !s.fresh(v.record, k, v.record.Scope) {
 				delete(s.entries, k)
 			}
+		}
+		// Authorization can block across expiry. Recheck at publication, after
+		// all current-policy callbacks and while holding the cache lock. Never
+		// return or reinsert a record whose original TTL elapsed during a hit.
+		if !s.fresh(record, key, scope) {
+			delete(s.entries, key)
+			s.mu.Unlock()
+			return SearchRecord{}, false, ErrSearchExpired
 		}
 		if len(s.entries) < 128 {
 			e.record = record

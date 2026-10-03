@@ -46,7 +46,10 @@ TTL is exactly 15 minutes from the record's initial publication preparation;
 lookup does not renew it or change retrieval/source dates. At most 128 process
 entries reference verified origin steps. Every hit rereads that authoritative
 receipt, rechecks current policy/source grants, inherits provenance and checks
-S23. The cache spends no upstream unit and never resets usage; normal Invoke
+S23. TTL is rechecked at publication after those callbacks; crossing expiry
+returns a bounded `not_found` error with no result or upstream spend, removes
+the expired cache reference and requires a fresh retry. The cache spends no
+upstream unit and never resets usage; normal Invoke
 tool-call limits still apply.
 
 Fresh responses never seed process cache before canonical verification. A crash,

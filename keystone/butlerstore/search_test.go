@@ -285,7 +285,32 @@ func TestSearchVerifiedReuseCancellationTTLAndAuthority(t *testing.T) {
 	if err != nil || !hit || calls != 3 || !retained.Result.RetrievedAt.Equal(r.Result.RetrievedAt) {
 		t.Fatalf("restart: %v %v", hit, err)
 	}
-	now = now.Add(searchTTL)
+	t.Run("expiry-during-source-authorization", func(t *testing.T) {
+		authorize := s.AuthorizeSource
+		s.AuthorizeSource = func(ctx context.Context, to, from string, step int64) error {
+			err := authorize(ctx, to, from, step)
+			// No sleeps: advance from a valid hit to the exact original TTL
+			// boundary inside the potentially blocking provenance callback.
+			now = r.StoredAt.Add(searchTTL)
+			return err
+		}
+		defer func() { s.AuthorizeSource = authorize }()
+		out, hit, err := s.Search(ctx, task, next, request, dispatch)
+		if !errors.Is(err, ErrSearchExpired) || hit || out.Version != 0 || len(out.Result.Items) != 0 || calls != 3 {
+			t.Fatalf("expired publication: hit=%v error=%v record=%+v calls=%d", hit, err, out, calls)
+		}
+		s.mu.Lock()
+		_, reinserted := s.entries[r.Key]
+		s.mu.Unlock()
+		if reinserted {
+			t.Fatal("expired record retained or reinserted")
+		}
+		budget, err := db.GetResearchBudget(task)
+		if err != nil || budget.SearchesUsed != 3 {
+			t.Fatalf("expiry fence spent budget: %+v %v", budget, err)
+		}
+	})
+	now = r.StoredAt.Add(searchTTL)
 	_, last := start()
 	_, hit, err = s.Search(ctx, task, last, request, dispatch)
 	if err != nil || hit || calls != 4 {
