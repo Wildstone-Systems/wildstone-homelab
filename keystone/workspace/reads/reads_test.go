@@ -508,6 +508,44 @@ func TestReadRechecksCommittedArtifactMetadataAfterIO(t *testing.T) {
 	}
 }
 
+func TestScanRechecksCommittedMetadata(t *testing.T) {
+	for _, tc := range []struct{ tool, stage, path, change string }{
+		{"workspace_list", "queried", "report.txt", "trash"},
+		{"workspace_list", "queried", "report.txt", "path"},
+		{"workspace_list", "assembled", "report.txt", "trash"},
+		{"workspace_list", "assembled", "report.txt", "path"},
+		{"workspace_list", "assembled", "folder/report.txt", "trash"},
+		{"workspace_search", "assembled", "report.txt", "path"},
+	} {
+		t.Run(tc.tool+"/"+tc.stage+"/"+tc.path+"/"+tc.change, func(t *testing.T) {
+			f := newFixture(t)
+			artifact, revision := f.publish(t, 1, tc.path, "matching retained body", "normal")
+			_, ctx := f.turn(t, runtimedb.ModelLocal)
+			changed := false
+			f.service.scanFence = func(stage string) {
+				if stage != tc.stage || changed {
+					return
+				}
+				changed = true
+				must(t, f.db.TrashWorkspaceArtifact(f.w.ID, artifact, revision))
+				if tc.change == "path" {
+					must(t, f.db.RestoreWorkspaceArtifact(f.w.ID, artifact, revision, "moved.txt"))
+				}
+			}
+			out := f.service.Call(ctx, tc.tool, butler.WorkspaceReadCall{Scope: "private", Query: "matching"})
+			if !changed || (!out.Failed && !out.Rejected) || strings.Contains(out.Content, tc.path) || strings.Contains(out.Content, "matching retained body") {
+				t.Fatalf("scan disclosed changed metadata: %+v", out)
+			}
+			if (tc.change == "path" || tc.stage == "assembled") && !strings.Contains(out.Content, "stale_cursor") {
+				t.Fatalf("snapshot conflict did not refuse consistently: %+v", out)
+			}
+			if len(f.service.cursors) != 0 {
+				t.Fatal("refused scan published a cursor")
+			}
+		})
+	}
+}
+
 func readBoundaryPath(n int) string {
 	var out strings.Builder
 	for n > 204 {

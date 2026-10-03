@@ -46,8 +46,9 @@ type Service struct {
 	cursors      map[string]cursor
 	directoryKey []byte
 	// Private fault seams keep fake storage and clocks out of production wiring.
-	read func(*storage.Store, storage.Object) ([]byte, error)
-	now  func() time.Time
+	read      func(*storage.Store, storage.Object) ([]byte, error)
+	now       func() time.Time
+	scanFence func(string)
 }
 
 // selector renders only server-owned lookup identities as JSON escapes.
@@ -352,6 +353,7 @@ func (s *Service) Call(ctx context.Context, tool string, call butler.WorkspaceRe
 }
 
 func (s *Service) scan(ctx context.Context, access *runtimedb.WorkspaceAccess, settings workspace.Settings, w runtimedb.Workspace, c cursor) butler.ToolOutcome {
+	after := c.after
 	files, snapshot, err := s.DB.WorkspaceReadFiles(ctx, access, w.ID, c.call.Path, c.after, 21)
 	if err != nil {
 		return failure(err)
@@ -360,6 +362,9 @@ func (s *Service) scan(ctx context.Context, access *runtimedb.WorkspaceAccess, s
 		return failure(errCursor)
 	}
 	c.snapshot = snapshot
+	if s.scanFence != nil {
+		s.scanFence("queried")
+	}
 	entries := []entry{}
 	hits := []hit{}
 	seen := map[string]bool{}
@@ -391,8 +396,11 @@ func (s *Service) scan(ctx context.Context, access *runtimedb.WorkspaceAccess, s
 					seen[dir] = true
 				}
 			} else {
-				r, err := s.DB.ReadWorkspaceRevision(ctx, access, w.ID, a.ID, a.CurrentRevision)
+				r, err := s.DB.ReadWorkspaceRevisionForArtifact(ctx, access, a, a.CurrentRevision)
 				if err != nil {
+					if errors.Is(err, runtimedb.ErrWorkspaceConflict) {
+						err = errCursor
+					}
 					return failure(err)
 				}
 				file := info(a, r)
@@ -443,6 +451,19 @@ func (s *Service) scan(ctx context.Context, access *runtimedb.WorkspaceAccess, s
 			files = files[:i+1]
 			break
 		}
+	}
+	// Repeat the original scoped query once after assembling the page. This
+	// checks current authority and catches changes to earlier files or derived
+	// directories while later entries were processed, before publishing cursors.
+	if s.scanFence != nil {
+		s.scanFence("assembled")
+	}
+	_, currentSnapshot, err := s.DB.WorkspaceReadFiles(ctx, access, w.ID, c.call.Path, after, 21)
+	if err != nil {
+		return failure(err)
+	}
+	if currentSnapshot != snapshot {
+		return failure(errCursor)
 	}
 	next := ""
 	if len(files) > 20 || (len(files) > 0 && last != files[len(files)-1].Path) {
