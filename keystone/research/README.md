@@ -56,3 +56,24 @@ No extraction implementation, source persistence, grants or budgets are added.
 
 Verification: `go test -race ./research/...` and `go vet ./...` in Keystone.
 Fixtures use local HTTP servers only and are not live-provider evidence.
+
+## External egress privacy (S23)
+
+Model-authored search queries and fetch URLs must enter through
+`egress.Search` / `egress.Fetch`. These call `runtimedb.CheckResearchEgress`
+before invoking any adapter. The gateway supplies a trusted `PrivacyTurn`
+bound to its current task (the existing `beginDisclosureTurn` seam); query,
+URL, model location and the local DDGS service address supply no authority.
+Missing context, failed policy reads, protected source history and revoked
+source access refuse both operations with no adapter request. Current task,
+session and workspace ancestry are checked on each call, including resumes.
+An active Person and explicit Agent access are required even on Console Owner
+tasks; the legacy memory-only Console administration exemption cannot authorize
+external research disclosure.
+In-flight memory reads are committed to task provenance before dispatch and
+retained on policy denial. All errors are static and omit input/source data.
+
+This is a dormant boundary: canonical tool registration (#499), cache checks
+(#498), budgets and execution fences must compose it with their own admission
+checks. Low-level transport APIs are not Agent tool entry points. The fixed
+synthetic Owner provider test remains a separate configuration probe.
