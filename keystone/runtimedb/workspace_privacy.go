@@ -142,6 +142,19 @@ func (db *DB) workspacePolicy(tx *sql.Tx, a *WorkspaceAccess, p *PrivacyTurn, ob
 // snippet or bytes, and repeat at each page/cache/retry boundary. Durable source
 // identity commits before the return; a failed commit discloses nothing.
 func (db *DB) ReadWorkspaceRevision(ctx context.Context, a *WorkspaceAccess, workspace, artifact, revision string) (WorkspaceRevision, error) {
+	return db.readWorkspaceRevision(ctx, a, workspace, artifact, revision, nil)
+}
+
+// ReadWorkspaceRevisionForArtifact checks current committed artifact metadata
+// and source/resource policy in the same transaction. Normal read coordinators
+// use it before and after byte I/O. Historical revisions remain readable while
+// the artifact stays committed at the path/current revision used for output.
+// The retained-history accessor above intentionally still admits trash.
+func (db *DB) ReadWorkspaceRevisionForArtifact(ctx context.Context, a *WorkspaceAccess, artifact WorkspaceArtifact, revision string) (WorkspaceRevision, error) {
+	return db.readWorkspaceRevision(ctx, a, artifact.WorkspaceID, artifact.ID, revision, &artifact)
+}
+
+func (db *DB) readWorkspaceRevision(ctx context.Context, a *WorkspaceAccess, workspace, artifact, revision string, expected *WorkspaceArtifact) (WorkspaceRevision, error) {
 	p, err := db.workspaceTurn(ctx, a)
 	if err != nil {
 		return WorkspaceRevision{}, err
@@ -157,6 +170,19 @@ func (db *DB) ReadWorkspaceRevision(ctx context.Context, a *WorkspaceAccess, wor
 	}
 	if err = workspaceInputs(tx, p); err != nil {
 		return WorkspaceRevision{}, err
+	}
+	if expected != nil {
+		var currentPath, currentRevision string
+		err = tx.QueryRow(`SELECT path,current_revision FROM workspace_artifacts WHERE workspace_id=? AND id=? AND state='committed'`, workspace, artifact).Scan(&currentPath, &currentRevision)
+		if errors.Is(err, sql.ErrNoRows) {
+			return WorkspaceRevision{}, ErrWorkspaceDenied
+		}
+		if err != nil {
+			return WorkspaceRevision{}, err
+		}
+		if expected.State != "committed" || currentPath != expected.Path || currentRevision != expected.CurrentRevision {
+			return WorkspaceRevision{}, ErrWorkspaceConflict
+		}
 	}
 	var r WorkspaceRevision
 	err = tx.QueryRow(`SELECT r.id,r.artifact_id,r.task_id,r.hash,r.size_bytes,r.media_type,r.privacy,r.trusted_only,r.created_at

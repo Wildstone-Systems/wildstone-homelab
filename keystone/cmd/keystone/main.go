@@ -55,6 +55,7 @@ import (
 	"github.com/chickenrat17/wildstone-homelab/keystone/speech"
 	"github.com/chickenrat17/wildstone-homelab/keystone/statefile"
 	"github.com/chickenrat17/wildstone-homelab/keystone/upkeep"
+	workspacereads "github.com/chickenrat17/wildstone-homelab/keystone/workspace/reads"
 )
 
 var version = "dev" // set via -ldflags at release
@@ -1630,6 +1631,9 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 			mode, _ = probeButler(context.Background(), bp, log)
 		}
 		bgw := butler.NewToolGateway(state, &butler.AgentReader{Gateway: gw})
+		workspaceReader := &workspacereads.Service{DB: db, Settings: apiSrv.WorkspaceSettings}
+		bgw.WorkspaceReads = workspaceReader.Call
+		bgw.WorkspaceReadReady = func() bool { _, err := apiSrv.WorkspaceSettings(); return err == nil }
 		// The host.* tools dispatch through the SAME domestic Gateway a
 		// household rule's action does (ADR-W039 H7, #353) — one tier
 		// check, one confirm flow, one audit line, whichever surface
@@ -1842,6 +1846,8 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 
 		}
 
+		household.WorkspaceReads = workspaceReader.Call
+		household.WorkspaceReadReady = bgw.WorkspaceReadReady
 		apiSrv.ButlerHost = &api.ButlerHost{
 			Provider: bp, Gateway: bgw, Mode: mode, Household: household,
 			Model: backend.Model, Endpoint: backend.Endpoint,

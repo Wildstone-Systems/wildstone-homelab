@@ -615,31 +615,25 @@ func TestPermitsRefusesAnyMutatingToolWhenReadOnly(t *testing.T) {
 	}
 }
 
-// No shipped tool reaches a §10 layer-2 resource yet, and the day one
-// does, it has to say so.
-//
-// The path from a tool's declaration through the query to the
-// resource's own rule is complete and tested; what does not exist is a
-// resource to put in it, because layer 2 is defined BY the resource
-// (memory §11, secrets §12) and those slices bring both the tools and
-// the rules. This test is what makes that a STATED fact rather than an
-// assumption: a tool that starts reaching a resource fails here until
-// somebody writes its rule.
-//
-// Mutation: declaring Reaches on any registered tool makes this fail,
-// which is the point — the failure is the prompt to add the rule.
+// Workspace reads use the durable workspace ResourceRule. Other shipped
+// resources require an explicitly reviewed rule and inventory entry.
 func TestNoShippedToolReachesAResourceWithoutARule(t *testing.T) {
-	for name, entry := range NewToolGateway(nil, nil).tools {
-		if entry.Reaches != "" {
-			t.Errorf("operator tool %s reaches a %s: give that kind a ResourceRule, "+
-				"then update this test to expect it", name, entry.Reaches)
+	check := func(name, kind string) {
+		if name == "workspace_list" || name == "workspace_read" || name == "workspace_search" {
+			if kind != "workspace" {
+				t.Errorf("%s lost its workspace resource rule", name)
+			}
+			return
+		}
+		if kind != "" {
+			t.Errorf("%s reaches %s without a reviewed ResourceRule", name, kind)
 		}
 	}
+	for name, entry := range NewToolGateway(nil, nil).tools {
+		check(name, entry.Reaches)
+	}
 	for name, entry := range NewHouseholdGateway("sam", HouseholdSeams{}).tools {
-		if entry.Reaches != "" {
-			t.Errorf("family tool %s reaches a %s: give that kind a ResourceRule, "+
-				"then update this test to expect it", name, entry.Reaches)
-		}
+		check(name, entry.Reaches)
 	}
 }
 

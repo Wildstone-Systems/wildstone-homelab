@@ -46,6 +46,7 @@ func TestWorkspaceCanonicalGatewaysCarryTrustedTaskScope(t *testing.T) {
 				offered, dispatch = gw.OfferedSpecs, gw.Dispatch
 			} else {
 				gw := NewToolGateway(nil, nil)
+				gw.WorkspaceReads = func(context.Context, string, WorkspaceReadCall) ToolOutcome { return ToolOutcome{} }
 				gw.tools[spec.Name] = toolEntry{Spec: spec, Reaches: "workspace", Handler: func(context.Context, *ToolGateway, map[string]any) (ToolOutcome, error) {
 					effects++
 					return ToolOutcome{Content: "fixture result"}, nil

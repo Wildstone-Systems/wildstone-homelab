@@ -49,5 +49,5 @@ func (b RuntimeTools) Call(ctx context.Context, name string, input map[string]an
 	}
 	// A policy-rejected proposal is an answer, not a failure: the model
 	// is expected to read why and change course.
-	return agentruntime.ToolResult{Content: out.Content}, nil
+	return agentruntime.ToolResult{Content: out.Content, Denied: out.Rejected, Failed: out.Failed}, nil
 }

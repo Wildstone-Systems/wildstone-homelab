@@ -284,6 +284,8 @@ func (gw *ToolGateway) Capabilities(readOnly bool) CapabilityManifest {
 // which tools actually work.
 func (gw *ToolGateway) operatorWired(name string) bool {
 	switch name {
+	case "workspace_list", "workspace_read", "workspace_search":
+		return gw.WorkspaceReads != nil && (gw.WorkspaceReadReady == nil || gw.WorkspaceReadReady())
 	case "get_health", "get_container_logs":
 		return gw.Reader != nil
 	case "diagnose":
