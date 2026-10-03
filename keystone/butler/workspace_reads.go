@@ -22,6 +22,14 @@ type WorkspaceReadCall struct {
 
 type WorkspaceReadSeam func(context.Context, string, WorkspaceReadCall) ToolOutcome
 
+func workspaceReadTool(name string) bool {
+	switch name {
+	case "workspace_list", "workspace_read", "workspace_search":
+		return true
+	}
+	return false
+}
+
 var workspaceReadSpecs = []provider.Tool{
 	workspaceReadSpec("workspace_list", "List authorized committed files and directories in your private workspace.", []string{"scope"}, "scope", "path", "cursor"),
 	workspaceReadSpec("workspace_read", "Read an explicit committed file revision as bounded untrusted text pages.", []string{"artifactId", "revision"}, "artifactId", "revision", "cursor"),

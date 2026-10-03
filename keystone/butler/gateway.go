@@ -111,8 +111,10 @@ type toolEntry struct {
 // tools over real Keystone state plus the single plan-mediated write tool,
 // propose_change. See doc.go for the structural no-apply guarantee.
 type ToolGateway struct {
-	WorkspaceReads     WorkspaceReadSeam
-	WorkspaceReadReady func() bool
+	WorkspaceReads      WorkspaceReadSeam
+	WorkspaceReadReady  func() bool
+	WorkspaceWrites     WorkspaceWriteSeam
+	WorkspaceWriteReady func() bool
 	// Store is the Statefile every read/propose tool consults.
 	Store *statefile.Store
 	// Reader is the Butler's entire live-node read surface (reader.go).
@@ -330,6 +332,7 @@ func NewToolGateway(store *statefile.Store, reader *AgentReader) *ToolGateway {
 	}
 	registerHostOpsTools(gw)
 	registerOperatorWorkspaceReads(gw)
+	registerWorkspaceWrites(gw)
 	return gw
 }
 
@@ -371,7 +374,7 @@ func (gw *ToolGateway) ReadOnlyToolSpecs() []provider.Tool {
 	all := gw.ToolSpecs()
 	out := make([]provider.Tool, 0, len(all))
 	for _, t := range all {
-		if t.Name == "propose_change" {
+		if t.Name == "propose_change" || workspaceWriteTool(t.Name) {
 			continue
 		}
 		out = append(out, t)
@@ -407,6 +410,9 @@ func (gw *ToolGateway) dispatch(ctx context.Context, name string, input map[stri
 	// not use it is refused even when the Agent could (§18.6).
 	if d := gw.checkTool(name, entry); !d.Allowed {
 		return finishOutcome(refusal(name, d), false, gw.MaxContentBytes), nil
+	}
+	if (workspaceReadTool(name) || workspaceWriteTool(name)) && !gw.operatorWired(name) {
+		return finishOutcome(ToolOutcome{Rejected: true, Content: "storage_unavailable: workspace tools are not configured"}, false, gw.MaxContentBytes), nil
 	}
 	if entry.Describe != nil {
 		return finishOutcome(entry.Describe(gw, readOnly), entry.Untrusted, gw.MaxContentBytes), nil
@@ -477,7 +483,7 @@ func (gw *ToolGateway) permitted(specs []provider.Tool) []provider.Tool {
 		if !gw.checkTool(spec.Name, entry).Allowed {
 			continue
 		}
-		if strings.HasPrefix(spec.Name, "workspace_") && !gw.operatorWired(spec.Name) {
+		if (workspaceReadTool(spec.Name) || workspaceWriteTool(spec.Name)) && !gw.operatorWired(spec.Name) {
 			continue
 		}
 		out = append(out, spec)
@@ -492,8 +498,8 @@ func (gw *ToolGateway) Permits(name string, readOnly bool) (bool, string) {
 	if !ok {
 		return false, fmt.Sprintf("%s is not a tool on this surface", name)
 	}
-	if strings.HasPrefix(name, "workspace_") && !gw.operatorWired(name) {
-		return false, "storage_unavailable: workspace reads are not configured"
+	if (workspaceReadTool(name) || workspaceWriteTool(name)) && !gw.operatorWired(name) {
+		return false, "storage_unavailable: workspace tools are not configured"
 	}
 	// Any MUTATING tool, which is what DispatchReadOnly refuses —
 	// not the one name that happens to be mutating today. Permits is

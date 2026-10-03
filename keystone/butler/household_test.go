@@ -120,10 +120,12 @@ func TestHouseholdGatewayHoldsNoInfrastructure(t *testing.T) {
 	// that closes a commitment, clears a notification, answers a
 	// question for somebody, or touches a machine.
 	// Slice 17 adds submission only, with no approval or execution capability.
+	// ADR-W047 adds confined staged file writes, with no infrastructure access.
 	want := []string{
 		// ADR-W047 S07 adds read-only confined workspace access and readiness,
 		// with no host paths, filesystem execution or infrastructure capability.
 		"WorkspaceReads", "WorkspaceReadReady",
+		"WorkspaceWrites", "WorkspaceWriteReady",
 		"Events", "Actions", "ActionResult", "Vocabulary", "Memory", "RecordReading", "ProposeRoutine",
 		"Upkeep", "Activity", "Notifications", "Machines", "MaxContentBytes",
 	}

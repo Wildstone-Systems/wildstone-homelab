@@ -177,7 +177,7 @@ func (g *Gateway) Invoke(ctx context.Context, req agentapi.InvokeRequest) (agent
 	// The disclosure turn combines the restored task/session sources with
 	// this call's reads. Its result check persists new sources before the
 	// runtime receives content, so retries cannot shed earlier restrictions.
-	id := operation.Identity{TaskID: taskID, Step: step, PermissionLabel: label, Audience: audience}
+	id := operation.Identity{TaskID: taskID, Step: step, PermissionLabel: label, Audience: audience, IdempotencyKey: req.IdempotencyKey, Tool: req.Tool}
 	outcome, err := s.toolset.Execute(operation.With(dctx, id), req.Tool, input, s.readOnly)
 	if err != nil {
 		rec.Error = err.Error()
@@ -329,6 +329,8 @@ func resultFor(taskID string, step int64, tool string, outcome butler.ToolOutcom
 		return agentapi.InvokeResult{Outcome: agentapi.OutcomeRejected, Content: outcome.Content, Reason: outcome.Content}
 	case outcome.Rejected:
 		return agentapi.InvokeResult{Outcome: agentapi.OutcomeDenied, Content: outcome.Content, Reason: outcome.Content}
+	case outcome.Failed:
+		return agentapi.InvokeResult{Outcome: agentapi.OutcomeError, Content: outcome.Content, Reason: outcome.Content}
 	case outcome.EffectPending:
 		return agentapi.InvokeResult{
 			Outcome: agentapi.OutcomeWaiting, WaitReason: agentapi.WaitConfirmPending, Content: outcome.Content,
