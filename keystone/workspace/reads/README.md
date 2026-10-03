@@ -10,7 +10,10 @@ The read coordinator requires authenticated operation identity and the full
 task privacy turn. Metadata, filenames, directories and snippets pass the
 same live source-policy checks as bodies. Only committed, nontrashed artifacts
 appear; staging is excluded. Reads persist source identity before disclosure
-and recheck authority after byte I/O. Bytes use the existing immutable confined
+and recheck authority after byte I/O. That check atomically requires the artifact
+to remain committed at the admitted path/current revision; concurrent trash,
+move or publication refuses stale output. Retained historical revisions remain
+readable while their artifact stays committed. Bytes use the existing immutable confined
 store and hash/size verification. `ReadCommittedBytes` exposes that transport
 without model envelopes for independently authorized human routes; it grants
 no access and requires trusted committed metadata from the caller.
@@ -18,7 +21,9 @@ no access and requires trusted committed metadata from the caller.
 Text pages target 2,500 UTF-8 bytes and shrink for JSON escaping/metadata.
 The complete structured result plus the existing untrusted envelope fits the
 default 4,000-byte bound. Long metadata that cannot fit is refused visibly;
-the gateway never truncates a successful structured workspace response.
+the gateway never truncates a successful structured workspace response. If a
+nonterminal page cannot fit even one complete UTF-8 rune, it refuses visibly
+instead of returning an empty page/cursor at an unchanged offset.
 Search is literal, case sensitive filename/body matching with 160-byte UTF-8
 snippets and at most 20 scanned files per page. Scans can return an empty page
 with a continuation. Storage/download limits remain separate.

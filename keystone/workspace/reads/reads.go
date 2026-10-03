@@ -210,8 +210,11 @@ func info(a runtimedb.WorkspaceArtifact, r runtimedb.WorkspaceRevision) fileInfo
 }
 
 func (s *Service) bytes(ctx context.Context, access *runtimedb.WorkspaceAccess, settings workspace.Settings, w runtimedb.Workspace, a runtimedb.WorkspaceArtifact, revision string) (fileInfo, []byte, error) {
-	r, err := s.DB.ReadWorkspaceRevision(ctx, access, w.ID, a.ID, revision)
+	r, err := s.DB.ReadWorkspaceRevisionForArtifact(ctx, access, a, revision)
 	if err != nil {
+		if errors.Is(err, runtimedb.ErrWorkspaceConflict) {
+			err = errCursor
+		}
 		return fileInfo{}, nil, err
 	}
 	store, err := storage.New(settings, w.PersonID, strconv.FormatInt(w.AgentID, 10))
@@ -228,7 +231,10 @@ func (s *Service) bytes(ctx context.Context, access *runtimedb.WorkspaceAccess, 
 		return fileInfo{}, nil, err
 	}
 	// Repeat authority after byte I/O; revoked access never reaches the model.
-	if _, err = s.DB.ReadWorkspaceRevision(ctx, access, w.ID, a.ID, revision); err != nil {
+	if _, err = s.DB.ReadWorkspaceRevisionForArtifact(ctx, access, a, revision); err != nil {
+		if errors.Is(err, runtimedb.ErrWorkspaceConflict) {
+			err = errCursor
+		}
 		return fileInfo{}, nil, err
 	}
 	if !utf8.Valid(data) {
@@ -299,6 +305,9 @@ func (s *Service) Call(ctx context.Context, tool string, call butler.WorkspaceRe
 		}
 		for {
 			page := textPage{Text: string(data[c.offset:end]), Truncated: end < len(data)}
+			if page.Truncated && end == c.offset {
+				return failure(workspace.ErrUnavailable)
+			}
 			token := ""
 			if page.Truncated {
 				next := c

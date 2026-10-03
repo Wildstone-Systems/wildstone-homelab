@@ -450,3 +450,111 @@ func TestScopedCursorSnapshotExcludesUnrelatedMutations(t *testing.T) {
 		decodeData(t, f.service.Call(ctx, tool, call), &page)
 	}
 }
+
+func TestReadRechecksCommittedArtifactMetadataAfterIO(t *testing.T) {
+	for _, change := range []string{"trash", "path", "current revision"} {
+		t.Run(change, func(t *testing.T) {
+			f := newFixture(t)
+			artifact, revision := f.publish(t, 1, "report.txt", "retained historical body", "normal")
+			_, ctx := f.turn(t, runtimedb.ModelLocal)
+			f.service.read = func(_ *storage.Store, obj storage.Object) ([]byte, error) {
+				// Simulate a lifecycle/publication transition after admission and
+				// before the immutable byte read returns to the coordinator.
+				switch change {
+				case "trash", "path":
+					must(t, f.db.TrashWorkspaceArtifact(f.w.ID, artifact, revision))
+					if change == "path" {
+						must(t, f.db.RestoreWorkspaceArtifact(f.w.ID, artifact, revision, "moved.txt"))
+					}
+				case "current revision":
+					task, err := f.db.GetButlerTask(f.writer)
+					must(t, err)
+					newRevision := fmt.Sprintf("%032x", 99)
+					body := []byte("new committed body")
+					hash := sha256.Sum256(body)
+					must(t, f.db.CreateWorkspaceRevision(runtimedb.WorkspaceRevision{ID: newRevision, ArtifactID: artifact, TaskID: task.Seq, Hash: fmt.Sprintf("%x", hash), SizeBytes: int64(len(body)), MediaType: "text/plain", Privacy: "normal"}))
+					must(t, f.db.ReserveWorkspaceBytes(runtimedb.WorkspaceReservation{ID: "reserve-new", WorkspaceID: f.w.ID, TaskID: task.Seq, SizeBytes: int64(len(body)), Purpose: "publication"}))
+					must(t, f.db.CreateWorkspacePublication(runtimedb.WorkspacePublication{ID: "publish-new", WorkspaceID: f.w.ID, ArtifactID: artifact, RevisionID: newRevision, BaseRevision: revision, TaskID: task.Seq, ReservationID: "reserve-new", EffectKey: "new-revision"}))
+					must(t, f.db.PrepareWorkspacePublication(f.w.ID, "publish-new"))
+					must(t, f.db.MarkWorkspaceBytesPublished(f.w.ID, "publish-new"))
+					must(t, f.db.CommitWorkspacePublication(f.w.ID, "publish-new", "receipt-new"))
+					f.bodies[newRevision] = body
+				}
+				return f.bodies[obj.ID], nil
+			}
+			call := butler.WorkspaceReadCall{ArtifactID: artifact, Revision: revision}
+			out := f.service.Call(ctx, "workspace_read", call)
+			if (!out.Failed && !out.Rejected) || strings.Contains(out.Content, "retained historical body") || strings.Contains(out.Content, "report.txt") {
+				t.Fatalf("changed artifact disclosed stale metadata/body: %+v", out)
+			}
+			// Retained history is still available to its trusted recovery seam.
+			_, err := f.db.WorkspaceRevision(f.w.ID, revision)
+			must(t, err)
+			if change != "trash" {
+				f.service.read = func(_ *storage.Store, obj storage.Object) ([]byte, error) { return f.bodies[obj.ID], nil }
+				var page struct {
+					File fileInfo `json:"file"`
+					Page textPage `json:"page"`
+				}
+				decodeData(t, f.service.Call(ctx, "workspace_read", call), &page)
+				if page.Page.Text != "retained historical body" || page.File.Revision != revision {
+					t.Fatal("historical revision refused despite current committed artifact")
+				}
+				if change == "path" && page.File.Path != "moved.txt" {
+					t.Fatal("historical read did not use current committed path")
+				}
+			}
+		})
+	}
+}
+
+func readBoundaryPath(n int) string {
+	var out strings.Builder
+	for n > 204 {
+		out.WriteString(strings.Repeat("q", 200) + "/")
+		n -= 201
+	}
+	out.WriteString(strings.Repeat("z", n-4) + ".txt")
+	return out.String()
+}
+
+func TestReadRefusesZeroProgressNonterminalPages(t *testing.T) {
+	for _, body := range []string{strings.Repeat("x", 6000), strings.Repeat("世", 2000)} {
+		t.Run(fmt.Sprintf("rune-bytes-%d", utf8.RuneLen([]rune(body)[0])), func(t *testing.T) {
+			f := newFixture(t)
+			artifact, revision := f.publish(t, 1, "short.txt", body, "normal")
+			a, err := f.db.WorkspaceArtifact(f.w.ID, artifact)
+			must(t, err)
+			r, err := f.db.WorkspaceRevision(f.w.ID, revision)
+			must(t, err)
+			file := info(a, r)
+			boundary := ""
+			for n := 2700; n < 3500; n++ {
+				file.Path = readBoundaryPath(n)
+				probe := result(struct {
+					File fileInfo `json:"file"`
+					Page textPage `json:"page"`
+				}{file, textPage{NextCursor: strings.Repeat("c", 32), Truncated: true}})
+				if !probe.Failed && len(probe.Content) == 3600 {
+					boundary = file.Path
+					break
+				}
+			}
+			if boundary == "" || storage.ValidatePath(boundary, false) != nil {
+				t.Fatal("missing valid exact metadata boundary")
+			}
+			// Derive the boundary from actual persisted timestamps, then change
+			// only the path in fixture setup; the test has no timing dependency.
+			must(t, f.db.TrashWorkspaceArtifact(f.w.ID, artifact, revision))
+			must(t, f.db.RestoreWorkspaceArtifact(f.w.ID, artifact, revision, boundary))
+			_, ctx := f.turn(t, runtimedb.ModelLocal)
+			out := f.service.Call(ctx, "workspace_read", butler.WorkspaceReadCall{ArtifactID: artifact, Revision: revision})
+			if !out.Failed || out.Rejected || !strings.Contains(out.Content, "storage_unavailable") {
+				t.Fatalf("zero-progress page accepted: %+v", out)
+			}
+			if len(f.service.cursors) != 0 {
+				t.Fatal("zero-progress refusal retained a cursor")
+			}
+		})
+	}
+}
