@@ -188,7 +188,7 @@ wc -l ~/before-upgrade.txt
 ### 0.5 Upgrade the node agent, then Keystone (changes the VM)
 
 The node agent (`wardstoned`) goes first: the new Keystone expects the
-new agent's features (protocol minors 22 to 26: host networking, the
+new agent's features (protocol minors 23 to 27: host networking, the
 host-gateway alias, the radio inventory, the readiness probe, and the
 `/run/dbus` mount).
 
@@ -265,7 +265,7 @@ export THREAD=/dev/serial/by-id/<your Thread stick>
 1. **0.7.1** `wild node list`
 
    **Expect:** your node `connected`, AGENT `v0.0.0-test-<commit>`,
-   PROTOCOL `minor 26`.
+   PROTOCOL `minor 27`.
 
 2. **0.7.2** No churn (#432 step 1): run the command from 0.4 again into
    `~/after-upgrade.txt`, then `diff ~/before-upgrade.txt ~/after-upgrade.txt`.
@@ -349,9 +349,9 @@ The sticks stay plugged in; nothing uses them until section 2.
    `sudo grep -c '"ListRadios"' /var/lib/wildstone/keystone/audit.log`.
    **Expect:** both above 0.
 6. **1.1.6** (optional, needs a second node with an older agent) The
-   same call against an agent below protocol minor 24 answers 400
+   same call against an agent below protocol minor 25 answers 400
    "unknown operation — agent too old"; the readiness probe (1.2) needs
-   minor 25, and Home Assistant's `bluetooth=host-bluez` minor 26.
+   minor 26, and Home Assistant's `bluetooth=host-bluez` minor 27.
 
 **Paste back:** `check api` (the radios part) and any FAILs.
 
@@ -580,8 +580,8 @@ propose() { apipost /api/v1/plans "$(jq -n --arg s "$1" --arg d "$(cat "$2")" '{
    with the same ID.
 4. **1.6.4** (changes the VM) Remove both lines, propose, approve.
    **Expect:** back on the `wildstone` network.
-5. **1.6.5** (optional) An agent older than minor 22 refuses
-   `networkMode: host` with a message naming "protocol minor 22", the
+5. **1.6.5** (optional) An agent older than minor 23 refuses
+   `networkMode: host` with a message naming "protocol minor 23", the
    node and "upgrade wardstoned". Only testable with a second, older
    node: SKIP otherwise.
 6. **1.6.6** Clean up: `apipost /api/v1/plans '{"summary":"remove nettest","delete":[{"kind":"Container","name":"nettest"}]}'`, approve.
@@ -1408,7 +1408,7 @@ Thread RCP settings (baud / flow control):
 0.2.5  sticks visible by-id in the VM            :
 0.3.2  build-dist.sh finished                    :
 0.5    agent and Keystone upgraded               :
-0.7.1  node at protocol minor 26                 :
+0.7.1  node at protocol minor 27                 :
 0.7.2  no container churn from the upgrade       :
 0.8.1  TestSecuredMosquitto (optional)           :
 0.8.2  TestMatterServerServesHomeAssistant (opt) :

@@ -2,7 +2,7 @@
 
 package agent
 
-// HomeAutomationReadiness (protocol minor 25, #436). Every input is a
+// HomeAutomationReadiness (protocol minor 26, #436). Every input is a
 // fixture: procfs/sysfs/run files under a temp root, a stubbed interface
 // list and a fake systemd client. Nothing reads the networking, D-Bus or
 // BlueZ of the machine running the tests.

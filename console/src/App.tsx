@@ -13,6 +13,7 @@ import {
   Pulse,
   Repeat,
   CalendarCheck,
+  EnvelopeSimple,
   SealCheck,
   ShieldCheck,
   Sparkle,
@@ -45,6 +46,7 @@ import { Home } from "./views/Home";
 import { HomeAutomation } from "./views/HomeAutomation";
 import { Household } from "./views/Household";
 import { Integrations } from "./views/Integrations";
+import { MailWatch } from "./views/MailWatch";
 import { IdentityView } from "./views/Identity";
 import { Memory } from "./views/Memory";
 import { Nodes } from "./views/Nodes";
@@ -65,6 +67,7 @@ type View =
   | "authority"
   | "memory"
   | "integrations"
+  | "mail"
   | "routines"
   | "commitments"
   | "butlers"
@@ -93,6 +96,7 @@ const TITLES: Record<View, [string, string]> = {
   authority: ["Admission", "Butler access"],
   memory: ["Owned data", "Memory"],
   integrations: ["Connected apps", "Integrations"],
+  mail: ["Watch this mailbox", "Mailbox"],
   routines: ["On its own", "Routines"],
   commitments: ["The house keeps track", "Commitments"],
   butlers: ["Who answers", "Butlers"],
@@ -185,6 +189,7 @@ export function Shell() {
       { id: "authority", label: "Butler access", icon: <ShieldCheck size={ICON} /> },
       { id: "memory", label: "Memory", icon: <Brain size={ICON} /> },
       { id: "integrations", label: "Integrations", icon: <PlugsConnected size={ICON} /> },
+      { id: "mail", label: "Mailbox", icon: <EnvelopeSimple size={ICON} /> },
       { id: "routines", label: "Routines", icon: <Repeat size={ICON} /> },
       { id: "commitments", label: "Commitments", icon: <CalendarCheck size={ICON} /> },
       { id: "chat", label: "Chat", icon: <ChatsCircle size={ICON} /> },
@@ -244,7 +249,7 @@ export function Shell() {
         <div className={FULL_BLEED.has(view) ? "screen screen-flush" : "screen"}>
           <ErrorLine error={error} />
           {view === "home" && <Home onNavigate={setView} />}
-          {view === "services" && <Services key={openPackage ?? "board"} openPackage={openPackage} />}
+          {view === "services" && <Services key={openPackage ?? "board"} openPackage={openPackage} onWatchMailbox={() => setView("mail")} />}
           {view === "homeAutomation" && (
             <HomeAutomation
               onOpenPackage={(name) => {
@@ -263,6 +268,7 @@ export function Shell() {
           {view === "authority" && <ButlerAuthority />}
           {view === "memory" && <Memory />}
           {view === "integrations" && <Integrations />}
+          {view === "mail" && <MailWatch onNavigate={setView} />}
           {view === "routines" && <Routines key={openRoutine ?? "list"} openRoutine={openRoutine} />}
           {view === "commitments" && <Commitments />}
           {view === "butlers" && <Butlers />}

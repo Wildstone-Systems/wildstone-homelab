@@ -46,7 +46,7 @@ const HostGatewayAlias = "host.docker.internal"
 // therefore refuses a host Route on such a node and leaves the alias out
 // of container specs there (so their hashes do not change until the
 // agent can honour it).
-const HostGatewayProtocolMinor = 23
+const HostGatewayProtocolMinor = 24
 
 // ParseHostUpstream reports whether upstream is the "host/<port>" form
 // and, if so, its port. isHost is true for anything that STARTS like the

@@ -521,7 +521,7 @@ func (a *testAgent) inspectContainer(opID string, op *wsv1.InspectContainer) *ws
 	if errRes != nil {
 		return errRes
 	}
-	// NetworkMode as Docker records it (minor 22): "host", or the network.
+	// NetworkMode as Docker records it (minor 23): "host", or the network.
 	networkMode := c.network
 	if c.networkMode == wsv1.ContainerNetworkMode_CONTAINER_NETWORK_MODE_HOST {
 		networkMode = "host"

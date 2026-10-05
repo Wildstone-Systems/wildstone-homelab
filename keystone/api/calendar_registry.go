@@ -131,32 +131,9 @@ func (s *Server) CalendarForActor(member, id string, write bool) (sharedcalendar
 	if err != nil {
 		return sharedcalendar.Calendar{}, "", err
 	}
-	groups := []string{}
-	for _, r := range desired {
-		if r.LdapUser != nil && r.LdapUser.Username == member {
-			groups = append(groups, r.LdapUser.Groups...)
-		}
-	}
-	if s.DB != nil {
-		person, ambiguous, e := s.DB.PersonForDirectoryAccount(member)
-		if e != nil {
-			return sharedcalendar.Calendar{}, "", e
-		}
-		if !ambiguous && person != "" {
-			services, e := s.DB.EntitledServices(person)
-			if e != nil {
-				return sharedcalendar.Calendar{}, "", e
-			}
-			for _, r := range desired {
-				if r.LdapGroup != nil {
-					for _, service := range services {
-						if r.Metadata.Owner == "capability/"+service {
-							groups = append(groups, r.LdapGroup.Name)
-						}
-					}
-				}
-			}
-		}
+	groups, err := s.actorCalendarGroups(desired, member)
+	if err != nil {
+		return sharedcalendar.Calendar{}, "", err
 	}
 	c, _, u, e := s.selectCalendar(desired, member, groups, id, write)
 	return c, u, e

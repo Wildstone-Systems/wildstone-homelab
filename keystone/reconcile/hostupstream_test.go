@@ -87,7 +87,7 @@ func TestHostGatewayAliasIsWithheldWhenItCannotHelp(t *testing.T) {
 		upstream string
 	}{
 		"no host route":   {&Reconciler{AgentProtocolMinor: minor(resource.HostGatewayProtocolMinor)}, "container/app:80"},
-		"minor 22 agent":  {&Reconciler{AgentProtocolMinor: minor(resource.HostGatewayProtocolMinor - 1)}, "host/8123"},
+		"minor 23 agent":  {&Reconciler{AgentProtocolMinor: minor(resource.HostGatewayProtocolMinor - 1)}, "host/8123"},
 		"unknown agent":   {&Reconciler{AgentProtocolMinor: func(string) (uint32, bool) { return 0, false }}, "host/8123"},
 		"no reporter":     {&Reconciler{}, "host/8123"},
 		"malformed route": {&Reconciler{AgentProtocolMinor: minor(resource.HostGatewayProtocolMinor)}, "host/0"},
@@ -215,7 +215,7 @@ func TestHostRouteIsRefusedOnAnOlderAgent(t *testing.T) {
 			msg = sr.Error
 		}
 	}
-	for _, want := range []string{"protocol minor 23", "node-a", "minor 22", "upgrade wardstoned"} {
+	for _, want := range []string{"protocol minor 24", "node-a", "minor 23", "upgrade wardstoned"} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("route error %q does not say %q", msg, want)
 		}

@@ -1,0 +1,17 @@
+-- 0097: an adapter credential may be bound to one placement NODE (epic
+-- #326 S01; ADR-W030 A5).
+--
+-- A5 says one lease epoch permits only the current holder to claim work,
+-- and "the other running containers remain ready but inactive". Before
+-- this column the claim query checked only that the principal was bound
+-- to the connection, so a prepared fallback's adapter, running beside
+-- the primary's, could claim the same connection's work while the
+-- primary still held the lease — two live adapters and a race, which is
+-- the duplicate the placement design exists to prevent.
+--
+-- node names the placement this principal's container runs on. A
+-- principal bound to a node claims only while that node holds the lease
+-- and is not being removed. Empty keeps the earlier meaning — bound to
+-- the connection wherever it runs — for adapters that predate placement
+-- (a single-node connection has nothing to fence between).
+ALTER TABLE integration_principals ADD COLUMN node TEXT NOT NULL DEFAULT '';

@@ -118,6 +118,11 @@ func (a *Agent) dispatchOp(ctx context.Context, opID string, op *wsv1.Operation)
 		if r, oerr = a.listSecrets(); oerr == nil {
 			res.Result = r
 		}
+	case *wsv1.Operation_EraseSecret:
+		var r *wsv1.OpResult_EraseSecret
+		if r, oerr = a.eraseSecret(o.EraseSecret); oerr == nil {
+			res.Result = r
+		}
 	case *wsv1.Operation_ExportSecretBundle:
 		var r *wsv1.OpResult_ExportSecretBundle
 		if r, oerr = a.exportSecretBundle(o.ExportSecretBundle); oerr == nil {
@@ -608,7 +613,7 @@ func (a *Agent) ensureContainer(ctx context.Context, op *wsv1.EnsureContainer) (
 	if oe != nil {
 		return nil, oe
 	}
-	// Host networking (protocol minor 22), up front for the same reason
+	// Host networking (protocol minor 23), up front for the same reason
 	// as everything above: an incompatible combination must fail with the
 	// OLD container still running. Docker itself would accept host mode
 	// with PortBindings and silently discard them, and would refuse a

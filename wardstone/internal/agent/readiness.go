@@ -1,6 +1,6 @@
 package agent
 
-// HomeAutomationReadiness (protocol minor 25): the platform-neutral half
+// HomeAutomationReadiness (protocol minor 26): the platform-neutral half
 // — the closed set of check names and the helpers every check result is
 // built with. The reads live in readiness_linux.go; readiness_other.go
 // answers every check UNSUPPORTED.

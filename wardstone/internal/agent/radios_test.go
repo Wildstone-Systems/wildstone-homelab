@@ -2,7 +2,7 @@
 
 package agent
 
-// ListRadios (protocol minor 24, #434). Every test builds its own sysfs
+// ListRadios (protocol minor 25, #434). Every test builds its own sysfs
 // and /dev/serial/by-id fixture: nothing may depend on what is plugged
 // into the machine running the tests.
 

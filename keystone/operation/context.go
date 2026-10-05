@@ -5,6 +5,8 @@ import "context"
 
 type Identity struct {
 	TaskID          string
+	IdempotencyKey  string
+	Tool            string
 	Step            int64
 	PermissionLabel string
 	Audience        string

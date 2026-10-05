@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/agentapi"
@@ -86,6 +87,19 @@ func (g *Gateway) Invoke(ctx context.Context, req agentapi.InvokeRequest) (agent
 		return agentapi.InvokeResult{Outcome: agentapi.OutcomeDenied, Reason: err.Error()}, nil
 	}
 
+	// Restore and check source taint before effects or cached ledger output.
+	class, err := g.disclosureClass(s.hc.Butler.Seq)
+	if err != nil {
+		return agentapi.InvokeResult{}, fmt.Errorf("agentgateway: resolving the runtime's processing class: %w", err)
+	}
+	dctx, disclosure, err := g.beginDisclosureTurn(ctx, class, s.turn.MemoryDestination(), taskID)
+	if err != nil {
+		return agentapi.InvokeResult{}, fmt.Errorf("agentgateway: opening the disclosure turn: %w", err)
+	}
+	if err := disclosure.Check(); err != nil {
+		return agentapi.InvokeResult{Outcome: agentapi.OutcomeDenied, Reason: "privacy_denied: task source policy refuses this destination"}, nil
+	}
+
 	// Steps 2–5 are one reservation: see Gateway.reserve.
 	g.reserve.Lock()
 	release := sync.OnceFunc(g.reserve.Unlock)
@@ -105,14 +119,16 @@ func (g *Gateway) Invoke(ctx context.Context, req agentapi.InvokeRequest) (agent
 		}, nil
 	}
 
-	// 3. The ledger retrieval (runner.go:706-742).
+	// 3. The ledger retrieval (runner.go:706-742). Workspace resources must
+	// re-enter their resource/receipt seam on every call; tool permission
+	// alone cannot reauthorize cached private content.
 	fp := butler.CallFingerprint(req.Tool, input)
 	steps, err := g.Ledger.Steps(taskID)
 	if err != nil {
 		return agentapi.InvokeResult{}, fmt.Errorf("agentgateway: reading the step ledger: %w", err)
 	}
 	verified := butler.VerifiedResults(steps, g.now(), g.observationTTL())
-	if content, ok := verified[fp]; ok && fp != "" && req.Tool != "recall" {
+	if content, ok := verified[fp]; ok && fp != "" && req.Tool != "recall" && !strings.HasPrefix(req.Tool, "workspace_") && req.Tool != "artifact_export" {
 		if allowed, why := s.toolset.Permits(req.Tool, s.readOnly); !allowed {
 			g.trace(s, butler.LedgerTraceEvent{
 				Type:      butler.TraceDenial,
@@ -158,22 +174,10 @@ func (g *Gateway) Invoke(ctx context.Context, req agentapi.InvokeRequest) (agent
 	// field comes from the handle: the task, this step, the Butler's
 	// name as the permission label, the task's admitted audience.
 	//
-	// The dispatch runs under a call-scoped disclosure turn (§3.5 rule
-	// 3, #345): whatever the Toolset reads through it
-	// — today, the "recall" tool's memory seams — is tracked exactly as
-	// butlerlive.Serve tracked a whole conversation for the provider
-	// wrapper, but scoped to this one call rather than the task's
-	// history, because it is this call's RESULT that is about to be
-	// handed to the runtime.
-	class, err := g.disclosureClass(s.hc.Butler.Seq)
-	if err != nil {
-		return agentapi.InvokeResult{}, fmt.Errorf("agentgateway: resolving the runtime's processing class: %w", err)
-	}
-	dctx, disclosure, err := g.beginDisclosureTurn(ctx, class, s.turn.MemoryDestination())
-	if err != nil {
-		return agentapi.InvokeResult{}, fmt.Errorf("agentgateway: opening the disclosure turn: %w", err)
-	}
-	id := operation.Identity{TaskID: taskID, Step: step, PermissionLabel: label, Audience: audience}
+	// The disclosure turn combines the restored task/session sources with
+	// this call's reads. Its result check persists new sources before the
+	// runtime receives content, so retries cannot shed earlier restrictions.
+	id := operation.Identity{TaskID: taskID, Step: step, PermissionLabel: label, Audience: audience, IdempotencyKey: req.IdempotencyKey, Tool: req.Tool}
 	outcome, err := s.toolset.Execute(operation.With(dctx, id), req.Tool, input, s.readOnly)
 	if err != nil {
 		rec.Error = err.Error()
@@ -184,6 +188,20 @@ func (g *Gateway) Invoke(ctx context.Context, req agentapi.InvokeRequest) (agent
 			Type: butler.TraceToolResult, Step: step, Attempt: attempt.Seq,
 			Payload: jsonPayload(map[string]any{"error": true}),
 		})
+		// Research admission has already parked this task atomically with its
+		// durable counters. Preserve the existing waiting wire outcome so both
+		// native and legacy slices stop instead of treating exhaustion as a
+		// retriable upstream error. A typed error alone cannot invent a wait.
+		if errors.Is(err, runtimedb.ErrResearchBudgetExhausted) {
+			parked, checkErr := g.DB.IsResearchBudgetWait(taskID)
+			if checkErr != nil {
+				return agentapi.InvokeResult{}, checkErr
+			}
+			if parked {
+				return agentapi.InvokeResult{Outcome: agentapi.OutcomeWaiting,
+					WaitReason: agentapi.WaitBudgetExhausted, Reason: runtimedb.ErrResearchBudgetExhausted.Error()}, nil
+			}
+		}
 		return agentapi.InvokeResult{
 			Outcome: agentapi.OutcomeError,
 			Content: fmt.Sprintf("error: %v", err),
@@ -255,7 +273,7 @@ func (g *Gateway) Invoke(ctx context.Context, req agentapi.InvokeRequest) (agent
 		Rejected:          outcome.Rejected,
 	}
 	body, _ := json.Marshal(result)
-	if err := g.Ledger.FinishAttempt(attempt.Seq, true, string(body), ""); errors.Is(err, runtimedb.ErrAttemptFenced) {
+	if err := g.Ledger.FinishAttempt(attempt.Seq, !outcome.Failed, string(body), ""); errors.Is(err, runtimedb.ErrAttemptFenced) {
 		// The lease moved while the tool ran: this attempt was fenced
 		// and its result is refused (§3.7, ADR-W030 A4). The step is
 		// failed rather than verified so no resume serves it.
@@ -269,7 +287,7 @@ func (g *Gateway) Invoke(ctx context.Context, req agentapi.InvokeRequest) (agent
 			Reason:  "the attempt was fenced while the tool ran, so its result was refused",
 		}, nil
 	}
-	if outcome.Rejected {
+	if outcome.Rejected || outcome.Failed {
 		_ = g.Ledger.SetStepState(step, butler.LedgerStepFailed)
 	} else {
 		_ = g.Ledger.SetStepState(step, butler.LedgerStepVerified)
@@ -305,10 +323,14 @@ func (g *Gateway) Invoke(ctx context.Context, req agentapi.InvokeRequest) (agent
 // can name the policy verdict directly.
 func resultFor(taskID string, step int64, tool string, outcome butler.ToolOutcome) agentapi.InvokeResult {
 	switch {
+	case outcome.Failed:
+		return agentapi.InvokeResult{Outcome: agentapi.OutcomeError, Content: outcome.Content, Reason: outcome.Content}
 	case outcome.Rejected && outcome.Plan != nil:
 		return agentapi.InvokeResult{Outcome: agentapi.OutcomeRejected, Content: outcome.Content, Reason: outcome.Content}
 	case outcome.Rejected:
 		return agentapi.InvokeResult{Outcome: agentapi.OutcomeDenied, Content: outcome.Content, Reason: outcome.Content}
+	case outcome.Failed:
+		return agentapi.InvokeResult{Outcome: agentapi.OutcomeError, Content: outcome.Content, Reason: outcome.Content}
 	case outcome.EffectPending:
 		return agentapi.InvokeResult{
 			Outcome: agentapi.OutcomeWaiting, WaitReason: agentapi.WaitConfirmPending, Content: outcome.Content,

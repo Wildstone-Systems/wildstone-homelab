@@ -3,6 +3,8 @@ package pkgtool
 import (
 	"strings"
 	"testing"
+
+	"github.com/chickenrat17/wildstone-homelab/keystone/pkgspec"
 )
 
 // #381: a package's events are held to the closed integration vocabulary
@@ -38,5 +40,33 @@ func TestLintAcceptsWellKnownPantryEventsAndOpenNamespaces(t *testing.T) {
 	dir := writeTraitPkg(t, publishing("pantry.meal_logged", "pantry.item_spoiled", "person.arrived_home"))
 	if got := issuesOfRule(t, dir, "integration"); len(got) != 0 {
 		t.Fatalf("issues = %q", got)
+	}
+}
+
+// An answered query may only claim to support params the closed query
+// defines (docs/catalog-integration-contract.md §4).
+func TestLintRejectsASupportedParamTheQueryDoesNotDefine(t *testing.T) {
+	pkg, err := pkgspec.Parse([]byte(`
+apiVersion: wildstone.dev/v1
+kind: Package
+metadata: { name: m, version: 1.0.0, capability: mail }
+params: [{ name: imap_host }]
+templates: ["x"]
+integrates:
+  - domain: mail
+    shape: connection-only
+    adapter:
+      contract: 1
+      image: "gcr.io/distroless/static-debian12@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab"
+      program: wild-mail-adapter
+    answers:
+      - { query: mail.changes, supports: [folder, flags] }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := integrationIssues(pkg)
+	if len(got) != 1 || !strings.Contains(got[0].Msg, `"flags" is not a param of mail.changes`) {
+		t.Fatalf("issues = %+v", got)
 	}
 }

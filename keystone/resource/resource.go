@@ -248,7 +248,7 @@ type ContainerSpec struct {
 	// NetworkMode is empty for the default — attached to the managed
 	// wildstone bridge, reachable by name as "container/<name>" — or
 	// NetworkModeHost to share the node's own network namespace (protocol
-	// minor 22): what a home-automation hub needs to hear mDNS, SSDP and
+	// minor 23): what a home-automation hub needs to hear mDNS, SSDP and
 	// the other link-local discovery a bridge never forwards. Host mode is
 	// mutually exclusive with Ports (every listener is already on the
 	// host) and with the managed bridge, so such a container is not

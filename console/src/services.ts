@@ -158,6 +158,8 @@ const GROUP_OF: Record<string, Group> = {
   // "what runs this Agent" is looking among the other AI capabilities,
   // beside assistant and language-models, not among the messaging doors.
   "agent-hermes": "AI",
+  workspace: "AI",
+  "web-research": "AI",
 };
 
 export function groupOf(pkg: { capability: string }): Group {

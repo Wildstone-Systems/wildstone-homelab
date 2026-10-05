@@ -2,7 +2,7 @@
 
 package agent
 
-// HomeAutomationReadiness (protocol minor 25, #436) reports whether a
+// HomeAutomationReadiness (protocol minor 26, #436) reports whether a
 // node can host LAN-native home automation: IPv6, multicast on the
 // interfaces that face the LAN, the D-Bus system bus, BlueZ, a Bluetooth
 // adapter and /dev/net/tun. Every check is a read — procfs, sysfs, a

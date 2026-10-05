@@ -1,0 +1,70 @@
+From: Front Office <office@school.example.internal>
+To: ada@example.internal
+Subject: Invitation: School family night
+Date: Thu, 01 Oct 2026 12:00:00 +0000
+Message-ID: <invite-1@school.example.internal>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="outer"
+
+--outer
+Content-Type: multipart/alternative; boundary="alt"
+
+--alt
+Content-Type: text/plain; charset=utf-8
+
+You have been invited to School family night, Thursday October 15 6pm.
+--alt
+Content-Type: text/html; charset=utf-8
+
+<p>You have been invited to <b>School family night</b>.</p>
+--alt
+Content-Type: text/calendar; charset=utf-8; method=REQUEST
+Content-Transfer-Encoding: 7bit
+
+BEGIN:VCALENDAR
+PRODID:-//Example//Fixture//EN
+VERSION:2.0
+METHOD:REQUEST
+BEGIN:VEVENT
+UID:fixture-invite-1@example.internal
+DTSTAMP:20261001T120000Z
+DTSTART;TZID=America/New_York:20261015T180000
+DTEND;TZID=America/New_York:20261015T193000
+SUMMARY:School family night
+LOCATION:School gym
+ORGANIZER;CN=Front Office:mailto:office@school.example.internal
+END:VEVENT
+END:VCALENDAR
+--alt--
+
+--outer
+Content-Type: application/ics; name="invite.ics"
+Content-Disposition: attachment; filename="invite.ics"
+Content-Transfer-Encoding: base64
+
+QkVHSU46VkNBTEVOREFSDQpQUk9ESUQ6LS8vRXhhbXBsZS8vRml4dHVyZS8vRU4NClZFUlNJT046
+Mi4wDQpNRVRIT0Q6UkVRVUVTVA0KQkVHSU46VkVWRU5UDQpVSUQ6Zml4dHVyZS1pbnZpdGUtMUBl
+eGFtcGxlLmludGVybmFsDQpEVFNUQU1QOjIwMjYxMDAxVDEyMDAwMFoNCkRUU1RBUlQ7VFpJRD1B
+bWVyaWNhL05ld19Zb3JrOjIwMjYxMDE1VDE4MDAwMA0KRFRFTkQ7VFpJRD1BbWVyaWNhL05ld19Z
+b3JrOjIwMjYxMDE1VDE5MzAwMA0KU1VNTUFSWTpTY2hvb2wgZmFtaWx5IG5pZ2h0DQpMT0NBVElP
+TjpTY2hvb2wgZ3ltDQpPUkdBTklaRVI7Q049RnJvbnQgT2ZmaWNlOm1haWx0bzpvZmZpY2VAc2No
+b29sLmV4YW1wbGUuaW50ZXJuYWwNCkVORDpWRVZFTlQNCkVORDpWQ0FMRU5EQVINCg==
+
+--outer
+Content-Type: application/pdf; name="flyer.pdf"
+Content-Disposition: attachment; filename="../../etc/flyer.pdf"
+Content-Transfer-Encoding: base64
+
+JVBERi0xLjQKMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw
+MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw
+MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw
+MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw
+MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw
+MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw
+MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw
+MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw
+MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw
+MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw
+MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwCiUlRU9GCg==
+
+--outer--

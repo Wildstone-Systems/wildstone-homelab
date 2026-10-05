@@ -1,0 +1,7 @@
+From: odd@example.internal
+Subject: Unknown charset
+Message-ID: <odd-1@example.internal>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=x-no-such-charset
+
+plain ascii survives an unknown charset

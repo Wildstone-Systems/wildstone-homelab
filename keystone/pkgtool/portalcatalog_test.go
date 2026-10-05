@@ -96,7 +96,7 @@ func TestTheHouseholdIsNeverOfferedTheOperatorsCapabilities(t *testing.T) {
 			"movies-radarr", "tv-sonarr", "music-lidarr", "captcha-flaresolverr",
 			"wildstone-console", "notifications", "dashboard", "dashboard-homarr",
 			"filedrop-wildstone", "assistant-wildstone", "homepage-wildstone",
-			"chat-matrix-admin", "chat-telegram-admin":
+			"chat-matrix-admin", "chat-telegram-admin", "research-ddgs":
 			if portal.Requestable(capability) {
 				t.Errorf("%s (capability %q) is requestable from the household surface", pkg, capability)
 			}

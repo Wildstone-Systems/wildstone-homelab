@@ -1,5 +1,7 @@
 package plan
 
+import "github.com/chickenrat17/wildstone-homelab/keystone/research"
+
 // StoredProposal is what a plan record's plan_json carries: the computed
 // plan plus the exact desired-state documents approval will commit.
 //
@@ -13,6 +15,8 @@ package plan
 // makes that particular mistake a compile-time concern instead of a
 // silent one.
 type StoredProposal struct {
+	// Research is an exact-version, Owner-only registry change. It provisions no host resource.
+	Research *research.Change `json:"research,omitempty"`
 	// AuditOnly records a member's immediate maintenance-tracker edit. It is
 	// history, not a submitted Plan or permission to execute host changes.
 	AuditOnly bool           `json:"auditOnly,omitempty"`
@@ -107,6 +111,21 @@ type SubscriptionChange struct {
 	CapabilitySet string `json:"capabilitySet"`
 	// BudgetJSON bounds what a matched Task may spend.
 	BudgetJSON string `json:"budgetJson,omitempty"`
+	// Trigger is "event" (the default, 0086) or "schedule" (0099, epic
+	// #326 S03). Cadence is a Go duration for a scheduled subscription
+	// (default 15m, 5m..24h); Source names the integration connection it
+	// reads. A Personal source binds the subscription to that
+	// connection's owning Person, whose own authorization dispatch
+	// additionally requires — this approval never substitutes for it.
+	Trigger string `json:"trigger,omitempty"`
+	Cadence string `json:"cadence,omitempty"`
+	Source  string `json:"source,omitempty"`
+	// Revises, when set, makes this the approval of an EDIT to an
+	// existing subscription rather than a new one: approving it enables
+	// exactly Version of row Revises, and nothing if that row has been
+	// edited again since.
+	Revises int64 `json:"revises,omitempty"`
+	Version int   `json:"version,omitempty"`
 }
 
 // RoutineChange is the exact routine version an Owner reviews. Output audience

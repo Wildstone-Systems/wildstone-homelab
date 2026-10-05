@@ -56,8 +56,9 @@ func Open(path string) (*DB, error) {
 	// front puts the contention back under busy_timeout, where it waits.
 	// Read-only transactions can still opt out with
 	// BeginTx(ctx, &sql.TxOptions{ReadOnly: true}) — the driver leaves
-	// those DEFERRED.
-	dsn := fmt.Sprintf("file:%s?_txlock=immediate&_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)", path)
+	// those DEFERRED. FULL synchronous WAL commits make publication journal
+	// acknowledgements durable independently of filesystem object fsyncs (W047).
+	dsn := fmt.Sprintf("file:%s?_txlock=immediate&_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)&_pragma=synchronous(FULL)", path)
 	sqlDB, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("runtimedb: open %s: %w", path, err)
@@ -74,7 +75,7 @@ func Open(path string) (*DB, error) {
 // support for exercising a migration against data written by the schema
 // before it (the rebuild in 0005 is the first that had to preserve rows).
 func openUnmigrated(path string) (*DB, error) {
-	dsn := fmt.Sprintf("file:%s?_txlock=immediate&_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)", path)
+	dsn := fmt.Sprintf("file:%s?_txlock=immediate&_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)&_pragma=synchronous(FULL)", path)
 	sqlDB, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("runtimedb: open %s: %w", path, err)
@@ -287,7 +288,7 @@ func now() string {
 // 0043 — which is exactly the deployment the pre-flight report is for.
 // Nothing in production calls it.
 func OpenThroughForTest(path, last string) (*DB, error) {
-	dsn := fmt.Sprintf("file:%s?_txlock=immediate&_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)", path)
+	dsn := fmt.Sprintf("file:%s?_txlock=immediate&_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)&_pragma=synchronous(FULL)", path)
 	sqlDB, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("runtimedb: open %s: %w", path, err)
@@ -306,4 +307,14 @@ func OpenThroughForTest(path, last string) (*DB, error) {
 // way to test a trigger. Nothing in production calls it.
 func (db *DB) ExecForTest(query string, args ...any) (sql.Result, error) {
 	return db.sql.Exec(query, args...)
+}
+
+// CountForTest runs a raw single-integer query (a COUNT). It exists so
+// tests in other packages can assert that a table holds nothing it must
+// not — the capture checks' "no task trace was opened". Nothing in
+// production calls it.
+func (db *DB) CountForTest(query string, args ...any) (int, error) {
+	var n int
+	err := db.sql.QueryRow(query, args...).Scan(&n)
+	return n, err
 }

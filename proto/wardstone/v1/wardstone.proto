@@ -138,8 +138,9 @@ message Operation {
     DiskSpace disk_space = 33;
     ExportSecretBundle export_secret_bundle = 34;
     ImportSecretBundle import_secret_bundle = 35;
-    ListRadios list_radios = 36; // protocol minor 24
-    HomeAutomationReadiness home_automation_readiness = 37; // protocol minor 25
+    EraseSecret erase_secret = 36;
+    ListRadios list_radios = 37; // protocol minor 25
+    HomeAutomationReadiness home_automation_readiness = 38; // protocol minor 26
   }
 }
 
@@ -182,8 +183,9 @@ message OpResult {
     DiskSpaceResult disk_space = 35;
     ExportSecretBundleResult export_secret_bundle = 36;
     ImportSecretBundleResult import_secret_bundle = 37;
-    ListRadiosResult list_radios = 38; // protocol minor 24
-    HomeAutomationReadinessResult home_automation_readiness = 39; // protocol minor 25
+    EraseSecretResult erase_secret = 38;
+    ListRadiosResult list_radios = 39; // protocol minor 25
+    HomeAutomationReadinessResult home_automation_readiness = 40; // protocol minor 26
   }
 }
 
@@ -263,7 +265,7 @@ message EnsureContainer {
   // A pre-minor-14 agent ignores this field, so the container starts
   // exactly as it does today.
   //
-  // One name is not resolved (protocol minor 23): "host.docker.internal"
+  // One name is not resolved (protocol minor 24): "host.docker.internal"
   // is written as Docker's literal "host-gateway", which the daemon
   // replaces with its bridge gateway. Keystone sends it only to the
   // ingress proxy and the dashboard, so a Route upstream "host/<port>"
@@ -308,7 +310,7 @@ message EnsureContainer {
   // all, which is why Docker's default is small enough to matter.
   string shm_size = 17;
 
-  // Which network namespace the container runs in (protocol minor 22).
+  // Which network namespace the container runs in (protocol minor 23).
   // UNSPECIFIED is everything before this field existed: Docker's bridge
   // networking, attached to `network` when that is set. HOST shares the
   // node's own network namespace — what a home-automation hub needs to
@@ -324,7 +326,7 @@ message EnsureContainer {
   // UNSPECIFIED, because guessing bridge for a spec that asked for
   // something else is a quiet wrong answer.
   //
-  // A pre-minor-22 agent ignores this field and would start the container
+  // A pre-minor-23 agent ignores this field and would start the container
   // on the bridge with nothing published, which is why Keystone refuses to
   // dispatch a HOST spec to one (resource.HostNetworkProtocolMinor).
   ContainerNetworkMode network_mode = 18;
@@ -386,7 +388,7 @@ message DeviceMapping {
 }
 
 message Mount {
-  string source = 1; // host path (managed-prefix-restricted, plus read-only /run/dbus from minor 26) or volume name
+  string source = 1; // host path (managed-prefix-restricted, plus read-only /run/dbus from minor 27) or volume name
   string target = 2;
   bool read_only = 3;
 }
@@ -527,10 +529,10 @@ message InspectContainerResult {
   // had rather than concluding the proxy has gone.
   repeated string ip_addresses = 7;
 
-  // Docker's HostConfig.NetworkMode verbatim (protocol minor 22): "host"
+  // Docker's HostConfig.NetworkMode verbatim (protocol minor 23): "host"
   // for a container in the node's namespace, otherwise the bridge or
   // network name Docker recorded. Verbatim for the reason `status` is.
-  // Empty from an agent older than minor 22, which readers must treat as
+  // Empty from an agent older than minor 23, which readers must treat as
   // "unknown" rather than "bridge".
   string network_mode = 8;
 }
@@ -1071,7 +1073,43 @@ message ImportSecretBundleResult {
   uint32 secret_count = 1;
 }
 
-// ---------------------------------------------------------------- home automation (protocol minor 24)
+// EraseSecret removes one secret from the node's store and proves it is
+// gone (protocol minor 22, ADR-W030 A5.1, epic #326 S02). It is the
+// erase half of the write-only path: there is still no arm that reads a
+// value back, and this one returns nothing about the value either.
+//
+// It is VERSION-FENCED. max_version names the newest version the caller
+// means to erase; a store holding a NEWER version under the same name
+// (a later PutSecret the caller has not seen) is refused as FORBIDDEN
+// rather than erased, so a stale erase can never destroy a credential
+// that replaced the one it was aimed at. 0 means "any version".
+//
+// It is idempotent: erasing an absent secret succeeds with existed =
+// false and absent = true, which is what a retry after a lost answer
+// must see.
+//
+// The result is EVIDENCE, not an acknowledgement. After unlinking, the
+// agent re-checks that neither the sealed value nor its sidecar exists
+// and reports that as absent. evidence binds the answer to this request:
+// sha256("wardstone-erase-v1" || name || 0x00 || nonce || 0x00 ||
+// decimal(erased_version) || 0x00 || ("absent"|"present")), so a replayed
+// or reordered answer for another erase does not verify. The channel is
+// the mTLS session; evidence is what makes the answer specific.
+message EraseSecret {
+  string name = 1;
+  uint32 max_version = 2;
+  // A caller-chosen random value echoed into the evidence. Required.
+  string nonce = 3;
+}
+
+message EraseSecretResult {
+  bool existed = 1;
+  uint32 erased_version = 2;
+  bool absent = 3;
+  bytes evidence = 4;
+}
+
+// ---------------------------------------------------------------- home automation (protocol minor 25)
 
 // ListRadios inventories the device candidates a home-automation app may
 // be handed: USB-backed serial adapters (Zigbee/Z-Wave/Thread coordinators
@@ -1151,7 +1189,7 @@ message ListRadiosResult {
   bool platform_supported = 2;
 }
 
-// ---------------------------------------------------------------- home automation readiness (protocol minor 25)
+// ---------------------------------------------------------------- home automation readiness (protocol minor 26)
 
 // HomeAutomationReadiness reports whether a node can host LAN-native home
 // automation. Bounded and read-only: procfs/sysfs values, the kernel's

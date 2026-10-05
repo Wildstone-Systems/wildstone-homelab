@@ -123,6 +123,11 @@ func init() {
 		// content of the decision.
 		{Name: "approve", Arg: "<id>", Help: "why approving happens elsewhere", Surfaces: bothSurfaces, Run: (*Server).chatApprove},
 
+		// /mail answers a private mail review by its exact candidate and
+		// revision (ADR-W030 A8.1's text fallback, A5.7): deterministic,
+		// direct-message only, bound to the conversation it was sent to.
+		{Name: "mail", Arg: "<add|apply|dismiss> <id> <revision>", Help: "answer a private review of an event from your mail", Surfaces: bothSurfaces, Run: (*Server).chatMail},
+
 		{Name: "today", Help: "what has happened in the house today", Surfaces: familyOnly, Run: (*Server).chatToday},
 		{Name: "actions", Help: "what I can do here", Surfaces: familyOnly, Run: (*Server).chatActions},
 	}

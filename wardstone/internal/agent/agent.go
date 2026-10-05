@@ -115,17 +115,24 @@ import (
 // agent refuses it as FORBIDDEN, so Keystone gates a spec adding it on
 // this minor (resource.IPCLockProtocolMinor).
 //
-// 22: adds EnsureContainer.network_mode (CONTAINER_NETWORK_MODE_HOST) and
+// 22: adds EraseSecret, the version-fenced erase of one node secret with
+// absent-after-erase evidence (ADR-W030 A5.1, epic #326 S02). An older
+// agent answers it as an unknown operation; Keystone treats that as
+// erasure UNVERIFIED and keeps the connection degraded, never as done.
+// Personal integration credentials (secreterase.PersonalPrefix) are also
+// left out of the recovery export from this minor on.
+//
+// 23: adds EnsureContainer.network_mode (CONTAINER_NETWORK_MODE_HOST) and
 //
 //	InspectContainerResult.network_mode. A home-automation hub has to
 //	share the node's network namespace to hear mDNS, SSDP and the other
 //	link-local discovery a bridge never forwards. Host mode excludes
 //	ports and network; both are refused before an existing container is
-//	touched. A pre-minor-22 agent would ignore the field and start the
+//	touched. A pre-minor-23 agent would ignore the field and start the
 //	container on the bridge with nothing published, so Keystone refuses
 //	to dispatch a host-mode spec to one (resource.HostNetworkProtocolMinor).
 //
-// 23: EnsureContainer.host_aliases gives one closed name,
+// 24: EnsureContainer.host_aliases gives one closed name,
 //
 //	"host.docker.internal", Docker's "host-gateway" value instead of a
 //	node DNS answer (#433), so a bridge-networked proxy can reach a
@@ -135,20 +142,20 @@ import (
 //	Keystone withholds the alias from and refuses host Routes on one
 //	(resource.HostGatewayProtocolMinor).
 //
-// 24: adds ListRadios (#434): a read-only inventory of USB serial and
+// 25: adds ListRadios (#434): a read-only inventory of USB serial and
 //
 //	Bluetooth adapters from /dev/serial/by-id and sysfs, for the device
 //	picker a Zigbee/Z-Wave/Bluetooth app needs. An older agent answers
 //	it as an unknown operation (INVALID), which the probe endpoint
 //	relays as-is.
 //
-// 25: adds HomeAutomationReadiness (#436): typed, evidence-carrying
+// 26: adds HomeAutomationReadiness (#436): typed, evidence-carrying
 //
 //	checks for IPv6, IPv6 forwarding, multicast, the D-Bus system bus,
 //	BlueZ, Bluetooth adapters and /dev/net/tun. Read-only; a missing
 //	prerequisite is a MISSING check, not an OpError.
 //
-// 26: EnsureContainer accepts a bind mount of /run/dbus, the D-Bus system
+// 27: EnsureContainer accepts a bind mount of /run/dbus, the D-Bus system
 //
 //	bus, from outside the managed prefixes (#445): the one entry on a
 //	closed host-system-mount allowlist (devices.go), read-only at the
@@ -156,7 +163,7 @@ import (
 //	use the host's BlueZ. No schema change. An older agent refuses it as
 //	outside its managed prefixes, so Keystone refuses to dispatch such a
 //	spec to one (resource.HostSystemMountProtocolMinor).
-const ProtocolMinor = 26
+const ProtocolMinor = 27
 
 // maxUpdateMsgBytes is the gRPC message size cap on both ends of the
 // session/join connections (ADR-W003 W5). SelfUpdate ships the new binary

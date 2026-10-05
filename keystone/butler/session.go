@@ -178,6 +178,9 @@ func (s *Session) Run(ctx context.Context, p provider.Provider, userMessage stri
 				rec.Plan = outcome.Plan
 				rec.ResourceYAML = outcome.ResourceYAML
 				rec.Rejected = outcome.Rejected
+				if outcome.Failed {
+					rec.Error = outcome.Content
+				}
 				if outcome.Plan != nil {
 					tr.Audit.Plans = append(tr.Audit.Plans, outcome.Plan)
 				}

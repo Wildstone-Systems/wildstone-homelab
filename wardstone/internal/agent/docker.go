@@ -216,7 +216,7 @@ type hostConfig struct {
 	// container's /etc/hosts (protocol minor 14). Resolved by the agent
 	// from host_aliases, because the node is where the name resolves —
 	// except hostGatewayAlias, written as Docker's "host-gateway"
-	// (protocol minor 23).
+	// (protocol minor 24).
 	ExtraHosts []string `json:"ExtraHosts,omitempty"`
 
 	// The H1 hardening fields (protocol minor 18). Reached only through
@@ -245,7 +245,7 @@ type hostConfig struct {
 	ShmSize int64 `json:"ShmSize,omitempty"`
 	// NetworkMode is "host" for a CONTAINER_NETWORK_MODE_HOST op and
 	// empty otherwise, which Docker reads as its default bridge (protocol
-	// minor 22). Nothing else is ever written here: "container:<id>"
+	// minor 23). Nothing else is ever written here: "container:<id>"
 	// would join another container's namespace.
 	NetworkMode string `json:"NetworkMode,omitempty"`
 }

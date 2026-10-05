@@ -1,0 +1,6 @@
+*
+!requirements.txt
+!contract.py
+!engine.py
+!service.py
+!Dockerfile

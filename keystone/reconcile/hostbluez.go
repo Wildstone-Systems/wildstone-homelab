@@ -12,7 +12,7 @@ package reconcile
 // to get local Bluetooth ends up with neither, behind a green step.
 //
 // So before such a container is created or replaced, the node's
-// HomeAutomationReadiness (protocol minor 25, #436; any agent that accepts
+// HomeAutomationReadiness (protocol minor 26, #436; any agent that accepts
 // the mount speaks it) is read, and DEFINITE evidence of absence refuses
 // the step before any pull or EnsureContainer, leaving the running
 // container — a proxy-mode Home Assistant during a switch — untouched:

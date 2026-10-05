@@ -19,8 +19,8 @@ import (
 // The same stick has several names: its /dev/serial/by-id alias and the
 // /dev/ttyUSB* node the alias resolves to. Only the node knows which
 // alias points where, so the node's radio inventory (ListRadios, protocol
-// minor 24, #434) is what folds the names into one device. When the node
-// cannot be asked — offline, or an agent older than minor 24 — the check
+// minor 25, #434) is what folds the names into one device. When the node
+// cannot be asked — offline, or an agent older than minor 25 — the check
 // falls back to exact cleaned paths: it still catches the same path
 // written twice, and it never invents a conflict between two names it
 // cannot prove are one device.
@@ -32,7 +32,7 @@ import (
 
 // RadioInventoryProtocolMinor is the Wardstone protocol minor that first
 // carried ListRadios (#434). An older agent answers "unknown operation".
-const RadioInventoryProtocolMinor = 24
+const RadioInventoryProtocolMinor = 25
 
 // Radio is the slice of one ListRadios entry ownership needs: the
 // inventory's stable identity and every host path that reaches the

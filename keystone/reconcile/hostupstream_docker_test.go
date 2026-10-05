@@ -2,7 +2,7 @@ package reconcile
 
 // An opt-in test that puts the REAL ingress image on a user-defined
 // bridge, gives it the host-gateway alias exactly as the agent writes it
-// (wardstone hostaliases.go, protocol minor 23), loads the Caddy config
+// (wardstone hostaliases.go, protocol minor 24), loads the Caddy config
 // this package renders for a "host/<port>" Route, and proxies a request
 // to a service listening on the host (#433).
 //

@@ -23,6 +23,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/chickenrat17/wildstone-homelab/keystone/integration"
 	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 )
@@ -105,7 +106,11 @@ func (s *Server) bindIntegrationAdapter(r *http.Request, id principal.Identity) 
 	name := r.PathValue("name")
 	var req struct {
 		Principal string `json:"principal"`
-		Unbind    bool   `json:"unbind"`
+		// Node binds the credential to one placement: it claims only
+		// while that node holds the lease (ADR-W030 A5). Empty binds it
+		// to the connection wherever it runs.
+		Node   string `json:"node"`
+		Unbind bool   `json:"unbind"`
 	}
 	if code, err := decodeStrict(r, &req); err != nil {
 		return nil, code, err
@@ -119,13 +124,17 @@ func (s *Server) bindIntegrationAdapter(r *http.Request, id principal.Identity) 
 		return map[string]any{"unbound": req.Principal, "note": "the connection lease moved; " +
 			"work claimed by the old adapter will be refused when it answers"}, http.StatusOK, nil
 	}
-	if err := s.DB.BindAdapterPrincipal(req.Principal, name, actingMember(id)); err != nil {
+	if err := s.DB.BindAdapterPrincipalOnNode(req.Principal, name, req.Node, actingMember(id)); err != nil {
 		if errors.Is(err, runtimedb.ErrNotFound) {
 			return nil, http.StatusNotFound, fmt.Errorf("no connection named %q", name)
 		}
 		return nil, http.StatusBadRequest, err
 	}
-	return map[string]any{"bound": req.Principal}, http.StatusOK, nil
+	out := map[string]any{"bound": req.Principal}
+	if req.Node != "" {
+		out["node"] = req.Node
+	}
+	return out, http.StatusOK, nil
 }
 
 // recordIntegrationCapability stores what a connection was VERIFIED to
@@ -195,6 +204,12 @@ func (s *Server) getIntegrationWork(r *http.Request, _ principal.Identity) (any,
 	w, err := s.DB.GetIntegrationWork(seq)
 	if err != nil {
 		return nil, http.StatusNotFound, fmt.Errorf("no such work")
+	}
+	// A mail read's answer carries a Person's normalized messages. It is
+	// for the mailbox monitor in this process, never for an API caller
+	// (epic #326: no full message body in any API response).
+	if d, ok := integration.DomainOf(w.Capability); ok && d.Name == "mail" {
+		w.ResultJSON = ""
 	}
 	return w, http.StatusOK, nil
 }
@@ -404,7 +419,7 @@ func (s *Server) placeAndReport(name string) (any, int, error) {
 
 // removeIntegrationPlacement fences a node now and starts the removal it
 // must then prove.
-func (s *Server) removeIntegrationPlacement(r *http.Request, _ principal.Identity) (any, int, error) {
+func (s *Server) removeIntegrationPlacement(r *http.Request, id principal.Identity) (any, int, error) {
 	name := r.PathValue("name")
 	var req struct {
 		Node string `json:"node"`
@@ -418,11 +433,19 @@ func (s *Server) removeIntegrationPlacement(r *http.Request, _ principal.Identit
 		}
 		return nil, http.StatusBadRequest, err
 	}
-	return map[string]any{
+	out := map[string]any{
 		"fencing": req.Node,
 		"note": "the adapter is fenced already. The connection stays degraded until the container " +
 			"removal, the secret erasure and the credential revocation are each proven",
-	}, http.StatusOK, nil
+	}
+	// Personal credential copies on the node were fenced with it; erase
+	// them now and let the node's evidence, not a caller, say they are
+	// gone (ProvePlacementRemoval checks it).
+	if erasures := s.eraseCredentialCopies(r.Context(), name, false); len(erasures) > 0 {
+		out["credentialErasures"] = erasures
+	}
+	s.refileAdapterRender(name, actingMember(id))
+	return out, http.StatusOK, nil
 }
 
 // proveIntegrationPlacementRemoval records what has actually been

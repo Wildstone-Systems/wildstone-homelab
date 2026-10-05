@@ -12,7 +12,8 @@ package agent
 // The op surface over this store is WRITE-ONLY: EnsureSecret (local
 // random generation — the value never crosses the wire), PutSecret
 // (operator-supplied value, transits once over mTLS), ListSecrets
-// (metadata only). There is no GetSecret arm at all. The single read
+// (metadata only), EraseSecret (removal with absent-after-erase
+// evidence, protocol minor 22). There is no GetSecret arm at all. The single read
 // path is materializeEnv, called by ensureContainer to substitute env
 // values of the form secret/<name> into the docker create body.
 
@@ -35,6 +36,7 @@ import (
 
 	wsv1 "github.com/chickenrat17/wildstone-homelab/proto/gen/wardstone/v1"
 	"github.com/chickenrat17/wildstone-homelab/proto/recoveryseal"
+	"github.com/chickenrat17/wildstone-homelab/proto/secreterase"
 )
 
 // secretRefPrefix marks a container env VALUE as a reference into the
@@ -278,6 +280,12 @@ func (a *Agent) exportSecretBundle(op *wsv1.ExportSecretBundle) (*wsv1.OpResult_
 		if oerr := validSecretName(name); oerr != nil {
 			return nil, opErr(wsv1.ErrorCode_ERROR_CODE_INVALID, "secret store contains an invalid name")
 		}
+		// A Personal integration credential belongs to one Person, not
+		// the household: it is re-entered by them after a recovery,
+		// never carried in the household's kit (ADR-W033 D1).
+		if strings.HasPrefix(name, secreterase.PersonalPrefix) {
+			continue
+		}
 		names = append(names, name)
 	}
 	if len(names) > maxRecoverySecrets {
@@ -497,4 +505,85 @@ func (a *Agent) materializeEnv(env map[string]string) (map[string]string, *wsv1.
 		out[k] = value
 	}
 	return out, nil
+}
+
+// ---------------------------------------------------------------- erase
+
+// eraseSecret removes one secret and proves it is gone (protocol minor
+// 22, ADR-W030 A5.1). Version-fenced: a store holding a newer version
+// than max_version is refused rather than erased, so a stale erase never
+// destroys the credential that replaced the one it was aimed at.
+// Idempotent: an absent secret is a successful erase of nothing.
+//
+// The sealed file is overwritten before it is unlinked. The ciphertext
+// is useless without secret.key, which stays; the overwrite is so the
+// blocks the ciphertext lived in do not keep it for whoever later reads
+// the disk with the key in hand.
+func (a *Agent) eraseSecret(op *wsv1.EraseSecret) (*wsv1.OpResult_EraseSecret, *wsv1.OpError) {
+	name := op.GetName()
+	if oerr := validSecretName(name); oerr != nil {
+		return nil, oerr
+	}
+	if op.GetNonce() == "" || len(op.GetNonce()) > 128 {
+		return nil, opErr(wsv1.ErrorCode_ERROR_CODE_INVALID, "erase of %q needs a nonce of at most 128 bytes", name)
+	}
+	valuePath := filepath.Join(a.secretsDir(), name)
+	metaPath := valuePath + ".meta.json"
+
+	existed := a.secretExists(name)
+	var version uint32
+	if meta, err := a.readSecretMeta(name); err == nil {
+		version = meta.Version
+		existed = true
+	}
+	if existed && op.GetMaxVersion() != 0 && version > op.GetMaxVersion() {
+		return nil, opErr(wsv1.ErrorCode_ERROR_CODE_FORBIDDEN,
+			"secret %q is at version %d, newer than the %d this erase was fenced to", name, version, op.GetMaxVersion())
+	}
+	if existed {
+		if err := overwriteAndRemove(valuePath); err != nil {
+			return nil, opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "erasing secret %q: %v", name, err)
+		}
+		if err := os.Remove(metaPath); err != nil && !os.IsNotExist(err) {
+			return nil, opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "erasing secret %q metadata: %v", name, err)
+		}
+		if d, err := os.Open(a.secretsDir()); err == nil {
+			_ = d.Sync()
+			_ = d.Close()
+		}
+	}
+	// The proof is a fresh look, not the absence of an error above.
+	_, valueErr := os.Lstat(valuePath)
+	_, metaErr := os.Lstat(metaPath)
+	absent := os.IsNotExist(valueErr) && os.IsNotExist(metaErr)
+	return &wsv1.OpResult_EraseSecret{EraseSecret: &wsv1.EraseSecretResult{
+		Existed:       existed,
+		ErasedVersion: version,
+		Absent:        absent,
+		Evidence:      secreterase.Evidence(name, op.GetNonce(), version, absent),
+	}}, nil
+}
+
+func overwriteAndRemove(path string) error {
+	f, err := os.OpenFile(path, os.O_WRONLY, 0)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if info, err := f.Stat(); err == nil && info.Size() > 0 {
+		if _, err := f.WriteAt(make([]byte, info.Size()), 0); err != nil {
+			f.Close()
+			return err
+		}
+		_ = f.Sync()
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
 }

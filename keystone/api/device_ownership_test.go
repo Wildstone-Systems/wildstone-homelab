@@ -181,7 +181,7 @@ func TestDuplicateRadioCheckSkipsOldAgents(t *testing.T) {
 	h := newHarness(t)
 	calls := 0
 	h.s.Agents = radioAgent(t, &calls)
-	h.s.LiveNodes = func() []LiveNode { return []LiveNode{{NodeID: "n1", ProtocolMinor: 23}} }
+	h.s.LiveNodes = func() []LiveNode { return []LiveNode{{NodeID: "n1", ProtocolMinor: 24}} }
 	seedDesired(t, h, deviceContainerResource("zwave-js-ui", "zwave-js-ui", "n1", zwaveAlias))
 	resp := h.do(runtimedb.RoleOperator, http.MethodPost, "/api/v1/plans", proposalRequest{
 		Summary: "hass", Put: []string{deviceContainerDoc(t, "homeassistant", "home-assistant", "n1", zwaveTTY)},

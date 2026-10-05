@@ -15,6 +15,7 @@ import { Drawer } from "../ui/Drawer";
 import { SecretInput } from "../ui/SecretInput";
 import { PantryPairingPanel } from "./PantryPairing";
 import { ServiceAccessPanel } from "./ServiceAccess";
+import { MailWatchEntry } from "./MailWatch";
 
 // Services (ADR-W021 A5, ADR-W027): the catalog, and installing from it.
 //
@@ -33,7 +34,7 @@ import { ServiceAccessPanel } from "./ServiceAccess";
 // list is the point — meeting a missing secret as a failed reconcile
 // tick, after approving a plan that could not have worked, is the shape
 // of F37.
-export function Services({ openPackage }: { openPackage?: string } = {}) {
+export function Services({ openPackage, onWatchMailbox }: { openPackage?: string; onWatchMailbox?: () => void } = {}) {
   const list = useLoad(() => api.packages(), []);
   // Removing a capability proposes deleting everything it owns, and
   // only the statefile knows what that is.
@@ -62,6 +63,7 @@ export function Services({ openPackage }: { openPackage?: string } = {}) {
         list.reload();
         resources.reload();
       }}
+      onWatchMailbox={onWatchMailbox}
     />
   );
 }
@@ -88,6 +90,7 @@ export function ServicesView({
   // already installed, opens once the list has it.
   openPackage,
   onInstalled,
+  onWatchMailbox,
 }: {
   pkgs: PackageView[];
   resources?: ResourceView[];
@@ -98,6 +101,7 @@ export function ServicesView({
   initialHideBlocked?: boolean;
   openPackage?: string;
   onInstalled: () => void;
+  onWatchMailbox?: () => void;
 }) {
   const [tab, setTab] = useState<"installed" | "catalog">(initialTab);
   const [query, setQuery] = useState("");
@@ -348,6 +352,7 @@ export function ServicesView({
               setRemoving(detail);
               setDetail(null);
             }}
+            onWatchMailbox={onWatchMailbox}
           />
         )}
       </Drawer>
@@ -572,10 +577,12 @@ export function InstalledDetail({
   pkg,
   onReconfigure,
   onRemove,
+  onWatchMailbox,
 }: {
   pkg: PackageView;
   onReconfigure: () => void;
   onRemove?: () => void;
+  onWatchMailbox?: () => void;
 }) {
   const total = pkg.addresses?.length ?? 0;
   return (
@@ -651,6 +658,11 @@ export function InstalledDetail({
       {/* PantryOS runs where it already runs; pairing is how Wildstone
           reaches it (ADR-W044 A6). */}
       {pkg.capability === "pantry" && <PantryPairingPanel />}
+
+      {/* Email carries a dormant mailbox reader (epic #326). It belongs to
+          this capability, not the catalog: each Person turns it on for
+          their own mailbox, and nothing reads mail until they do. */}
+      {pkg.capability === "mail" && <MailWatchEntry onOpen={onWatchMailbox} />}
 
       <div className="row" style={{ marginTop: "var(--space-8)" }}>
         <button className="btn btn-secondary" onClick={onReconfigure}>

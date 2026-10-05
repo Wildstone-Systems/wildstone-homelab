@@ -23,7 +23,7 @@ approval and the reconcile loop.
 | Test (keystone/api) | What it proves |
 |---|---|
 | `TestHomeAutomationE2EReferenceStackFromEmpty` | Empty Statefile → base layer → the six packages, one approved plan at a time, in dependency order; params filled from the node; container shapes; Keystone restart mid-sequence; external steps; complete. Then: Keystone restart, host reboot, agent disconnect, a crashed service (drift plan), and a node lost mid-apply while switching Bluetooth to host-bluez. |
-| `TestHomeAutomationE2EProtocolSkew` | A rolling agent upgrade 21 → 26: host networking (22) and host Routes (23) and the /run/dbus mount (26) refused by the reconciler at apply; the radio inventory (24) and readiness probe (25) refused by the aggregate before any plan; services untouched; each upgrade continues the setup. |
+| `TestHomeAutomationE2EProtocolSkew` | A rolling agent upgrade 21 → 27: host networking (23) and host Routes (24) and the /run/dbus mount (27) refused by the reconciler at apply; the radio inventory (25) and readiness probe (26) refused by the aggregate before any plan; services untouched; each upgrade continues the setup. |
 | `TestHomeAutomationE2EBrokenPrerequisites` | IPv6 off blocks Matter and Thread; IPv6 forwarding off blocks Thread (with the sysctl's evidence and fix), and Thread forced through the capability endpoint fails its health gate; D-Bus missing blocks host-bluez, and forced through, the reconciler refuses before the proxy container is touched. Fixing each lets the setup finish. |
 | `TestHomeAutomationCatalogWiring` | Every component resolves to a shipped package the orchestration can fill without the household typing a value the node reports. |
 

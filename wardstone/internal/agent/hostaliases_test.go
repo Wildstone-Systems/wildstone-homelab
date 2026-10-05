@@ -49,7 +49,7 @@ func TestResolveHostAliasesOnEmptyIsNil(t *testing.T) {
 }
 
 // The host-gateway alias is written as Docker's own "host-gateway" value
-// rather than resolved (protocol minor 23): the node has no DNS answer
+// rather than resolved (protocol minor 24): the node has no DNS answer
 // for it, and the daemon is the only party that knows its bridge
 // gateway. Every other name is still resolved, so this is one closed
 // value, not a way to hand Docker arbitrary ExtraHosts.

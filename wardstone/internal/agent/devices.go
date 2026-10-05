@@ -82,7 +82,7 @@ var capabilities = map[string]string{
 }
 
 // hostSystemMounts is the closed set of host paths OUTSIDE the managed
-// prefixes a container may be bind-mounted (protocol minor 26, #445).
+// prefixes a container may be bind-mounted (protocol minor 27, #445).
 // Everywhere else ADR-W003 A1 holds: a host path is mounted only from a
 // managed prefix. Each entry is an exact path, mounted read-only at the
 // same path inside; keystone/resource.HostSystemMounts is the lint twin

@@ -39,7 +39,7 @@ import (
 
 // homeAutomationReadinessProtocolMinor is the Wardstone protocol minor
 // that first carried HomeAutomationReadiness (#436).
-const homeAutomationReadinessProtocolMinor = 25
+const homeAutomationReadinessProtocolMinor = 26
 
 // haProbeTimeout bounds each probe the aggregate waits on. Both ops read
 // a handful of files; a node that has not answered by then is reported

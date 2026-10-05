@@ -266,7 +266,7 @@ func TestHomeAutomationE2EProtocolSkew(t *testing.T) {
 	req := selectOnly(referenceRequest(), haZigbee, haBluetooth)
 	req.Modes[haBluetooth] = "host-bluez"
 
-	// No readiness probe below 25, so no host address to fill in: the
+	// No readiness probe below 26, so no host address to fill in: the
 	// household is asked for it rather than given a guess.
 	o := st.orch("preview", req, http.StatusOK)
 	if o.Next.ID != "mqtt:resolve_blockers" || o.Next.blocker("param_needed") == nil {
@@ -278,41 +278,41 @@ func TestHomeAutomationE2EProtocolSkew(t *testing.T) {
 	}
 
 	st.refusedAtApply(req, "home-assistant:install_package:home-assistant",
-		"needs wardstone protocol minor 22 (networkMode: host) and the agent on node ha1 speaks minor 21")
+		"needs wardstone protocol minor 23 (networkMode: host) and the agent on node ha1 speaks minor 21")
 	if st.has("home-assistant") {
 		t.Fatal("home-assistant was started on a minor-21 agent")
 	}
 
-	// Minor 22 could run the container, but not yet the host Route in
+	// Minor 23 could run the container, but not yet the host Route in
 	// front of it: the loop's next pass over the committed install stops
 	// at the Route with the same kind of refusal, and the aggregate
 	// carries it.
-	st.fleet.Do(st.node, func(n *fakenode.Node) { n.ProtocolMinor = 22 })
-	routeRefusal := "routes to host/8123, which needs wardstone protocol minor 23, and the agent on node ha1 speaks minor 22"
+	st.fleet.Do(st.node, func(n *fakenode.Node) { n.ProtocolMinor = 23 })
+	routeRefusal := "routes to host/8123, which needs wardstone protocol minor 24, and the agent on node ha1 speaks minor 23"
 	if out := st.tick(); !strings.Contains(out.Failed, routeRefusal) {
-		t.Fatalf("minor 22: tick %q", out.Failed)
+		t.Fatalf("minor 23: tick %q", out.Failed)
 	}
 	if o := st.orch("preview", req, http.StatusOK); o.Next.Action != haStepResolve || !haEvidenceSays(o.Next.Blockers, routeRefusal) {
-		t.Fatalf("minor 22: next %s %+v", o.Next.ID, o.Next.Blockers)
+		t.Fatalf("minor 23: next %s %+v", o.Next.ID, o.Next.Blockers)
 	}
 
-	st.upgradeAgent(23, true)
-	st.refusedBeforePlan(req, "zigbee:resolve_blockers", "agent_outdated", "the radio inventory needs 24")
-	st.upgradeAgent(24, false)
-	st.refusedBeforePlan(req, "zigbee:resolve_blockers", "agent_outdated", "the readiness probe needs 25")
+	st.upgradeAgent(24, true)
+	st.refusedBeforePlan(req, "zigbee:resolve_blockers", "agent_outdated", "the radio inventory needs 25")
 	st.upgradeAgent(25, false)
+	st.refusedBeforePlan(req, "zigbee:resolve_blockers", "agent_outdated", "the readiness probe needs 26")
+	st.upgradeAgent(26, false)
 	if _, state := st.advance(req); state != runtimedb.PlanApplied {
-		t.Fatalf("zigbee on minor 25: %s", state)
+		t.Fatalf("zigbee on minor 26: %s", state)
 	}
 	st.refusedAtApply(req, "bluetooth:reconfigure_package:home-assistant",
-		"needs wardstone protocol minor 26 (a read-only mount of the host's /run/dbus")
+		"needs wardstone protocol minor 27 (a read-only mount of the host's /run/dbus")
 	for _, m := range mustContainer(st, "home-assistant").Spec.GetMounts() {
 		if m.GetSource() == "/run/dbus" {
-			t.Fatal("the proxy-mode container was replaced on a minor-25 agent")
+			t.Fatal("the proxy-mode container was replaced on a minor-26 agent")
 		}
 	}
 
-	st.upgradeAgent(26, true)
+	st.upgradeAgent(27, true)
 	if o := st.orch("preview", req, http.StatusOK); o.Next.Action != haStepExternal {
 		t.Fatalf("after the last upgrade: next %s (%s) %+v", o.Next.ID, o.Next.Reason, o.Next.Blockers)
 	}

@@ -99,7 +99,7 @@ func HostSystemMountAllowed(path string) bool {
 // outside its managed prefixes, so Keystone refuses to dispatch the spec
 // there with the upgrade named, rather than the node answering FORBIDDEN
 // after approval.
-const HostSystemMountProtocolMinor = 26
+const HostSystemMountProtocolMinor = 27
 
 // UsesHostSystemMount reports whether the spec mounts any
 // HostSystemMounts path.
@@ -141,7 +141,7 @@ const IPCLockProtocolMinor = 21
 // and starts the container on the bridge with nothing published — up,
 // green, and deaf to every discovery packet it was moved to hear — so a
 // host-mode spec is refused rather than dispatched to one.
-const HostNetworkProtocolMinor = 22
+const HostNetworkProtocolMinor = 23
 
 // RequiredProtocolMinor reports the lowest agent protocol minor that can
 // honour this spec in full, or 0 when any agent can. An agent below it

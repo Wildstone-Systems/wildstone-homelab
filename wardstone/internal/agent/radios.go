@@ -1,6 +1,6 @@
 package agent
 
-// ListRadios (protocol minor 24): the platform-neutral half — the
+// ListRadios (protocol minor 25): the platform-neutral half — the
 // classification table and the string hygiene every value read from
 // sysfs passes through. The reads themselves live in radios_linux.go.
 

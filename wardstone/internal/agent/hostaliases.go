@@ -29,7 +29,7 @@ import (
 )
 
 // hostGatewayAlias is the one alias the node does NOT resolve (protocol
-// minor 23, #433). It names the node host as seen from a bridge
+// minor 24, #433). It names the node host as seen from a bridge
 // container, and the only party that knows that address is Docker: the
 // daemon substitutes its bridge gateway for the literal "host-gateway"
 // when it writes /etc/hosts. Keystone asks for it on the ingress proxy

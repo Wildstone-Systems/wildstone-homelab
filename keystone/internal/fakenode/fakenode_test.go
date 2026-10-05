@@ -49,10 +49,10 @@ func TestAgentSideRules(t *testing.T) {
 	if res.GetEnsureContainer() == nil || !res.GetEnsureContainer().GetCreated() {
 		t.Fatalf("ensure = %v", res)
 	}
-	f.Do(p.ID, func(n *Node) { n.ProtocolMinor = 24 })
+	f.Do(p.ID, func(n *Node) { n.ProtocolMinor = 25 })
 	res, _ = f.Apply(ctx, p.ID, &wsv1.Operation{Op: &wsv1.Operation_HomeAutomationReadiness{HomeAutomationReadiness: &wsv1.HomeAutomationReadiness{}}})
 	if !strings.Contains(res.GetError().GetMessage(), "unknown operation") {
-		t.Fatalf("readiness on minor 24 = %v", res)
+		t.Fatalf("readiness on minor 25 = %v", res)
 	}
 	f.SetConnected(p.ID, false)
 	if _, err := f.Apply(ctx, p.ID, ensure(&wsv1.EnsureContainer{Name: "z", Image: pinned})); err == nil || !strings.Contains(err.Error(), "is not connected") {

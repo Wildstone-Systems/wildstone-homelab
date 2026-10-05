@@ -33,7 +33,7 @@
 # HOST NETWORK, AND WHAT THE HOST MUST ALREADY BE. otbr-agent creates
 # the wpan0 interface, routes between it and the backbone (LAN)
 # interface, and speaks mDNS on the LAN, so it runs in the node's own
-# network namespace (networkMode: host, protocol minor 22). It needs
+# network namespace (networkMode: host, protocol minor 23). It needs
 # /dev/net/tun and NET_ADMIN to create and route wpan0, IPC_LOCK for the
 # memory it locks (protocol minor 21), and nothing else: no privileged
 # mode, no SYS_ADMIN, no SYS_MODULE. A container cannot set the host's

@@ -39,13 +39,17 @@ func MemoryReadContextForTask(db *runtimedb.DB, taskID string) (*runtimedb.Memor
 	if err != nil {
 		return nil, err
 	}
+	return db.BindMemoryRead(task.Owner, agentName, memoryDestinationForTask(task)), nil
+}
+
+// memoryDestinationForTask reconstructs the trusted destination consistently
+// for task-bound reads and queued delivery; no delivery payload supplies it.
+func memoryDestinationForTask(task runtimedb.ButlerTask) runtimedb.MemoryDestination {
 	turn := butlerlive.Turn{
-		Member:  task.Owner,
-		Group:   task.Audience == runtimedb.ButlerAudienceShared,
-		AsOwner: task.AsOwner,
-		Connection: butlerlive.ConnectionScope{
-			Name: task.OriginConnection, Ref: task.OriginConnectionRef,
-		},
+		Member:     task.Owner,
+		Group:      task.Audience == runtimedb.ButlerAudienceShared,
+		AsOwner:    task.AsOwner,
+		Connection: butlerlive.ConnectionScope{Name: task.OriginConnection, Ref: task.OriginConnectionRef, Conversation: task.OriginConversation},
 	}
-	return db.BindMemoryRead(turn.Member, agentName, turn.MemoryDestination()), nil
+	return turn.MemoryDestination()
 }

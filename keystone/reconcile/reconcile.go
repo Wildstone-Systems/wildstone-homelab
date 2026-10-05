@@ -1688,7 +1688,7 @@ const DefaultAutheliaAddr = "authelia:9091"
 
 // containerNetworkFor is the managed network a container is attached to:
 // ContainerNetwork, or nothing for a container in the host's network
-// namespace, which cannot also join a bridge (protocol minor 22). The
+// namespace, which cannot also join a bridge (protocol minor 23). The
 // same value feeds specHash, so a move between bridge and host changes
 // the "\x00net=" suffix as well as the spec's own networkMode and the
 // container is replaced; a container that never set networkMode keeps
@@ -1901,7 +1901,7 @@ func containerEnsureOp(name string, spec *resource.ContainerSpec, network, cfgDi
 	if r := spec.Resources; r != nil {
 		resources = &wsv1.ContainerResources{Memory: r.Memory, Cpus: r.Cpus, PidsLimit: int64(r.PidsLimit)}
 	}
-	// Host networking (protocol minor 22): refuseIfAgentTooOld keeps a
+	// Host networking (protocol minor 23): refuseIfAgentTooOld keeps a
 	// host-mode spec away from an agent that would ignore this and start
 	// the container on the bridge instead.
 	networkMode := wsv1.ContainerNetworkMode_CONTAINER_NETWORK_MODE_UNSPECIFIED

@@ -1,7 +1,7 @@
 {
   "comment": "The reference home-automation node (#452): what a current wardstoned reports on a Debian/Ubuntu machine with IPv6 forwarding on, BlueZ running, an Aeotec Z-Stick Gen5 (identified as Z-Wave by its USB id), a Home Assistant Connect ZBT-1 flashed with OpenThread RCP firmware (a CP210x bridge, so the inventory cannot tell its protocol: unknown) and a USB Bluetooth adapter. Zigbee uses a network coordinator, so there is no Zigbee stick. Readiness and radios are protojson of HomeAutomationReadinessResult and ListRadiosResult. Scrubbed: the RFC 1918 example LAN the package docs use (a TEST-NET address is refused as not private, as it would be on a real node), 2001:db8::/32 IPv6, REPLACED-SERIAL serials.",
   "id": "ha1",
-  "protocolMinor": 26,
+  "protocolMinor": 27,
   "readiness": {
     "platformSupported": true,
     "interfaces": [

@@ -201,6 +201,49 @@ already have happened.
     wild restore status                 # is this database quarantined
     wild restore reconcile --release    # assert, replay, and release
 
+#### Mailbox monitors after a restore
+
+A Person's mailbox monitor (epic #326) is built to come back closed, not
+open. What a restore does to it, and what you do afterwards:
+
+- **Before anything else, the copy is quarantined.** `RestoreBackup`
+  enters quarantine first; then it abandons every scheduled run the lost
+  machine had in flight (their checkpoints did not move, so the first run
+  after release re-reads that mail and the fingerprints dedupe it),
+  revokes every open review (their tokens could not be presented anyway:
+  they derive from the excerpt key, which is in no backup), deletes every
+  sealed excerpt and scrubs every mail answer from the work queue.
+- **While quarantined nothing reads, offers or writes.** No scheduled
+  read is dispatched, no adapter can claim, no review is delivered, and
+  the review reconciler does not look at a calendar or settle an
+  interrupted write until the quarantine is released.
+- **The replay re-fences.** A background authorization, a Personal
+  credential or a whole connection revoked after the snapshot is revoked
+  again; an offboarded Person's mailbox state (candidates, reviews,
+  effects, dedupe state, checkpoints) is erased again. Then
+  `wild restore reconcile` proves every fenced credential copy erased on
+  its node and erases any `pc.<connection>.` name a node holds that the
+  snapshot never heard of; anything unproven leaves the connection
+  `degraded` (`erasure_unverified`) and visible.
+- **Adapter placements are re-filed, not applied.** The replay re-files
+  each Personal connection's adapter render, so an adapter the replayed
+  authority no longer allows is proposed for removal. Approve it (or the
+  rendering that matches); the reconciler applies nothing while
+  quarantined.
+- **People re-enter their own credentials.** Personal credentials are
+  not in the recovery set (Wardstone leaves `pc.` names out of the node
+  bundle). After release, each Person whose monitor should run opens
+  *Watch this mailbox*, enters their app password again, and authorizes;
+  an Owner approves the render Plan. Their earlier candidates that were
+  still unresolved show without an excerpt; nothing is asked twice.
+
+What is never in a backup: the excerpt key file
+(`<DataDir>/mail-excerpts.key`), any Personal credential value or node
+secret name's value, any mail answer, and any full message body, subject
+or sender (`runtimedb.BackupTo` scrubs answers and excerpts from the copy
+and vacuums it; `keystone/runtimedb/mailoffboarding_test.go` and the
+capture checks in `keystone/api/mail_e2e_test.go` inspect the bytes).
+
 V1 has one active coordinator. A standby restore may be prepared, but promotion
 is an explicit fenced recovery action: verify the previous Keystone cannot
 dispatch, restore/reconcile authority state in quarantine, then release the new

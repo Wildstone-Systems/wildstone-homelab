@@ -2,7 +2,7 @@
 
 package agent
 
-// ListRadios (protocol minor 24) reads /dev/serial/by-id, /sys/class/tty
+// ListRadios (protocol minor 25) reads /dev/serial/by-id, /sys/class/tty
 // and /sys/class/bluetooth directly — no udevadm, no lsusb, no shell-out
 // (ADR-W003 §A4.5). Every path is derived from those fixed roots and the
 // kernel's own names; nothing on the wire selects what is read.

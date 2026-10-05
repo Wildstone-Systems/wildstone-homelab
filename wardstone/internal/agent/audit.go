@@ -45,7 +45,7 @@ func auditFields(op *wsv1.Operation) (arm string, fields []slog.Attr) {
 		if caps := o.EnsureContainer.GetCapAdd(); len(caps) > 0 {
 			attrs = append(attrs, slog.String("cap_add", strings.Join(caps, ",")))
 		}
-		// Host networking (protocol minor 22) is host access in the same
+		// Host networking (protocol minor 23) is host access in the same
 		// sense: the container listens on the node's own interfaces.
 		if o.EnsureContainer.GetNetworkMode() == wsv1.ContainerNetworkMode_CONTAINER_NETWORK_MODE_HOST {
 			attrs = append(attrs, slog.String("network_mode", "host"))
@@ -89,6 +89,13 @@ func auditFields(op *wsv1.Operation) (arm string, fields []slog.Attr) {
 		return "PutSecret", []slog.Attr{slog.String("name", o.PutSecret.GetName())}
 	case *wsv1.Operation_ListSecrets:
 		return "ListSecrets", nil
+	case *wsv1.Operation_EraseSecret:
+		// Name and fence only; the nonce is harmless but belongs to the
+		// evidence, not the log.
+		return "EraseSecret", []slog.Attr{
+			slog.String("name", o.EraseSecret.GetName()),
+			slog.Uint64("max_version", uint64(o.EraseSecret.GetMaxVersion())),
+		}
 	case *wsv1.Operation_ExportSecretBundle:
 		// The public key is not confidential, but omitting it keeps recovery
 		// material out of routine logs and makes this arm safe by construction.

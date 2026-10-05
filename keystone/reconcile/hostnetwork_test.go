@@ -132,7 +132,7 @@ func TestHostNetworkSpecIsRefusedOnAnOlderAgent(t *testing.T) {
 			msg = sr.Error
 		}
 	}
-	for _, want := range []string{"protocol minor 22", "networkMode: host", "node-a", "minor 21", "upgrade wardstoned"} {
+	for _, want := range []string{"protocol minor 23", "networkMode: host", "node-a", "minor 21", "upgrade wardstoned"} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("step error %q does not say %q", msg, want)
 		}

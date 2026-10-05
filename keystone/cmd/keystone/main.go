@@ -11,6 +11,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/chickenrat17/wildstone-homelab/keystone/mailreview"
 	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
 	"io"
 	"log/slog"
@@ -54,6 +55,8 @@ import (
 	"github.com/chickenrat17/wildstone-homelab/keystone/speech"
 	"github.com/chickenrat17/wildstone-homelab/keystone/statefile"
 	"github.com/chickenrat17/wildstone-homelab/keystone/upkeep"
+	workspacereads "github.com/chickenrat17/wildstone-homelab/keystone/workspace/reads"
+	"github.com/chickenrat17/wildstone-homelab/keystone/workspace/writes"
 )
 
 var version = "dev" // set via -ldflags at release
@@ -736,6 +739,17 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 		return fmt.Errorf("taking the coordinator lease: %w", leaseErr)
 	}
 
+	// Roll back unsettled workspace metadata before any task can dispatch.
+	// Startup has no fresh per-task resource authorization, so it never invents
+	// publication success. Bytes/reservations and prior revisions remain intact.
+	if coordinating {
+		recovered, err := recoverWorkspaceAtStartup(db, log)
+		if err != nil {
+			return err
+		}
+		coordinating = recovered
+	}
+
 	// Heartbeats inform the human takeover decision; they never auto-promote.
 	if coordinating {
 		go func() {
@@ -1251,6 +1265,7 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	// flag (#408). Approvals refresh it at once; the timer catches any
 	// other change to desired state.
 	apiSrv.NodeID = householdCfg.NodeID
+	apiSrv.WireManagedResearch(svc.Rec)
 	apiSrv.RefreshSpeech()
 	go func() {
 		for range time.Tick(time.Minute) {
@@ -1617,6 +1632,12 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 			mode, _ = probeButler(context.Background(), bp, log)
 		}
 		bgw := butler.NewToolGateway(state, &butler.AgentReader{Gateway: gw})
+		workspaceReader := &workspacereads.Service{DB: db, Settings: apiSrv.WorkspaceSettings}
+		bgw.WorkspaceReads = workspaceReader.Call
+		bgw.WorkspaceReadReady = func() bool { _, err := apiSrv.WorkspaceSettings(); return err == nil }
+		workspaceWriter := writes.New(db, apiSrv.WorkspaceSettings)
+		bgw.WorkspaceWrites = workspaceWriter.Call
+		bgw.WorkspaceWriteReady = func() bool { _, err := apiSrv.WorkspaceSettings(); return err == nil }
 		// The host.* tools dispatch through the SAME domestic Gateway a
 		// household rule's action does (ADR-W039 H7, #353) — one tier
 		// check, one confirm flow, one audit line, whichever surface
@@ -1829,6 +1850,10 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 
 		}
 
+		household.WorkspaceReads = workspaceReader.Call
+		household.WorkspaceReadReady = bgw.WorkspaceReadReady
+		household.WorkspaceWrites = workspaceWriter.Call
+		household.WorkspaceWriteReady = bgw.WorkspaceWriteReady
 		apiSrv.ButlerHost = &api.ButlerHost{
 			Provider: bp, Gateway: bgw, Mode: mode, Household: household,
 			Model: backend.Model, Endpoint: backend.Endpoint,
@@ -2013,6 +2038,27 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 			// coordinator's ledger, for fenceRuntimeTasks (§3.7).
 			apiSrv.AgentGateway = butlers.AgentClient
 			apiSrv.Ledger = ledger
+
+			// Scheduled Agent subscriptions (ADR-W039 §3.6.1, epic
+			// #326): coordinator-held, on this ledger, gated by the
+			// Person's live background authorization.
+			// mail.changes runs the mailbox monitor (epic #326 S05); if
+			// its excerpt key cannot be opened the entry refuses instead.
+			mailMonitor, mailErr := newMailMonitor(db, dataDir, householdZone, log)
+			if mailErr != nil {
+				log.Error("mailbox monitor unavailable; mail.changes runs will be refused", "err", mailErr)
+				mailMonitor = nil
+			}
+			// The private review of its candidates (epic #326 S06): the
+			// monitor's hook, the Person-scoped candidate API and /mail,
+			// and the reconciler that settles interrupted calendar writes.
+			if mailMonitor != nil {
+				review := newMailReview(db, mailMonitor, calendarActions, log)
+				mailMonitor.Hook = review
+				apiSrv.MailReview = review
+				go mailreview.RunReconciler(context.Background(), review, time.Minute, redact.Logger(log))
+			}
+			startScheduledSubscriptions(context.Background(), newScheduledSubscriptions(db, ledger, log, mailMonitor), mailMonitor, log)
 
 			// The heartbeat sweeper (ADR-W039 §3.7, Phase 4, #340): the
 			// only thing that ever marks a runtime offline on its own,

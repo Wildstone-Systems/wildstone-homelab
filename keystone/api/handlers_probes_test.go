@@ -158,7 +158,7 @@ func TestProbeRadios(t *testing.T) {
 		t.Fatalf("future kind = %q, want unknown", out.Radios[2].Kind)
 	}
 
-	// An agent below minor 24 answers INVALID (unknown operation).
+	// An agent below minor 25 answers INVALID (unknown operation).
 	agentErr = &wsv1.OpError{Code: wsv1.ErrorCode_ERROR_CODE_INVALID, Message: "unknown operation"}
 	if resp := h.do(runtimedb.RoleOperator, http.MethodGet, "/api/v1/nodes/n1/probes/radios", nil, nil); resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("old agent = %d, want 400", resp.StatusCode)

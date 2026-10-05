@@ -112,8 +112,72 @@ var Pantry = Domain{
 	},
 }
 
+// Mail is a Person's own mailbox at the household's configured IMAP
+// provider (epic #326; docs/catalog-integration-contract.md §7.1). It is
+// READ-ONLY by construction: the domain declares no actions at all, so
+// there is no send, reply, draft, mark-read, move, archive, delete or
+// rule operation for a package to offer or for Keystone to dispatch.
+// Adding one is not a vocabulary change but a new decision, and
+// TestMailIsReadOnly is where that decision would have to be argued.
+//
+// Every query is bounded and scoped to one Personal connection: the
+// adapter answers only for the mailbox whose credential it holds, and
+// only inside the folders and filters that Person approved.
+var Mail = Domain{
+	Name:        "mail",
+	Description: "One Person's mailbox at the household's mail provider, read-only.",
+	Queries: []Query{
+		{Name: "mail.capabilities", Description: "What this mailbox connection can answer, its folders and its bounds.",
+			Returns: "{outcome, readOnly, operations[], folders[{folder, available, messages}], limits}"},
+		{Name: "mail.changes", Description: "New messages after a durable cursor, bounded to one batch.",
+			Params: []Param{
+				{Name: "folder", Description: "one approved folder; absent reads every approved folder"},
+				{Name: "cursor", Description: "the previous answer's next, {folders: [{folder, uidValidity, lastUid}]}; absent starts every folder from now"},
+				{Name: "limit", Description: "1–50, default 50"},
+			},
+			Returns: "{outcome: ok|empty|cursor_reset, next, messages[{ref, fingerprint, folder, size, content}], folders[], more}"},
+		{Name: "mail.message", Description: "One message by opaque provider reference, bounded headers and normalized text.",
+			Params:  []Param{{Name: "ref", Description: "the opaque reference mail.changes or mail.search returned", Required: true}},
+			Returns: "{outcome, message: {ref, fingerprint, folder, size, content: {outcome, headers, text, calendars[], attachments[]}}}"},
+		{Name: "mail.search", Description: "An explicitly bounded search inside the approved folders and filters.",
+			Params: []Param{
+				{Name: "folders", Description: "approved folders only; absent means all of them"},
+				{Name: "from", Description: "sender addresses or domains, any of"},
+				{Name: "subject", Description: "text the subject contains"},
+				{Name: "since", Description: "YYYY-MM-DD, default 30 days before before"},
+				{Name: "before", Description: "YYYY-MM-DD, default tomorrow; at most 366 days after since"},
+				{Name: "limit", Description: "1–50, default 50"},
+			},
+			Returns: "{outcome, results[{ref, fingerprint, folder, size, headers}], truncated}"},
+	},
+}
+
 // Domains is every declared domain.
-var Domains = []Domain{Pantry}
+var Domains = []Domain{Pantry, Mail}
+
+// LookupQuery returns the declared query called name.
+func LookupQuery(name string) (Query, bool) {
+	d, ok := DomainOf(name)
+	if !ok {
+		return Query{}, false
+	}
+	for _, q := range d.Queries {
+		if q.Name == name {
+			return q, true
+		}
+	}
+	return Query{}, false
+}
+
+// Lookup returns the declared domain called name.
+func Lookup(name string) (Domain, bool) {
+	for _, d := range Domains {
+		if d.Name == name {
+			return d, true
+		}
+	}
+	return Domain{}, false
+}
 
 // DomainOf returns the domain a dotted name ("pantry.list",
 // "pantry.meal_logged") belongs to, if one is declared.

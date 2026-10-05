@@ -189,7 +189,7 @@ func TestHostBlueZNeedsTheAgentMinor(t *testing.T) {
 		t.Fatal(err)
 	}
 	msg := hubStepError(t, outcome)
-	if !strings.Contains(msg, "minor 26") || !strings.Contains(msg, "/run/dbus") {
+	if !strings.Contains(msg, "minor 27") || !strings.Contains(msg, "/run/dbus") {
 		t.Errorf("refusal %q does not name the minor and the mount", msg)
 	}
 	if agent.opCount("EnsureContainer") != 0 || agent.opCount("HomeAutomationReadiness") != 0 {

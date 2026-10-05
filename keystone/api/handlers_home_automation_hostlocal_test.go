@@ -87,7 +87,7 @@ func TestHomeAutomationHostLocalComponents(t *testing.T) {
 	if err := f2.h.s.DB.RecordNodeJoin("n2"); err != nil {
 		t.Fatal(err)
 	}
-	f2.live = append(f2.live, LiveNode{NodeID: "n2", ProtocolMinor: 25, Since: time.Now()})
+	f2.live = append(f2.live, LiveNode{NodeID: "n2", ProtocolMinor: 26, Since: time.Now()})
 	f2.install(t, "hass-test", "1.2.0", map[string]string{"node": "n2"}, haContainer("home-assistant", "home-assistant", "hass-test", "n2"))
 	m := f2.get(t, "?topology=managed&select=matter&node=n1").comp(t, haMatter)
 	b := m.blocker("dependency_on_other_node")

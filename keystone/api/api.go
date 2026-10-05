@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/chickenrat17/wildstone-homelab/keystone/householdtz"
+	"github.com/chickenrat17/wildstone-homelab/keystone/mailreview"
 	"log/slog"
 	"net"
 	"net/http"
@@ -30,6 +31,7 @@ import (
 	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
 	"github.com/chickenrat17/wildstone-homelab/keystone/reconcile"
 	"github.com/chickenrat17/wildstone-homelab/keystone/redact"
+	"github.com/chickenrat17/wildstone-homelab/keystone/research"
 	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 	"github.com/chickenrat17/wildstone-homelab/keystone/speech"
@@ -40,7 +42,18 @@ import (
 // Server serves the public plane. All fields are required except Log and
 // OnApproved.
 type Server struct {
+	// ResearchTest tests stored, validated configuration using a bounded context.
+	// The adapter must resolve service/secret references and check their current
+	// revisions. Nil is deliberately unavailable. Production wiring also requires a verified
+	// release pin and fresh Wardstone dependency inspection.
+	ResearchTest func(context.Context, research.Provider) error
+	// Serializes bounded provider probes against infrastructure approval writes.
+	researchServiceMu sync.RWMutex
+
 	SecretVault *runtimedb.SecretVault
+	// MailReview is the private review of mail event candidates (epic
+	// #326 S06). nil leaves the candidate routes reading only.
+	MailReview *mailreview.Engine
 	// PairingHTTP, when set, is the client pairing calls PantryOS with
 	// (tests); its redirect policy is always replaced with "never follow".
 	PairingHTTP *http.Client
@@ -588,6 +601,44 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/integrations/{name}/placement/remove", s.handle(principal.VerbManage, s.removeIntegrationPlacement))
 	mux.Handle("POST /api/v1/integrations/{name}/placement/proof", s.handle(principal.VerbManage, s.proveIntegrationPlacementRemoval))
 	mux.Handle("POST /api/v1/integrations/{name}/secrets", s.handle(principal.VerbManage, s.onboardIntegrationSecret))
+	// Personal credentials and unattended-use authorization (epic #326
+	// S02). The Console/CLI routes and the Homepage routes call the same
+	// handlers; the store decides who may, and for onboarding, replacing,
+	// inspecting and authorizing that is the connection's owner alone.
+	// An Owner on the Console may revoke and erase, never more.
+	mux.Handle("GET /api/v1/integrations/{name}/credential", s.handle(principal.VerbManage, s.consoleCredential))
+	mux.Handle("POST /api/v1/integrations/{name}/credential", s.handle(principal.VerbManage, s.consoleSubmitCredential))
+	mux.Handle("POST /api/v1/integrations/{name}/credential/revoke", s.handle(principal.VerbManage, s.consoleRevokeCredential))
+	mux.Handle("POST /api/v1/integrations/{name}/credential/erase", s.handle(principal.VerbManage, s.consoleEraseCredential))
+	mux.Handle("POST /api/v1/integrations/{name}/authorization", s.handle(principal.VerbManage, s.consoleAuthorizeBackground))
+	mux.Handle("POST /api/v1/integrations/{name}/authorization/revoke", s.handle(principal.VerbManage, s.consoleRevokeBackground))
+	mux.Handle("POST /api/v1/integrations/{name}/executable", s.handle(principal.VerbManage, s.setIntegrationExecutable))
+	// Render the adapter placement as a Plan (epic #326): records the
+	// executable, places node-bound adapter tokens, never approves.
+	mux.Handle("POST /api/v1/integrations/{name}/adapter/render", s.handle(principal.VerbManage, s.renderIntegrationAdapter))
+	// Watch this mailbox (epic #326 S07): the setup read model a screen
+	// resumes from, and filing the subscription a Person's authorization
+	// names. The Plan it files is an Owner's to approve.
+	mux.Handle("GET /api/v1/mail/setup", s.handle(principal.VerbRead, s.consoleMailSetup))
+	mux.Handle("POST /api/v1/integrations/{name}/subscription", s.handle(principal.VerbManage, s.consoleFileMailSubscription))
+	mux.Handle("GET /api/v1/home/mail/setup", s.portal(surfaceHome, s.homeMailSetup))
+	mux.Handle("POST /api/v1/home/integrations/{name}/subscription", s.portal(surfaceHome, s.homeFileMailSubscription))
+	mux.Handle("GET /api/v1/home/integrations/{name}/credential", s.portal(surfaceHome, s.homeCredential))
+	mux.Handle("POST /api/v1/home/integrations/{name}/credential", s.portal(surfaceHome, s.homeSubmitCredential))
+	mux.Handle("POST /api/v1/home/integrations/{name}/credential/revoke", s.portal(surfaceHome, s.homeRevokeCredential))
+	mux.Handle("POST /api/v1/home/integrations/{name}/authorization", s.portal(surfaceHome, s.homeAuthorizeBackground))
+	mux.Handle("POST /api/v1/home/integrations/{name}/authorization/revoke", s.portal(surfaceHome, s.homeRevokeBackground))
+	// Mail event candidates and their private review (epic #326 S06).
+	// Person-scoped in the store; acting needs the Person's own identity
+	// (never an Agent or a delegate) and manage, which no Agent holds.
+	mux.Handle("GET /api/v1/mail/candidates", s.handle(principal.VerbRead, s.consoleMailCandidates))
+	mux.Handle("GET /api/v1/mail/candidates/{id}", s.handle(principal.VerbRead, s.consoleMailCandidate))
+	mux.Handle("POST /api/v1/mail/candidates/{id}/act", s.handle(principal.VerbManage, s.consoleMailAct))
+	mux.Handle("POST /api/v1/mail/act", s.handle(principal.VerbManage, s.consoleMailAct))
+	mux.Handle("GET /api/v1/home/mail/candidates", s.portal(surfaceHome, s.homeMailCandidates))
+	mux.Handle("GET /api/v1/home/mail/candidates/{id}", s.portal(surfaceHome, s.homeMailCandidate))
+	mux.Handle("POST /api/v1/home/mail/candidates/{id}/act", s.portal(surfaceHome, s.homeMailAct))
+	mux.Handle("POST /api/v1/home/mail/act", s.portal(surfaceHome, s.homeMailAct))
 	// The adapter's side: claim and answer, and nothing else.
 	mux.Handle("POST /api/v1/integration-work/claim", s.handle(principal.VerbClaimIntegrationWork, s.claimIntegrationWork))
 	mux.Handle("POST /api/v1/integration-work/result", s.handle(principal.VerbReportIntegrationResult, s.reportIntegrationResult))
@@ -613,6 +664,13 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/household/routines/{name}/purge", s.handle(principal.VerbManage, s.consequential(s.purgeDeletedRoutine)))
 	mux.Handle("GET /api/v1/household/execution-stop", s.handle(principal.VerbRead, s.getHouseholdExecutionStop))
 	mux.Handle("POST /api/v1/household/execution-stop", s.handle(principal.VerbApprove, s.changeHouseholdExecutionStop))
+	// Agent subscriptions, event and scheduled (epic #326 S03): one
+	// surface for Console, CLI and Butler. Approval stays the Plan path.
+	mux.Handle("GET /api/v1/agent-subscriptions", s.handle(principal.VerbRead, s.listAgentSubscriptions))
+	mux.Handle("GET /api/v1/agent-subscriptions/{id}", s.handle(principal.VerbRead, s.getAgentSubscription))
+	mux.Handle("PUT /api/v1/agent-subscriptions/{id}", s.handle(principal.VerbPropose, s.reviseAgentSubscription))
+	mux.Handle("POST /api/v1/agent-subscriptions/{id}/control", s.handle(principal.VerbPropose, s.controlAgentSubscription))
+	mux.Handle("POST /api/v1/home/agent-subscriptions/{id}/control", s.portal(surfaceHome, s.homeControlAgentSubscription))
 	mux.Handle("GET /api/v1/butler/tools", s.handle(principal.VerbRead, s.listButlerToolControls))
 	mux.Handle("PUT /api/v1/butler/tools", s.handle(principal.VerbManage, s.setButlerToolControl))
 	mux.Handle("GET /api/v1/butler/grants", s.handle(principal.VerbRead, s.listButlerGrants))
@@ -676,6 +734,16 @@ func (s *Server) Handler() http.Handler {
 	// route for the bytes at all — it only manages them.
 	mux.Handle("PUT /api/v1/appearance/themes/{name}/background", s.handle(principal.VerbManage, s.themeBackgroundSet))
 	mux.Handle("DELETE /api/v1/appearance/themes/{name}/background", s.handle(principal.VerbManage, s.themeBackgroundClear))
+	// Research administration is never accessible to model/runtime principals.
+	mux.Handle("GET /api/v1/research/providers", s.handle(principal.VerbManage, s.listResearchProviders))
+	mux.Handle("POST /api/v1/research/providers", s.handle(principal.VerbManage, s.proposeResearchProvider))
+	mux.Handle("GET /api/v1/research/providers/{provider}", s.handle(principal.VerbManage, s.getResearchProvider))
+	mux.Handle("PATCH /api/v1/research/providers/{provider}", s.handle(principal.VerbManage, s.proposeResearchProvider))
+	mux.Handle("DELETE /api/v1/research/providers/{provider}", s.handle(principal.VerbManage, s.proposeResearchProvider))
+	mux.Handle("POST /api/v1/research/providers/{provider}/test", s.handle(principal.VerbManage, s.testResearchProvider))
+	mux.Handle("PUT /api/v1/research/default-provider", s.handle(principal.VerbManage, s.selectResearchProvider))
+	mux.Handle("GET /api/v1/agents/{agent}/research-provider", s.handle(principal.VerbManage, s.getResearchSelection))
+	mux.Handle("PUT /api/v1/agents/{agent}/research-provider", s.handle(principal.VerbManage, s.selectResearchProvider))
 	mux.Handle("GET /api/v1/butler/models", s.handle(principal.VerbRead, s.listModels))
 	mux.Handle("PUT /api/v1/butler/models", s.handle(principal.VerbManage, s.upsertModel))
 
@@ -876,6 +944,9 @@ func (s *Server) Handler() http.Handler {
 	// database is how two cards end up telling different stories about
 	// one event.
 	mux.Handle("GET /home/secrets/{$}", s.portal(surfaceHome, s.portalPage("secrets")))
+	// Watch this mailbox for a Person who is not an Owner (epic #326 S07):
+	// the page over the /api/v1/home/mail and integrations routes below.
+	mux.Handle("GET /home/mail/{$}", s.portal(surfaceHome, s.portalPage("mail")))
 	mux.Handle("GET /home/{$}", s.portal(surfaceHome, s.portalPage("home")))
 	mux.Handle("GET /api/v1/home/summary", s.portal(surfaceHome, s.homeSummary))
 	// The one write the page has: a member answering the question they
@@ -1240,6 +1311,17 @@ func (s *Server) writeJSON(w http.ResponseWriter, status int, body any) {
 		// Redacted everywhere but the password-reset link an admin hands
 		// over (identityNotification.redacted), and never cached.
 		if raw, err = body.(identityNotification).redacted(); err != nil {
+			s.Log.Error("response redaction failed", "err", err)
+			http.Error(w, `{"error":"internal"}`, http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Pragma", "no-cache")
+	case mailCandidateResponse:
+		// Redacted everywhere but the Person's own review tokens, which
+		// they present back to act (mailCandidateResponse.redacted), and
+		// never cached.
+		if raw, err = body.(mailCandidateResponse).redacted(); err != nil {
 			s.Log.Error("response redaction failed", "err", err)
 			http.Error(w, `{"error":"internal"}`, http.StatusInternalServerError)
 			return

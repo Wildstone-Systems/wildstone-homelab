@@ -89,7 +89,7 @@ var radioKindNames = map[wsv1.RadioKind]string{
 }
 
 // probeRadios inventories a node's serial and Bluetooth adapters
-// (ListRadios, protocol minor 24, #434). The op is parameterless, so the
+// (ListRadios, protocol minor 25, #434). The op is parameterless, so the
 // endpoint takes no query: nothing here can steer what the agent reads.
 func (s *Server) probeRadios(r *http.Request, _ principal.Identity) (any, int, error) {
 	res, node, status, err := s.probeDispatch(r, &wsv1.Operation{Op: &wsv1.Operation_ListRadios{
@@ -162,7 +162,7 @@ var readinessStateNames = map[wsv1.ReadinessState]string{
 }
 
 // probeHomeAutomation reports a node's LAN-native home-automation
-// prerequisites (HomeAutomationReadiness, protocol minor 25, #436). Like
+// prerequisites (HomeAutomationReadiness, protocol minor 26, #436). Like
 // the radio inventory it is parameterless: a report, never a fix.
 func (s *Server) probeHomeAutomation(r *http.Request, _ principal.Identity) (any, int, error) {
 	res, node, status, err := s.probeDispatch(r, &wsv1.Operation{Op: &wsv1.Operation_HomeAutomationReadiness{

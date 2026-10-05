@@ -63,8 +63,8 @@ var opMinor = map[string]uint32{
 	"PutSecret":               7,
 	"ListSecrets":             7,
 	"DiskSpace":               19,
-	"ListRadios":              24,
-	"HomeAutomationReadiness": 25,
+	"ListRadios":              25,
+	"HomeAutomationReadiness": 26,
 }
 
 // alwaysPresentDevices are character devices every modelled node has.

@@ -172,7 +172,7 @@ func fixtureRadios() []*wsv1.Radio {
 	}
 }
 
-// newHAFixture: one live node n1 (minor 25) with every prerequisite ready
+// newHAFixture: one live node n1 (minor 26) with every prerequisite ready
 // and a Zigbee stick, a Z-Wave stick and a Bluetooth adapter.
 func newHAFixture(t *testing.T) *haFixture {
 	f := &haFixture{h: newHarness(t), checks: allReadyChecks(), radios: fixtureRadios(), addr: "192.0.2.10/24"}
@@ -180,7 +180,7 @@ func newHAFixture(t *testing.T) *haFixture {
 	if err := f.h.s.DB.RecordNodeJoin("n1"); err != nil {
 		t.Fatal(err)
 	}
-	f.live = []LiveNode{{NodeID: "n1", AgentVersion: "test", ProtocolMinor: 25, Since: time.Now()}}
+	f.live = []LiveNode{{NodeID: "n1", AgentVersion: "test", ProtocolMinor: 26, Since: time.Now()}}
 	f.h.s.LiveNodes = func() []LiveNode { return f.live }
 	f.h.s.Agents = applierFunc(func(_ context.Context, node string, op *wsv1.Operation) (*wsv1.OpResult, error) {
 		f.calls.Add(1)
@@ -562,7 +562,7 @@ func TestHomeAutomationOfflineNode(t *testing.T) {
 	}
 
 	// An agent too old for the readiness probe is named, not waited on.
-	f.live = []LiveNode{{NodeID: "n1", ProtocolMinor: 24}}
+	f.live = []LiveNode{{NodeID: "n1", ProtocolMinor: 25}}
 	m = f.get(t, "?select=matter").comp(t, haMatter)
 	if m.State != haBlocked || m.blocker("agent_outdated") == nil {
 		t.Errorf("old agent matter = %s %+v", m.State, m.Blockers)

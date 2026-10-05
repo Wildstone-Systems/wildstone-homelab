@@ -164,7 +164,7 @@ embeds a serial number the secret-literal policy rightly refuses in env.
 
 Host paths are bind-mounted only from Wardstone's managed prefixes
 (ADR-W003 A1), with one closed exception list, `HostSystemMounts` in the
-same file (protocol minor 26, #445). It holds exactly `/run/dbus`, the
+same file (protocol minor 27, #445). It holds exactly `/run/dbus`, the
 D-Bus system bus, and only as `{ source: /run/dbus, target: /run/dbus,
 readOnly: true }`: lint refuses it writable or elsewhere inside, and the
 agent also refuses it through a symlink or on a host that has none. It
@@ -882,7 +882,7 @@ Keystone adds `host.docker.internal` to the host aliases of the ingress
 proxy and the dashboard container only, and the agent writes it as
 Docker's own `host.docker.internal:host-gateway`, so the daemon fills in
 its bridge gateway on that machine. No gateway IP is ever stored in
-desired state. This needs wardstone protocol minor 23; Keystone refuses a
+desired state. This needs wardstone protocol minor 24; Keystone refuses a
 host Route on a node with an older agent rather than rendering a site
 that answers 502.
 

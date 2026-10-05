@@ -40,7 +40,14 @@ The native runtime receives only the effective tool schemas for its current task
 
 Keystone performs or mediates network access and filesystem operations. The native sidecar gets neither a workspace mount nor provider credentials. Runtime restart or replacement does not change file ownership or erase work. Future runtimes may consume the same platform capabilities through the Agent API; native-runtime support is the initial acceptance target.
 
-Shared DDGS execution does not merge Agent budgets or identities. Requests retain task attribution. DDGS is a replaceable worker, not a task coordinator or file store. Diagnostic logs must not persist private queries, page bodies, credentials, or workspace contents by default.
+Shared DDGS execution does not merge Agent budgets or identities. Requests retain task attribution. DDGS is a replaceable worker, not a task coordinator or file store.
+
+For #493, the maintainer accepted the trusted homelab-network boundary
+(2026-09-30): loopback host publication and no public Route. Reachable sibling
+containers and local processes can still invoke the unauthenticated worker
+directly, bypassing Keystone permissions, budgets and audit. Do not claim
+Keystone-only caller isolation; per-app/process isolation is the known #191
+limitation and is not added to this epic. Public Internet exposure is excluded. Diagnostic logs must not persist private queries, page bodies, credentials, or workspace contents by default.
 
 ## 4. Installation, configuration, and controls
 

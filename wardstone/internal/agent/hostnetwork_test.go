@@ -7,7 +7,7 @@ import (
 	wsv1 "github.com/chickenrat17/wildstone-homelab/proto/gen/wardstone/v1"
 )
 
-// TestEnsureContainerHostNetwork is the protocol-minor-22 op test: a HOST
+// TestEnsureContainerHostNetwork is the protocol-minor-23 op test: a HOST
 // op reaches Docker as HostConfig.NetworkMode=host with no network
 // endpoint, InspectContainer reports it back, and moving the same
 // container back to the default is a replacement that clears it.

@@ -31,12 +31,14 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/ingressorigin"
 	"github.com/chickenrat17/wildstone-homelab/keystone/plan"
 	"github.com/chickenrat17/wildstone-homelab/keystone/policy"
 	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
 	"github.com/chickenrat17/wildstone-homelab/keystone/reconcile"
+	"github.com/chickenrat17/wildstone-homelab/keystone/research"
 	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 	"github.com/chickenrat17/wildstone-homelab/keystone/statefile"
@@ -120,7 +122,8 @@ func (d Deps) event(typ, planID string, id principal.Identity, msg string) {
 // a JSON string, so this parses it once and returns the plan the way
 // every other field already reads.
 type PlanView struct {
-	AuditOnly bool `json:"auditOnly,omitempty"`
+	Research  *research.Change `json:"research,omitempty"`
+	AuditOnly bool             `json:"auditOnly,omitempty"`
 	runtimedb.PlanRecord
 	// PlanJSON must compete for the embedded field's NAME to suppress
 	// it. `json:"-"` does not shadow — it removes this field from
@@ -158,6 +161,7 @@ func ViewPlan(rec runtimedb.PlanRecord) PlanView {
 	}
 	v.BasedOnHead, v.Plan, v.Put, v.Delete = stored.BasedOnHead, stored.Plan, stored.Put, stored.Delete
 	v.Origin = stored.Origin
+	v.Research = stored.Research
 	v.Setting = stored.Setting
 	v.Routine = stored.Routine
 	v.AuditOnly = stored.AuditOnly
@@ -383,6 +387,36 @@ type SubscriptionRequest struct {
 	CapabilitySet []string
 	BudgetJSON    string
 	Summary       string
+	// Trigger, Cadence and Source describe a scheduled subscription
+	// (epic #326 S03); empty Trigger is the event trigger. Cadence is a
+	// Go duration string, validated against the store's own bounds.
+	Trigger string
+	Cadence string
+	Source  string
+	// Revises and Version make this an edit's approval Plan rather than
+	// a new subscription (see plan.SubscriptionChange).
+	Revises int64
+	Version int
+}
+
+// normalizeSubscriptionTrigger checks a proposal's trigger against the
+// same bounds runtimedb enforces, so an Owner is never shown a schedule
+// approval could not apply.
+func normalizeSubscriptionTrigger(req SubscriptionRequest) (trigger, cadence string, err error) {
+	var d time.Duration
+	if req.Cadence != "" {
+		if d, err = time.ParseDuration(req.Cadence); err != nil {
+			return "", "", fmt.Errorf("a subscription cadence must be a duration like 15m: %w", err)
+		}
+	}
+	trigger, d, err = runtimedb.NormalizeSubscriptionTrigger(req.Trigger, d, req.Source)
+	if err != nil {
+		return "", "", err
+	}
+	if trigger == runtimedb.SubscriptionTriggerSchedule {
+		cadence = d.String()
+	}
+	return trigger, cadence, nil
 }
 
 // FileSubscription proposes an Owner-approved event subscription
@@ -404,8 +438,18 @@ func FileSubscription(deps Deps, id principal.Identity, req SubscriptionRequest)
 	if len(req.CapabilitySet) == 0 {
 		return PlanView{}, fmt.Errorf("a subscription needs at least one capability")
 	}
+	trigger, cadence, err := normalizeSubscriptionTrigger(req)
+	if err != nil {
+		return PlanView{}, err
+	}
+	if req.Revises != 0 && req.Version < 2 {
+		return PlanView{}, fmt.Errorf("an edit's approval names the edited version")
+	}
 	if req.Summary == "" {
 		req.Summary = fmt.Sprintf("%s subscribes to %s events", req.Butler, req.MatchKind)
+		if trigger == runtimedb.SubscriptionTriggerSchedule {
+			req.Summary = fmt.Sprintf("%s runs %s every %s", req.Butler, req.MatchKind, cadence)
+		}
 	}
 	matchJSON := req.MatchJSON
 	if matchJSON == "" {
@@ -424,6 +468,8 @@ func FileSubscription(deps Deps, id principal.Identity, req SubscriptionRequest)
 		Subscription: &plan.SubscriptionChange{
 			Butler: req.Butler, MatchKind: req.MatchKind, MatchJSON: matchJSON,
 			Audience: req.Audience, CapabilitySet: string(capsJSON), BudgetJSON: budgetJSON,
+			Trigger: trigger, Cadence: cadence, Source: req.Source,
+			Revises: req.Revises, Version: req.Version,
 		},
 	}
 	if head, err := deps.State.Head(); err == nil {
