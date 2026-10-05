@@ -10,6 +10,8 @@ radio; the Console's guided setup works end to end; everything survives
 restarts and reboots; each controller's backup really brings its
 network back; and Wildstone refuses to hand one stick to two programs.
 
+**Earlier runs:** [results/](results/) (redacted reports, one per run).
+
 **How long:** plan two or three sessions. Sections 0 and 1 take an
 evening; section 2 another; sections 3 to 6 a third. Section 2.2 step
 10 needs the machine left running overnight.
