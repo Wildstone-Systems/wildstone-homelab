@@ -272,7 +272,13 @@ function SetupLive({
 }) {
   const req = useMemo(() => planRequestOf(draft, status, topology), [draft, status, topology]);
   const key = JSON.stringify(req);
-  const [answer, setAnswer] = useState<HomeAutomationPlanAnswer | null>(null);
+  // Each answer remembers the request it answers. One for an older draft
+  // is never shown or proposed from: the next step's values may differ
+  // even when its id does not (expectStep carries no values). A failed
+  // re-check of the SAME request keeps it, so a passing network error
+  // does not blank the plan or stop the polling.
+  const [answered, setAnswered] = useState<{ key: string; answer: HomeAutomationPlanAnswer } | null>(null);
+  const answer = answered && answered.key === key ? answered.answer : null;
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -288,12 +294,9 @@ function SetupLive({
     if (n !== asked.current) return;
     setLoading(false);
     if (r.answer) {
-      setAnswer(r.answer);
+      setAnswered({ key, answer: r.answer });
       setError(null);
     } else {
-      // The old answer was for a different request; proposing from it would
-      // file values that were never successfully previewed.
-      setAnswer(null);
       setError(r.error ?? "The setup could not be checked.");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -359,7 +362,7 @@ function SetupLive({
     setBusy(true);
     const r = await proposeStep(api, req, answer);
     setNotice(r.notice);
-    if (r.answer) setAnswer(r.answer);
+    if (r.answer) setAnswered({ key, answer: r.answer });
     setBusy(false);
     // Whatever propose said, the next screen is the server's fresh
     // answer, not this one's guess.
