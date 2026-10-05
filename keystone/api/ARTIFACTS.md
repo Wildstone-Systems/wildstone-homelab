@@ -42,7 +42,10 @@ the original revision bytes outside model context.
 
 `cursor` is a server-issued opaque handle (15-minute expiry, bounded process-local
 store, invalid after restart), bound to Person, Agent, surface, route selectors
-and the authorized metadata snapshot. Pages reauthorize; changed snapshots return
+and the authorized metadata snapshot. A page that returns `nextCursor` retires
+the cursor it consumed, so a reader holds one live cursor per listing or preview
+regardless of length. Each Person holds at most 64 live cursors (their oldest is
+evicted first); only the process-wide bound of 1024 refuses with 503. Pages reauthorize; changed snapshots return
 409 `stale_cursor`. Query keys are only `cursor` and optional `scope=private`.
 Changing a handle's resource/surface does not confer authority. File names are
 never host paths. Missing and hidden files both return the same 404; storage

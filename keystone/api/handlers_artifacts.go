@@ -25,12 +25,19 @@ import (
 	"github.com/chickenrat17/wildstone-homelab/keystone/workspace/storage"
 )
 
-const artifactPreviewBytes = 32 << 10
+const (
+	artifactPreviewBytes = 32 << 10
+	// Each page replaces the cursor it consumed, so a reader holds one live
+	// cursor per listing or preview however long the artifact is. The per-Person
+	// bound keeps one Person from exhausting pagination for everyone else.
+	artifactCursorsPerPerson = 64
+	artifactCursorsTotal     = 1024
+)
 
 type artifactCursor struct {
-	Binding, Snapshot, After string
-	Offset                   int
-	Expires                  time.Time
+	Owner, Binding, Snapshot, After string
+	Offset                          int
+	Expires                         time.Time
 }
 
 type artifactInfo struct {
@@ -188,7 +195,7 @@ func (s *Server) personArtifacts(w http.ResponseWriter, r *http.Request, member 
 		next := ""
 		if len(entries) > 20 {
 			last := entries[19]
-			next, err = s.mintArtifactCursor(artifactCursor{Binding: binding, Snapshot: snapshot, After: last.Artifact.ID + "\x00" + last.Revision.ID})
+			next, err = s.mintArtifactCursor(artifactCursor{Owner: member, Binding: binding, Snapshot: snapshot, After: last.Artifact.ID + "\x00" + last.Revision.ID}, token)
 			if err != nil {
 				return artifactUnavailable()
 			}
@@ -252,7 +259,7 @@ func (s *Server) personArtifacts(w http.ResponseWriter, r *http.Request, member 
 	text := preview[cursor.Offset:end]
 	next := ""
 	if end < len(preview) {
-		next, err = s.mintArtifactCursor(artifactCursor{Binding: binding, Snapshot: snapshot, Offset: end})
+		next, err = s.mintArtifactCursor(artifactCursor{Owner: member, Binding: binding, Snapshot: snapshot, Offset: end}, token)
 		if err != nil {
 			return artifactUnavailable()
 		}
@@ -293,25 +300,41 @@ func (s *Server) artifactCursor(token, binding string) (artifactCursor, bool) {
 	return c, ok && c.Binding == binding && time.Now().Before(c.Expires)
 }
 
-func (s *Server) mintArtifactCursor(c artifactCursor) (string, error) {
+// mintArtifactCursor stores c and removes replaces, the already validated cursor
+// this page consumed. A Person at their bound loses their own oldest cursor
+// rather than being refused; only the process-wide bound refuses.
+func (s *Server) mintArtifactCursor(c artifactCursor, replaces string) (string, error) {
 	s.artifactCursorMu.Lock()
 	defer s.artifactCursorMu.Unlock()
 	if s.artifactCursors == nil {
 		s.artifactCursors = make(map[string]artifactCursor)
 	}
+	delete(s.artifactCursors, replaces)
+	now := time.Now()
+	owned, oldest := 0, ""
 	for k, v := range s.artifactCursors {
-		if !time.Now().Before(v.Expires) {
+		if !now.Before(v.Expires) {
 			delete(s.artifactCursors, k)
+			continue
+		}
+		if v.Owner == c.Owner {
+			owned++
+			if oldest == "" || v.Expires.Before(s.artifactCursors[oldest].Expires) {
+				oldest = k
+			}
 		}
 	}
-	if len(s.artifactCursors) >= 256 {
+	if owned >= artifactCursorsPerPerson {
+		delete(s.artifactCursors, oldest)
+	}
+	if len(s.artifactCursors) >= artifactCursorsTotal {
 		return "", workspace.ErrUnavailable
 	}
 	var id [24]byte
 	if _, err := rand.Read(id[:]); err != nil {
 		return "", err
 	}
-	c.Expires = time.Now().Add(15 * time.Minute)
+	c.Expires = now.Add(15 * time.Minute)
 	token := hex.EncodeToString(id[:])
 	s.artifactCursors[token] = c
 	return token, nil

@@ -398,3 +398,77 @@ func TestArtifactPreviewPaginationAndPortalTrust(t *testing.T) {
 		t.Fatalf("untrusted forwarded identity %d", resp.StatusCode)
 	}
 }
+
+func TestArtifactCursorsReplaceConsumedAndBoundPerPerson(t *testing.T) {
+	s := &Server{}
+	// A 10 MiB preview needs ~320 continuations; each replaces the one consumed.
+	token := ""
+	for i := 0; i < 400; i++ {
+		next, err := s.mintArtifactCursor(artifactCursor{Owner: "reader", Binding: "chain", Offset: i}, token)
+		if err != nil {
+			t.Fatalf("continuation %d: %v", i, err)
+		}
+		token = next
+	}
+	if len(s.artifactCursors) != 1 {
+		t.Fatalf("chain kept %d cursors", len(s.artifactCursors))
+	}
+	// Unused cursors from one Person evict that Person's own oldest, never
+	// refuse them and never touch another Person's live cursor.
+	other, err := s.mintArtifactCursor(artifactCursor{Owner: "other", Binding: "other"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 3*artifactCursorsPerPerson; i++ {
+		if _, err = s.mintArtifactCursor(artifactCursor{Owner: "reader", Binding: "flood"}, ""); err != nil {
+			t.Fatalf("own flood %d: %v", i, err)
+		}
+	}
+	owned := 0
+	for _, c := range s.artifactCursors {
+		if c.Owner == "reader" {
+			owned++
+		}
+	}
+	if owned != artifactCursorsPerPerson {
+		t.Fatalf("reader holds %d cursors", owned)
+	}
+	if _, ok := s.artifactCursor(other, "other"); !ok {
+		t.Fatal("one Person's cursors evicted another's")
+	}
+	// The process-wide bound still refuses once enough distinct People fill it.
+	for i := 0; len(s.artifactCursors) < artifactCursorsTotal; i++ {
+		if _, err = s.mintArtifactCursor(artifactCursor{Owner: fmt.Sprintf("person-%d", i/artifactCursorsPerPerson), Binding: "fill"}, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err = s.mintArtifactCursor(artifactCursor{Owner: "newcomer", Binding: "fill"}, ""); err == nil {
+		t.Fatal("process-wide cursor bound not enforced")
+	}
+}
+
+func TestArtifactPreviewConsumedCursorIsReplaced(t *testing.T) {
+	h, w, token, data := artifactFixture(t, true)
+	a, r := publishArtifact(t, h, w, data, 0, "txt", strings.Repeat("plain words ", 2*artifactPreviewBytes/len("plain words ")+1))
+	base := "/api/v1/agents/writer/artifacts/" + a + "/revisions/" + r
+	page := func(path string) artifactPreviewResponse {
+		t.Helper()
+		resp, body := artifactRequest(t, h, path, token)
+		var p artifactPreviewResponse
+		if resp.StatusCode != 200 || json.Unmarshal(body, &p) != nil {
+			t.Fatalf("preview %s: %d %s", path, resp.StatusCode, body)
+		}
+		return p
+	}
+	first := page(base)
+	second := page(base + "?cursor=" + url.QueryEscape(first.NextCursor))
+	if second.NextCursor == "" {
+		t.Fatal("expected a third page")
+	}
+	if resp, _ := artifactRequest(t, h, base+"?cursor="+url.QueryEscape(first.NextCursor), token); resp.StatusCode != 400 {
+		t.Fatalf("consumed cursor reused: %d", resp.StatusCode)
+	}
+	if last := page(base + "?cursor=" + url.QueryEscape(second.NextCursor)); last.NextCursor != "" || last.Truncated {
+		t.Fatal("final page continued")
+	}
+}
