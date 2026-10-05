@@ -11,7 +11,7 @@ import (
 
 func pairingVault(t *testing.T) (*DB, *SecretVault, string) {
 	t.Helper()
-	db, err := Open(filepath.Join(t.TempDir(), "runtime.db"))
+	db, err := Open(migrated.Path(t)) // a copy of the template, not a fresh replay (#231)
 	if err != nil {
 		t.Fatal(err)
 	}
