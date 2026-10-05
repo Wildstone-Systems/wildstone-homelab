@@ -291,6 +291,9 @@ function SetupLive({
       setAnswer(r.answer);
       setError(null);
     } else {
+      // The old answer was for a different request; proposing from it would
+      // file values that were never successfully previewed.
+      setAnswer(null);
       setError(r.error ?? "The setup could not be checked.");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps

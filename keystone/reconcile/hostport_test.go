@@ -110,6 +110,36 @@ func TestHostPortInUseIsRefusedBeforeTheOldContainerIsReplaced(t *testing.T) {
 	}
 }
 
+// A stopped host-networked container cannot be the listener, so a port
+// something else took while it was down is still refused.
+func TestHostPortTakenWhileHostContainerStoppedIsRefused(t *testing.T) {
+	h := startGateway(t, []string{"tok"})
+	agent := newTestAgent(t, h, "node-a", "tok")
+	if !h.gw.WaitConnected("node-a", 10*time.Second) {
+		t.Fatal("agent never connected")
+	}
+	r := newReconciler(&GatewayApplier{Gateway: h.gw})
+	r.AgentProtocolMinor = minor(resource.HostGatewayProtocolMinor)
+	r.Approve = func(*plan.Plan) bool { return true }
+	ctx := context.Background()
+
+	if _, err := r.Reconcile(ctx, "node-a", hubPackage(true, testDigestImage)); err != nil {
+		t.Fatal(err)
+	}
+	agent.mu.Lock()
+	agent.containers["hub"].running = false
+	agent.mu.Unlock()
+	agent.setListening(&wsv1.ListeningPort{Proto: "tcp", Port: 18123, LocalIp: "0.0.0.0"})
+
+	outcome, err := r.Reconcile(ctx, "node-a", hubPackage(true, strings.ReplaceAll(testDigestImage, "a", "b")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if msg := hubStepError(t, outcome); !strings.Contains(msg, "18123") {
+		t.Errorf("stopped host container over a taken port was not refused: %q", msg)
+	}
+}
+
 // Ports of host Routes from OTHER packages, or on other nodes, are not
 // this container's to claim.
 func TestHostRoutePortsAreThePackagesOwn(t *testing.T) {
