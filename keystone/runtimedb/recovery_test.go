@@ -7,7 +7,7 @@ import (
 )
 
 func TestOnlineBackupAndRestoreStartsQuarantined(t *testing.T) {
-	live, err := Open(filepath.Join(t.TempDir(), "live.db"))
+	live, err := Open(migrated.Path(t)) // a copy of the template, not a fresh replay (#231)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +52,7 @@ func TestOnlineBackupAndRestoreStartsQuarantined(t *testing.T) {
 }
 
 func TestBackupRefusesOverwrite(t *testing.T) {
-	db, err := Open(filepath.Join(t.TempDir(), "live.db"))
+	db, err := Open(migrated.Path(t)) // a copy of the template, not a fresh replay (#231)
 	if err != nil {
 		t.Fatal(err)
 	}
