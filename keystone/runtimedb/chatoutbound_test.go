@@ -16,7 +16,7 @@ import (
 // Agents are `admin`.
 func uncoordinatedChatTestDB(t *testing.T) (*DB, Connection, Connection) {
 	t.Helper()
-	db, err := Open(t.TempDir() + "/keystone.db")
+	db, err := Open(migrated.Path(t)) // a copy of the template, not a fresh replay (#231)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -250,7 +250,7 @@ func TestAnAnswerToOneBotDoesNotCloseAnothersQuestion(t *testing.T) {
 // that makes its own.
 func chatQuestionDB(t *testing.T) *DB {
 	t.Helper()
-	db, err := Open(t.TempDir() + "/keystone.db")
+	db, err := Open(migrated.Path(t)) // a copy of the template, not a fresh replay (#231)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
