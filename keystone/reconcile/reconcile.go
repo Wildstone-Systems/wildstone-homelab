@@ -2143,26 +2143,19 @@ func (r *Reconciler) probeRoute(ctx context.Context, nodeID string, spec *resour
 	// routing — one service's link reaching another, a second reaching
 	// nothing — for as long as nobody looked.
 	if host, port, ok := r.routeFrontDoor(spec); ok {
-		attempts, backoff := r.routeGateParams()
-		for i := 0; i < attempts; i++ {
-			// A TCP connect can succeed against an unrelated host process
-			// holding Caddy's port (rpc.statd did exactly that). Require a
-			// trusted HTTPS response from the routed tailnet name instead.
-			res, err := r.Applier.Apply(ctx, nodeID, &wsv1.Operation{Op: &wsv1.Operation_ProbeHttp{
-				ProbeHttp: &wsv1.ProbeHttp{Url: fmt.Sprintf("https://%s:%d/", host, port), TimeoutSeconds: 2},
-			}})
-			if err == nil && res.GetError() == nil && res.GetProbeHttp().GetReachable() {
-				return true
-			}
-			if i < attempts-1 {
-				select {
-				case <-ctx.Done():
-					return false
-				case <-time.After(backoff):
-				}
-			}
+		if !r.probeFrontDoor(ctx, nodeID, host, port) {
+			return false
 		}
-		return false
+		// The front door answering says Caddy took the config, not that
+		// anything is behind it: Caddy answers 502 for a dead upstream,
+		// and a Route with auth answers 302 to the sign-in page first.
+		// A host upstream is one the agent CAN reach, so it gets #433's
+		// probe below as well. Before this, the tailnet posture returned
+		// here and never ran it: the live run applied a Route change
+		// against a stopped host service.
+		if _, isHost, _ := resource.ParseHostUpstream(spec.Upstream); !isHost {
+			return true
+		}
 	}
 	if strings.HasPrefix(spec.Upstream, "container/") {
 		// No front door to probe and a container upstream the agent
@@ -2182,6 +2175,30 @@ func (r *Reconciler) probeRoute(ctx context.Context, nodeID string, spec *resour
 	for i := 0; i < attempts; i++ {
 		res, err := r.Applier.Apply(ctx, nodeID, &wsv1.Operation{Op: &wsv1.Operation_ProbeHttp{
 			ProbeHttp: &wsv1.ProbeHttp{Url: url},
+		}})
+		if err == nil && res.GetError() == nil && res.GetProbeHttp().GetReachable() {
+			return true
+		}
+		if i < attempts-1 {
+			select {
+			case <-ctx.Done():
+				return false
+			case <-time.After(backoff):
+			}
+		}
+	}
+	return false
+}
+
+// probeFrontDoor polls the Route's tailnet address until Caddy answers.
+// A TCP connect can succeed against an unrelated host process holding
+// Caddy's port (rpc.statd did exactly that), so this requires a trusted
+// HTTPS response from the routed tailnet name.
+func (r *Reconciler) probeFrontDoor(ctx context.Context, nodeID, host string, port uint32) bool {
+	attempts, backoff := r.routeGateParams()
+	for i := 0; i < attempts; i++ {
+		res, err := r.Applier.Apply(ctx, nodeID, &wsv1.Operation{Op: &wsv1.Operation_ProbeHttp{
+			ProbeHttp: &wsv1.ProbeHttp{Url: fmt.Sprintf("https://%s:%d/", host, port), TimeoutSeconds: 2},
 		}})
 		if err == nil && res.GetError() == nil && res.GetProbeHttp().GetReachable() {
 			return true

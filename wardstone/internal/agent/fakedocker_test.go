@@ -300,7 +300,7 @@ func (f *fakeDocker) handle(w http.ResponseWriter, r *http.Request) {
 				"Image":  c.image,
 				"Labels": c.labels,
 			},
-			"HostConfig":      map[string]any{"PortBindings": c.host.PortBindings, "NetworkMode": c.dockerNetworkMode()},
+			"HostConfig":      map[string]any{"PortBindings": c.host.PortBindings, "NetworkMode": c.dockerNetworkMode(), "Devices": c.host.Devices},
 			"NetworkSettings": map[string]any{"Ports": livePorts},
 		})
 	case m[3] == "start" && r.Method == http.MethodPost:

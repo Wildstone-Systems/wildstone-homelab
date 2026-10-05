@@ -670,7 +670,10 @@ func (a *Agent) ensureContainer(ctx context.Context, op *wsv1.EnsureContainer) (
 		if hasHash {
 			specMatches = existing.Config.Labels[SpecHashLabel] == wantHash
 		}
-		if specMatches {
+		// A matching spec is not enough when a device alias now
+		// resolves elsewhere: docker start would hand over the node
+		// stored at create, which may be another radio by now.
+		if specMatches && staleDevice(existing, devices) == "" {
 			started := false
 			if !existing.State.Running {
 				if err := a.docker.start(ctx, existing.ID); err != nil {
@@ -707,6 +710,9 @@ func (a *Agent) ensureContainer(ctx context.Context, op *wsv1.EnsureContainer) (
 		labels[k] = v
 	}
 	labels[OwnerLabel] = ownerValue
+	if s := deviceSourcesLabel(op.GetDevices(), devices); s != "" {
+		labels[DeviceSourcesLabel] = s
+	}
 
 	var env []string
 	for k, v := range materialized {
@@ -947,7 +953,12 @@ func (a *Agent) inspectContainer(ctx context.Context, op *wsv1.InspectContainer)
 		return nil, oerr
 	}
 	labels := ci.Config.Labels
-	if ci.State.Running && missingPublishedPort(ci, ci.HostConfig.PortBindings) != "" {
+	// A device alias that resolves to a different node than Docker
+	// stored is drift too, running or not: Docker's restart policy
+	// starts the container on its own after a reboot, against whatever
+	// that node now is (DeviceSourcesLabel).
+	staleDev := staleDevice(ci, currentDeviceMappings(ci)) != ""
+	if staleDev || (ci.State.Running && missingPublishedPort(ci, ci.HostConfig.PortBindings) != "") {
 		// Signal drift through the existing spec-hash contract. Returning
 		// Running=false would misreport the process; returning the intact
 		// hash would tell Keystone this broken container has converged.

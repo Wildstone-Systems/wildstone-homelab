@@ -96,7 +96,9 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: thread-otbr
-  version: 1.0.0
+  # 1.0.1: the preflight's accept_ra=0 warning points at the network
+  # manager (systemd-networkd/netplan) instead of only "set it to 2".
+  version: 1.0.1
   capability: thread
   profile: otbr
 params:
@@ -177,7 +179,16 @@ templates:
                         wildstone_fail interface_ipv6 "IPv6 is disabled on $bb (disable_ipv6=$v). Fix on the node: sudo sysctl -w net.ipv6.conf.$bb.disable_ipv6=0, and remove whatever sets it."
                     fi
                     v=$(cat "$root/proc/sys/net/ipv6/conf/$bb/accept_ra" 2>/dev/null || echo "?")
-                    if [[ $v != 2 ]]; then
+                    # 1 is the kernel handling router advertisements and
+                    # ignoring them once forwarding is on: 2 is the fix.
+                    # 0 is the kernel not handling them at all, either
+                    # because a network manager does (systemd-networkd,
+                    # so netplan, pins it there) or because the address
+                    # is static. "Set it to 2" is wrong advice there: it
+                    # fights the manager, which owns the setting.
+                    if [[ $v == 0 ]]; then
+                        wildstone_warn accept_ra "net.ipv6.conf.$bb.accept_ra is 0: the kernel is not processing router advertisements on $bb. If systemd-networkd/netplan configures $bb it handles them itself; make it keep accepting them with forwarding on (netplan: accept-ra: true under $bb). Otherwise set accept_ra to 2 and accept_ra_rt_info_max_plen to 64, or the node loses its own IPv6 default route and other border routers' routes."
+                    elif [[ $v != 2 ]]; then
                         wildstone_warn accept_ra "net.ipv6.conf.$bb.accept_ra is $v; with forwarding on the node ignores router advertisements on $bb unless it is 2, losing its own IPv6 default route and other border routers' routes. Set it to 2 and accept_ra_rt_info_max_plen to 64."
                     fi
                 fi
