@@ -148,6 +148,6 @@ Not started.
 - **One flaky USB moment.** The MG21 had one `cp210x … -71` USB
   disconnect when its port was first opened under passthrough. It
   re-enumerated at once and did not recur.
-- **Another Thread network on the LAN.** An unrelated Amazon border
-  router advertises its own Thread network there. HA's preferred
+- **Another Thread network on the LAN.** Another Thread border router
+  on the same LAN advertised its own, separate network. HA's preferred
   network stayed this one.
