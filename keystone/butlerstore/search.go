@@ -42,10 +42,22 @@ func (r SearchRecord) Encode() (string, error) {
 	return string(b), nil
 }
 
+// searchEntry is a reference to a verified ledger step plus its expiry. It
+// never holds result content: every hit rereads the authoritative ledger.
 type searchEntry struct {
-	task   string
-	step   int64
-	record SearchRecord
+	task    string
+	step    int64
+	expires time.Time
+}
+
+// pruneLocked drops expired references. Callers hold s.mu.
+func (s *Searches) pruneLocked() {
+	n := s.now()
+	for k, v := range s.entries {
+		if !n.Before(v.expires) {
+			delete(s.entries, k)
+		}
+	}
 }
 
 // Searches composes S23/S24 with a bounded cache of VERIFIED ledger references.
@@ -170,6 +182,7 @@ func (s *Searches) Search(ctx context.Context, task string, attempt int64, reque
 	}
 	// Recheck the authoritative origin receipt, not just process memory.
 	s.mu.Lock()
+	s.pruneLocked()
 	e, present := s.entries[key]
 	s.mu.Unlock()
 	if present {
@@ -206,11 +219,7 @@ func (s *Searches) Search(ctx context.Context, task string, attempt int64, reque
 		if s.entries == nil {
 			s.entries = map[string]searchEntry{}
 		}
-		for k, v := range s.entries {
-			if !s.fresh(v.record, k, v.record.Scope) {
-				delete(s.entries, k)
-			}
-		}
+		s.pruneLocked()
 		// Authorization can block across expiry. Recheck at publication, after
 		// all current-policy callbacks and while holding the cache lock. Never
 		// return or reinsert a record whose original TTL elapsed during a hit.
@@ -220,7 +229,7 @@ func (s *Searches) Search(ctx context.Context, task string, attempt int64, reque
 			return SearchRecord{}, false, ErrSearchExpired
 		}
 		if len(s.entries) < 128 {
-			e.record = record
+			e.expires = record.StoredAt.Add(searchTTL)
 			s.entries[key] = e
 		}
 		s.mu.Unlock()

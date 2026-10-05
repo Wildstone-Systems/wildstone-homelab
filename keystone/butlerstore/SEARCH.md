@@ -44,7 +44,9 @@ ownership are authorization. The seam emits no logs.
 
 TTL is exactly 15 minutes from the record's initial publication preparation;
 lookup does not renew it or change retrieval/source dates. At most 128 process
-entries reference verified origin steps. Every hit rereads that authoritative
+entries reference verified origin steps. An entry holds only the origin task,
+step and expiry, never result content, and expired entries are pruned on every
+lookup. Every hit rereads that authoritative
 receipt, rechecks current policy/source grants, inherits provenance and checks
 S23. TTL is rechecked at publication after those callbacks; crossing expiry
 returns a bounded `not_found` error with no result or upstream spend, removes

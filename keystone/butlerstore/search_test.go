@@ -341,3 +341,80 @@ func TestSearchVerifiedReuseCancellationTTLAndAuthority(t *testing.T) {
 		t.Fatalf("denied completion spend: %+v %v", b, err)
 	}
 }
+
+func TestSearchCacheHoldsOnlyExpiringReferences(t *testing.T) {
+	db, l := testLedger(t, filepath.Join(t.TempDir(), "runtime.db"))
+	defer db.Close()
+	if err := db.AdmitButlerMember("mika", "test-admin"); err != nil {
+		t.Fatal(err)
+	}
+	task := newTask(t, db)
+	if err := l.Running(task, "test"); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC)
+	s := &Searches{Research: &Research{Ledger: l, Authorize: func(context.Context, string, string) (runtimedb.ResearchLimits, error) {
+		return runtimedb.DefaultResearchLimits(), nil
+	}}, Resolve: func(context.Context, string) (SearchScope, error) {
+		return SearchScope{"mika", "private", "provider", "duckduckgo", "rev"}, nil
+	}, AuthorizeSource: func(context.Context, string, string, int64) error { return nil }, checkEgress: func(context.Context) error { return nil },
+		Now: func() time.Time { return now }}
+	dispatch := func(context.Context, research.SearchRequest) (research.SearchResult, error) {
+		return research.SearchResult{Provider: research.DDGS, Backend: "duckduckgo", RetrievedAt: now,
+			Items: []research.SearchHit{{Snippet: "synthetic private snippet"}}}, nil
+	}
+	request := research.SearchRequest{Query: "synthetic retained request"}
+	step, err := l.AppendStep(task, "tool", "web_search", "{}")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, err := l.StartAttempt(step)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, _, err := s.Search(context.Background(), task, a.Seq, request, dispatch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, err := r.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, _ := json.Marshal(butler.ToolStepResult{Version: 1, Fingerprint: "web_search", Content: content})
+	if err = l.FinishAttempt(a.Seq, true, string(encoded), ""); err != nil {
+		t.Fatal(err)
+	}
+	if err = l.SetStepState(step, butler.LedgerStepVerified); err != nil {
+		t.Fatal(err)
+	}
+	if _, hit, err := s.Search(context.Background(), task, 0, request, dispatch); err != nil || !hit {
+		t.Fatalf("verified hit: %v %v", hit, err)
+	}
+	s.mu.Lock()
+	e, ok := s.entries[r.Key]
+	s.mu.Unlock()
+	if !ok || e.task != task || e.step != step || !e.expires.Equal(r.StoredAt.Add(searchTTL)) {
+		t.Fatalf("cache reference: %+v %v", e, ok)
+	}
+	// A later lookup for an unrelated query is a miss, but must still drop the
+	// expired reference rather than wait for a future hit on the same key.
+	now = now.Add(searchTTL)
+	other := research.SearchRequest{Query: "synthetic unrelated request"}
+	step2, err := l.AppendStep(task, "tool", "web_search", "{}")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a2, err := l.StartAttempt(step2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, hit, err := s.Search(context.Background(), task, a2.Seq, other, dispatch); err != nil || hit {
+		t.Fatalf("unrelated miss: %v %v", hit, err)
+	}
+	s.mu.Lock()
+	_, stale := s.entries[r.Key]
+	s.mu.Unlock()
+	if stale {
+		t.Fatal("expired reference retained after a later miss")
+	}
+}
