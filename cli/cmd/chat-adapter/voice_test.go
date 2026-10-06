@@ -149,6 +149,9 @@ type voiceKeystone struct {
 	fakeKeystone
 	vmu    sync.Mutex
 	voices []receivedVoice
+	// failVoice is how many uploads are answered 502 before one is taken.
+	failVoice int
+	attempts  int
 }
 
 type receivedVoice struct {
@@ -182,7 +185,13 @@ func (k *voiceKeystone) handler() http.Handler {
 		}
 		k.vmu.Lock()
 		k.voices = append(k.voices, got)
+		k.attempts++
+		fail := k.attempts <= k.failVoice
 		k.vmu.Unlock()
+		if fail {
+			http.Error(w, "down", http.StatusBadGateway)
+			return
+		}
 		w.WriteHeader(http.StatusAccepted)
 		io.WriteString(w, `{"accepted":true,"bound":true,"queued":1}`)
 	})
@@ -202,6 +211,7 @@ func newVoiceAdapter(t *testing.T, ks *voiceKeystone, tr Transport) *adapter {
 	return &adapter{
 		keystone:  &keystoneClient{Base: srv.URL, Token: "wst-test", HTTP: srv.Client()},
 		transport: tr, log: testLogger(), pollWait: 10 * time.Millisecond,
+		retryBase: time.Millisecond,
 	}
 }
 
@@ -289,5 +299,26 @@ func TestAdapterSendsAnOversizedVoiceNoteUnfetched(t *testing.T) {
 				t.Fatal("a recording reported too long was downloaded anyway")
 			}
 		})
+	}
+}
+
+// A 5xx on the voice door retries the upload only: the recording is
+// downloaded once.
+func TestVoiceRelayRetriesThePostNotTheDownload(t *testing.T) {
+	ks := &voiceKeystone{failVoice: 1}
+	f := &countingFetch{audio: []byte("OggS opus")}
+	tr := &fakeTransport{incoming: [][]Incoming{{{
+		Account: "12345", Conversation: "12345", MessageID: "40", Addressed: true,
+		Voice: &VoiceNote{MIME: "audio/ogg", Seconds: 4, Size: 9, Fetch: f.fetch},
+	}}}}
+	a := newVoiceAdapter(t, ks, tr)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	runUntil(ctx, a, func() bool { return len(ks.received()) >= 2 })
+	if got := ks.received(); len(got) != 2 || string(got[1].audio) != "OggS opus" {
+		t.Fatalf("uploads = %d, want 2 with the audio", len(got))
+	}
+	if f.calls.Load() != 1 {
+		t.Fatalf("downloads = %d, want 1", f.calls.Load())
 	}
 }

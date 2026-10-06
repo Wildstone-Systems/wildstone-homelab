@@ -118,6 +118,11 @@ type fakeKeystone struct {
 	// the adapter asked for, in order.
 	speech map[int64][]byte
 	spoken []int64
+	// failInbound is how many POSTs to /chat/messages are answered with
+	// failStatus before one is accepted; posts counts every attempt.
+	failInbound int
+	failStatus  int
+	posts       int
 }
 
 func (f *fakeKeystone) handler() http.Handler {
@@ -127,7 +132,13 @@ func (f *fakeKeystone) handler() http.Handler {
 		json.NewDecoder(r.Body).Decode(&msg) //nolint:errcheck // test fake
 		f.mu.Lock()
 		f.inbound = append(f.inbound, msg)
+		f.posts++
+		fail := f.posts <= f.failInbound
 		f.mu.Unlock()
+		if fail {
+			http.Error(w, "refused", f.failStatus)
+			return
+		}
 		w.WriteHeader(http.StatusAccepted)
 		w.Write([]byte(`{"accepted":true,"bound":true,"queued":1}`)) //nolint:errcheck
 	})
@@ -217,6 +228,7 @@ func newTestAdapter(t *testing.T, ks *fakeKeystone, tr Transport) (*adapter, fun
 		transport: tr,
 		log:       testLogger(),
 		pollWait:  10 * time.Millisecond,
+		retryBase: time.Millisecond,
 	}
 	return a, srv.Close
 }
@@ -606,5 +618,95 @@ func TestMenuFailureDoesNotStopMessages(t *testing.T) {
 
 	if got := tr.sentMessages(); len(got) != 1 || got[0].body != "hello" {
 		t.Fatalf("a failed menu update stopped delivery: %+v", got)
+	}
+}
+
+func (f *fakeKeystone) postCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.posts
+}
+
+func relayRetryTransport() *fakeTransport {
+	return &fakeTransport{incoming: [][]Incoming{{{
+		Account: "12345", Conversation: "12345", MessageID: "31", Addressed: true, Text: "hello",
+	}}}}
+}
+
+// Inbound is at-least-once while the process lives: a 5xx is retried
+// with the same message id until Keystone takes it.
+func TestInboundRelayRetriesA5xx(t *testing.T) {
+	ks := &fakeKeystone{failInbound: 2, failStatus: http.StatusBadGateway}
+	a, closeSrv := newTestAdapter(t, ks, relayRetryTransport())
+	defer closeSrv()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	runUntil(ctx, a, func() bool { return ks.postCount() >= 3 })
+	time.Sleep(50 * time.Millisecond)
+	ks.mu.Lock()
+	defer ks.mu.Unlock()
+	if ks.posts != 3 || len(ks.inbound) != 3 {
+		t.Fatalf("posts = %d, want 3", ks.posts)
+	}
+	for _, m := range ks.inbound {
+		if m.MessageID != "31" {
+			t.Fatalf("message id changed across retries: %q", m.MessageID)
+		}
+	}
+}
+
+func TestInboundRelayGivesUpQuietlyAfterThreeAttempts(t *testing.T) {
+	ks := &fakeKeystone{failInbound: 100, failStatus: http.StatusBadGateway}
+	tr := relayRetryTransport()
+	a, closeSrv := newTestAdapter(t, ks, tr)
+	defer closeSrv()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	runUntil(ctx, a, func() bool { return ks.postCount() >= 3 })
+	time.Sleep(100 * time.Millisecond)
+	if n := ks.postCount(); n != 3 {
+		t.Fatalf("posts = %d, want exactly 3", n)
+	}
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	if len(tr.sent) != 0 {
+		t.Fatalf("an apology was sent: %v", tr.sent)
+	}
+}
+
+func TestInboundRelayDoesNotRetryARefusal(t *testing.T) {
+	for _, status := range []int{http.StatusForbidden, http.StatusTooManyRequests} {
+		ks := &fakeKeystone{failInbound: 100, failStatus: status}
+		a, closeSrv := newTestAdapter(t, ks, relayRetryTransport())
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		runUntil(ctx, a, func() bool { return ks.postCount() >= 1 })
+		time.Sleep(100 * time.Millisecond)
+		cancel()
+		closeSrv()
+		if n := ks.postCount(); n != 1 {
+			t.Fatalf("status %d: posts = %d, want 1", status, n)
+		}
+	}
+}
+
+func TestInboundRelayStopsWhenContextIsDone(t *testing.T) {
+	ks := &fakeKeystone{failInbound: 100, failStatus: http.StatusBadGateway}
+	a, closeSrv := newTestAdapter(t, ks, relayRetryTransport())
+	defer closeSrv()
+	a.retryBase = time.Hour
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { a.run(ctx); close(done) }()
+	for ks.postCount() < 1 {
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("adapter kept waiting to retry after its context was cancelled")
+	}
+	if n := ks.postCount(); n != 1 {
+		t.Fatalf("posts = %d, want 1", n)
 	}
 }

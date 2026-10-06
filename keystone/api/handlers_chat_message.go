@@ -542,9 +542,10 @@ func (s *Server) chatInbound(r *http.Request, id principal.Identity, msg inbound
 			// duplicate. The thread pointer set just above means that
 			// attempt resumes the session holding the work rather than
 			// proposing it a second time. Note that the bundled adapter
-			// does not itself redeliver a failed relay (it advances its
-			// cursor first, then apologises), which is why this notice
-			// is queued whether or not anything comes back — see #232.
+			// retries a failed relay only briefly (3 attempts, 2s then
+			// 4s, 5xx or no response) and a crash mid-retry loses the
+			// message, which is why this notice is queued whether or
+			// not anything comes back — see #232.
 			//
 			// Deduplicated on the message AND the outcome, so a
 			// redelivery of this question announces once while a later

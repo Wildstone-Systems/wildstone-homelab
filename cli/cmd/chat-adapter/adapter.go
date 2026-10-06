@@ -222,6 +222,48 @@ type adapter struct {
 	transport Transport
 	log       *slog.Logger
 	pollWait  time.Duration
+	// retryBase is the wait before the second relay attempt; the third
+	// waits twice as long. Zero means relayRetryBase.
+	retryBase time.Duration
+}
+
+// relayAttempts and relayRetryBase bound how long an inbound message is
+// held while Keystone is down: 3 attempts, 2s then 4s apart.
+const (
+	relayAttempts  = 3
+	relayRetryBase = 2 * time.Second
+)
+
+// retryRelay runs post until it succeeds, fails with an answer that
+// repeating cannot change, or the attempts run out. Only a failure with
+// no response (network) or a 5xx is retried: a 4xx, 429 included, is
+// Keystone's answer, not an outage. Keystone dedupes inbound on the
+// message id, so a repeat cannot double-answer.
+func (a *adapter) retryRelay(ctx context.Context, post func() (bool, error)) (bool, error) {
+	wait := a.retryBase
+	if wait <= 0 {
+		wait = relayRetryBase
+	}
+	for attempt := 1; ; attempt++ {
+		bound, err := post()
+		if err == nil || attempt >= relayAttempts || !retryable(err) {
+			return bound, err
+		}
+		select {
+		case <-ctx.Done():
+			return false, err
+		case <-time.After(wait):
+		}
+		wait *= 2
+	}
+}
+
+func retryable(err error) bool {
+	var se *statusError
+	if errors.As(err, &se) {
+		return se.Code >= 500
+	}
+	return true
 }
 
 func (a *adapter) run(ctx context.Context) {
@@ -364,7 +406,7 @@ func (a *adapter) handle(ctx context.Context, m Incoming) {
 	if m.Voice != nil {
 		bound, err = a.relayVoice(ctx, inbound, m.Voice)
 	} else {
-		bound, err = a.keystone.send(ctx, inbound)
+		bound, err = a.retryRelay(ctx, func() (bool, error) { return a.keystone.send(ctx, inbound) })
 	}
 	switch {
 	case err == nil && bound && a.guard != nil:
@@ -373,6 +415,9 @@ func (a *adapter) handle(ctx context.Context, m Incoming) {
 		a.guard.markUnknown(m.Account)
 	}
 	if err != nil {
+		// Inbound is at-least-once while this process is alive (the
+		// relay is retried above before the next Receive); a crash
+		// mid-retry can still lose the message.
 		// Logged, not said: the adapter cannot tell whether the sender is
 		// somebody the household knows, and a stranger learns nothing
 		// from an outage either.
@@ -403,9 +448,12 @@ func (a *adapter) relayVoice(ctx context.Context, msg keystoneInbound, v *VoiceN
 			return false, fmt.Errorf("fetching voice message: %w", err)
 		}
 	}
-	return a.keystone.sendVoice(ctx, keystoneVoice{
-		keystoneInbound: msg, AudioSeconds: v.Seconds, TooLarge: tooLarge,
-	}, audio, v.MIME)
+	// The audio is fetched once; only the POST is retried.
+	return a.retryRelay(ctx, func() (bool, error) {
+		return a.keystone.sendVoice(ctx, keystoneVoice{
+			keystoneInbound: msg, AudioSeconds: v.Seconds, TooLarge: tooLarge,
+		}, audio, v.MIME)
+	})
 }
 
 // reply sends one message directly, for the two cases that never reach
