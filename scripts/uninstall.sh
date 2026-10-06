@@ -23,7 +23,9 @@ if ((${#running[@]})); then
 fi
 
 # The socket mount is still needed by tailnet ingress, so leave its unit
-# running. Likewise, leave Docker and Tailscale untouched.
+# running. Likewise, leave Docker and Tailscale untouched. Before deleting
+# /srv/wildstone later, follow "Removing the managed prefix" in
+# docs/uninstall.md: rm -rf would delete through that mount.
 for unit in keystone.service wardstoned.service; do
   if [[ -e /etc/systemd/system/$unit ]]; then
     systemctl disable --now "$unit"
