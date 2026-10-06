@@ -135,3 +135,46 @@ func TestSharedResourcesAreNotSilentlyDestroyed(t *testing.T) {
 		t.Fatalf("missing recorded resource decisions: %v; got %+v", want, decisions)
 	}
 }
+
+func TestOffboardingRevokesLinkedAPITokens(t *testing.T) {
+	db := householdWith(t, "mika", "sandy", "sam")
+	if err := db.SetButlerMemberRole("mika", RoleOwner, "root-admin"); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"sam-cli", "sam", "sam-old"} {
+		if err := db.CreatePrincipal(name, RoleOperator, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, tok := range []struct{ hash, principal string }{
+		{"h-linked", "sam-cli"}, {"h-unlinked", "sam"}, {"h-earlier", "sam-old"},
+	} {
+		if err := db.InsertToken(tok.hash, tok.principal, "", time.Time{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := db.LinkSurfaceIdentity(LinkAPIPrincipal, "sam-cli", "sam", "root-admin"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.LinkSurfaceIdentity(LinkAPIPrincipal, "sam-old", "sam", "root-admin"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.RevokeSurfaceLink(LinkAPIPrincipal, "sam-old", "root-admin"); err != nil {
+		t.Fatal(err)
+	}
+	result, err := db.OffboardMember("sam", "mika", "mika")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := db.LiveTokensFor("sam-cli"); n != 0 {
+		t.Fatalf("linked principal still has %d live tokens", n)
+	}
+	if result.Stores["api-tokens"] != 1 {
+		t.Fatalf("api-tokens = %d, want 1", result.Stores["api-tokens"])
+	}
+	for _, p := range []string{"sam", "sam-old"} {
+		if n, _ := db.LiveTokensFor(p); n != 1 {
+			t.Fatalf("%s token must stay live (not linked at offboarding), got %d", p, n)
+		}
+	}
+}
