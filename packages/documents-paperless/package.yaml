@@ -23,7 +23,7 @@
 #
 # Rules for that JSON (#134):
 #   - provider_id must stay `authelia`: the OidcClient redirect URI is
-#     /accounts/authelia/login/callback/ and allauth builds that path
+#     /accounts/oidc/authelia/login/callback/ and allauth builds that path
 #     from the provider id.
 #   - client_id must stay `paperless` (the OidcClient's client id).
 #   - secret must be byte-for-byte equal to secret/paperless-oidc.
@@ -40,7 +40,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: documents-paperless
-  version: 1.0.6
+  version: 1.0.7
   capability: documents
   profile: paperless
 requires:
@@ -111,7 +111,7 @@ templates:
     spec:
       name: paperless-oauth-providers
       provided: true
-      purpose: "Paperless's whole sign-in provider JSON, with the paperless-oidc value inside it. See the package header for the exact shape."
+      purpose: 'Paperless''s whole sign-in provider JSON. Set it to {"openid_connect":{"APPS":[{"provider_id":"authelia","name":"Authelia","client_id":"paperless","secret":"<the paperless-oidc value>","settings":{"server_url":"<login portal address>/.well-known/openid-configuration"}}]}}, keeping provider_id and client_id exactly as shown.'
   - |
     apiVersion: wildstone.dev/v1
     kind: Volume
@@ -249,7 +249,7 @@ templates:
       clientId: paperless
       clientName: Paperless
       redirectUris:
-        - "https://{{ .Params.docs_subdomain }}.{{ .Params.public_domain }}/accounts/authelia/login/callback/"
+        - "https://{{ .Params.docs_subdomain }}.{{ .Params.public_domain }}/accounts/oidc/authelia/login/callback/"
       scopes: [openid, profile, email]
       authPolicy: two_factor
       secretRef: secret/paperless-oidc
