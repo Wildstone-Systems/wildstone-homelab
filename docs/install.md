@@ -205,8 +205,8 @@ pre-authorized, ideally ephemeral key. Tailscale SSH is deliberately
 
 It also bind-mounts tailscaled's local API into Wildstone's managed
 prefix, as `/srv/wildstone/tailscale/tailscaled.sock`, via a systemd
-mount unit ordered after `tailscaled`. That is what lets the
-`ingress-tailnet-ts` profile serve under a Tailscale-issued certificate:
+oneshot service (`wildstone-tailscale-socket.service`) ordered after
+`tailscaled`. That is what lets the `ingress-tailnet-ts` profile serve under a Tailscale-issued certificate:
 Caddy fetches `*.ts.net` certificates from tailscaled and needs no
 configuration at all to do it, but Wardstone bind-mounts host paths only
 from its managed prefixes (ADR-W003 A1), and `/run/tailscale` is not
@@ -215,7 +215,9 @@ one.
 The socket is **not moved**. `tailscale status` and every other command
 keep working exactly as they did, because the CLI still finds it where
 it has always been — the bind mount adds a second path to the same
-socket rather than relocating it.
+socket rather than relocating it. Because it is a mount, deleting the
+prefix needs care: see "Removing the managed prefix" in
+[uninstall.md](uninstall.md).
 
 To use the tailnet ingress profile you also need HTTPS certificates
 enabled for your tailnet (Tailscale admin console → DNS → HTTPS
