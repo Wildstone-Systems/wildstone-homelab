@@ -8,7 +8,7 @@
     "typecheck": "tsc --noEmit",
     "secrets-check": "node scripts/secrets-check.mjs",
     "ui-check": "node scripts/ui-check.mjs",
-    "render-check": "node scripts/privacy-check.mjs && esbuild scripts/render-check.tsx --bundle --platform=node --format=cjs --outfile=node_modules/.cache/render-check.cjs --jsx=automatic && node node_modules/.cache/render-check.cjs && esbuild scripts/owner-review-check.tsx --bundle --platform=node --format=cjs --outfile=node_modules/.cache/owner-review-check.cjs --jsx=automatic && node node_modules/.cache/owner-review-check.cjs",
+    "render-check": "node scripts/privacy-check.mjs && esbuild scripts/render-check.tsx --bundle --platform=node --format=cjs --outfile=node_modules/.cache/render-check.cjs --jsx=automatic && node node_modules/.cache/render-check.cjs && esbuild scripts/owner-review-check.tsx --bundle --platform=node --format=cjs --outfile=node_modules/.cache/owner-review-check.cjs --jsx=automatic && node node_modules/.cache/owner-review-check.cjs && esbuild scripts/butler-failure-check.tsx --bundle --platform=node --format=cjs --outfile=node_modules/.cache/butler-failure-check.cjs --jsx=automatic && node node_modules/.cache/butler-failure-check.cjs",
     "contrast-check": "node scripts/contrast-check.mjs",
     "handoff-check": "node scripts/handoff-check.mjs",
     "build": "tsc --noEmit && vite build",

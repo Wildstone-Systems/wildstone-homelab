@@ -258,37 +258,15 @@ export function Butler({
       })
       .then(() => sessions.reload())
       .catch((e: Error) => {
-        // A turn can fail after tools have already run, and the server
-        // preserves that work and names the session holding it.
-        // Adopting it is what makes the next message continue the task
-        // instead of opening a new one and repeating calls that already
-        // changed the house.
-        if (e instanceof ApiError && e.sessionId) {
-          setOpenID(e.sessionId);
+        // What a failed turn means for the screen is decided by
+        // failedAsk, so it can be tested without driving React.
+        const failed = failedAsk(e);
+        if (failed.adopt) {
+          setOpenID(failed.adopt);
           setReloads((n) => n + 1);
           void sessions.reload();
         }
-        // A proposal the queue refused leaves no trace to find later.
-        // The tool trace on the preserved turn shows that propose_change
-        // RAN, which reads as success; the refusal happened after it,
-        // during submission, and is only reported here. Saying it with
-        // the error is what stops the operator assuming the change is
-        // waiting on the Plans screen.
-        //
-        // It says to start a NEW conversation rather than just to ask
-        // again, and the difference is not politeness. This thread has
-        // just adopted the preserved session, so asking again resumes
-        // that task — and the server recorded the accepted
-        // propose_change as a verified step, which a resumed task
-        // replays from its ledger instead of re-running. Retrying here
-        // would look like it worked and queue nothing (#234).
-        const refused =
-          e instanceof ApiError && e.proposalErrors?.length ? e.proposalErrors : null;
-        setAskError(
-          refused
-            ? `${e.message} — and a change it tried to propose was refused before reaching the approval queue (${refused.join("; ")}). Nothing is waiting there. Start a new conversation and ask again; continuing this one resumes the same task, which will not attempt that change a second time.`
-            : e.message,
-        );
+        setAskError(failed.message);
       })
       .finally(() => {
         setBusy(false);
@@ -877,6 +855,38 @@ function TurnRow({ children }: { children: React.ReactNode }) {
       <div className="turn-body">{children}</div>
     </div>
   );
+}
+
+// What a failed ask does to the screen: the session to adopt, and the
+// text to show.
+//
+// A turn can fail after tools have already run, and the server preserves
+// that work and names the session holding it. Adopting it is what makes
+// the next message continue the task instead of opening a new one and
+// repeating calls that already changed the house.
+//
+// A proposal the queue refused leaves no trace to find later. The tool
+// trace on the preserved turn shows that propose_change RAN, which reads
+// as success; the refusal happened after it, during submission, and is
+// only reported here. Saying it with the error is what stops the
+// operator assuming the change is waiting on the Plans screen.
+//
+// It says to start a NEW conversation rather than just to ask again, and
+// the difference is not politeness. The thread has just adopted the
+// preserved session, so asking again resumes that task — and the server
+// recorded the accepted propose_change as a verified step, which a
+// resumed task replays from its ledger instead of re-running. Retrying
+// here would look like it worked and queue nothing (#234).
+export function failedAsk(e: unknown): { adopt: string | null; message: string } {
+  const message = e instanceof Error ? e.message : String(e);
+  const adopt = e instanceof ApiError && e.sessionId ? e.sessionId : null;
+  const refused = e instanceof ApiError && e.proposalErrors?.length ? e.proposalErrors : null;
+  return {
+    adopt,
+    message: refused
+      ? `${message} — and a change it tried to propose was refused before reaching the approval queue (${refused.join("; ")}). Nothing is waiting there. Start a new conversation and ask again; continuing this one resumes the same task, which will not attempt that change a second time.`
+      : message,
+  };
 }
 
 export function Turn({
