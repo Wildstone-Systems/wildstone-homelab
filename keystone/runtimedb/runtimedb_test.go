@@ -30,6 +30,36 @@ var migrated = dbtemplate.New(func(path string) error {
 	return db.Close()
 })
 
+// throughTemplates caches the schema as it stood after one named
+// migration, built once per test binary. See openThrough.
+var throughTemplates sync.Map // last migration path -> *dbtemplate.Template
+
+// openThrough is the migration tests' counterpart of open: an unmigrated
+// handle at path on a private copy of the schema as it stood after the
+// named migration ("migrations/NNNN_x.sql"), the same state that
+// openUnmigrated followed by migrateThrough(last) would reach, without
+// replaying that history in every test.
+//
+// The migrations up to last are the PRIOR schema here. A test that is
+// about migration N+1 still runs N+1 for real, against rows it writes into
+// this database, through db.migrate. A test that asserts something about
+// migrations at or before last must keep using openUnmigrated.
+func openThrough(t *testing.T, path, last string) (*DB, error) {
+	t.Helper()
+	v, _ := throughTemplates.LoadOrStore(last, dbtemplate.New(func(p string) error {
+		db, err := openUnmigrated(p)
+		if err != nil {
+			return err
+		}
+		if err := db.migrateThrough(last); err != nil {
+			db.Close()
+			return err
+		}
+		return db.Close()
+	}))
+	return openUnmigrated(v.(*dbtemplate.Template).Into(t, path))
+}
+
 // open returns a private, writable, fully migrated database.
 func open(t *testing.T) *DB {
 	t.Helper()

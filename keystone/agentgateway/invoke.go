@@ -260,17 +260,24 @@ func (g *Gateway) Invoke(ctx context.Context, req agentapi.InvokeRequest) (agent
 	}
 	g.record(taskID, rec)
 
+	// A proposal the gateway accepted but could not file did not take
+	// effect: the step is treated like a rejected one (failed, no
+	// proposal receipt) so a resume re-dispatches it instead of serving
+	// it from the ledger and queueing nothing (#234). rec.Rejected stays
+	// as is so the caller still reports rec.ProposalError to the person.
+	refused := rec.ProposalError != ""
+
 	// 7. The result checkpoint, in the runner's envelope. A rejected
 	// call is a real, established outcome but not a verified READ, so
 	// it is not served from the ledger on a resume.
 	result := butler.ToolStepResult{
 		EffectPending:     outcome.EffectPending && !outcome.Rejected,
-		EffectConfirmed:   outcome.EffectConfirmed && !outcome.Rejected,
-		ProposalConfirmed: outcome.ProposalConfirmed && !outcome.Rejected,
+		EffectConfirmed:   outcome.EffectConfirmed && !outcome.Rejected && !refused,
+		ProposalConfirmed: outcome.ProposalConfirmed && !outcome.Rejected && !refused,
 		Version:           1,
 		Fingerprint:       fp,
 		Content:           outcome.Content,
-		Rejected:          outcome.Rejected,
+		Rejected:          outcome.Rejected || refused,
 	}
 	body, _ := json.Marshal(result)
 	if err := g.Ledger.FinishAttempt(attempt.Seq, !outcome.Failed, string(body), ""); errors.Is(err, runtimedb.ErrAttemptFenced) {
@@ -287,7 +294,7 @@ func (g *Gateway) Invoke(ctx context.Context, req agentapi.InvokeRequest) (agent
 			Reason:  "the attempt was fenced while the tool ran, so its result was refused",
 		}, nil
 	}
-	if outcome.Rejected || outcome.Failed {
+	if outcome.Rejected || outcome.Failed || refused {
 		_ = g.Ledger.SetStepState(step, butler.LedgerStepFailed)
 	} else {
 		_ = g.Ledger.SetStepState(step, butler.LedgerStepVerified)
@@ -295,7 +302,7 @@ func (g *Gateway) Invoke(ctx context.Context, req agentapi.InvokeRequest) (agent
 	g.trace(s, butler.LedgerTraceEvent{
 		Type: butler.TraceToolResult, Step: step, Attempt: attempt.Seq,
 		SourceIDs: []string{req.Tool},
-		Payload:   jsonPayload(map[string]any{"rejected": outcome.Rejected, "bytes": len(outcome.Content)}),
+		Payload:   jsonPayload(map[string]any{"rejected": outcome.Rejected, "proposalRefused": refused, "bytes": len(outcome.Content)}),
 	})
 	res := resultFor(taskID, step, req.Tool, outcome)
 	// The real filed Plan id, when this call filed one above — replacing

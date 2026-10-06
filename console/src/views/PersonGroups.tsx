@@ -1,4 +1,5 @@
-import { api, type PersonGroup } from "../api";
+import { useState } from "react";
+import { api, isPendingStepUp, type PersonGroup } from "../api";
 import { ErrorLine, useAction, useLoad } from "../lib";
 
 // The household's one principal namespace (ADR-W033 design §4; slices 6
@@ -14,6 +15,28 @@ import { ErrorLine, useAction, useLoad } from "../lib";
 // primitive; what it reaches is decided per service, on the Services
 // screen. The copy says so, because a list of groups with an Add button
 // looks exactly like a permissions screen and is not one.
+const GROUPS_PATH = "/api/v1/household/person-groups";
+const DRAFT_KEY = "wst.console.person-group-draft";
+
+// The name typed before a step-up redirect, so coming back needs one
+// click rather than retyping. Only restored for the create it interrupted.
+function loadDraft(): string {
+  try {
+    return isPendingStepUp("POST", GROUPS_PATH) ? (sessionStorage.getItem(DRAFT_KEY) ?? "") : "";
+  } catch {
+    return "";
+  }
+}
+
+function saveDraft(name: string | null) {
+  try {
+    if (name === null) sessionStorage.removeItem(DRAFT_KEY);
+    else sessionStorage.setItem(DRAFT_KEY, name);
+  } catch {
+    // A draft is a convenience; losing it only costs retyping.
+  }
+}
+
 export function PersonGroups({ members }: { members: string[] }) {
   const groups = useLoad(() => api.personGroups(), []);
   if (groups.error) return <ErrorLine error={groups.error} />;
@@ -50,6 +73,24 @@ export function PersonGroupsView({
       inGroup ? `${member} added to ${group.name}` : `${member} taken out of ${group.name}`,
     );
 
+  const [name, setName] = useState(loadDraft);
+  const create = () => {
+    saveDraft(name);
+    action.run(async () => {
+      await api.createPersonGroup(name);
+      saveDraft(null);
+      setName("");
+      onChanged();
+    }, `${name.trim()} created`);
+  };
+  const remove = (group: PersonGroup) => {
+    if (!window.confirm(`Delete the group ${group.name}? Its memberships are removed; this cannot be undone.`)) return;
+    action.run(async () => {
+      await api.deletePersonGroup(group.id);
+      onChanged();
+    }, `${group.name} deleted`);
+  };
+
   return (
     <>
       <div className="sect" style={{ marginTop: "var(--space-8)" }}>
@@ -62,6 +103,19 @@ export function PersonGroupsView({
         the assistant may remember and for secrets, so a person is in one list rather than three.
       </div>
       {failure && <ErrorLine error={failure} />}
+
+      <div className="chips">
+        <input
+          aria-label="new group name"
+          placeholder="New group"
+          value={name}
+          disabled={busy}
+          onChange={(e) => setName(e.target.value)}
+        />
+        <button disabled={busy || name.trim() === ""} onClick={create}>
+          Create group
+        </button>
+      </div>
 
       <table>
         <thead>
@@ -80,6 +134,14 @@ export function PersonGroupsView({
                     not re-point anything — which is reassuring only if
                     somebody can see that it is true. */}
                 {g.seedKey && <div className="timeline-src">{`role: ${g.seedKey}`}</div>}
+                {/* Seeded groups are named by packages, so only the
+                    household's own can be deleted — and only while
+                    nothing refers to them, which the server enforces. */}
+                {!g.seedKey && (
+                  <button disabled={busy} onClick={() => remove(g)}>
+                    Delete
+                  </button>
+                )}
               </td>
               <td>
                 <div className="chips">

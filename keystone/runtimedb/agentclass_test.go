@@ -374,12 +374,9 @@ func TestDowngradeDoesNotStripAnotherAgentsGrants(t *testing.T) {
 // it.
 func TestMigrationResolvesChildProfiledAgents(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "keystone.db")
-	old, err := openUnmigrated(path)
+	old, err := openThrough(t, path, "migrations/0057_connection_credentials.sql")
 	if err != nil {
 		t.Fatal(err)
-	}
-	if err := old.migrateThrough("migrations/0057_connection_credentials.sql"); err != nil {
-		t.Fatalf("migrating to the point before 0058: %v", err)
 	}
 	if err := old.UpsertModel(Model{
 		Name: "kitchen-box", Kind: ModelLocal, Provider: "ollama", ProviderModel: "llama",

@@ -564,12 +564,9 @@ func TestButlerTasksInStateIsTheResumeQueue(t *testing.T) {
 // works with an empty task table (ADR-W030 A4, P1).
 func TestMigration0017LeavesExistingConversationsReadable(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "keystone.db")
-	db, err := openUnmigrated(path)
+	db, err := openThrough(t, path, "migrations/0016_observed_app_health.sql")
 	if err != nil {
 		t.Fatal(err)
-	}
-	if err := db.migrateThrough("migrations/0016_observed_app_health.sql"); err != nil {
-		t.Fatalf("migrating through 0016: %v", err)
 	}
 	id := insertSessionAtSchema(t, db, "n2 has been offline since 14:04.", []ButlerTurn{
 		{Role: ButlerRoleUser, Text: "why is n2 offline?"},

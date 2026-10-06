@@ -79,12 +79,9 @@ func TestHouseholdEventRequiredColumns(t *testing.T) {
 // role. Rows and the tokens foreign key must survive the rebuild.
 func TestMigration0005PreservesPrincipalsAndTokens(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "keystone.db")
-	db, err := openUnmigrated(path)
+	db, err := openThrough(t, path, "migrations/0004_nodes.sql")
 	if err != nil {
 		t.Fatal(err)
-	}
-	if err := db.migrateThrough("migrations/0004_nodes.sql"); err != nil {
-		t.Fatalf("migrating through 0004: %v", err)
 	}
 	if err := db.CreatePrincipal("mika", RoleAdmin, ""); err != nil {
 		t.Fatal(err)

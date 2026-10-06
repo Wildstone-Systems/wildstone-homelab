@@ -194,12 +194,9 @@ func TestConcurrentDemotionOfTwoOwnersLeavesOne(t *testing.T) {
 // and the legacy profile maps as specified.
 func TestMigrationMapsLegacyProfiles(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "keystone.db")
-	old, err := openUnmigrated(path)
+	old, err := openThrough(t, path, "migrations/0021_butler_identity.sql")
 	if err != nil {
 		t.Fatal(err)
-	}
-	if err := old.migrateThrough("migrations/0021_butler_identity.sql"); err != nil {
-		t.Fatalf("migrating through 0021: %v", err)
 	}
 	// One row of each legacy profile, at the old schema.
 	if _, err := old.sql.Exec(

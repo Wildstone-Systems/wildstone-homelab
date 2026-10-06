@@ -91,12 +91,9 @@ const theMigrationBefore = "migrations/0040_notice_question.sql"
 // self-consistent, did anything silently disappear.
 func TestTheIdentityMigrationIsCleanOnARealisticSnapshot(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "keystone.db")
-	old, err := openUnmigrated(path)
+	old, err := openThrough(t, path, theMigrationBefore)
 	if err != nil {
 		t.Fatal(err)
-	}
-	if err := old.migrateThrough(theMigrationBefore); err != nil {
-		t.Fatalf("migrating through %s: %v", theMigrationBefore, err)
 	}
 	seedRealisticHousehold(t, old)
 

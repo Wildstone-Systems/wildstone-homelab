@@ -39,12 +39,9 @@ func runtimeFixture(t *testing.T) (*DB, Butler) {
 // a household that already has Agents.
 func TestMigrationBackfillsANativeRuntimeForExistingAgents(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "keystone.db")
-	old, err := openUnmigrated(path)
+	old, err := openThrough(t, path, "migrations/0080_shared_calendars.sql")
 	if err != nil {
 		t.Fatal(err)
-	}
-	if err := old.migrateThrough("migrations/0080_shared_calendars.sql"); err != nil {
-		t.Fatalf("migrating to the point before 0081: %v", err)
 	}
 	if err := old.UpsertModel(Model{
 		Name: "kitchen-box", Kind: ModelLocal, Provider: "ollama", ProviderModel: "llama",

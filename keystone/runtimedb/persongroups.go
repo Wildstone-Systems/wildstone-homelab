@@ -32,7 +32,25 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
+)
+
+// Refusals CreateGroup and DeleteGroup return, so a handler can say
+// which rule applied rather than "failed".
+var (
+	// ErrGroupNameTaken: another group already has this name (compared
+	// without regard to case).
+	ErrGroupNameTaken = errors.New("runtimedb: a group with that name already exists")
+	// ErrGroupNameEmpty: a group needs a name to be told apart by.
+	ErrGroupNameEmpty = errors.New("runtimedb: a group needs a name")
+	// ErrSeededGroup: seeded groups are named by packages and design
+	// code through seed_key, so they are not the household's to delete.
+	ErrSeededGroup = errors.New("runtimedb: a seeded group cannot be deleted")
+	// ErrGroupInUse: an entitlement, audience or secret grant still
+	// names the group. Refused rather than cascaded, because a cascade
+	// would silently widen or narrow somebody's access.
+	ErrGroupInUse = errors.New("runtimedb: the group is still referenced")
 )
 
 // Seed keys, the one thing code may look a group up by.
@@ -232,6 +250,10 @@ func (db *DB) GroupBySeedKey(seedKey string) (Group, error) {
 // by it. Nothing in Wildstone should have an opinion about a group it
 // did not define.
 func (db *DB) CreateGroup(name string) (Group, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return Group{}, ErrGroupNameEmpty
+	}
 	id, err := newGroupID()
 	if err != nil {
 		return Group{}, err
@@ -240,9 +262,61 @@ func (db *DB) CreateGroup(name string) (Group, error) {
 	if _, err := db.sql.Exec(
 		`INSERT INTO person_groups (group_id, name, seed_key, created_at) VALUES (?, ?, NULL, ?)`,
 		id, name, now); err != nil {
+		if isUniqueViolation(err) {
+			return Group{}, ErrGroupNameTaken
+		}
 		return Group{}, fmt.Errorf("runtimedb: creating group %q: %w", name, err)
 	}
 	return Group{ID: id, Name: name, CreatedAt: time.Now().UTC()}, nil
+}
+
+// DeleteGroup removes a group the household created, and its memberships.
+//
+// Refuses a seeded group (ErrSeededGroup) and any group something still
+// names (ErrGroupInUse): service entitlements, audience members and
+// secret grants all hold the group's id, and deleting under them would
+// either fail on a foreign key or leave a dangling reference that
+// resolves to nobody. The references are checked and the delete done in
+// one transaction so a grant added between the two cannot be orphaned.
+func (db *DB) DeleteGroup(groupID string) error {
+	tx, err := db.sql.Begin()
+	if err != nil {
+		return fmt.Errorf("runtimedb: deleting group %q: %w", groupID, err)
+	}
+	defer tx.Rollback()
+
+	var seed sql.NullString
+	err = tx.QueryRow(`SELECT seed_key FROM person_groups WHERE group_id = ?`, groupID).Scan(&seed)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("runtimedb: deleting group %q: %w", groupID, err)
+	}
+	if seed.Valid {
+		return ErrSeededGroup
+	}
+	for _, q := range []string{
+		`SELECT 1 FROM service_entitlements WHERE subject_kind = 'group' AND subject = ? LIMIT 1`,
+		`SELECT 1 FROM audience_members WHERE kind = 'group' AND ref = ? LIMIT 1`,
+		`SELECT 1 FROM household_secret_grants WHERE group_id = ? LIMIT 1`,
+	} {
+		var one int
+		err := tx.QueryRow(q, groupID).Scan(&one)
+		if err == nil {
+			return ErrGroupInUse
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("runtimedb: deleting group %q: %w", groupID, err)
+		}
+	}
+	if _, err := tx.Exec(`DELETE FROM person_groups WHERE group_id = ?`, groupID); err != nil {
+		return fmt.Errorf("runtimedb: deleting group %q: %w", groupID, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("runtimedb: deleting group %q: %w", groupID, err)
+	}
+	return nil
 }
 
 // RenameGroup changes the household's word for a group.

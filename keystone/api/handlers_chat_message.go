@@ -542,9 +542,10 @@ func (s *Server) chatInbound(r *http.Request, id principal.Identity, msg inbound
 			// duplicate. The thread pointer set just above means that
 			// attempt resumes the session holding the work rather than
 			// proposing it a second time. Note that the bundled adapter
-			// does not itself redeliver a failed relay (it advances its
-			// cursor first, then apologises), which is why this notice
-			// is queued whether or not anything comes back — see #232.
+			// retries a failed relay only briefly (3 attempts, 2s then
+			// 4s, 5xx or no response) and a crash mid-retry loses the
+			// message, which is why this notice is queued whether or
+			// not anything comes back — see #232.
 			//
 			// Deduplicated on the message AND the outcome, so a
 			// redelivery of this question announces once while a later
@@ -724,18 +725,13 @@ func chatReplyBody(ask askResponse, held bool) string {
 // so is the only chance they get: the refused change cannot be
 // recovered from the session.
 //
-// "Ask me again" alone would be advice that does not work, which is
-// worse than none. The refusal happened in submitSessionProposals,
-// AFTER the gateway accepted the call — so the runner recorded that
-// step as verified, and a resumed task serves it straight back from the
-// ledger (butler/runner.go, toolCall) without re-running it or
-// reconstructing ResourceYAML. Asking again inside this conversation
-// therefore resumes the same task, replays the recorded result, and
-// queues nothing, while sounding like it worked. /new clears the thread
-// pointer, so the next question opens a fresh task whose propose_change
-// actually dispatches. See #234 for closing the underlying gap, which
-// is that a proposal refused downstream is left standing as a verified
-// step.
+// The wording still says /new rather than "ask again". On the agent
+// gateway path (production) a refused filing now fails its ledger step,
+// so a resume re-dispatches it (#234); but on the legacy single-provider
+// path the refusal happens in submitSessionProposals AFTER the runner
+// recorded the step as verified, and a resumed task serves it back from
+// the ledger and queues nothing. /new clears the thread pointer, so the
+// next question opens a fresh task and works on either path.
 func chatProposalNotice(planIDs, proposalErrs []string) string {
 	waiting := fmt.Sprintf(
 		"I didn't get to finish that, but part of it is waiting for you: %s. Nothing has changed yet — approve it in the Console or with `wild plan approve`.",

@@ -241,7 +241,17 @@ func (k *keystoneClient) do(ctx context.Context, method, path, contentType strin
 		return nil, err
 	}
 	if res.StatusCode >= 300 {
-		return nil, fmt.Errorf("%s %s: %s: %s", method, path, res.Status, strings.TrimSpace(string(data)))
+		return nil, &statusError{Code: res.StatusCode, text: fmt.Sprintf("%s %s: %s: %s", method, path, res.Status, strings.TrimSpace(string(data)))}
 	}
 	return data, nil
 }
+
+// statusError is a non-2xx answer from Keystone. Its text is the same
+// as it always was; the code lets a caller tell an outage (5xx) from a
+// refusal (4xx) with errors.As.
+type statusError struct {
+	Code int
+	text string
+}
+
+func (e *statusError) Error() string { return e.text }
