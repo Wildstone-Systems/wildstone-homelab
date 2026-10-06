@@ -54,6 +54,10 @@ var consequentialRoutes = []struct{ method, path, body string }{
 	{http.MethodPost, "/api/v1/services/media/access", `{"subjectKind":"person","subject":"giulia","effect":"restrict"}`},
 	{http.MethodPost, "/api/v1/services/media/access", `{"subjectKind":"person","subject":"giulia","effect":""}`},
 	{http.MethodPost, "/api/v1/household/person-groups/adults/members", `{"member":"giulia","in":false}`},
+	// A group the household makes or deletes is a name every entitlement,
+	// audience and secret grant can then use (ADR-W033 A4.1).
+	{http.MethodPost, "/api/v1/household/person-groups", `{"name":"Neighbours"}`},
+	{http.MethodDelete, "/api/v1/household/person-groups/adults", ``},
 }
 
 // stepUpHarness adds giulia, a second active Owner, so the lifecycle

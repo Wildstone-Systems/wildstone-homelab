@@ -575,3 +575,127 @@ func TestAGroupCannotHoldAPersonWhoDoesNotExist(t *testing.T) {
 		t.Error("a Person joined a group that does not exist")
 	}
 }
+
+func TestCreateGroupRefusesEmptyAndDuplicateNames(t *testing.T) {
+	db := open(t)
+	if _, err := db.CreateGroup("   "); !errors.Is(err, ErrGroupNameEmpty) {
+		t.Fatalf("blank name: got %v, want ErrGroupNameEmpty", err)
+	}
+	g, err := db.CreateGroup("  Neighbours ")
+	if err != nil {
+		t.Fatalf("CreateGroup: %v", err)
+	}
+	if g.Name != "Neighbours" || g.SeedKey != "" {
+		t.Fatalf("created %+v, want trimmed name and no seed key", g)
+	}
+	if _, err := db.CreateGroup("neighbours"); !errors.Is(err, ErrGroupNameTaken) {
+		t.Fatalf("case-variant name: got %v, want ErrGroupNameTaken", err)
+	}
+	groups, err := db.ListGroups()
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, x := range groups {
+		found = found || x.ID == g.ID
+	}
+	if !found {
+		t.Fatal("created group is not listed")
+	}
+}
+
+func TestDeleteGroupRefusesSeededAndUnknown(t *testing.T) {
+	db := open(t)
+	if err := db.DeleteGroup(groupID(t, db, SeedAdults)); !errors.Is(err, ErrSeededGroup) {
+		t.Fatalf("seeded: got %v, want ErrSeededGroup", err)
+	}
+	if err := db.DeleteGroup("grp_nope"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unknown: got %v, want ErrNotFound", err)
+	}
+	if _, err := db.GroupBySeedKey(SeedAdults); err != nil {
+		t.Fatalf("seeded group disappeared: %v", err)
+	}
+}
+
+func TestDeleteGroupRefusesWhileReferenced(t *testing.T) {
+	owner := personOf // keep the helper in scope for the secret case below
+	refs := map[string]func(t *testing.T, db *DB, group string){
+		"entitlement": func(t *testing.T, db *DB, group string) {
+			if _, err := db.sql.Exec(
+				`INSERT INTO service_entitlements (service, subject_kind, subject, effect, created_at)
+				 VALUES ('photos', 'group', ?, 'allow', 'now')`, group); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"audience": func(t *testing.T, db *DB, group string) {
+			if _, err := db.sql.Exec(
+				`INSERT INTO audiences (audience_id, kind, created_at) VALUES ('aud_t', 'set', 'now')`); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := db.sql.Exec(
+				`INSERT INTO audience_members (audience_id, kind, ref) VALUES ('aud_t', 'group', ?)`, group); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"secret grant": func(t *testing.T, db *DB, group string) {
+			person := owner(t, db, "mika", RoleOwner)
+			if _, err := db.sql.Exec(
+				`INSERT INTO household_secrets (id, scope, owner_person_id, label, state, ciphertext, created_at)
+				 VALUES ('sec_t', 'household', ?, 'l', 'active', x'00', 'now')`, person); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := db.sql.Exec(
+				`INSERT INTO household_secret_grants (secret_id, group_id, verb) VALUES ('sec_t', ?, 'use')`, group); err != nil {
+				t.Fatal(err)
+			}
+		},
+	}
+	for name, add := range refs {
+		t.Run(name, func(t *testing.T) {
+			db := open(t)
+			g, err := db.CreateGroup("Book club")
+			if err != nil {
+				t.Fatal(err)
+			}
+			add(t, db, g.ID)
+			if err := db.DeleteGroup(g.ID); !errors.Is(err, ErrGroupInUse) {
+				t.Fatalf("got %v, want ErrGroupInUse", err)
+			}
+			groups, _ := db.ListGroups()
+			for _, x := range groups {
+				if x.ID == g.ID {
+					return
+				}
+			}
+			t.Fatal("group was deleted despite the refusal")
+		})
+	}
+}
+
+func TestDeleteGroupRemovesUnreferencedGroupAndMembers(t *testing.T) {
+	db := open(t)
+	person := personOf(t, db, "giulia", RoleMember)
+	g, err := db.CreateGroup("Book club")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AddPersonToGroup(g.ID, person, "mika"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.DeleteGroup(g.ID); err != nil {
+		t.Fatalf("DeleteGroup: %v", err)
+	}
+	groups, _ := db.ListGroups()
+	for _, x := range groups {
+		if x.ID == g.ID {
+			t.Fatal("group still listed")
+		}
+	}
+	var n int
+	if err := db.sql.QueryRow(`SELECT COUNT(*) FROM person_group_members WHERE group_id = ?`, g.ID).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("memberships left behind: n=%d err=%v", n, err)
+	}
+	if _, err := db.GetButlerMember("giulia"); err != nil {
+		t.Fatalf("deleting a group touched the person: %v", err)
+	}
+}

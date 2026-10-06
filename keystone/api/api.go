@@ -570,6 +570,8 @@ func (s *Server) Handler() http.Handler {
 	// nothing for a plan to apply. The reconcile loop projects them on
 	// its next tick.
 	mux.Handle("GET /api/v1/household/person-groups", s.handle(principal.VerbRead, s.listPersonGroups))
+	mux.Handle("POST /api/v1/household/person-groups", s.handle(principal.VerbManage, s.createPersonGroup))
+	mux.Handle("DELETE /api/v1/household/person-groups/{group}", s.handle(principal.VerbManage, s.deletePersonGroup))
 	mux.Handle("POST /api/v1/household/person-groups/{group}/members", s.handle(principal.VerbManage, s.setPersonGroup))
 	mux.Handle("GET /api/v1/services/{capability}/access", s.handle(principal.VerbRead, s.listServiceAccess))
 	mux.Handle("POST /api/v1/services/{capability}/access", s.handle(principal.VerbManage, s.setServiceAccess))

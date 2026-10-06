@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { api, type PersonGroup } from "../api";
 import { ErrorLine, useAction, useLoad } from "../lib";
 
@@ -50,6 +51,19 @@ export function PersonGroupsView({
       inGroup ? `${member} added to ${group.name}` : `${member} taken out of ${group.name}`,
     );
 
+  const [name, setName] = useState("");
+  const create = () =>
+    action.run(async () => {
+      await api.createPersonGroup(name);
+      setName("");
+      onChanged();
+    }, `${name.trim()} created`);
+  const remove = (group: PersonGroup) =>
+    action.run(async () => {
+      await api.deletePersonGroup(group.id);
+      onChanged();
+    }, `${group.name} deleted`);
+
   return (
     <>
       <div className="sect" style={{ marginTop: "var(--space-8)" }}>
@@ -62,6 +76,19 @@ export function PersonGroupsView({
         the assistant may remember and for secrets, so a person is in one list rather than three.
       </div>
       {failure && <ErrorLine error={failure} />}
+
+      <div className="chips">
+        <input
+          aria-label="new group name"
+          placeholder="New group"
+          value={name}
+          disabled={busy}
+          onChange={(e) => setName(e.target.value)}
+        />
+        <button disabled={busy || name.trim() === ""} onClick={create}>
+          Create group
+        </button>
+      </div>
 
       <table>
         <thead>
@@ -80,6 +107,14 @@ export function PersonGroupsView({
                     not re-point anything — which is reassuring only if
                     somebody can see that it is true. */}
                 {g.seedKey && <div className="timeline-src">{`role: ${g.seedKey}`}</div>}
+                {/* Seeded groups are named by packages, so only the
+                    household's own can be deleted — and only while
+                    nothing refers to them, which the server enforces. */}
+                {!g.seedKey && (
+                  <button disabled={busy} onClick={() => remove(g)}>
+                    Delete
+                  </button>
+                )}
               </td>
               <td>
                 <div className="chips">

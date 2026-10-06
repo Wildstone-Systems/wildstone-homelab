@@ -2723,6 +2723,13 @@ export const api = {
       `/api/v1/household/person-groups/${encodeURIComponent(group)}/members`,
       { member, in: inGroup },
     ),
+  // Consequential (step-up gated). A delete is refused while an
+  // entitlement, audience or secret grant still names the group, and for
+  // the seeded groups.
+  createPersonGroup: (name: string) =>
+    call<PersonGroup[]>("POST", "/api/v1/household/person-groups", { name }),
+  deletePersonGroup: (group: string) =>
+    call<PersonGroup[]>("DELETE", `/api/v1/household/person-groups/${encodeURIComponent(group)}`),
   // Who may reach a service. Not a proposal: an entitlement changes no
   // node, so there is nothing for a plan to apply, and the reconcile
   // loop projects it on its next tick.
