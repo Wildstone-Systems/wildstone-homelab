@@ -34,6 +34,12 @@ type OffboardingResult struct {
 	TransferredTo string `json:"transferredTo,omitempty"`
 }
 
+// apiTokensJournalPrefix marks a journalled link entry as the revocation of
+// a principal's bearer tokens rather than of a surface link, so
+// ReconcileRestore can replay it: a restored snapshot brings the tokens
+// back live, and the link revocation alone does not take them away again.
+const apiTokensJournalPrefix = "api-tokens:"
+
 // OffboardMember denies access everywhere and settles the work.
 //
 // Order matters and is not arbitrary. Admission and links go first —
@@ -100,7 +106,7 @@ func (db *DB) OffboardMember(member, actor, administrator string) (OffboardingRe
 			return result, err
 		}
 		result.Stores["api-tokens"] += int(n)
-		if err := db.journal("link", LinkAPIPrincipal+":"+principal, "revoked", actor, "api tokens revoked: owner offboarded"); err != nil {
+		if err := db.journal("link", apiTokensJournalPrefix+principal, "revoked", actor, "api tokens revoked: owner offboarded"); err != nil {
 			return result, err
 		}
 	}

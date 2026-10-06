@@ -178,3 +178,27 @@ func TestOffboardingRevokesLinkedAPITokens(t *testing.T) {
 		}
 	}
 }
+
+func TestReconcileRestoreReplaysAPITokenRevocation(t *testing.T) {
+	db := householdWith(t, "mika", "sam")
+	if err := db.CreatePrincipal("sam-cli", RoleOperator, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.InsertToken("h-restored", "sam-cli", "", time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	// The journal says the tokens were revoked after the snapshot, but
+	// the restored token row is live again.
+	if err := db.Journal("link", apiTokensJournalPrefix+"sam-cli", "revoked", "mika", "owner offboarded"); err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := db.LiveTokensFor("sam-cli"); n != 1 {
+		t.Fatalf("setup: want 1 live token, got %d", n)
+	}
+	if _, err := db.ReconcileRestore(); err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := db.LiveTokensFor("sam-cli"); n != 0 {
+		t.Fatalf("restore left %d live tokens for an offboarded member's principal", n)
+	}
+}
