@@ -1,6 +1,8 @@
 package resource
 
 import (
+	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -139,6 +141,11 @@ func TestRequiredProtocolMinor(t *testing.T) {
 		"resources":        {ContainerSpec{Image: "x", Resources: &ContainerResources{Memory: "4g"}}, HardeningProtocolMinor},
 		"shmSize":          {ContainerSpec{Image: "x", ShmSize: "1g"}, HardeningProtocolMinor},
 		"hardening+device": {ContainerSpec{Image: "x", ReadOnlyRootfs: true, Devices: []DeviceMapping{{Source: "/dev/net/tun"}}}, HardeningProtocolMinor},
+		"hostNetwork":      {ContainerSpec{Image: "x", NetworkMode: NetworkModeHost}, HostNetworkProtocolMinor},
+		"host+hardening":   {ContainerSpec{Image: "x", NetworkMode: NetworkModeHost, ReadOnlyRootfs: true, CapAdd: []string{"NET_RAW"}}, HostNetworkProtocolMinor},
+		"host+dbus": {ContainerSpec{Image: "x", NetworkMode: NetworkModeHost, CapAdd: []string{"NET_ADMIN", "NET_RAW"},
+			Mounts: []Mount{{Source: "cfg", Target: "/config"}, {Source: "/run/dbus", Target: "/run/dbus", ReadOnly: true}}}, HostSystemMountProtocolMinor},
+		"volume only": {ContainerSpec{Image: "x", Mounts: []Mount{{Source: "cfg", Target: "/config"}}}, 0},
 	} {
 		if got := tc.spec.RequiredProtocolMinor(); got != tc.want {
 			t.Errorf("%s: RequiredProtocolMinor = %d, want %d", name, got, tc.want)
@@ -208,6 +215,149 @@ func TestContainerCapabilityAllowlistIsPinned(t *testing.T) {
 		spec := containerWith(func(s *ContainerSpec) { s.CapAdd = []string{bad} })
 		if err := spec.Validate(); err == nil {
 			t.Errorf("%q accepted", bad)
+		}
+	}
+}
+
+// TestContainerNetworkModeIsValidated: host is the one non-default mode,
+// it cannot be combined with published ports, and a Job may not use it.
+func TestContainerNetworkModeIsValidated(t *testing.T) {
+	host := containerWith(func(s *ContainerSpec) {
+		s.NetworkMode = NetworkModeHost
+		s.Devices = []DeviceMapping{{Source: "/dev/ttyUSB0"}}
+	})
+	if err := host.Validate(); err != nil {
+		t.Fatalf("networkMode: host refused: %v", err)
+	}
+	for name, tc := range map[string]struct {
+		mutate func(*ContainerSpec)
+		field  string
+	}{
+		"bridge spelled out":  {func(s *ContainerSpec) { s.NetworkMode = "bridge" }, "spec.networkMode"},
+		"none":                {func(s *ContainerSpec) { s.NetworkMode = "none" }, "spec.networkMode"},
+		"container namespace": {func(s *ContainerSpec) { s.NetworkMode = "container:other" }, "spec.networkMode"},
+		"wrong case":          {func(s *ContainerSpec) { s.NetworkMode = "Host" }, "spec.networkMode"},
+		"host with ports": {func(s *ContainerSpec) {
+			s.NetworkMode = NetworkModeHost
+			s.Ports = []string{"8123:8123"}
+		}, "spec.ports"},
+	} {
+		err := containerWith(tc.mutate).Validate()
+		var ve *ValidationError
+		if !errors.As(err, &ve) {
+			t.Errorf("%s: got %v, want a ValidationError", name, err)
+			continue
+		}
+		if ve.Field != tc.field {
+			t.Errorf("%s: field = %q, want %q", name, ve.Field, tc.field)
+		}
+	}
+
+	job := &Resource{ApiVersion: ApiVersion, Kind: KindJob, Metadata: Metadata{Name: "j", Owner: "capability/x", Node: "n1"},
+		Job: &JobSpec{Run: ContainerSpec{Image: host.Container.Image, NetworkMode: NetworkModeHost}}}
+	var ve *ValidationError
+	if err := job.Validate(); !errors.As(err, &ve) || ve.Field != "spec.run.networkMode" {
+		t.Errorf("job with networkMode: host: got %v, want a spec.run.networkMode refusal", err)
+	}
+}
+
+// TestContainerNetworkModeYAMLAndHashShape: the field is spelled
+// networkMode in YAML, and an omitted mode adds nothing to the JSON the
+// reconciler hashes, so no existing container's hash moves.
+func TestContainerNetworkModeYAMLAndHashShape(t *testing.T) {
+	r, err := Unmarshal([]byte(`
+apiVersion: wildstone.dev/v1
+kind: Container
+metadata:
+  name: hub
+  owner: capability/home
+  node: node-a
+spec:
+  image: ghcr.io/example/hub@sha256:` + strings.Repeat("a", 64) + `
+  networkMode: host
+`))
+	if err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if !r.Container.HostNetwork() {
+		t.Fatalf("networkMode = %q, want host", r.Container.NetworkMode)
+	}
+	if err := r.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	out, err := Marshal(r)
+	if err != nil || !strings.Contains(string(out), "networkMode: host") {
+		t.Errorf("Marshal = %q, %v; want networkMode: host", out, err)
+	}
+
+	plain, _ := json.Marshal(&ContainerSpec{Image: "x"})
+	if strings.Contains(string(plain), "networkMode") {
+		t.Errorf("omitted networkMode reached the hashed JSON: %s", plain)
+	}
+	withHost, _ := json.Marshal(&ContainerSpec{Image: "x", NetworkMode: NetworkModeHost})
+	if !strings.Contains(string(withHost), `"networkMode":"host"`) {
+		t.Errorf("host networkMode missing from the hashed JSON: %s", withHost)
+	}
+}
+
+// hostSystemMountExamples is the SAME fixture wardstone/internal/agent's
+// TestHostSystemMountAllowlist runs (#445). Exact paths only: nothing is
+// cleaned into a match, and nothing under or beside /run/dbus counts.
+var hostSystemMountExamples = map[string]bool{
+	"/run/dbus":                     true,
+	"/run/dbus/":                    false,
+	"/run/dbus/system_bus_socket":   false,
+	"/var/run/dbus":                 false,
+	"/run/../run/dbus":              false,
+	"/run":                          false,
+	"/run/docker.sock":              false,
+	"/var/run/docker.sock":          false,
+	"/run/systemd":                  false,
+	"/etc":                          false,
+	"/":                             false,
+	"run/dbus":                      false,
+	"":                              false,
+	"/run/dbus-other":               false,
+	"/sys/class/bluetooth":          false,
+	"/dev/bus/usb":                  false,
+	"/run/dbus/../docker.sock":      false,
+	"/run/dbus/containers":          false,
+	"/run/user/1000/bus":            false,
+	"/var/lib/bluetooth":            false,
+	"/etc/dbus-1/system.d":          false,
+	"/run/dbus/system_bus_socket/x": false,
+}
+
+func TestHostSystemMountAllowlist(t *testing.T) {
+	for path, want := range hostSystemMountExamples {
+		if got := HostSystemMountAllowed(path); got != want {
+			t.Errorf("HostSystemMountAllowed(%q) = %v, want %v", path, got, want)
+		}
+	}
+	if len(HostSystemMounts) != 1 {
+		t.Errorf("HostSystemMounts = %v: a new entry is a new way into the host and needs the agent's twin, a fixture row and a review", HostSystemMounts)
+	}
+}
+
+// TestHostSystemMountIsReadOnlyAtItsOwnPath: /run/dbus lints only as a
+// read-only bind at /run/dbus; anything else is the lint error, not the
+// agent's FORBIDDEN after approval.
+func TestHostSystemMountIsReadOnlyAtItsOwnPath(t *testing.T) {
+	ok := containerWith(func(s *ContainerSpec) {
+		s.Mounts = []Mount{{Source: "cfg", Target: "/config"}, {Source: "/run/dbus", Target: "/run/dbus", ReadOnly: true}}
+	})
+	if err := ok.Validate(); err != nil {
+		t.Fatalf("read-only /run/dbus refused: %v", err)
+	}
+	for name, m := range map[string]Mount{
+		"writable":         {Source: "/run/dbus", Target: "/run/dbus"},
+		"elsewhere inside": {Source: "/run/dbus", Target: "/host/dbus", ReadOnly: true},
+	} {
+		spec := containerWith(func(s *ContainerSpec) { s.Mounts = []Mount{m} })
+		err := spec.Validate()
+		var ve *ValidationError
+		if !errors.As(err, &ve) || !strings.Contains(ve.Msg, "readOnly: true at the same path") {
+			t.Errorf("%s: got %v, want the read-only/same-path refusal", name, err)
 		}
 	}
 }

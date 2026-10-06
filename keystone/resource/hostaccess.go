@@ -68,6 +68,53 @@ func ContainerCapabilityNames() []string {
 	return out
 }
 
+// Host system mounts are the third place a ContainerSpec reaches into
+// the host (#445). Wardstone bind-mounts host paths only from its managed
+// prefixes (ADR-W003 A1); this is the closed list of host paths OUTSIDE
+// them a container may still be given, each read-only and at the same
+// path inside. It mirrors the agent's hostSystemMounts entry for entry,
+// and TestHostSystemMountAllowlist on both sides runs one fixture.
+//
+// /run/dbus is the one entry: the directory holding the D-Bus system bus
+// socket, which is how a containerised Home Assistant talks to the host's
+// BlueZ (bluetooth.service). The directory, not the socket file, because
+// dbus-daemon recreates the socket on restart and a file bind would keep
+// pointing at the deleted one. Read-only because a client only connects
+// to the socket, and connecting is not a write; what the bus then allows
+// is the host's D-Bus policy, which Wildstone does not change.
+var HostSystemMounts = map[string]string{
+	"/run/dbus": "the D-Bus system bus, for host BlueZ (Bluetooth)",
+}
+
+// HostSystemMountAllowed reports whether a host path, exactly as written,
+// is on the host system mount allowlist. No cleaning: "/run/dbus/" and
+// "/run/../run/dbus" are refused rather than normalised.
+func HostSystemMountAllowed(path string) bool {
+	_, ok := HostSystemMounts[path]
+	return ok
+}
+
+// HostSystemMountProtocolMinor is the wardstone protocol minor whose agent
+// first accepts a HostSystemMounts path. An older agent refuses it as
+// outside its managed prefixes, so Keystone refuses to dispatch the spec
+// there with the upgrade named, rather than the node answering FORBIDDEN
+// after approval.
+const HostSystemMountProtocolMinor = 27
+
+// UsesHostSystemMount reports whether the spec mounts any
+// HostSystemMounts path.
+func (s *ContainerSpec) UsesHostSystemMount() bool {
+	if s == nil {
+		return false
+	}
+	for _, m := range s.Mounts {
+		if HostSystemMountAllowed(m.Source) {
+			return true
+		}
+	}
+	return false
+}
+
 // HostAccessProtocolMinor is the wardstone protocol minor that first
 // carried UDP port publication, devices and capabilities.
 const HostAccessProtocolMinor = 12
@@ -89,6 +136,13 @@ const HardeningProtocolMinor = 18
 // minor rather than on HostAccessProtocolMinor.
 const IPCLockProtocolMinor = 21
 
+// HostNetworkProtocolMinor is the wardstone protocol minor that first
+// carried EnsureContainer.network_mode. An older agent ignores the field
+// and starts the container on the bridge with nothing published — up,
+// green, and deaf to every discovery packet it was moved to hear — so a
+// host-mode spec is refused rather than dispatched to one.
+const HostNetworkProtocolMinor = 23
+
 // RequiredProtocolMinor reports the lowest agent protocol minor that can
 // honour this spec in full, or 0 when any agent can. An agent below it
 // does not fail: it IGNORES the fields it cannot read, which is the
@@ -103,6 +157,12 @@ const IPCLockProtocolMinor = 21
 func (s *ContainerSpec) RequiredProtocolMinor() uint32 {
 	if s == nil {
 		return 0
+	}
+	if s.UsesHostSystemMount() {
+		return HostSystemMountProtocolMinor
+	}
+	if s.HostNetwork() {
+		return HostNetworkProtocolMinor
 	}
 	for _, c := range s.CapAdd {
 		if c == "IPC_LOCK" {
@@ -126,7 +186,8 @@ func (s *ContainerSpec) RequiredProtocolMinor() uint32 {
 // usesHardeningFields reports whether the spec sets any H1 field, so
 // RequiredProtocolMinor can gate on the HIGHEST minor a spec actually
 // needs: a plan that uses hardening AND a device still needs only minor
-// 18, since 18 is defined to also carry everything minor 12 did (v1
+// 18 (and host networking plus either needs only 19), since each minor is
+// defined to also carry everything earlier ones did (v1
 // evolves additively, ADR-W003) and an agent new enough for hardening is
 // new enough for devices too.
 func (s *ContainerSpec) usesHardeningFields() bool {

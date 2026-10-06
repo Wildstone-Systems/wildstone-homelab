@@ -93,6 +93,37 @@ var eventIDRefScanRegexp = regexp.MustCompile(
 var calendarEventRefScanRegexp = regexp.MustCompile(
 	`\\?"calendarEvent\\?"\s*:\s*\\?"/[A-Za-z0-9._~%/:@+=-]{1,512}\\?"`)
 
+// serialByIDName is one udev /dev/serial/by-id name in either of the two
+// forms the radio inventory carries it: the alias path itself, and the
+// Wardstone radio id built from it ("serial-by-id:<name>", see
+// wardstone/internal/agent/radios_linux.go). The name charset is udev's
+// own for these links, and excludes "/", so an alias with further path
+// segments is not one.
+const serialByIDName = `(?:/dev/serial/by-id/|serial-by-id:)[A-Za-z0-9._:+-]{1,255}`
+
+// serialByIDValueRegexp / serialByIDJSONScanRegexp find a serial by-id
+// name that is an ENTIRE value: either the whole input, or the whole of a
+// JSON string (the opening quote directly after a structural character,
+// the closing quote directly after the name).
+//
+// A udev by-id name is vendor, model and USB serial number —
+// "usb-ITead_Sonoff_Zigbee_3.0_USB_Dongle_Plus_<serial>-if00-port0" — a
+// mixed-case run the base64 shape rule takes for a token. It is hardware
+// identity the OS already shows the Owner, not a credential, and it is
+// the stable identity the Console's radio picker keys on: redacted, a
+// stick's byIdPaths and its id both read "[REDACTED]" and the picker has
+// nothing to tell two sticks apart by, nor anything to submit.
+//
+// Narrow on purpose. Only the exact value is sheltered: the same name
+// with extra path segments, or embedded in a larger string (a plan
+// summary, an error message), still meets the value rules. And the
+// sentinel is its own, so a by-id value under a credential-shaped key is
+// still taken by kvSecretRegexp, as a path is.
+var (
+	serialByIDValueRegexp    = regexp.MustCompile(`^` + serialByIDName + `$`)
+	serialByIDJSONScanRegexp = regexp.MustCompile(`([\[{:,]\s*")(` + serialByIDName + `)"`)
+)
+
 // kindRefScanRegexp finds a resource reference of the form "Kind/name"
 // over the closed kind vocabulary. These are sheltered for exactly the
 // reason digest pins are: an ordinary "Volume/immich-postgres-data" is a
@@ -399,6 +430,11 @@ const urlSentinelMarker = "\x00URLROUND\x00"
 // whole value and the sentinel is simply not here to restore.
 const pathSentinelMarker = "\x00PATHROUND\x00"
 
+// serialByIDSentinelMarker shelters an exact serial by-id value (see
+// serialByIDJSONScanRegexp), under its own marker for pathSentinelMarker's
+// reason.
+const serialByIDSentinelMarker = "\x00BYIDROUND\x00"
+
 // SecretShaped reports whether s contains a secret-VALUE shape (long hex
 // or base64 runs), ignoring sheltered forms — secret/<name> references
 // and sha256 digest pins are not secrets. The policy engine's
@@ -480,6 +516,22 @@ func String(s string) string {
 		urls = append(urls, m)
 		return fmt.Sprintf("%s%d\x00", urlSentinelMarker, len(urls)-1)
 	})
+	// Serial by-id names that are a whole value (see
+	// serialByIDJSONScanRegexp). Only the name is swapped out; the quotes
+	// stay in the text, so kvSecretRegexp still sees a quoted value.
+	var byIDs []string
+	byIDSentinel := func(name string) string {
+		byIDs = append(byIDs, name)
+		return fmt.Sprintf("%s%d\x00", serialByIDSentinelMarker, len(byIDs)-1)
+	}
+	if serialByIDValueRegexp.MatchString(protected) {
+		protected = byIDSentinel(protected)
+	} else {
+		protected = serialByIDJSONScanRegexp.ReplaceAllStringFunc(protected, func(m string) string {
+			sub := serialByIDJSONScanRegexp.FindStringSubmatch(m)
+			return sub[1] + byIDSentinel(sub[2]) + `"`
+		})
+	}
 	protected = secretRefScanRegexp.ReplaceAllStringFunc(protected, func(m string) string {
 		refs = append(refs, m)
 		return fmt.Sprintf("%s%d\x00", secretRefSentinelMarker, len(refs)-1)
@@ -564,6 +616,10 @@ func String(s string) string {
 	for i, u := range urls {
 		placeholder := fmt.Sprintf("%s%d\x00", urlSentinelMarker, i)
 		protected = strings.ReplaceAll(protected, placeholder, u)
+	}
+	for i, name := range byIDs {
+		placeholder := fmt.Sprintf("%s%d\x00", serialByIDSentinelMarker, i)
+		protected = strings.ReplaceAll(protected, placeholder, name)
 	}
 	// Same for paths, and for the same reason: one the keyword rule
 	// replaced is not here to restore.

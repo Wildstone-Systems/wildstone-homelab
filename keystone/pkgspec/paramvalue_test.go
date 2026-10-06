@@ -63,6 +63,32 @@ func TestValidateParamValueExistingShapesUnaffected(t *testing.T) {
 	}
 }
 
+// TestPrivateIPv4Shape: a LAN or tailnet listener gets one private
+// address, and each thing an operator might type instead — every
+// interface, loopback, a public address, a name, IPv6 — is refused with
+// a reason.
+func TestPrivateIPv4Shape(t *testing.T) {
+	for _, v := range []string{"192.168.1.10", "10.0.0.2", "172.16.5.4", "172.31.255.1", "100.64.0.1"} {
+		if err := ValidateParamValue("private_ipv4", v); err != nil {
+			t.Errorf("%s: unexpected error: %v", v, err)
+		}
+	}
+	for v, want := range map[string]string{
+		"0.0.0.0":       "every interface",
+		"127.0.0.1":     "loopback",
+		"8.8.8.8":       "not a private address",
+		"172.32.0.1":    "not a private address",
+		"broker.local":  "not an IPv4 address",
+		"fd00::1":       "not an IPv4 address",
+		"192.168.1.10:": "not an IPv4 address",
+	} {
+		err := ValidateParamValue("private_ipv4", v)
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: want an error containing %q, got %v", v, want, err)
+		}
+	}
+}
+
 // TestEnumShapeValues pins the parsing helper directly: the prefix, the
 // split, and that a bare "enum" (no colon) is not the enum form at all —
 // it falls through to the ordinary closed-vocabulary lookup and fails
@@ -93,6 +119,49 @@ func TestValidateEnumShapeDecl(t *testing.T) {
 	} {
 		if err := validateEnumShapeDecl(values); err == nil {
 			t.Errorf("%s: expected an error", name)
+		}
+	}
+}
+
+// TestInterfaceNameShape: a node interface name lands in a sysfs path and
+// an upstream script's sed expression, so anything with a separator,
+// whitespace or more than IFNAMSIZ-1 bytes is refused.
+func TestInterfaceNameShape(t *testing.T) {
+	for _, v := range []string{"eth0", "enp1s0", "br-lan", "eth0.100", "wlp2s0", "enx001122334455"} {
+		if err := ValidateParamValue("interface_name", v); err != nil {
+			t.Errorf("%s: unexpected error: %v", v, err)
+		}
+	}
+	for _, v := range []string{"../eth0", "eth0/", "eth 0", "a-name-that-is-too-long", ".hidden", "eth0;reboot", "s/x/y/", "lo"} {
+		if err := ValidateParamValue("interface_name", v); err == nil {
+			t.Errorf("%q: accepted, want refused", v)
+		}
+	}
+}
+
+// TestSerialByIDShape: a radio is named by its stable alias, never by a
+// plug-order tty and never by anything outside /dev/serial/by-id.
+func TestSerialByIDShape(t *testing.T) {
+	for _, v := range []string{
+		"/dev/serial/by-id/usb-Nabu_Casa_Home_Assistant_Connect_ZBT-1_REPLACED-SERIAL-if00-port0",
+		"/dev/serial/by-id/usb-SEGGER_J-Link_000683000000-if00",
+	} {
+		if err := ValidateParamValue("serial_by_id", v); err != nil {
+			t.Errorf("%s: unexpected error: %v", v, err)
+		}
+	}
+	for v, want := range map[string]string{
+		"/dev/ttyUSB0":                  "plug order",
+		"/dev/ttyACM0":                  "plug order",
+		"/dev/serial/by-id/../../sda":   "not a /dev/serial/by-id/ path",
+		"/dev/serial/by-id/":            "not a /dev/serial/by-id/ path",
+		"/dev/serial/by-path/pci-0:1.0": "not a /dev/serial/by-id/ path",
+		"/dev/serial/by-id/a/b":         "not a /dev/serial/by-id/ path",
+		"tcp://192.168.1.5:6638":        "not a /dev/serial/by-id/ path",
+	} {
+		err := ValidateParamValue("serial_by_id", v)
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: want an error containing %q, got %v", v, want, err)
 		}
 	}
 }

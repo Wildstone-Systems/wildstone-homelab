@@ -104,3 +104,34 @@ func TestAppliedPlanJSONKeepsAPlanThatFailedAtTheNode(t *testing.T) {
 		t.Fatalf("a committed plan describes the install even when the node lagged, got %v", docs)
 	}
 }
+
+// PlansMentioning is a package's install history: every state, newest
+// first, with the JSON — so "the newest attempt failed" can be told from
+// "an older one failed and a later one applied" (#446).
+func TestPlansMentioningKeepsStateAndOrder(t *testing.T) {
+	db := open(t)
+	first, err := db.InsertPlan("admin", "", "enable x", "low", `{"origin":{"package":"pkg-x"}}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, to := range []PlanState{PlanApproved, PlanApplying, PlanFailed} {
+		if err := db.TransitionPlan(first, to, "admin"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := db.InsertPlan("admin", "", "enable y", "low", `{"origin":{"package":"pkg-y"}}`); err != nil {
+		t.Fatal(err)
+	}
+	second, err := db.InsertPlan("admin", "", "enable x again", "low", `{"origin":{"package":"pkg-x"}}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recs, err := db.PlansMentioning(`"package":"pkg-x"`, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recs) != 2 || recs[0].ID != second || recs[0].State != PlanProposed ||
+		recs[1].ID != first || recs[1].State != PlanFailed || recs[1].PlanJSON == "" {
+		t.Fatalf("PlansMentioning = %+v", recs)
+	}
+}

@@ -101,6 +101,12 @@ type Deps struct {
 	// copy fits its disk (ADR-W045 A3.1). A refusal is a 422 carrying its
 	// reason; nil skips the check.
 	Preflight func(puts []resource.Resource) error
+	// Radios, when set, returns a node's radio inventory (ListRadios,
+	// #434) so the duplicate-ownership check can fold a by-id alias and
+	// the tty it resolves to into one device. nil — for an offline node,
+	// an agent older than plan.RadioInventoryProtocolMinor, or an unwired
+	// caller — falls back to exact cleaned paths (#435).
+	Radios func(node string) []plan.Radio
 }
 
 func (d Deps) event(typ, planID string, id principal.Identity, msg string) {
@@ -282,6 +288,11 @@ func File(deps Deps, id principal.Identity, req Request, opts Options) (any, int
 		}
 	}
 
+	if err := duplicateDeviceOwnership(deps, desired, puts); err != nil {
+		deps.event("preflight.rejected", "", id, err.Error())
+		return nil, http.StatusConflict, err
+	}
+
 	p := plan.Diff(desired, current)
 	if len(p.Steps) == 0 {
 		return nil, http.StatusBadRequest, ErrNoOp
@@ -329,6 +340,37 @@ func File(deps Deps, id principal.Identity, req Request, opts Options) (any, int
 		return nil, http.StatusInternalServerError, err
 	}
 	return ViewPlan(rec), http.StatusCreated, nil
+}
+
+// duplicateDeviceOwnership refuses a proposal that would leave two
+// Containers on one node owning the same serial radio or Bluetooth
+// adapter (#435). It sits here, in the one pipeline, so the CLI, a
+// capability install or preview, and a Butler or Agent proposal are all
+// refused before a plan exists — not merely warned in the Console. Only
+// the nodes of Containers this proposal puts with devices are asked for
+// their inventory, and only conflicts involving such a Container are
+// reported: a duplicate already desired is not this proposer's to fix.
+func duplicateDeviceOwnership(deps Deps, desired, puts []resource.Resource) error {
+	touched := map[string]bool{}
+	nodes := map[string]bool{}
+	for _, r := range puts {
+		if r.Kind == resource.KindContainer && r.Container != nil && len(r.Container.Devices) > 0 {
+			touched[r.Metadata.Name] = true
+			nodes[r.Metadata.Node] = true
+		}
+	}
+	if len(touched) == 0 {
+		return nil
+	}
+	radios := map[string][]plan.Radio{}
+	if deps.Radios != nil {
+		for node := range nodes {
+			if inv := deps.Radios(node); inv != nil {
+				radios[node] = inv
+			}
+		}
+	}
+	return plan.DuplicateDeviceOwnership(desired, radios, touched)
 }
 
 // SubscriptionRequest is what FileSubscription needs beyond a plain

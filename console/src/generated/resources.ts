@@ -63,6 +63,7 @@ export interface ContainerSpec {
   noNewPrivileges?: boolean;
   resources?: ContainerResources;
   shmSize?: string;
+  networkMode?: string;
 }
 
 export interface VolumeSpec {

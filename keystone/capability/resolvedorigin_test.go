@@ -41,7 +41,7 @@ func identityProvider() *pkgspec.Package {
 // with a key missing.
 func resolve(t *testing.T, pkg *pkgspec.Package, params map[string]string, cat *Catalog) map[string]string {
 	t.Helper()
-	got, err := buildResolved(pkg, params, cat)
+	got, _, err := buildResolved(pkg, params, pkg.Metadata.Capability, cat)
 	if err != nil {
 		t.Fatalf("buildResolved: %v", err)
 	}

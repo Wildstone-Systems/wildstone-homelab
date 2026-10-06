@@ -497,3 +497,219 @@ The reconciler pulls the image itself (`PullImage` before
 
 Set up backups before you rely on any of it — see
 [recovery.md](recovery.md) for what must exist before a host dies.
+
+## 6. Home automation hardware
+
+Read this before plugging radios in. The Console's Home automation
+screen (choose → readiness → setup → status) checks what it can see on
+the machine; this section is what it cannot see. To prove a setup on
+real hardware, follow [the hardware runbook](../testing/home-automation/README.md).
+
+### What Wildstone runs, and what it does not
+
+Wildstone runs **Home Assistant Container** (the `home-assistant`
+package) next to the servers Home Assistant OS would run as add-ons,
+each as its own package: `mqtt-mosquitto` (MQTT broker),
+`zigbee-zigbee2mqtt`, `zwave-zwave-js-ui`, `matter-matterjs` (Matter
+server) and `thread-otbr` (OpenThread Border Router). If you already run
+Home Assistant elsewhere, choose *Connect existing Home Assistant* in
+the Console instead of *Run it here*; Matter and Thread are then not
+offered, because their servers only answer on the same machine as Home
+Assistant (127.0.0.1).
+
+**Home Assistant OS is not what this is.** HAOS is an operating system
+that owns the whole machine; Wildstone is a guest on a Linux host you
+own. The boundary, plainly:
+
+| | Home Assistant OS | Wildstone |
+|---|---|---|
+| The host (kernel, sysctls, firewall, BlueZ, USB) | HAOS tunes it for you | **You** prepare it. Wildstone's readiness check reports what is missing and never changes it |
+| Add-ons and the Supervisor | Yes | No Supervisor and no add-on store. The servers above are Wildstone packages; anything else is a package or nothing |
+| Backups | Home Assistant's own, including add-ons | Wildstone's restic plans, one per package ([recovery.md](recovery.md#home-automation-controllers)). Home Assistant's own backup page covers only Home Assistant's `/config`, not the controllers |
+| Updates | Supervisor | A new package version, through a plan you approve |
+| Upstream support | Full | Home Assistant Container is supported upstream. The Matter server and OTBR images are supported upstream on HAOS only; on a general host they are "as-is" |
+
+### Supported machines
+
+- **CPU:** 64-bit x86 (`amd64`) or 64-bit ARM (`arm64`, such as a
+  Raspberry Pi 4 or 5 with a **64-bit** OS). Wildstone's own binaries
+  are built for those two only, and Home Assistant and the Matter server
+  publish no 32-bit image. A 32-bit Raspberry Pi OS does not work.
+- **OS:** a current Debian or Ubuntu with systemd and Docker. IPv6 must
+  be enabled: Matter and Thread need it.
+- **A VM is fine.** Pass each USB radio through to the VM as a USB
+  device (Proxmox: VM → Hardware → Add → USB Device → *Use USB
+  Vendor/Device ID*), and bridge the VM onto the household LAN, not
+  behind NAT: mDNS, IPv6 router advertisements and Thread routes must
+  reach it.
+
+### One radio per protocol
+
+- **One coordinator per Zigbee network, one controller per Z-Wave
+  network, one RCP per Thread border router.** Two sticks are two
+  networks with two sets of keys.
+- **One protocol per radio.** A stick runs Zigbee firmware **or**
+  OpenThread RCP firmware, not both. Multiprotocol (Zigbee and Thread
+  on one stick) is not supported: upstream has deprecated it, and it
+  shares one radio's time between two meshes. A Home Assistant Connect
+  ZBT-1 or a Sonoff ZBDongle-E can be either; buy two if you want both.
+- Wildstone refuses a second package that claims a radio another package
+  already owns, whichever path names it (`/dev/serial/by-id/...` or
+  `/dev/ttyUSB0`), before any plan exists.
+
+### Name radios by their by-id path
+
+Always give a package the radio's `/dev/serial/by-id/...` name, never
+`/dev/ttyUSB0` or `/dev/ttyACM0`. The numbered names follow plug order
+and can swap on reboot; the by-id name contains the stick's model and
+serial number and stays put. List them with `ls -l /dev/serial/by-id/`,
+or read the node's radio inventory (the Console shows it; the API is
+`GET /api/v1/nodes/<node>/probes/radios`). A replacement stick has a
+different serial number, so a different by-id name: replacing a stick
+is always a param change too.
+
+### USB placement and interference
+
+Zigbee, Thread, Wi-Fi and Bluetooth all share 2.4 GHz, and USB 3 ports,
+USB 3 drives and SSD enclosures radiate noise right across it.
+
+- Put every stick on a **USB 2.0 extension cable** (about 1 m), away
+  from the computer's case, USB 3 ports and disks. Do not plug a stick
+  straight into the machine, and especially not into a USB 3 port
+  beside a USB 3 drive.
+- Keep the sticks apart from each other and from Wi-Fi access points
+  (about 1 m is a good start).
+- In a VM, the stick still sits next to the physical host: the same
+  advice applies to the host's ports.
+- Metal cases, racks and cupboards block radio. A stick on an extension
+  outside the cabinet often fixes a "flaky mesh".
+
+### Channel planning
+
+Zigbee and Thread both use IEEE 802.15.4 channels 11 to 26; 2.4 GHz
+Wi-Fi uses channels 1, 6 and 11. They overlap roughly like this:
+
+| Wi-Fi channel | Overlaps 802.15.4 channels | Clear 802.15.4 channels nearby |
+|---|---|---|
+| 1 | 11 – 14 | 15 |
+| 6 | 16 – 19 | 20 |
+| 11 | 21 – 24 | 25, 26 |
+
+- Find the Wi-Fi channels in use (yours and the neighbours') first, and
+  fix your access points on 1, 6 or 11 rather than "auto".
+- Give Zigbee and Thread **different** clear channels: for example
+  Zigbee **15** and Thread **25** with Wi-Fi on 6 and 11, or Zigbee 25
+  and Thread 15 with Wi-Fi on 1 and 6. Channel 26 is weaker on some
+  devices and missing on a few; avoid it for Zigbee.
+- Choose before pairing. Zigbee2MQTT fixes its channel in its
+  `configuration.yaml` on first start, and changing it later can mean
+  re-pairing devices. Thread's channel is part of the dataset Home
+  Assistant creates for the border router.
+
+### Network coordinators
+
+`zigbee-zigbee2mqtt` also accepts a network coordinator
+(`coordinator_url: tcp://<address>:<port>`, such as an SLZB-06 or an
+ESPHome serial bridge) instead of a USB stick.
+
+- **For:** it can sit in the middle of the house on PoE, far from the
+  server and its USB noise, and the server can be a VM anywhere.
+- **Against:** the serial link now depends on the network. A dropped
+  link or a switch reboot disconnects Zigbee2MQTT until it reconnects;
+  the TCP serial port has no password, so keep it on a network only
+  your own devices reach; and its firmware is one more thing to update.
+- Z-Wave and Thread are USB-only here. `zwave-zwave-js-ui` takes a
+  stick on the machine; `thread-otbr` refuses a network RCP because the
+  added latency breaks Thread's radio timing.
+
+### Host preparation for Thread and Matter
+
+The readiness check (Console, or
+`GET /api/v1/nodes/<node>/probes/home-automation`) reports these;
+Wildstone never sets them. For **Thread**, on the machine with the RCP
+(replace `<NIC>` with the LAN interface from `ip route show default`):
+
+```sh
+printf 'net.ipv6.conf.all.forwarding = 1\nnet.ipv6.conf.<NIC>.accept_ra = 2\nnet.ipv6.conf.<NIC>.accept_ra_rt_info_max_plen = 64\n' \
+  | sudo tee /etc/sysctl.d/60-wildstone-otbr.conf
+sudo sysctl --system
+sudo modprobe ip6table_filter
+echo ip6table_filter | sudo tee /etc/modules-load.d/wildstone-otbr.conf
+```
+
+`accept_ra = 2` keeps the machine's own IPv6 address and default route
+once forwarding is on (with forwarding on, the default `1` ignores
+router advertisements), and `accept_ra_rt_info_max_plen = 64` accepts
+the routes to Thread networks that other border routers advertise.
+`ip6table_filter` is needed for the border router's firewall (the
+default, `firewall=on`). For **Matter**, allow UDP 5353 (mDNS) and UDP
+5540 in from the LAN, and keep any stateful firewall's UDP timeout
+longer than your devices' report interval.
+
+### Thread credentials on phones
+
+To commission a Matter-over-Thread device with a phone onto *this*
+Thread network, the phone needs its credentials. Once Home Assistant
+has the OpenThread Border Router integration and that network is
+preferred (Settings → Thread), use the companion app's *Sync Thread
+credentials* (in the app's own settings; where it sits differs between
+iOS, Android and app versions), then commission from Settings → Devices
+& services → Add device → Matter in the app. Without the sync, the
+phone may put the device on an Apple or Google Thread network instead.
+Sync again after you restore or change the network.
+
+### Migrating from an existing Home Assistant
+
+Move one thing at a time, and **never run the old and the new copy of
+a controller at once**: two servers with the same keys fight over the
+same devices. The pattern for each piece is the one in
+[recovery.md](recovery.md#restore-order-for-a-replacement-node):
+install the package, disable it (its volume stays), copy the old data
+into the volume, move the stick across, enable it.
+
+1. **Take a full backup of the old installation** and keep it until
+   everything works. On HAOS, download a full backup from Settings →
+   System → Backups; it is a tar file with one archive per add-on.
+2. **Broker.** Install `mqtt-mosquitto`. There is nothing to copy: it
+   issues new passwords, and every Wildstone consumer is given its own.
+   Home Assistant's is re-entered in step 7.
+3. **Zigbee2MQTT.** Copy the old data directory (`configuration.yaml`,
+   `database.db`, `coordinator_backup.json`, `state.json`) into
+   `zigbee2mqtt-data`, move the stick, and enable with the stick's by-id
+   path and the right `coordinator_adapter`. The MQTT settings in the
+   old `configuration.yaml` are overridden by Wildstone's environment.
+   Coming from **ZHA**, there is no conversion: either keep ZHA (set
+   `home-assistant`'s `serial_device` to the stick) or re-pair the
+   devices in Zigbee2MQTT.
+4. **Z-Wave.** From Z-Wave JS UI, copy its whole `store` into
+   `zwave-js-ui-store`. From the official Z-Wave JS add-on, copy its
+   S0 and S2 keys (add-on configuration) into the new Z-Wave JS UI
+   before including anything; the procedure is in the
+   `zwave-zwave-js-ui` package header. Move the stick: the network is on
+   it.
+5. **Thread.** Copy the OTBR add-on's Thread settings (its
+   `/data/thread`) into `otbr-data`, or let Home Assistant hand its
+   preferred dataset to the new, empty border router (step 7). Remove
+   the old border router from Home Assistant once the new one is
+   preferred. The RCP stick needs OpenThread RCP firmware either way.
+6. **Matter.** Copy the old Matter server's storage into
+   `matter-data` and `chown -R 1000:1000` it. The Matter.js server is
+   upstream's drop-in replacement for the Python Matter Server; confirm
+   afterwards that the `compressed_fabric_id` is the same as before. If
+   it is not, stop: the devices are on the old fabric.
+7. **Home Assistant last.** Copy the old `/config` (from a HAOS backup,
+   the `homeassistant.tar.gz` inside it) into `home-assistant-config`
+   and enable `home-assistant`. Then, in Home Assistant, point each
+   integration at its new server: MQTT at the broker's LAN address with
+   user `home-assistant` and the password
+   `docker exec home-assistant printenv WILDSTONE_MQTT_PASSWORD` shows;
+   Z-Wave JS at `ws://<listen_addr>:3000`; Matter at
+   `ws://127.0.0.1:5580/ws`; OpenThread Border Router at
+   `http://127.0.0.1:8081`. Remove what only made sense under HAOS
+   (the Supervisor integration, add-on update entities).
+   If the Wildstone URL answers 400 "not set-up for reverse proxies",
+   the copied config does not trust the proxy: stop Home Assistant and
+   make `trusted_proxies` in `/config/.storage/http` (or the `http:`
+   block of `configuration.yaml`, on an older config) include
+   `172.16.0.0/12` and `127.0.0.1/32`, with `use_x_forwarded_for: true`.
+8. **Turn the old installation off** for good, and keep its backup.

@@ -192,6 +192,10 @@ func opArmFromOperation(op *wsv1.Operation) string {
 		return "SystemdUnitStatus"
 	case *wsv1.Operation_TimeSyncStatus:
 		return "TimeSyncStatus"
+	case *wsv1.Operation_ListRadios:
+		return "ListRadios"
+	case *wsv1.Operation_HomeAutomationReadiness:
+		return "HomeAutomationReadiness"
 	default:
 		return "unknown"
 	}
@@ -254,6 +258,10 @@ func opArmFromResult(res *wsv1.OpResult) string {
 		return "SystemdUnitStatus"
 	case *wsv1.OpResult_TimeSyncStatus:
 		return "TimeSyncStatus"
+	case *wsv1.OpResult_ListRadios:
+		return "ListRadios"
+	case *wsv1.OpResult_HomeAutomationReadiness:
+		return "HomeAutomationReadiness"
 	default:
 		return ""
 	}

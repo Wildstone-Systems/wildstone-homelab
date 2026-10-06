@@ -8,6 +8,7 @@ import (
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/ingressorigin"
 	"github.com/chickenrat17/wildstone-homelab/keystone/pkgspec"
+	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
 	"github.com/chickenrat17/wildstone-homelab/keystone/trait"
 )
 
@@ -39,7 +40,7 @@ func repoRoot(t *testing.T) string {
 // declared there is the mirror image: a function that works and that lint
 // calls a typo.
 func TestExportFuncsMatchTheVocabulary(t *testing.T) {
-	bound := exportFuncs(ingressorigin.Posture{})
+	bound := exportFuncs(ingressorigin.Posture{}, func() []resource.Resource { return nil })
 	for _, name := range trait.ExportFuncs {
 		if _, ok := bound[name]; !ok {
 			t.Errorf("trait.ExportFuncs declares %q but exportFuncs does not bind it: "+

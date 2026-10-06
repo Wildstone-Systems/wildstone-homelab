@@ -704,7 +704,16 @@ func (s *Server) enableCapability(r *http.Request, id principal.Identity) (any, 
 	if err != nil {
 		return nil, http.StatusNotFound, err
 	}
+	return s.proposeCapability(id, pkg, req.Params, req.DryRun)
+}
 
+// proposeCapability expands one catalog package with params and files
+// (or, dryRun, previews) it through the one proposal pipeline. Shared by
+// the capability endpoint and the home-automation orchestration API
+// (#447), so a package step the orchestrator proposes is exactly the
+// plan the Services page would have made.
+func (s *Server) proposeCapability(id principal.Identity, pkg *pkgspec.Package, params map[string]string, dryRun bool) (any, int, error) {
+	req := enableRequest{Package: pkg.Metadata.Name, Params: params, DryRun: dryRun}
 	enabled, err := s.enabledCapabilities()
 	if err != nil {
 		return nil, http.StatusInternalServerError, err

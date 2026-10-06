@@ -104,6 +104,7 @@ var homepageApps = map[string]homepageApp{
 	"adguard-home":   {"AdGuard Home", "adguard-home", "Ad blocking for the whole network"},
 	"vaultwarden":    {"Passwords", "vaultwarden", "The household password vault"},
 	"zigbee2mqtt":    {"Zigbee", "zigbee2mqtt", "Zigbee bulbs, sensors and switches"},
+	"zwave-js-ui":    {"Z-Wave", "z-wave-js-ui", "Z-Wave locks, switches and sensors"},
 	"open-webui":     {"Chat", "open-webui", "Talk to an AI that runs at home"},
 	"grafana":        {"Grafana", "grafana", "Graphs of how everything is doing"},
 	"qbittorrent":    {"Downloads", "qbittorrent", "The download queue"},
@@ -220,6 +221,40 @@ func upstreamContainerName(upstream string) string {
 		return addr[:i]
 	}
 	return addr
+}
+
+// routeServiceContainer is the container a Route serves: the named one
+// for "container/<name>:<port>", and for "host/<port>" (#433) the one
+// host-networked Container the Route's own package runs on the Route's
+// node — which is what a host Route is for, and what makes it a KNOWN
+// service (its homepageApps row, its icon, its runtime state) rather
+// than an anonymous address.
+//
+// "" when that is not exactly one container: two host-networked
+// containers in one package leave the port as the only thing saying
+// which, and a guess would put one app's name on the other's card.
+func routeServiceContainer(route resource.Resource, desired []resource.Resource) string {
+	if route.Route == nil {
+		return ""
+	}
+	if !resource.IsHostUpstream(route.Route.Upstream) {
+		return upstreamContainerName(route.Route.Upstream)
+	}
+	if route.Metadata.Package == "" {
+		return ""
+	}
+	found := ""
+	for _, c := range desired {
+		if c.Kind != resource.KindContainer || !c.Container.HostNetwork() ||
+			c.Metadata.Package != route.Metadata.Package || c.Metadata.Node != route.Metadata.Node {
+			continue
+		}
+		if found != "" {
+			return ""
+		}
+		found = c.Metadata.Name
+	}
+	return found
 }
 
 // dashboardTitleEnv is the environment variable the dashboard package
@@ -351,7 +386,14 @@ func dashboardNode(desired []resource.Resource) string {
 // is the fact a person wants from a status dot. It is also the same
 // address Caddy dials (caddyUpstream), so a green dot and a working link
 // agree by construction.
+//
+// A "host/<port>" upstream (#433) is dialled the same way Caddy dials
+// it, through the host-gateway alias — which the dashboard container is
+// given alongside the proxy (containerHostAliases) for exactly this.
 func homepageMonitor(upstream string) string {
+	if resource.IsHostUpstream(upstream) {
+		return "http://" + caddyUpstream(upstream)
+	}
 	if !strings.HasPrefix(upstream, "container/") {
 		return ""
 	}
@@ -521,7 +563,8 @@ func homepageEntries(desired []resource.Resource) []homepageEntry {
 			entries = append(entries, e)
 			continue
 		}
-		if app, known := homepageApps[upstreamContainerName(r.Route.Upstream)]; known {
+		container := routeServiceContainer(r, desired)
+		if app, known := homepageApps[container]; known {
 			e.title, e.icon, e.desc = app.title, app.icon, app.description
 		} else {
 			// No row: still a complete entry, just an unbranded one. The
@@ -535,7 +578,7 @@ func homepageEntries(desired []resource.Resource) []homepageEntry {
 		if home != "" && r.Metadata.Node == home {
 			e.monitor = homepageMonitor(r.Route.Upstream)
 		}
-		e.container, e.node = upstreamContainerName(r.Route.Upstream), r.Metadata.Node
+		e.container, e.node = container, r.Metadata.Node
 		entries = append(entries, e)
 	}
 

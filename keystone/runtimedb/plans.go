@@ -217,6 +217,34 @@ func (db *DB) ListPlans(limit int) ([]PlanRecord, error) {
 	return out, rows.Err()
 }
 
+// PlansMentioning returns the newest limit plans in ANY state whose JSON
+// contains needle, newest first, with their JSON. It is the history of
+// one package's installs — the only way to tell "the newest attempt at
+// this failed" from "an older attempt failed and a later one applied",
+// which AppliedPlanJSONMentioning cannot, because it carries neither the
+// state nor the order of what it returns.
+func (db *DB) PlansMentioning(needle string, limit int) ([]PlanRecord, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	rows, err := db.sql.Query(
+		`SELECT seq, created_at, principal, acting_for, summary, risk, state, plan_json, resolved_by, resolved_at
+		 FROM plans WHERE instr(plan_json, ?) > 0 ORDER BY seq DESC LIMIT ?`, needle, limit)
+	if err != nil {
+		return nil, fmt.Errorf("runtimedb: listing plans mentioning %q: %w", needle, err)
+	}
+	defer rows.Close()
+	var out []PlanRecord
+	for rows.Next() {
+		p, err := scanPlan(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
 // PlansInState returns every plan currently in state, oldest first,
 // including full JSON — the reconcile service's work queue (ADR-W008 A2).
 func (db *DB) PlansInState(state PlanState) ([]PlanRecord, error) {

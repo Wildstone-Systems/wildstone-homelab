@@ -223,6 +223,16 @@ func (a *Agent) dispatchOp(ctx context.Context, opID string, op *wsv1.Operation)
 		if r, oerr = a.timeSyncStatus(o.TimeSyncStatus); oerr == nil {
 			res.Result = r
 		}
+	case *wsv1.Operation_ListRadios:
+		var r *wsv1.OpResult_ListRadios
+		if r, oerr = a.listRadios(); oerr == nil {
+			res.Result = r
+		}
+	case *wsv1.Operation_HomeAutomationReadiness:
+		var r *wsv1.OpResult_HomeAutomationReadiness
+		if r, oerr = a.homeAutomationReadiness(ctx); oerr == nil {
+			res.Result = r
+		}
 	default:
 		oerr = opErr(wsv1.ErrorCode_ERROR_CODE_INVALID, "unknown operation — agent too old for this Keystone? (protocol skew)")
 	}
@@ -528,6 +538,14 @@ func (a *Agent) ensureContainer(ctx context.Context, op *wsv1.EnsureContainer) (
 			"image %q is not digest-pinned (repo@sha256:... required)", op.GetImage())
 	}
 	for _, m := range op.GetMounts() {
+		if hostSystemMountAllowed(m.GetSource()) {
+			// Outside the managed prefixes on purpose (#445), and held to
+			// its own rules instead: read-only, same path, no symlink.
+			if oerr := checkHostSystemMount(m); oerr != nil {
+				return nil, oerr
+			}
+			continue
+		}
 		if strings.Contains(m.GetSource(), "/") { // host path, not a named volume
 			if _, oerr := a.resolveManaged(m.GetSource()); oerr != nil {
 				return nil, oerr
@@ -595,6 +613,16 @@ func (a *Agent) ensureContainer(ctx context.Context, op *wsv1.EnsureContainer) (
 	if oe != nil {
 		return nil, oe
 	}
+	// Host networking (protocol minor 23), up front for the same reason
+	// as everything above: an incompatible combination must fail with the
+	// OLD container still running. Docker itself would accept host mode
+	// with PortBindings and silently discard them, and would refuse a
+	// NetworkingConfig endpoint only at create — after the replace below
+	// had already removed the container being replaced.
+	networkMode, oe := checkNetworkMode(op)
+	if oe != nil {
+		return nil, oe
+	}
 	// A network must exist and be wildstone-owned before anything is
 	// attached to it (protocol minor 8). Attaching to a foreign network
 	// would join the container to whatever else lives there, so the same
@@ -647,7 +675,10 @@ func (a *Agent) ensureContainer(ctx context.Context, op *wsv1.EnsureContainer) (
 		if hasHash {
 			specMatches = existing.Config.Labels[SpecHashLabel] == wantHash
 		}
-		if specMatches {
+		// A matching spec is not enough when a device alias now
+		// resolves elsewhere: docker start would hand over the node
+		// stored at create, which may be another radio by now.
+		if specMatches && staleDevice(existing, devices) == "" {
 			started := false
 			if !existing.State.Running {
 				if err := a.docker.start(ctx, existing.ID); err != nil {
@@ -684,6 +715,9 @@ func (a *Agent) ensureContainer(ctx context.Context, op *wsv1.EnsureContainer) (
 		labels[k] = v
 	}
 	labels[OwnerLabel] = ownerValue
+	if s := deviceSourcesLabel(op.GetDevices(), devices); s != "" {
+		labels[DeviceSourcesLabel] = s
+	}
 
 	var env []string
 	for k, v := range materialized {
@@ -730,6 +764,7 @@ func (a *Agent) ensureContainer(ctx context.Context, op *wsv1.EnsureContainer) (
 			NanoCpus:       nanoCPUs,
 			PidsLimit:      pidsLimit,
 			ShmSize:        shmBytes,
+			NetworkMode:    networkMode,
 		},
 		NetworkingConfig: netCfg,
 	})
@@ -758,6 +793,32 @@ func (a *Agent) ensureContainer(ctx context.Context, op *wsv1.EnsureContainer) (
 	return &wsv1.OpResult_EnsureContainer{EnsureContainer: &wsv1.EnsureContainerResult{
 		ContainerId: id, Created: true, Started: true,
 	}}, nil
+}
+
+// checkNetworkMode maps the op's network mode to Docker's
+// HostConfig.NetworkMode, refusing host mode combined with published
+// ports or a network attachment, and any value this agent does not know.
+// An unknown value is refused rather than read as the default: a newer
+// Keystone asking for a mode this agent cannot honour must not get a
+// bridge container that merely looks converged.
+func checkNetworkMode(op *wsv1.EnsureContainer) (string, *wsv1.OpError) {
+	switch op.GetNetworkMode() {
+	case wsv1.ContainerNetworkMode_CONTAINER_NETWORK_MODE_UNSPECIFIED:
+		return "", nil
+	case wsv1.ContainerNetworkMode_CONTAINER_NETWORK_MODE_HOST:
+		if len(op.GetPorts()) > 0 {
+			return "", opErr(wsv1.ErrorCode_ERROR_CODE_INVALID,
+				"host network mode cannot publish ports: the container already listens on the host's interfaces")
+		}
+		if op.GetNetwork() != "" {
+			return "", opErr(wsv1.ErrorCode_ERROR_CODE_INVALID,
+				"host network mode cannot also attach to network %q", op.GetNetwork())
+		}
+		return "host", nil
+	default:
+		return "", opErr(wsv1.ErrorCode_ERROR_CODE_INVALID,
+			"unknown network mode %d: this agent speaks protocol minor %d", op.GetNetworkMode(), ProtocolMinor)
+	}
 }
 
 // missingPublishedPort compares Docker's effective mappings with the bindings
@@ -897,7 +958,12 @@ func (a *Agent) inspectContainer(ctx context.Context, op *wsv1.InspectContainer)
 		return nil, oerr
 	}
 	labels := ci.Config.Labels
-	if ci.State.Running && missingPublishedPort(ci, ci.HostConfig.PortBindings) != "" {
+	// A device alias that resolves to a different node than Docker
+	// stored is drift too, running or not: Docker's restart policy
+	// starts the container on its own after a reboot, against whatever
+	// that node now is (DeviceSourcesLabel).
+	staleDev := staleDevice(ci, currentDeviceMappings(ci)) != ""
+	if staleDev || (ci.State.Running && missingPublishedPort(ci, ci.HostConfig.PortBindings) != "") {
 		// Signal drift through the existing spec-hash contract. Returning
 		// Running=false would misreport the process; returning the intact
 		// hash would tell Keystone this broken container has converged.
@@ -935,6 +1001,7 @@ func (a *Agent) inspectContainer(ctx context.Context, op *wsv1.InspectContainer)
 			sort.Strings(out)
 			return out
 		}(),
+		NetworkMode: ci.HostConfig.NetworkMode,
 	}}, nil
 }
 

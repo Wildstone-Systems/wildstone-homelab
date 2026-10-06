@@ -123,6 +123,13 @@ var Intrinsic = []Export{
 			"here is what stops each package guessing its own list.",
 	},
 	{
+		Key: "HostNetworkProxyTrustCIDRs",
+		Description: "ProxyTrustCIDRs for an app on HOST networking (networkMode: host), which " +
+			"the LAN reaches directly: Docker's default bridge pool and loopback only, " +
+			"[\"172.16.0.0/12\", \"127.0.0.1/32\"], without the 10/8 and 192.168/16 ranges a " +
+			"household LAN usually occupies — so a device on the LAN cannot forge X-Forwarded-For.",
+	},
+	{
 		Key: "TailnetHost",
 		Description: "The node's MagicDNS name under the tailnet ingress posture, and the " +
 			"empty string otherwise. Always defined, so a template may test it without " +
@@ -150,7 +157,33 @@ var ExportFuncs = []string{
 	// sessionDomain <domain> — the cookie domain a session must be
 	// scoped to for that domain to work under the current posture.
 	"sessionDomain",
+	// publishedHost <container> <port> — the host address at which the
+	// PROVIDER's own named container publishes that TCP container port,
+	// as the deployment has it installed (desired state), or "" when the
+	// provider is not installed or publishes it on every interface. A
+	// provider's install params are not visible to an export (ADR-W025
+	// Part B item 4); what it rendered from them is, and an address a
+	// consumer must connect to is exactly a fact about what was rendered.
+	"publishedHost",
+	// publishedPort <container> <port> — the matching host port, or "".
+	"publishedPort",
+	// hostNetworkEnv <container> <key> — the value of one env var on the
+	// PROVIDER's own named container, as installed, and only if that
+	// container runs with networkMode: host; otherwise "". A host-
+	// networked provider publishes no ports for publishedHost to read, so
+	// where it listens is what it was told to listen on — its own
+	// LISTEN_ADDRESS/PORT-style env (#442). A value that names a secret
+	// reference is never returned: a credential is not an address.
+	"hostNetworkEnv",
 }
+
+// ExportContext names the fields an export template renders over, beside
+// ExportFuncs. `.Params` is the provider's params (see keystone/
+// capability's exportParams for exactly which values); `.Consumer` is the
+// capability name of the package the export is being resolved FOR — the
+// one thing that lets a provider hand each consumer its own credential
+// (mqtt:broker's MqttUsername) rather than one every consumer shares.
+var ExportContext = []string{"Params", "Consumer"}
 
 // registry is the vocabulary itself. Ordered, so diagnostics and
 // `wild pkg traits` list traits the same way every time.
@@ -221,6 +254,129 @@ var registry = []Trait{
 			{
 				Name:        "private",
 				Description: "Reachable only from the household's own network or tailnet.",
+			},
+		},
+	},
+	{
+		Name: "mqtt",
+		Description: "A message bus devices and home-automation services publish onto and " +
+			"subscribe from — Zigbee2MQTT publishes, Frigate publishes, Home Assistant " +
+			"listens. A consumer requires this instead of guessing a broker's container " +
+			"name, which a host-networked service cannot resolve anyway.",
+		Modes: []Mode{
+			{
+				Name: "broker",
+				Description: "An MQTT broker that refuses anonymous clients and issues each " +
+					"consuming capability its own username and generated password. The " +
+					"password is a node secret on the BROKER's node, so a consumer must be " +
+					"installed on that same node: expansion refuses a consumer that would " +
+					"read the secret anywhere else, because secrets are node-local and there " +
+					"is no cross-node credential path yet.",
+				Exports: []Export{
+					{
+						Key: "MqttHost",
+						Description: "The private address the broker listens on, as installed — " +
+							"an IPv4 literal on the broker's node, reachable both from a " +
+							"host-networked service and from a container on the Wildstone " +
+							"network. Never a container name.",
+					},
+					{
+						Key:         "MqttPort",
+						Description: "The TCP port the broker listens on at MqttHost. Plain MQTT, no TLS.",
+					},
+					{
+						Key: "MqttURL",
+						Description: "MqttHost and MqttPort as one mqtt://host:port URL, for " +
+							"clients configured by a single server string (Zigbee2MQTT).",
+					},
+					{
+						Key: "MqttUsername",
+						Description: "The username the broker issued to the REQUESTING " +
+							"capability — its capability name, so each consumer gets its own " +
+							"credential rather than a shared one.",
+					},
+					{
+						Key: "MqttPasswordSecretRef",
+						Description: "\"secret/<name>\" — the requesting capability's password, " +
+							"generated on the broker's node. Put it in env or a managed file, " +
+							"where the node substitutes the value; never a literal. Expansion " +
+							"refuses a consumer the broker issues no credential to, and one " +
+							"placed on another node.",
+					},
+				},
+			},
+		},
+	},
+	{
+		Name: "zwave",
+		Description: "A Z-Wave network a home-automation service can control — the " +
+			"controller stick and the server that owns it. A consumer (Home Assistant's " +
+			"Z-Wave integration) requires this instead of guessing a container name, which " +
+			"a host-networked service cannot resolve anyway.",
+		Modes: []Mode{
+			{
+				Name: "server",
+				Description: "A Z-Wave JS server: the WebSocket API zwave-js-server speaks " +
+					"(Z-Wave JS UI's \"WS Server\"), one per controller. It has no " +
+					"authentication of its own, so the provider publishes it on one " +
+					"private address the operator chose, never on every interface. The " +
+					"network's security keys stay with the server; a consumer is never " +
+					"handed them.",
+				Exports: []Export{
+					{
+						Key: "ZwaveWsHost",
+						Description: "The private address the server's WebSocket listens on, " +
+							"as installed — an IPv4 literal on the provider's node, reachable " +
+							"both from a host-networked service and from a container on the " +
+							"Wildstone network. Never a container name.",
+					},
+					{
+						Key:         "ZwaveWsPort",
+						Description: "The TCP port the WebSocket listens on at ZwaveWsHost. Plain ws://, no TLS.",
+					},
+					{
+						Key: "ZwaveWsURL",
+						Description: "ZwaveWsHost and ZwaveWsPort as one ws://host:port URL — " +
+							"the single value Home Assistant's Z-Wave JS integration asks for.",
+					},
+				},
+			},
+		},
+	},
+	{
+		Name: "matter",
+		Description: "A Matter controller a home-automation service can drive — the fabric " +
+			"(its root of trust and every commissioned device's credentials) and the server " +
+			"that owns it. A consumer (Home Assistant's Matter integration) requires this " +
+			"instead of guessing a container name, which a host-networked service cannot " +
+			"resolve anyway.",
+		Modes: []Mode{
+			{
+				Name: "server",
+				Description: "A Matter Server WebSocket API (the Open Home Foundation's " +
+					"Matter.js Server, python-matter-server compatible), one per fabric. " +
+					"It has no authentication of its own and runs on host networking, so " +
+					"the provider binds it to LOOPBACK on its own node: a consumer must be " +
+					"host-networked and on that same node, and the engine refuses one " +
+					"that is not rather than let it dial its own 127.0.0.1. The fabric's " +
+					"keys stay with the server; a consumer is never handed them.",
+				Exports: []Export{
+					{
+						Key: "MatterWsHost",
+						Description: "The address the server's WebSocket listens on, as " +
+							"installed: 127.0.0.1 on the provider's node, reachable only by a " +
+							"host-networked service on that node. Never a container name.",
+					},
+					{
+						Key:         "MatterWsPort",
+						Description: "The TCP port the WebSocket listens on at MatterWsHost. Plain ws://, no TLS.",
+					},
+					{
+						Key: "MatterWsURL",
+						Description: "MatterWsHost and MatterWsPort as one ws://host:port/ws URL — " +
+							"the single value Home Assistant's Matter integration asks for.",
+					},
+				},
 			},
 		},
 	},

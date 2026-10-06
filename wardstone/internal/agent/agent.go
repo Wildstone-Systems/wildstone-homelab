@@ -121,7 +121,49 @@ import (
 // erasure UNVERIFIED and keeps the connection degraded, never as done.
 // Personal integration credentials (secreterase.PersonalPrefix) are also
 // left out of the recovery export from this minor on.
-const ProtocolMinor = 22
+//
+// 23: adds EnsureContainer.network_mode (CONTAINER_NETWORK_MODE_HOST) and
+//
+//	InspectContainerResult.network_mode. A home-automation hub has to
+//	share the node's network namespace to hear mDNS, SSDP and the other
+//	link-local discovery a bridge never forwards. Host mode excludes
+//	ports and network; both are refused before an existing container is
+//	touched. A pre-minor-23 agent would ignore the field and start the
+//	container on the bridge with nothing published, so Keystone refuses
+//	to dispatch a host-mode spec to one (resource.HostNetworkProtocolMinor).
+//
+// 24: EnsureContainer.host_aliases gives one closed name,
+//
+//	"host.docker.internal", Docker's "host-gateway" value instead of a
+//	node DNS answer (#433), so a bridge-networked proxy can reach a
+//	"host/<port>" Route with no machine-specific address in desired
+//	state. No schema change. An older agent tries to resolve the name,
+//	fails and skips it, leaving the proxy with no route to the host, so
+//	Keystone withholds the alias from and refuses host Routes on one
+//	(resource.HostGatewayProtocolMinor).
+//
+// 25: adds ListRadios (#434): a read-only inventory of USB serial and
+//
+//	Bluetooth adapters from /dev/serial/by-id and sysfs, for the device
+//	picker a Zigbee/Z-Wave/Bluetooth app needs. An older agent answers
+//	it as an unknown operation (INVALID), which the probe endpoint
+//	relays as-is.
+//
+// 26: adds HomeAutomationReadiness (#436): typed, evidence-carrying
+//
+//	checks for IPv6, IPv6 forwarding, multicast, the D-Bus system bus,
+//	BlueZ, Bluetooth adapters and /dev/net/tun. Read-only; a missing
+//	prerequisite is a MISSING check, not an OpError.
+//
+// 27: EnsureContainer accepts a bind mount of /run/dbus, the D-Bus system
+//
+//	bus, from outside the managed prefixes (#445): the one entry on a
+//	closed host-system-mount allowlist (devices.go), read-only at the
+//	same path inside and never through a symlink, so Home Assistant can
+//	use the host's BlueZ. No schema change. An older agent refuses it as
+//	outside its managed prefixes, so Keystone refuses to dispatch such a
+//	spec to one (resource.HostSystemMountProtocolMinor).
+const ProtocolMinor = 27
 
 // maxUpdateMsgBytes is the gRPC message size cap on both ends of the
 // session/join connections (ADR-W003 W5). SelfUpdate ships the new binary

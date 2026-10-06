@@ -244,6 +244,29 @@ type ContainerSpec struct {
 	// package cannot choose a Docker network, while the backup engine can
 	// attach a fixed pg_dump helper to Wildstone's managed network.
 	RunNetwork string `yaml:"-" json:"-"`
+
+	// NetworkMode is empty for the default — attached to the managed
+	// wildstone bridge, reachable by name as "container/<name>" — or
+	// NetworkModeHost to share the node's own network namespace (protocol
+	// minor 23): what a home-automation hub needs to hear mDNS, SSDP and
+	// the other link-local discovery a bridge never forwards. Host mode is
+	// mutually exclusive with Ports (every listener is already on the
+	// host) and with the managed bridge, so such a container is not
+	// reachable by name from other containers. Same omitempty rule as
+	// above: absent, it must not move the spec hash of any container that
+	// never asked for it.
+	NetworkMode string `yaml:"networkMode,omitempty" json:"networkMode,omitempty"`
+}
+
+// NetworkModeHost is the one non-default ContainerSpec.NetworkMode. The
+// set is closed on purpose: Docker also accepts "none" and
+// "container:<id>", and the second joins another container's namespace.
+const NetworkModeHost = "host"
+
+// HostNetwork reports whether the container runs in the node's network
+// namespace rather than on the managed bridge.
+func (s *ContainerSpec) HostNetwork() bool {
+	return s != nil && s.NetworkMode == NetworkModeHost
 }
 
 // ContainerResources bounds what one container may consume (protocol
@@ -281,7 +304,8 @@ type VolumeSpec struct {
 // config fragment via Wardstone WriteManagedFile.
 type RouteSpec struct {
 	Host string `yaml:"host"`
-	// Upstream is "container/<name>:<port>" or "ip:port".
+	// Upstream is "container/<name>:<port>", "host/<port>" (a service on
+	// the node's host network, see routeupstream.go) or "ip:port".
 	Upstream string `yaml:"upstream"`
 	// Auth is one of routeAuthValues: none, authelia_oidc, app_oidc, app_ldap, portal.
 	Auth string `yaml:"auth"`
@@ -1368,6 +1392,12 @@ func validateContainer(r *Resource) error {
 		if m.Target == "" {
 			return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: fmt.Sprintf("spec.mounts[%d].target", i), Msg: "must not be empty"}
 		}
+		// A host system mount (#445) is only ever read-only and at its own
+		// path: the agent refuses anything else, so lint says so first.
+		if HostSystemMountAllowed(m.Source) && (!m.ReadOnly || m.Target != m.Source) {
+			return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: fmt.Sprintf("spec.mounts[%d]", i),
+				Msg: fmt.Sprintf("host path %q (%s) may only be mounted readOnly: true at the same path inside", m.Source, HostSystemMounts[m.Source])}
+		}
 	}
 	for i, d := range r.Container.Devices {
 		if d.Source == "" || !path.IsAbs(d.Source) || path.Clean(d.Source) != d.Source {
@@ -1396,6 +1426,32 @@ func validateContainer(r *Resource) error {
 	}
 	if err := validateContainerHardening(r); err != nil {
 		return err
+	}
+	if err := validateNetworkMode(r); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validateNetworkMode enforces the closed NetworkMode set and host mode's
+// exclusion of ports. Caught here, at lint, so an incompatible spec never
+// reaches an approved plan — the agent refuses the same combinations
+// before it touches the running container, but by then the plan has
+// already been approved on a promise it cannot keep.
+func validateNetworkMode(r *Resource) error {
+	c := r.Container
+	switch c.NetworkMode {
+	case "":
+		return nil
+	case NetworkModeHost:
+	default:
+		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.networkMode",
+			Msg: fmt.Sprintf("%q is not a network mode: use %q, or omit it for the managed bridge", c.NetworkMode, NetworkModeHost)}
+	}
+	if len(c.Ports) > 0 {
+		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.ports",
+			Msg: "must be empty with networkMode: host — the container already listens on the host's own " +
+				"interfaces, so there is nothing to publish, and Docker would discard the mappings silently"}
 	}
 	return nil
 }
@@ -1493,6 +1549,11 @@ func validateJob(r *Resource) error {
 			Msg: fmt.Sprintf("must not be set (got %q): a Job runs once to completion, and the reconciler "+
 				"decides when to run it again from its exit status — a restart policy would re-run it "+
 				"on the node's terms instead, forever", r.Job.Run.Restart)}
+	}
+	if r.Job.Run.NetworkMode != "" {
+		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.run.networkMode",
+			Msg: "must not be set: a Job talks to services by name on the managed container network, " +
+				"which a container in the host's network namespace cannot join"}
 	}
 	if len(r.Job.Run.Ports) > 0 {
 		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.run.ports",
@@ -1667,6 +1728,9 @@ func validateRoute(r *Resource) error {
 	}
 	if !routeAuthValues[r.Route.Auth] {
 		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.auth", Msg: "must be one of none, authelia_oidc, app_oidc, app_ldap, portal"}
+	}
+	if err := validateRouteUpstream(r.Route.Upstream); err != nil {
+		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.upstream", Msg: err.Error()}
 	}
 	return nil
 }

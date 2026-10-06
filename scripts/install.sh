@@ -1516,7 +1516,7 @@ check_tailnet_ingress_ports() {
     port="${local_addr##*:}"
     [[ "$port" =~ ^[0-9]+$ ]] || continue
     if [ "$port" -ne 443 ]; then
-      if [ "$port" -lt 7443 ] || [ "$port" -gt 54443 ]; then
+      if [ "$port" -lt 7443 ] || [ "$port" -gt 55443 ]; then
         continue
       fi
       [ $(((port - 7443) % 1000)) -eq 0 ] || continue

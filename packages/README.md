@@ -85,10 +85,13 @@ one mechanism, which is worth deciding before any of them individually.
 | `metrics-grafana` | metrics | Grafana dashboards | app OIDC |
 | `metrics-prometheus` | timeseries | Prometheus, the store Grafana reads | internal |
 | `home-automation` | home-automation | adapter for a Home Assistant that already exists | — |
-| `home-assistant` | home-assistant | Home Assistant, run here | own |
-| `mqtt-mosquitto` | mqtt | Mosquitto broker, reachable from containers only | internal |
-| `zigbee-zigbee2mqtt` | zigbee | Zigbee2MQTT over a USB stick or a network coordinator | proxy |
-| `cameras-frigate` | cameras | Frigate NVR (CPU, Coral or GPU) | proxy |
+| `home-assistant` | home-assistant | Home Assistant, run here on the host's network (LAN discovery; port 8123 on the LAN); `mqtt_enabled` switches on `mqtt:broker`; `bluetooth` is `proxy` (default, ESPHome proxies, no host access), `host-bluez` or `off` — see [Bluetooth](#bluetooth-home-assistant) | own |
+| `mqtt-mosquitto` | mqtt | Mosquitto broker, password-only, on one private LAN address; provides `mqtt:broker` | internal |
+| `zigbee-zigbee2mqtt` | zigbee | Zigbee2MQTT over a USB stick or a network coordinator; requires `mqtt:broker` on its node | proxy |
+| `matter-matterjs` | matter | Matter.js Server (the current Matter controller, not the archived Python one) on host networking; WebSocket on loopback only for a Home Assistant on the same machine, provides `matter:server`; fabric backed up as critical | — |
+| `zwave-zwave-js-ui` | zwave | Z-Wave JS UI on a USB stick (by `/dev/serial/by-id/`); WS server for Home Assistant on one private address, provides `zwave:server`; MQTT gateway off | proxy |
+| `thread-otbr` | thread | OpenThread Border Router on a local USB Thread radio, host-networked; REST on 127.0.0.1:8081 for Home Assistant on the same node, no Route | — |
+| `cameras-frigate` | cameras | Frigate NVR (CPU, Coral or GPU); `mqtt_enabled` switches on `mqtt:broker` | proxy |
 | `dns-pihole`, `dns-adguard` | dns | Pi-hole or AdGuard Home, on 53/udp and 53/tcp | proxy |
 | `vpn-gluetun` | vpn | Gluetun VPN client with a kill switch and an HTTP proxy for other containers | internal |
 | `passwords-vaultwarden` | passwords | Vaultwarden, Bitwarden-compatible | app OIDC |
@@ -154,6 +157,122 @@ three: the port publishes as TCP, the device is absent, the capability
 is not granted, and the app says what it is missing. `IPC_LOCK` needs
 minor 21: Keystone refuses to dispatch a spec adding it to an older agent.
 
+Hand a radio to an app through the device mapping, not through env: map
+the operator's `/dev/serial/by-id/...` source to a fixed target such as
+`/dev/zigbee`, and point the app's env at that target. A real by-id name
+embeds a serial number the secret-literal policy rightly refuses in env.
+
+Host paths are bind-mounted only from Wardstone's managed prefixes
+(ADR-W003 A1), with one closed exception list, `HostSystemMounts` in the
+same file (protocol minor 27, #445). It holds exactly `/run/dbus`, the
+D-Bus system bus, and only as `{ source: /run/dbus, target: /run/dbus,
+readOnly: true }`: lint refuses it writable or elsewhere inside, and the
+agent also refuses it through a symlink or on a host that has none. It
+exists for Home Assistant's host Bluetooth (below). Keystone refuses to
+dispatch it to an older agent, and checks the node's BlueZ readiness
+before creating or replacing a container that uses it.
+
+### Bluetooth (Home Assistant)
+
+`home-assistant` takes a closed choice, `bluetooth`:
+
+| Mode | Host access | Where Bluetooth comes from |
+|---|---|---|
+| `proxy` (default) | none | ESPHome Bluetooth proxies on the network |
+| `host-bluez` | `/run/dbus` read-only; `NET_ADMIN`, `NET_RAW` | this machine's adapter, through the host's BlueZ |
+| `off` | none | nowhere |
+
+**BLE only.** Home Assistant's Bluetooth is Bluetooth Low Energy:
+sensors, beacons, BLE locks and lights. It does not do Bluetooth
+Classic, so speakers, headsets and classic serial devices do not work in
+any mode.
+
+**Proxy (recommended).** An ESPHome Bluetooth proxy is an ESP32 board on
+the household's Wi-Fi or Ethernet that forwards BLE advertisements and
+connections to Home Assistant over the network. Put one near the devices;
+add more to cover a bigger home. Wildstone does not own, flash or manage
+these boards. The operator:
+
+1. flashes the board with ESPHome's "Bluetooth Proxy" firmware from
+   ESPHome's web installer (a Chromium browser and a USB cable), and
+   joins it to the household Wi-Fi there;
+2. waits for Home Assistant to discover it. Home Assistant is on the
+   host's network, so ESPHome's mDNS announcement reaches it, and the
+   board appears under Settings > Devices & services > Discovered;
+3. adds it there. BLE devices it hears then show up in Home Assistant's
+   Bluetooth integration as they would from a local adapter.
+
+No port, device or capability on this machine is involved. If discovery
+does not show the board, add the ESPHome integration by hand with the
+board's address. Check the node's multicast readiness first
+(`GET /api/v1/nodes/{node}/probes/home-automation`).
+
+**Host BlueZ.** Uses the machine's own adapter. BlueZ
+(`bluetooth.service`), the D-Bus system bus and an unblocked adapter are
+the host's to provide. Wildstone does not install BlueZ. Before creating
+or replacing the container, the reconciler reads the same readiness probe
+and refuses the step when `dbus_system_bus` or `bluez_service` is
+`missing`/`unsupported`, or when no `bluetooth_adapter` is `ready` and
+one is `missing` (no controller, or rfkill-blocked). The refusal carries
+the evidence and leaves the running container untouched. `unknown` is not
+refused, because the probe could not tell (for example, systemd could not
+be asked about the unit). The step goes ahead and the probe still shows
+it. The container is on the host's network, so `NET_ADMIN` and `NET_RAW`
+act on the host's network stack. That is why this mode is not the
+default. No USB bus and no `/dev` node are passed.
+
+**Switching** replaces only the container. The `home-assistant-config`
+volume stays at `/config`, and every other resource renders identically
+in all three modes. Integrations, history and BLE devices Home Assistant
+knows about survive. Bonding keys held by the host's BlueZ stay on the
+host.
+
+### Home automation controllers
+
+Five packages own a radio or a network identity, and one carries their
+messages. Each controller's identity lives in one volume, backed up
+daily by a plan of its own; `keystone/pkgtool/controller_backup_test.go`
+holds them to this table, and [recovery.md](../docs/recovery.md#home-automation-controllers)
+says what each volume holds, what also lives on the radio, and the
+order to restore them in.
+
+| Package | Radio (param) | Identity volume | Plan, class | Home Assistant connects to |
+|---|---|---|---|---|
+| `mqtt-mosquitto` | — | none (passwords are node secrets) | none | `<listen_addr>:1883`, user `home-assistant` |
+| `zigbee-zigbee2mqtt` | Zigbee coordinator (`usb_device`, or `coordinator_url` over TCP) → `/dev/zigbee` | `zigbee2mqtt-data` | `zigbee`, critical | MQTT (discovery) |
+| `zwave-zwave-js-ui` | Z-Wave controller (`usb_device`) → `/dev/zwave` | `zwave-js-ui-store` | `zwave`, critical | `ws://<listen_addr>:3000` |
+| `thread-otbr` | Thread RCP (`radio_device`, OpenThread RCP firmware) → `/dev/ttyRCP` | `otbr-data` | `thread`, critical | `http://127.0.0.1:8081`, same node |
+| `matter-matterjs` | none | `matter-data` | `matter`, critical | `ws://127.0.0.1:5580/ws`, same node |
+| `home-assistant` | optional `serial_device` (ZHA); `bluetooth` | `home-assistant-config` | `home-assistant`, important | — |
+
+The rules every one of them follows, and every new one must:
+
+- **A radio is named by its `/dev/serial/by-id/` path** and mapped to a
+  fixed target inside the container. Numbered `/dev/ttyUSB*` names move
+  with plug order, and a real by-id name in env is refused as
+  secret-shaped (see above).
+- **One radio, one owner.** A second package mapping the same physical
+  stick, by any alias, is refused before a plan exists (#435). One
+  protocol per stick: no multiprotocol firmware.
+- **Identity is app-owned state in the volume**, never a param, a
+  Wildstone secret or a plan: Z-Wave keys are generated by the container
+  on first start, the Thread dataset by Home Assistant through OTBR, the
+  Matter fabric by the server. Restart, image upgrade, param changes and
+  disabling the capability all keep the volume.
+- **Identity-bearing means `class: critical`**: losing it is re-pairing
+  every device. Home Assistant's config is `important`: painful, but no
+  device is paired to it.
+- **Unauthenticated control ports stay off the LAN.** OTBR's REST and
+  the Matter WebSocket are bound to 127.0.0.1, which is why both need
+  Home Assistant on the same node; Z-Wave's WebSocket is bound to the
+  one private address the operator names.
+
+What a host must provide (IPv6 forwarding and `accept_ra` for Thread,
+BlueZ for `host-bluez`, USB placement, channel planning) is in
+[install.md](../docs/install.md#6-home-automation-hardware); the
+real-hardware runbook is
+[testing/home-automation](../testing/home-automation/README.md).
+
 ### Not shipped, and why
 
 Recorded here rather than left in someone's head (ADR-W018 A4).
@@ -168,11 +287,15 @@ Recorded here rather than left in someone's head (ADR-W018 A4).
   joined container is no longer reachable by its own name, which changes
   what a Route's upstream means. Gluetun's HTTP proxy is the shipped
   path; namespace sharing is a separate decision.
-- **Publishing Mosquitto to the LAN** — Mosquitto authenticates with a
-  password file in its own hashed format, and the node's secret
-  materialization produces Authelia's pbkdf2 form, not Mosquitto's. An
-  anonymous broker on the LAN is not an option, so the broker stays on
-  the container network until a Mosquitto-shaped digest exists.
+- **An MQTT client on another node** — `mqtt-mosquitto` issues each
+  consumer a password generated as a node secret on the broker's node,
+  and node secrets never leave their node. A consumer installed
+  elsewhere is refused at expansion with both node names (see
+  [the broker](#the-mqtt-broker-mqttbroker)) until a supported
+  cross-node credential path exists. The same limit keeps a Home
+  Assistant or ESP device you run OUTSIDE Wildstone off the broker for
+  now: Wildstone's secrets are write-only, so there is no plaintext to
+  hand it.
 - **Split-node OIDC** — the engine synthesises an app's client secret on
   the node its `OidcClient` is declared on, and the app's container reads
   the same reference on its own node. Secrets are node-local, so the new
@@ -181,7 +304,8 @@ Recorded here rather than left in someone's head (ADR-W018 A4).
   it works only when the two nodes are the same.
 - **Anything that mounts the Docker socket** (Portainer, Dozzle,
   Watchtower, Beszel's agent) — Wardstone bind-mounts only from its
-  managed prefixes (ADR-W003 A1), and the socket is the one path that
+  managed prefixes (ADR-W003 A1) plus the closed `/run/dbus` exception
+  above, and the socket is the one path that
   would let a container do what the agent exists to mediate.
 - **NVIDIA GPUs for Ollama** — the device nodes are on the allowlist,
   but CUDA in a container also needs the NVIDIA container runtime's
@@ -313,7 +437,8 @@ params:
 ```
 
 `validate:` names a shape from a closed vocabulary (`iana_timezone`,
-`url`, `hostname`, `email`, `port`, `duration`) and `capability.Expand`
+`url`, `hostname`, `email`, `port`, `duration`, `private_ipv4`,
+`interface_name`, `serial_by_id`) and `capability.Expand`
 refuses a value that fails it — so the check runs against the value an
 operator actually supplied, not only the one you shipped.
 
@@ -412,6 +537,23 @@ Lint refuses a trait, mode, or class that is not in it, and names the ones
 that are — so `trait: identiy` is a message about a typo rather than an
 "unsatisfied requirement" during someone else's install.
 
+An integration your package offers but does not need goes behind a
+switch param with `when:`. The requirement then binds only an install
+whose value is `"true"`, and the param must be `validate:
+"enum:true|false"`:
+
+```yaml
+requires:
+  - { trait: mqtt, mode: broker, when: mqtt_enabled }
+params:
+  - { name: mqtt_enabled, default: "false", validate: "enum:true|false" }
+```
+
+Guard every `.Resolved` key that requirement supplies with the same
+switch (`{{ if eq .Params.mqtt_enabled "true" }}`): with it off, no
+provider is needed, so none of its keys can be relied on. `cameras-frigate` is the
+worked example.
+
 ### Providing values to other packages: `exports`
 
 If your package is the one others depend on, say what it hands them. Each
@@ -425,10 +567,25 @@ provides:
       IssuerURL: '{{ with .Params.public_domain }}{{ origin (printf "auth.%s" .) }}{{ end }}'
 ```
 
-Four things to know:
+Five things to know:
 
-- The template renders over **your own** params, plus `origin` and
-  `sessionDomain`.
+- The template renders over **your own** params (`.Params`), the
+  requesting capability's name (`.Consumer`), and the functions `origin`,
+  `sessionDomain`, `publishedHost`, `publishedPort` and `hostNetworkEnv`.
+- **An export cannot see the params you were INSTALLED with** — only your
+  declared defaults (ADR-W025 Part B item 4). A fact that lives in a
+  required param, such as the address a listener was bound to, is read
+  back from what you rendered instead: `publishedHost "<container>"
+  <port>` and `publishedPort` answer where your own container publishes
+  that TCP port in the deployment's desired state, and render empty
+  before you are installed. Under `wild pkg lint` they answer from your
+  params' defaults and examples. A container on `networkMode: host`
+  publishes nothing, so for one of those `hostNetworkEnv "<container>"
+  "<KEY>"` reads back an env value it was installed with — the
+  listen address and port it was told to use — and never a secret
+  reference. An export that is a URL on loopback holds its consumer to
+  the provider's node and to host networking, the way an exported secret
+  holds it to the secret's node.
 - **Use `origin`, never string concatenation.** It answers where a host is
   actually *served*, which under the tailnet posture is the node's one
   certified name plus a port — not the host you declared (ADR-W019 A10).
@@ -438,6 +595,109 @@ Four things to know:
   and looping at a login screen.
 - `OidcSecretRef`, `PublisherSecretRef` and `TailnetHost` are yours
   already — every package gets them — and an export cannot override one.
+
+An export whose value is a secret reference (`secret/<name>`) is held to
+one more rule, by the engine and for every trait: the consumer may read
+it only on a node where your desired state declares that Secret. A
+consumer elsewhere, or one you declare no such Secret for, is refused at
+expansion — naming your package, the secret and both nodes — instead of
+installing and failing at the node.
+
+### The MQTT broker (`mqtt:broker`)
+
+`mqtt-mosquitto` provides it. A consumer requires it and renders only
+the exports — never the container name `mosquitto`, which a
+host-networked service cannot resolve:
+
+```yaml
+requires:
+  - { trait: mqtt, mode: broker }
+# ...
+env:
+  ZIGBEE2MQTT_CONFIG_MQTT_SERVER: "{{ .Resolved.MqttURL }}"          # mqtt://<private addr>:<port>
+  ZIGBEE2MQTT_CONFIG_MQTT_USER: "{{ .Resolved.MqttUsername }}"       # your capability name
+  ZIGBEE2MQTT_CONFIG_MQTT_PASSWORD: "{{ .Resolved.MqttPasswordSecretRef }}"  # secret/mqtt-<capability>
+```
+
+That is `zigbee-zigbee2mqtt`'s block verbatim. `MqttHost` and
+`MqttPort` are the same address split, for clients that take them
+separately (Frigate, Home Assistant). A client that reads its password
+from a config file rather than env gets the reference in env and
+substitutes it itself where it can: `cameras-frigate` sets
+`FRIGATE_MQTT_PASSWORD: secret/mqtt-cameras` and writes
+`password: "{FRIGATE_MQTT_PASSWORD}"`, so its managed file never holds
+the password. A client that takes its broker only through its own UI
+cannot be configured at all: Home Assistant's MQTT integration is a
+config entry, and seeding one would put the password in plain text in
+its settings store, where nothing substitutes a reference. So
+`home-assistant` renders `WILDSTONE_MQTT_HOST`, `_PORT`, `_USERNAME` and
+`_PASSWORD` (the reference) into its env for the one-time integration
+form, and says so in its header. The address is the one
+private IPv4 the operator bound the broker to (`listen_addr`,
+`validate: private_ipv4` — never `0.0.0.0` or loopback), so it works from
+host networking and from the Wildstone bridge network alike. Anonymous
+clients are refused.
+
+Credentials are per consumer: the broker declares `secret/mqtt-zigbee`,
+`secret/mqtt-cameras` and `secret/mqtt-home-assistant` and writes their
+`$7$` hashes into its password file (`mosquitto:secret/...`, ADR-W012).
+A new consumer is a Secret and a password-file line in
+`packages/mqtt-mosquitto`; until then its install is refused. Every
+consumer must be on the broker's node — see "Not shipped, and why".
+
+### The Z-Wave server (`zwave:server`)
+
+`zwave-zwave-js-ui` provides it. Home Assistant's Z-Wave JS integration
+wants one URL, and a consumer renders it from the export — never
+`ws://zwave-js-ui:3000`, which a host-networked Home Assistant cannot
+resolve:
+
+```yaml
+requires:
+  - { trait: zwave, mode: server }
+# ...
+url: "{{ .Resolved.ZwaveWsURL }}"   # ws://<private addr>:<port>
+```
+
+`ZwaveWsHost` and `ZwaveWsPort` are the same address split. The WS
+server has no authentication, so it is published only on the private
+IPv4 the operator chose (`listen_addr`, `validate: private_ipv4`); the
+management UI is an `admin_tailscale` Route and is not published at
+all. Nothing about the network's S0/S2 keys is exported: they are
+generated on first start into Z-Wave JS UI's own store (backed up
+daily with it) and never appear in params, secrets or a plan. The
+package is not instanced — one controller, one server, one
+`zwave:server` — and its header covers first install, moving an
+existing controller over, and NVM backups.
+
+### The Matter server (`matter:server`)
+
+`matter-matterjs` provides it. Home Assistant's Matter integration
+wants one URL:
+
+```yaml
+requires:
+  - { trait: matter, mode: server }
+# ...
+url: "{{ .Resolved.MatterWsURL }}"   # ws://127.0.0.1:5580/ws
+```
+
+`MatterWsHost` and `MatterWsPort` are the same address split. Unlike
+the Z-Wave server, this one runs on host networking (Matter is mDNS and
+IPv6 link-local), so it cannot be published on one chosen address: the
+WebSocket, which has no authentication and can commission or remove
+every device, is bound to 127.0.0.1 through the image's own
+`LISTEN_ADDRESS`. A consumer must therefore be host-networked and on
+the same node; the engine refuses one on another node, or one on the
+Wildstone bridge, with both named. Matter's own UDP (5540, mDNS 5353)
+stays on every interface — it is authenticated and encrypted under the
+fabric, and devices must reach it. There is no Route: the dashboard
+shares the WebSocket's port (`ssh -L 5580:127.0.0.1:5580` to open it).
+The fabric in `matter-data` is identity-bearing — a server on an empty
+volume makes a new fabric no device belongs to — so its BackupPlan is
+`critical`, removal keeps it, and a restore goes in before the first
+start. The package header covers the HAOS support boundary, host
+requirements and firewalling.
 
 ### Before you open a PR
 
@@ -554,8 +814,8 @@ already declares, by `keystone/reconcile/homepageservices.go`:
 | --- | --- |
 | The link | `Route.host`, resolved to the address a browser actually uses |
 | The group (Household / Admin) | `Route.classification` — `admin_tailscale` is Admin |
-| Status dot | `Route.upstream`, dialled over the Wildstone Docker network |
-| Name, icon, description | The `homepageApps` table, keyed by the upstream container name |
+| Status dot | `Route.upstream`, dialled over the Wildstone Docker network (a `host/<port>` upstream through the host-gateway alias, see [Route upstreams](#route-upstreams)) |
+| Name, icon, description | The `homepageApps` table, keyed by the upstream container name (for `host/<port>`, the package's host-networked container) |
 
 So integrating a new service is: declare a Route (which you must do
 anyway to be reachable), then add **one row** to `homepageApps`:
@@ -589,6 +849,78 @@ app's API key, secrets are write-only (ADR-W012 W2), and only a
 materializing write resolves a `secret/` reference — so `widgets.yaml`
 would need a materialize flag that depends on which apps are installed.
 Tracked as F87.
+
+## Route upstreams
+
+`Route.upstream` has exactly three forms:
+
+| Form | Means | Caddy dials |
+| --- | --- | --- |
+| `container/<name>:<port>` | a container on the Wildstone network | `<name>:<port>`, by Docker DNS |
+| `host/<port>` | a service on the **node host's** network — in practice a container with `networkMode: host` in the same package | `host.docker.internal:<port>` |
+| `<address>:<port>` | something Wildstone does not run (a NAS, a printer, Keystone itself) | the address, verbatim |
+
+```yaml
+spec:
+  host: home.example.internal
+  upstream: host/8123          # Home Assistant, running networkMode: host
+```
+
+`host/<port>` is a closed grammar: `host/` then a decimal port 1–65535,
+no leading zero, nothing else — no host part, no scheme, no path, and the
+prefix is lower-case. Validation refuses anything looser, and also refuses
+the literals `host:<port>`, `host.docker.internal:<port>` and
+`host-gateway:<port>`, which look like they reach the node but bypass the
+wiring below. Policy (`route-upstream-resolvable`) also refuses
+`container/<name>:<port>` when `<name>` runs with `networkMode: host` —
+it has no name on the Wildstone network — and names the `host/<port>`
+to use instead.
+
+How it works: the proxy stays on the Wildstone bridge (it needs Docker
+DNS for every `container/` upstream). While a node has a host Route,
+Keystone adds `host.docker.internal` to the host aliases of the ingress
+proxy and the dashboard container only, and the agent writes it as
+Docker's own `host.docker.internal:host-gateway`, so the daemon fills in
+its bridge gateway on that machine. No gateway IP is ever stored in
+desired state. This needs wardstone protocol minor 24; Keystone refuses a
+host Route on a node with an older agent rather than rendering a site
+that answers 502.
+
+The service must listen on an interface the bridge gateway reaches (all
+interfaces, the usual default for a host-networked hub) — one bound to
+`127.0.0.1` only is reachable from the node but not from the proxy — and
+a host firewall must allow the Docker bridge subnets to that port. The
+apply-time gate probes `http://127.0.0.1:<port>/` from the agent, and
+under the tailnet posture the front door, which exercises the proxy's
+real path.
+
+On the dashboard a host Route is presented as the one host-networked
+container its package runs on that node (its `homepageApps` row, icon and
+status), and its status dot dials `host.docker.internal:<port>` exactly
+as Caddy does. A package with two host-networked containers gets an
+unbranded card rather than a guess.
+
+**The port must be free, and is checked before anything is replaced.**
+A host-networked container's `host/<port>` Routes (same package, same
+node) are the only place its ports are stated, so before such a container
+is created — or replaces one that was on the bridge — Keystone reads the
+node's listening TCP sockets and refuses the step if one of those ports
+is taken, naming the port, the Route and the address it is held on. The
+existing container is left running. Replacing a container that is
+already host-networked skips the check (the listener is presumably
+itself). A port published through iptables alone, with Docker's
+userland proxy disabled, has no socket and is not seen.
+
+**What it trusts.** The proxy's requests arrive from the proxy's own
+address on the Wildstone bridge — Docker routes bridge-to-host traffic
+without masquerading — so an app that honours `X-Forwarded-For` trusts
+`.Resolved.HostNetworkProxyTrustCIDRs` (`172.16.0.0/12`, Docker's default
+bridge pool, and loopback) rather than `ProxyTrustCIDRs`, whose
+`10.0.0.0/8` and `192.168.0.0/16` are usually the household LAN — which
+on the host's network reaches the app directly and must not be believed
+about its own address. `home-assistant` is the worked example: its
+direct LAN listener (`http://<machine>:8123`) and its Wildstone URL are
+two doors to one app, and only the second is the proxy.
 
 ## Container-to-container addressing
 

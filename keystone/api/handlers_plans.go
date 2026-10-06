@@ -129,7 +129,7 @@ func (s *Server) submitProposal(id principal.Identity, req proposalRequest) (any
 // a Plan is filed by an HTTP caller or by a runtime through the Agent
 // Gateway.
 func (s *Server) proposalDeps() proposals.Deps {
-	return proposals.Deps{DB: s.DB, State: s.State, Policy: s.Policy, Log: s.Log, Event: s.event, Preflight: s.BackupPreflight}
+	return proposals.Deps{DB: s.DB, State: s.State, Policy: s.Policy, Log: s.Log, Event: s.event, Preflight: s.BackupPreflight, Radios: s.radioInventory}
 }
 
 // ProposalDeps is proposalDeps, exported for cmd/keystone's wiring of

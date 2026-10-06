@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -78,6 +79,56 @@ var capabilities = map[string]string{
 	// Raising process priority, which media servers ask for to keep a
 	// transcode ahead of a scan.
 	"SYS_NICE": "scheduling priority for transcodes",
+}
+
+// hostSystemMounts is the closed set of host paths OUTSIDE the managed
+// prefixes a container may be bind-mounted (protocol minor 27, #445).
+// Everywhere else ADR-W003 A1 holds: a host path is mounted only from a
+// managed prefix. Each entry is an exact path, mounted read-only at the
+// same path inside; keystone/resource.HostSystemMounts is the lint twin
+// and TestHostSystemMountAllowlist on each side runs one fixture.
+//
+// Not here, and not to be: /var/run/docker.sock or anything else that
+// is the agent's own job in a socket, /, /etc, /sys, /proc.
+var hostSystemMounts = map[string]string{
+	// The D-Bus system bus, for Home Assistant's Bluetooth over the
+	// host's BlueZ. The directory rather than the socket, because
+	// dbus-daemon recreates the socket on restart. Read-only: connecting
+	// to a socket is not a write, and what the bus lets the client do is
+	// the host's D-Bus policy.
+	"/run/dbus": "the D-Bus system bus, for host BlueZ (Bluetooth)",
+}
+
+// hostSystemMountAllowed reports whether a host path, exactly as written
+// (no cleaning), is on the host system mount allowlist.
+func hostSystemMountAllowed(path string) bool {
+	_, ok := hostSystemMounts[path]
+	return ok
+}
+
+// checkHostSystemMount holds an allowlisted host system mount to its
+// rules: read-only, the same path inside, and the path itself rather than
+// a symlink to somewhere else. A missing path is NOT_FOUND — the host has
+// no D-Bus system bus — rather than letting Docker create an empty
+// directory there.
+func checkHostSystemMount(m *wsv1.Mount) *wsv1.OpError {
+	src := m.GetSource()
+	if !m.GetReadOnly() || m.GetTarget() != src {
+		return opErr(wsv1.ErrorCode_ERROR_CODE_FORBIDDEN,
+			"host path %q (%s) may only be mounted read-only at the same path inside", src, hostSystemMounts[src])
+	}
+	resolved, err := evalSymlinks(src)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return opErr(wsv1.ErrorCode_ERROR_CODE_NOT_FOUND, "host path %q does not exist on this node", src)
+		}
+		return opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "resolve %q: %v", src, err)
+	}
+	if resolved != src {
+		return opErr(wsv1.ErrorCode_ERROR_CODE_FORBIDDEN,
+			"host path %q resolves to %q: an allowlisted host path is mounted only as itself", src, resolved)
+	}
+	return nil
 }
 
 // statDevice is os.Stat, replaceable in tests: the allowlist can be
@@ -199,4 +250,77 @@ func describeDevices(ds []*wsv1.DeviceMapping) string {
 		parts = append(parts, fmt.Sprintf("%s->%s", d.GetHostPath(), d.GetContainerPath()))
 	}
 	return strings.Join(parts, ",")
+}
+
+// DeviceSourcesLabel records, on a container the agent creates, each
+// device's host path AS REQUESTED — the /dev/serial/by-id alias, not
+// the node it resolved to — keyed by the path inside the container.
+//
+// checkDevice hands Docker the resolved node (/dev/ttyUSB1), and Docker
+// keeps that in HostConfig for every later start: its own restart
+// policy after a crash or a reboot, and ensureContainer's docker start
+// of a stopped container whose spec has not changed. The by-id alias
+// is the stable thing; the ttyUSB number is not. Unplug two sticks and
+// plug them back in the other order and the stored node is now the
+// OTHER stick: Zigbee2MQTT restarted against a Thread RCP, a second
+// owner for one radio (#435) with nothing in the spec to show it. The
+// label is what lets the agent notice: re-resolve the alias, compare
+// with what Docker will actually hand over.
+const DeviceSourcesLabel = "dev.wildstone.device-sources"
+
+// deviceSourcesLabel encodes requested[i] (the op's host paths) against
+// the container paths checkDevice settled on, in the same order. Empty
+// when there are no devices, so no label is written.
+func deviceSourcesLabel(requested []*wsv1.DeviceMapping, checked []deviceMapping) string {
+	if len(checked) == 0 {
+		return ""
+	}
+	m := make(map[string]string, len(checked))
+	for i, d := range checked {
+		m[d.PathInContainer] = requested[i].GetHostPath()
+	}
+	b, _ := json.Marshal(m)
+	return string(b)
+}
+
+// currentDeviceMappings re-resolves a container's recorded device
+// sources now. A source that no longer resolves (the stick is
+// unplugged) is left out: there is nothing to compare it with, and
+// re-creating the container would only fail checkDevice's NOT_FOUND.
+// A container without the label (created before it existed, or with no
+// devices) yields nothing, and so is never reported stale.
+func currentDeviceMappings(ci *containerInspect) []deviceMapping {
+	raw := ci.Config.Labels[DeviceSourcesLabel]
+	if raw == "" {
+		return nil
+	}
+	var sources map[string]string
+	if json.Unmarshal([]byte(raw), &sources) != nil {
+		return nil
+	}
+	var out []deviceMapping
+	for inContainer, host := range sources {
+		resolved, err := evalSymlinks(host)
+		if err != nil {
+			continue
+		}
+		out = append(out, deviceMapping{PathOnHost: resolved, PathInContainer: inContainer})
+	}
+	return out
+}
+
+// staleDevice reports the first wanted mapping whose host node differs
+// from what Docker has stored for the same container path, or "" when
+// every one matches.
+func staleDevice(ci *containerInspect, want []deviceMapping) string {
+	have := make(map[string]string, len(ci.HostConfig.Devices))
+	for _, d := range ci.HostConfig.Devices {
+		have[d.PathInContainer] = d.PathOnHost
+	}
+	for _, d := range want {
+		if got := have[d.PathInContainer]; got != d.PathOnHost {
+			return fmt.Sprintf("%s is %s now, but the container still maps %q", d.PathInContainer, d.PathOnHost, got)
+		}
+	}
+	return ""
 }
