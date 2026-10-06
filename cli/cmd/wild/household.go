@@ -33,6 +33,10 @@ func runHousehold(args []string) int {
 		return runHouseholdMembers(args[1:])
 	case "member":
 		return runHouseholdMemberAdd(args[1:])
+	case "groups":
+		return runHouseholdGroups(args[1:])
+	case "group":
+		return runHouseholdGroup(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "wild household: unknown subcommand %q\n", args[0])
 		householdUsage()
@@ -217,6 +221,47 @@ func runHouseholdMemberAdd(args []string) int {
 	return simpleCall("household member", *apiBase, token, http.MethodPost, "/api/v1/household/members", body)
 }
 
+// runHouseholdGroups lists the household's own groups (not the
+// directory groups packages declare).
+func runHouseholdGroups(args []string) int {
+	fs := flag.NewFlagSet("wild household groups", flag.ExitOnError)
+	apiBase := fs.String("api", "http://127.0.0.1:9441", "Keystone public API base URL")
+	fs.Parse(args) //nolint:errcheck // ExitOnError
+	token, ok := requireToken("household groups")
+	if !ok {
+		return 2
+	}
+	return simpleCall("household groups", *apiBase, token, http.MethodGet, "/api/v1/household/person-groups", nil)
+}
+
+// runHouseholdGroup creates or deletes a household group.
+func runHouseholdGroup(args []string) int {
+	const usage = "usage: wild household group create <name> [-api URL] | wild household group delete <id> [-api URL]"
+	if len(args) < 1 || (args[0] != "create" && args[0] != "delete") {
+		fmt.Fprintln(os.Stderr, usage)
+		return 2
+	}
+	verb := args[0]
+	arg, rest := splitLeadingArg(args[1:])
+	if arg == "" {
+		fmt.Fprintln(os.Stderr, usage)
+		return 2
+	}
+	fs := flag.NewFlagSet("wild household group "+verb, flag.ExitOnError)
+	apiBase := fs.String("api", "http://127.0.0.1:9441", "Keystone public API base URL")
+	fs.Parse(rest) //nolint:errcheck // ExitOnError
+	token, ok := requireToken("household group " + verb)
+	if !ok {
+		return 2
+	}
+	if verb == "create" {
+		return simpleCall("household group create", *apiBase, token, http.MethodPost,
+			"/api/v1/household/person-groups", map[string]any{"name": arg})
+	}
+	return simpleCall("household group delete", *apiBase, token, http.MethodDelete,
+		"/api/v1/household/person-groups/"+url.PathEscape(arg), nil)
+}
+
 func householdUsage() {
 	fmt.Fprintln(os.Stderr, `usage:
   wild household events [-after N] [-limit N] [-follow] [-api URL]
@@ -224,10 +269,16 @@ func householdUsage() {
   wild household publisher <capability> -node <id> [-api URL]
   wild household members [-api URL]
   wild household member <username> -email <address> [-name "Full Name"] [-groups a,b] [-node id] [-api URL]
+  wild household groups [-api URL]
+  wild household group create <name> [-api URL]
+  wild household group delete <id> [-api URL]
 Authentication: set WILD_TOKEN. events needs read; emit needs emit (a
 publisher or admin token); publisher needs an admin token — it mints
 the capability's publisher principal and places its token on the node
 as secret/<capability>-publisher (minting again rotates it). members
 needs read; member needs propose — it PROPOSES the account, which
-exists once the plan is approved and carries no password.`)
+exists once the plan is approved and carries no password. groups needs
+read; group create/delete need manage and are refused for the seeded
+groups and for any group an entitlement, audience or secret grant still
+names.`)
 }

@@ -17,9 +17,11 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"sort"
+	"strings"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
@@ -270,6 +272,65 @@ func (s *Server) setPersonGroup(r *http.Request, id principal.Identity) (any, in
 		err = s.DB.RemovePersonFromGroup(groupID, personID)
 	}
 	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	return s.listPersonGroups(r, id)
+}
+
+// createPersonGroupRequest names the group the household is making.
+type createPersonGroupRequest struct {
+	Name string `json:"name"`
+}
+
+// createPersonGroup makes a group the household defines itself.
+//
+// Consequential (ADR-W033 A4.1): the namespace is shared by service
+// entitlements, memory audiences and secret grants, so a new group is a
+// new thing all three can name. It grants nothing by existing.
+func (s *Server) createPersonGroup(r *http.Request, id principal.Identity) (any, int, error) {
+	if s.DB == nil {
+		return nil, http.StatusServiceUnavailable, fmt.Errorf("no assistant database is configured")
+	}
+	var req createPersonGroupRequest
+	if err := json.NewDecoder(http.MaxBytesReader(nil, r.Body, maxProposalBytes)).Decode(&req); err != nil {
+		return nil, http.StatusBadRequest, fmt.Errorf("parsing request: %w", err)
+	}
+	if body, code, err := s.stepUpRefusal(id); err != nil {
+		return body, code, err
+	}
+	if _, err := s.DB.CreateGroup(req.Name); err != nil {
+		switch {
+		case errors.Is(err, runtimedb.ErrGroupNameEmpty):
+			return nil, http.StatusBadRequest, fmt.Errorf("a group needs a name")
+		case errors.Is(err, runtimedb.ErrGroupNameTaken):
+			return nil, http.StatusConflict, fmt.Errorf("a group called %q already exists", strings.TrimSpace(req.Name))
+		}
+		return nil, http.StatusInternalServerError, err
+	}
+	return s.listPersonGroups(r, id)
+}
+
+// deletePersonGroup removes a household-made group nothing refers to.
+//
+// Refuses rather than cascades: entitlement rows, audiences and secret
+// grants that name the group would otherwise silently lose or change
+// meaning, and which of those the household wants is their call.
+func (s *Server) deletePersonGroup(r *http.Request, id principal.Identity) (any, int, error) {
+	if s.DB == nil {
+		return nil, http.StatusServiceUnavailable, fmt.Errorf("no assistant database is configured")
+	}
+	if body, code, err := s.stepUpRefusal(id); err != nil {
+		return body, code, err
+	}
+	err := s.DB.DeleteGroup(r.PathValue("group"))
+	switch {
+	case errors.Is(err, runtimedb.ErrNotFound):
+		return nil, http.StatusNotFound, fmt.Errorf("no such group")
+	case errors.Is(err, runtimedb.ErrSeededGroup):
+		return nil, http.StatusConflict, fmt.Errorf("this is one of the groups Wildstone seeds, and packages refer to it, so it cannot be deleted")
+	case errors.Is(err, runtimedb.ErrGroupInUse):
+		return nil, http.StatusConflict, fmt.Errorf("a service entitlement, audience or secret grant still names this group; remove those first")
+	case err != nil:
 		return nil, http.StatusInternalServerError, err
 	}
 	return s.listPersonGroups(r, id)

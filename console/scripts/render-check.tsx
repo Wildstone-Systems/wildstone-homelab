@@ -2589,6 +2589,8 @@ check("a seeded group shows the role its rules reference",
   groupsOut.includes("role: adults"));
 check("a household's own group shows no role",
   !groupsOut.includes("role: media"));
+check("a household's own group can be deleted", groupsOut.includes("Delete"));
+check("a household can create a group", groupsOut.includes("Create group"));
 check("membership is a toggle per person", groupsOut.includes('aria-pressed="true"'));
 
 // A secret field starts concealed, with a named Show control beside it,

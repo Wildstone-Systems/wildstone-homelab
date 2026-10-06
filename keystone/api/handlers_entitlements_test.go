@@ -334,3 +334,66 @@ func portalRoute(name, capability, host string) resource.Resource {
 		},
 	}
 }
+
+// An Owner can make a group, and delete it again while nothing names it.
+func TestPersonGroupCreateAndDelete(t *testing.T) {
+	h := newHarness(t)
+	var groups []personGroup
+	res := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/household/person-groups",
+		map[string]any{"name": "Neighbours"}, &groups)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("POST group = %d", res.StatusCode)
+	}
+	var made string
+	for _, g := range groups {
+		if g.Name == "Neighbours" {
+			made = g.ID
+			if g.SeedKey != "" {
+				t.Errorf("household group carries seed key %q", g.SeedKey)
+			}
+		}
+	}
+	if made == "" {
+		t.Fatalf("created group not listed: %v", groups)
+	}
+	if res := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/household/person-groups",
+		map[string]any{"name": "neighbours"}, nil); res.StatusCode != http.StatusConflict {
+		t.Errorf("duplicate name = %d, want 409", res.StatusCode)
+	}
+	if res := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/household/person-groups",
+		map[string]any{"name": " "}, nil); res.StatusCode != http.StatusBadRequest {
+		t.Errorf("empty name = %d, want 400", res.StatusCode)
+	}
+	res = h.do(runtimedb.RoleAdmin, http.MethodDelete, "/api/v1/household/person-groups/"+made, nil, &groups)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("DELETE group = %d", res.StatusCode)
+	}
+	for _, g := range groups {
+		if g.ID == made {
+			t.Errorf("deleted group still listed: %v", groups)
+		}
+	}
+	if res := h.do(runtimedb.RoleAdmin, http.MethodDelete, "/api/v1/household/person-groups/"+made, nil, nil); res.StatusCode != http.StatusNotFound {
+		t.Errorf("deleting twice = %d, want 404", res.StatusCode)
+	}
+}
+
+// Seeded groups stay, and so does any group an entitlement names.
+func TestPersonGroupDeleteRefusals(t *testing.T) {
+	h := newHarness(t)
+	adults := seedGroup(t, h, runtimedb.SeedAdults)
+	if res := h.do(runtimedb.RoleAdmin, http.MethodDelete,
+		"/api/v1/household/person-groups/"+adults, nil, nil); res.StatusCode != http.StatusConflict {
+		t.Errorf("deleting a seeded group = %d, want 409", res.StatusCode)
+	}
+	g, err := h.s.DB.CreateGroup("Neighbours")
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/services/photos/access",
+		map[string]any{"subjectKind": "group", "subject": g.ID, "effect": "allow"}, nil)
+	if res := h.do(runtimedb.RoleAdmin, http.MethodDelete,
+		"/api/v1/household/person-groups/"+g.ID, nil, nil); res.StatusCode != http.StatusConflict {
+		t.Errorf("deleting a referenced group = %d, want 409", res.StatusCode)
+	}
+}
