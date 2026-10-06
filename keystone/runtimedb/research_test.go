@@ -55,11 +55,8 @@ func researchReady(t *testing.T, db *DB, p research.Provider) {
 }
 func TestResearchMigrationAndSelectionNeverGrantTools(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "registry.db")
-	db, err := openUnmigrated(path)
+	db, err := openThrough(t, path, "migrations/0097_agent_workspaces.sql")
 	if err != nil {
-		t.Fatal(err)
-	}
-	if err = db.migrateThrough("migrations/0097_agent_workspaces.sql"); err != nil {
 		t.Fatal(err)
 	}
 	agent := researchAgent(t, db)

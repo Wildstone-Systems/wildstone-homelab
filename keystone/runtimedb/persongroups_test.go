@@ -437,12 +437,9 @@ func TestTheGroupsArriveEmptyOnAnUpgradeToo(t *testing.T) {
 	const before = "migrations/0050_completion_note.sql"
 
 	path := filepath.Join(t.TempDir(), "keystone.db")
-	old, err := openUnmigrated(path)
+	old, err := openThrough(t, path, before)
 	if err != nil {
 		t.Fatal(err)
-	}
-	if err := old.migrateThrough(before); err != nil {
-		t.Fatalf("migrating through %s: %v", before, err)
 	}
 
 	// A household with a child and an adult, as it stood before this

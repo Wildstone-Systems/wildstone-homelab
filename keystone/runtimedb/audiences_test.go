@@ -410,12 +410,9 @@ func TestTheAudienceMigrationIsCleanOnARealisticSnapshot(t *testing.T) {
 	const before = "migrations/0051_person_groups.sql"
 
 	path := filepath.Join(t.TempDir(), "keystone.db")
-	old, err := openUnmigrated(path)
+	old, err := openThrough(t, path, before)
 	if err != nil {
 		t.Fatal(err)
-	}
-	if err := old.migrateThrough(before); err != nil {
-		t.Fatalf("migrating through %s: %v", before, err)
 	}
 	seedAudienceHousehold(t, old)
 

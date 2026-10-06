@@ -110,12 +110,9 @@ func TestAPersonalFolderStaysPutThroughARename(t *testing.T) {
 // existing handles resolve, once 0093 has run.
 func TestMigration0093CarriesHandlesPreferencesAndFolders(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "keystone.db")
-	old, err := openUnmigrated(path)
+	old, err := openThrough(t, path, "migrations/0092_chat_outbound_speech.sql")
 	if err != nil {
 		t.Fatal(err)
-	}
-	if err := old.migrateThrough("migrations/0092_chat_outbound_speech.sql"); err != nil {
-		t.Fatalf("migrating through 0092: %v", err)
 	}
 	for _, stmt := range []string{
 		`INSERT INTO butler_members (person_id, member, role, admitted, generation, created_at)
@@ -219,12 +216,9 @@ func TestAFolderUsedBeforeBecomingAPersonStaysTheirs(t *testing.T) {
 // their folder (#426 review).
 func TestMigration0095BackfillsPeopleMissedBy0093(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "keystone.db")
-	old, err := openUnmigrated(path)
+	old, err := openThrough(t, path, "migrations/0093_person_handles.sql")
 	if err != nil {
 		t.Fatal(err)
-	}
-	if err := old.migrateThrough("migrations/0093_person_handles.sql"); err != nil {
-		t.Fatalf("migrating through 0093: %v", err)
 	}
 	for _, stmt := range []string{
 		`INSERT INTO butler_members (person_id, member, role, admitted, generation, created_at)

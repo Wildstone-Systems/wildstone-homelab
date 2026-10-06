@@ -106,12 +106,9 @@ func TestButlerTurnRoleIsClosed(t *testing.T) {
 // which is true, rather than an invented question.
 func TestMigration0014BackfillsExistingSessions(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "keystone.db")
-	db, err := openUnmigrated(path)
+	db, err := openThrough(t, path, "migrations/0013_chat_adapters.sql")
 	if err != nil {
 		t.Fatal(err)
-	}
-	if err := db.migrateThrough("migrations/0013_chat_adapters.sql"); err != nil {
-		t.Fatalf("migrating through 0013: %v", err)
 	}
 	id := insertSessionAtSchema(t, db, "n2 has been offline since 14:04.", nil)
 	db.Close()

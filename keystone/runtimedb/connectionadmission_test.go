@@ -194,12 +194,9 @@ func TestAClaimCodeNamesAPersonOnRecord(t *testing.T) {
 // to.
 func TestMigrationRefusesAConnectionAdmittingAPrincipal(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "keystone.db")
-	old, err := openUnmigrated(path)
+	old, err := openThrough(t, path, "migrations/0043_person_id_references.sql")
 	if err != nil {
 		t.Fatal(err)
-	}
-	if err := old.migrateThrough("migrations/0043_person_id_references.sql"); err != nil {
-		t.Fatalf("migrating through 0043: %v", err)
 	}
 	// Exactly what the old claim path wrote: an admin-surface binding
 	// naming a principal, with no Person behind it.
@@ -252,12 +249,9 @@ func TestMigrationRefusesAConnectionAdmittingAPrincipal(t *testing.T) {
 // binding that names a Person migrates, and keeps pointing at them.
 func TestMigrationCarriesAConnectionThatNamesAPerson(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "keystone.db")
-	old, err := openUnmigrated(path)
+	old, err := openThrough(t, path, "migrations/0043_person_id_references.sql")
 	if err != nil {
 		t.Fatal(err)
-	}
-	if err := old.migrateThrough("migrations/0043_person_id_references.sql"); err != nil {
-		t.Fatalf("migrating through 0043: %v", err)
 	}
 	if _, err := old.sql.Exec(
 		`INSERT INTO butler_members (person_id, member, role, admitted, generation, created_at)
@@ -316,12 +310,9 @@ func TestMigrationCarriesAConnectionThatNamesAPerson(t *testing.T) {
 // Butler each of their chat Connections belongs to, once.
 func TestMigrationRefusesAConnectionWithNoAgent(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "keystone.db")
-	old, err := openUnmigrated(path)
+	old, err := openThrough(t, path, "migrations/0044_connections_admit_a_person.sql")
 	if err != nil {
 		t.Fatal(err)
-	}
-	if err := old.migrateThrough("migrations/0044_connections_admit_a_person.sql"); err != nil {
-		t.Fatalf("migrating through 0044: %v", err)
 	}
 	if _, err := old.sql.Exec(
 		`INSERT INTO butler_members (person_id, member, role, admitted, generation, created_at)
