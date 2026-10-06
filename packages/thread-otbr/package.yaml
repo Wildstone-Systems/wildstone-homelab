@@ -1,0 +1,273 @@
+# Thread capability, profile "otbr": an OpenThread Border Router on a
+# dedicated local Thread radio (an RCP — radio co-processor — such as a
+# Home Assistant Connect ZBT-1/ZBT-2, a Sonoff ZBDongle-E or an nRF52840
+# dongle flashed with OpenThread RCP firmware). It joins the node's LAN
+# to a Thread mesh so Home Assistant, and through it Matter-over-Thread
+# devices, can reach the mesh.
+#
+# THE IMAGE, AND ITS CONTRACT. openthread/otbr is the OpenThread
+# project's own image, built from ot-br-posix main; it runs without Home
+# Assistant Supervisor (the Home Assistant add-on image does not). Its
+# ENTRYPOINT is /app/etc/docker/test/docker_entrypoint.sh, which
+#   - takes --radio-url, --backbone-interface, --interface,
+#     --trel-url and --debug-level as ARGUMENTS and silently drops any
+#     other argument (so there is no --rest-listen-port: REST is 8081);
+#   - reads REST_HOST (default: HTTP_HOST, default 127.0.0.1) for
+#     otbr-agent's --rest-listen-address, and HTTP_HOST/HTTP_PORT for
+#     the web GUI;
+#   - writes /etc/default/otbr-agent and runs /app/script/server, which
+#     starts rsyslog, dbus, the optional firewall and NAT44 rules, and
+#     otbr-agent, gating each on WEB_GUI, FIREWALL and NAT64 read from
+#     the environment at start (script/_initrc `with`).
+# otbr-agent keeps its settings — the active and pending operational
+# datasets, the network key, the frame counters — under /var/lib/thread,
+# and re-attaches to the saved network on start (--auto-attach defaults
+# to 1). That directory is the volume below, so a restart, re-create or
+# image upgrade keeps the Thread network, and it is backed up daily.
+# TestOTBRImageContract (WILDSTONE_DOCKER_TESTS=1) starts THIS digest and
+# checks the argument, variable and hook clauses;
+# TestOTBRRestartKeepsTheThreadDataset (which also needs an IPv6 kernel
+# and a simulated RCP) forms a network over REST, restarts, and checks
+# the dataset came back from the volume.
+#
+# HOST NETWORK, AND WHAT THE HOST MUST ALREADY BE. otbr-agent creates
+# the wpan0 interface, routes between it and the backbone (LAN)
+# interface, and speaks mDNS on the LAN, so it runs in the node's own
+# network namespace (networkMode: host, protocol minor 23). It needs
+# /dev/net/tun and NET_ADMIN to create and route wpan0, IPC_LOCK for the
+# memory it locks (protocol minor 21), and nothing else: no privileged
+# mode, no SYS_ADMIN, no SYS_MODULE. A container cannot set the host's
+# sysctls, so the host must already forward IPv6 — the image's own
+# `sysctl --system` fails read-only and carries on. The home-automation
+# readiness probe (GET /api/v1/nodes/{node}/probes/home-automation,
+# checks ipv6, ipv6_forwarding, interface_ipv6, multicast and tun)
+# reports all of it before anything is installed; the same checks run
+# again inside the container at start (the before_server hook below),
+# and a failure stops the container with one line per missing
+# prerequisite naming the check, the evidence and the fix, instead of
+# upstream's behaviour of hanging "Up" with no otbr-agent behind it.
+# A radio that is not plugged in is refused earlier still, at apply, by
+# the agent ("device ... does not exist on this node").
+#
+# THE REST API IS FOR HOME ASSISTANT ONLY. otbr-agent's REST API (8081)
+# has no authentication, and anyone who can reach it can read the
+# network key or replace the dataset. It is bound to 127.0.0.1 and has
+# no Route, so it is reachable from this node's own network namespace
+# and nowhere else: Home Assistant installed by the home-assistant
+# package on the SAME node (host networking, #440) adds the
+# "OpenThread Border Router" integration at http://127.0.0.1:8081. A
+# Home Assistant anywhere else cannot reach it, by design. The upstream
+# web GUI (port 80, same lack of authentication) is switched off.
+#
+# FIREWALL AND NAT64 are upstream's own switches and both touch the
+# HOST's packet filter, because the container shares its namespace:
+#   - firewall=on (the default) installs upstream's Thread ingress
+#     filter: an OTBR_FORWARD_INGRESS ip6tables chain jumped to from
+#     FORWARD for traffic into wpan0, plus four ipsets otbr-agent keeps
+#     current. It is removed when the container stops. The image's
+#     ip6tables is the legacy backend, so the rules do not show in
+#     `nft list ruleset`; `ip6tables-legacy -S` shows them.
+#   - nat64=on lets Thread devices reach IPv4-only services. Upstream's
+#     NAT44 step appends iptables MASQUERADE and FORWARD rules to the
+#     host on every start and never removes them, and its FORWARD
+#     accept rules name eth0 as built into the image, whatever the
+#     backbone is. Off by default for that reason; it also needs
+#     net.ipv4.ip_forward = 1.
+#
+# ONE RADIO, NAMED BY ITS STABLE ALIAS. radio_device must be the stick's
+# /dev/serial/by-id/ name (validate: serial_by_id); it appears inside
+# the container as /dev/ttyRCP, which is what the radio URL names. A
+# second package claiming the same stick is refused before a plan
+# exists (duplicate physical-device ownership, #435). The baud rate and
+# flow control must match the RCP firmware: 460800 with hardware flow
+# control is what Home Assistant's own ZBT-1/ZBT-2 firmware uses.
+#
+# NO NETWORK RCP. A radio reached over TCP (an SLZB-06 in Thread mode, an
+# ESP32 bridge) is not offered: this image has no TCP spinel transport
+# and no socat to fake one, and upstream warns that the added latency of
+# a network RCP breaks Thread's radio timing and leaves stale routes when
+# the link drops. A USB RCP on this node is the supported shape.
+#
+# Image digest is REAL, resolved 2026-09-30 by pulling from Docker Hub:
+#   openthread/otbr:latest -> sha256:3e8e0c8a...614b
+#   (built 2026-09-29 from ot-br-posix main, otbr-agent 0.3.0, Thread 1.4;
+#   Ubuntu 18.04 base, which is upstream's choice.)
+apiVersion: wildstone.dev/v1
+kind: Package
+metadata:
+  name: thread-otbr
+  # 1.0.1: the preflight's accept_ra=0 warning points at the network
+  # manager (systemd-networkd/netplan) instead of only "set it to 2".
+  version: 1.0.1
+  capability: thread
+  profile: otbr
+params:
+  - { name: node, required: true, description: "Which machine to install this on: the one the Thread radio is plugged into, and the one Home Assistant runs on — Home Assistant reaches the border router at 127.0.0.1 on that machine.", source: node }
+  - { name: radio_device, required: true, validate: serial_by_id, example: "/dev/serial/by-id/usb-Nabu_Casa_Home_Assistant_Connect_ZBT-1_REPLACED-SERIAL-if00-port0", description: "The Thread radio (flashed with OpenThread RCP firmware) plugged into this machine, by its name under /dev/serial/by-id/. The node's radio inventory lists it." }
+  - { name: backbone_interface, required: true, validate: interface_name, example: "enp1s0", description: "This machine's LAN-facing network interface, as `ip link` names it (e.g. eth0 or enp1s0) — the one with the default route. The border router advertises the Thread network on it." }
+  - { name: baud_rate, default: "460800", validate: "enum:57600|115200|230400|460800|921600", description: "The radio's serial speed, which must match its RCP firmware. 460800 for Home Assistant Connect ZBT-1/ZBT-2 and most RCP builds." }
+  - { name: flow_control, default: hardware, validate: "enum:hardware|none", description: "Serial flow control, which must match the RCP firmware: hardware (RTS/CTS) for Home Assistant Connect ZBT-1/ZBT-2, none for sticks without flow-control lines." }
+  - { name: firewall, default: "on", validate: "enum:on|off", description: "Upstream's Thread ingress filter, which drops unsolicited traffic from the LAN into the Thread network. It adds rules to this machine's ip6tables while the border router runs." }
+  - { name: nat64, default: "off", validate: "enum:off|on", description: "Let Thread devices reach IPv4-only services through this machine. Adds NAT rules to this machine's iptables that stay until reboot, and needs IPv4 forwarding on." }
+policies:
+  classifications: [internal_only]
+  dataSensitivity: high
+templates:
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: restic-thread, node: "{{ .Params.node }}" }
+    spec: { name: restic-thread }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: otbr-data, node: "{{ .Params.node }}" }
+    spec: { name: otbr-data }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: thread-backup-repo, node: "{{ .Params.node }}" }
+    spec: { name: thread-backup-repo }
+  # The prerequisite check. /app/script/server sources
+  # examples/platforms/$PLATFORM/before_server before it touches
+  # anything (script/_initrc BEFORE_HOOK), so with PLATFORM=wildstone and
+  # this directory mounted there it runs first, under the script's own
+  # `set -euxo pipefail`. It only READS: procfs, sysfs, /dev and one
+  # `ip6tables -S`. On a failure it signals the entrypoint (PID 1), whose
+  # TERM trap runs upstream's shutdown and exits, so the container stops
+  # and restarts with the evidence in its log rather than idling forever.
+  # WILDSTONE_PREFLIGHT_ROOT is empty in the container; tests point it at
+  # a fixture tree.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: ConfigFile
+    metadata: { name: otbr-preflight, node: "{{ .Params.node }}" }
+    spec:
+      filename: before_server
+      content: |
+        # Managed by Wildstone — do not edit. Sourced by /app/script/server.
+        # shellcheck shell=bash
+        { set +x; } 2>/dev/null
+        wildstone_preflight() {
+            local root="${WILDSTONE_PREFLIGHT_ROOT:-}"
+            local bb="${INFRA_IF_NAME:-}"
+            local radio="${WILDSTONE_OTBR_RADIO:-/dev/ttyRCP}"
+            local failed=0 ipv6=1 v flags
+            wildstone_fail() { echo "wildstone-otbr preflight: FAIL [$1] $2" >&2; failed=1; }
+            wildstone_warn() { echo "wildstone-otbr preflight: WARN [$1] $2" >&2; }
+
+            if [[ ! -d $root/proc/sys/net/ipv6 ]]; then
+                ipv6=0
+                wildstone_fail ipv6 "this kernel has no IPv6 (/proc/sys/net/ipv6 is absent). Thread is IPv6-only; boot the node without ipv6.disable=1."
+            else
+                v=$(cat "$root/proc/sys/net/ipv6/conf/all/forwarding" 2>/dev/null || echo "?")
+                if [[ $v != 1 ]]; then
+                    wildstone_fail ipv6_forwarding "net.ipv6.conf.all.forwarding is $v on this node, so nothing is routed between Thread and $bb. Fix on the node: printf 'net.ipv6.conf.all.forwarding = 1\\nnet.ipv6.conf.$bb.accept_ra = 2\\nnet.ipv6.conf.$bb.accept_ra_rt_info_max_plen = 64\\n' | sudo tee /etc/sysctl.d/60-wildstone-otbr.conf && sudo sysctl --system (a container cannot set host sysctls)."
+                fi
+            fi
+
+            if [[ -z $bb || ! -e $root/sys/class/net/$bb ]]; then
+                wildstone_fail backbone_interface "backbone interface '$bb' does not exist on this node (it has: $(ls "$root/sys/class/net" 2>/dev/null | tr '\n' ' ')). Reinstall with backbone_interface set to the interface in 'ip route show default'."
+            else
+                flags=$(cat "$root/sys/class/net/$bb/flags" 2>/dev/null || echo 0)
+                if (( (flags & 0x1000) == 0 )); then
+                    wildstone_fail multicast "$bb has multicast off (flags $flags), so mDNS never reaches the LAN. Fix on the node: sudo ip link set $bb multicast on."
+                fi
+                if (( ipv6 )); then
+                    v=$(cat "$root/proc/sys/net/ipv6/conf/$bb/disable_ipv6" 2>/dev/null || echo "?")
+                    if [[ $v != 0 ]]; then
+                        wildstone_fail interface_ipv6 "IPv6 is disabled on $bb (disable_ipv6=$v). Fix on the node: sudo sysctl -w net.ipv6.conf.$bb.disable_ipv6=0, and remove whatever sets it."
+                    fi
+                    v=$(cat "$root/proc/sys/net/ipv6/conf/$bb/accept_ra" 2>/dev/null || echo "?")
+                    # 1 is the kernel handling router advertisements and
+                    # ignoring them once forwarding is on: 2 is the fix.
+                    # 0 is the kernel not handling them at all, either
+                    # because a network manager does (systemd-networkd,
+                    # so netplan, pins it there) or because the address
+                    # is static. "Set it to 2" is wrong advice there: it
+                    # fights the manager, which owns the setting.
+                    if [[ $v == 0 ]]; then
+                        wildstone_warn accept_ra "net.ipv6.conf.$bb.accept_ra is 0: the kernel is not processing router advertisements on $bb. If systemd-networkd/netplan configures $bb it handles them itself; make it keep accepting them with forwarding on (netplan: accept-ra: true under $bb). Otherwise set accept_ra to 2 and accept_ra_rt_info_max_plen to 64, or the node loses its own IPv6 default route and other border routers' routes."
+                    elif [[ $v != 2 ]]; then
+                        wildstone_warn accept_ra "net.ipv6.conf.$bb.accept_ra is $v; with forwarding on the node ignores router advertisements on $bb unless it is 2, losing its own IPv6 default route and other border routers' routes. Set it to 2 and accept_ra_rt_info_max_plen to 64."
+                    fi
+                fi
+            fi
+
+            if [[ ! -e $root/dev/net/tun ]]; then
+                wildstone_fail tun "/dev/net/tun is missing, so wpan0 cannot be created. Fix on the node: sudo modprobe tun, and add tun to /etc/modules-load.d/."
+            fi
+            if [[ ! -e $root$radio ]]; then
+                wildstone_fail radio "the Thread radio was not handed to the container at $radio. Check the radio_device path under /dev/serial/by-id/ on the node."
+            fi
+
+            if [[ ${NAT64:-0} == 1 ]]; then
+                v=$(cat "$root/proc/sys/net/ipv4/ip_forward" 2>/dev/null || echo "?")
+                if [[ $v != 1 ]]; then
+                    wildstone_fail ipv4_forwarding "nat64=on needs net.ipv4.ip_forward = 1 (it is $v). Fix on the node: echo 'net.ipv4.ip_forward = 1' | sudo tee /etc/sysctl.d/61-wildstone-otbr-nat64.conf && sudo sysctl --system, or reinstall with nat64=off."
+                fi
+            fi
+            if [[ ${FIREWALL:-0} == 1 && -z $root ]]; then
+                if ! ip6tables -w -S FORWARD >/dev/null 2>&1; then
+                    wildstone_fail ip6tables "firewall=on needs the kernel's legacy ip6tables filter table, and it is unavailable here. Fix on the node: sudo modprobe ip6table_filter, or reinstall with firewall=off."
+                fi
+            fi
+
+            if (( failed )); then
+                echo "wildstone-otbr preflight: not starting otbr-agent; the container stops until the node is fixed." >&2
+                # The entrypoint's TERM trap runs upstream's shutdown and exits.
+                if [[ $PPID == 1 ]]; then kill -TERM 1; fi
+                return 1
+            fi
+            echo "wildstone-otbr preflight: ok (backbone $bb, radio $radio)" >&2
+        }
+        wildstone_preflight || exit 1
+        set -x
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: otbr, node: "{{ .Params.node }}" }
+    spec:
+      image: "openthread/otbr@sha256:3e8e0c8a74205b5ca53b4248d3470a31fa8241adcd1874025b5fc1638f79614b"
+      networkMode: host
+      command:
+        - "--radio-url"
+        - "spinel+hdlc+uart:///dev/ttyRCP?uart-baudrate={{ .Params.baud_rate }}{{ if eq .Params.flow_control "hardware" }}&uart-flow-control{{ end }}"
+        - "--backbone-interface"
+        - "{{ .Params.backbone_interface }}"
+        - "--debug-level"
+        - "5"
+      env:
+        # Read by upstream's scripts at start (see the header).
+        PLATFORM: wildstone
+        INFRA_IF_NAME: "{{ .Params.backbone_interface }}"
+        REST_HOST: "127.0.0.1"
+        HTTP_HOST: "127.0.0.1"
+        WEB_GUI: "0"
+        FIREWALL: "{{ if eq .Params.firewall "on" }}1{{ else }}0{{ end }}"
+        NAT64: "{{ if eq .Params.nat64 "on" }}1{{ else }}0{{ end }}"
+        WILDSTONE_OTBR_RADIO: /dev/ttyRCP
+      mounts:
+        - { source: otbr-data, target: /var/lib/thread }
+        - { source: /etc/wildstone/thread, target: /app/examples/platforms/wildstone, readOnly: true }
+      devices:
+        - { source: "{{ .Params.radio_device }}", target: /dev/ttyRCP }
+        - { source: /dev/net/tun }
+      capAdd: [IPC_LOCK, NET_ADMIN]
+      restart: unless-stopped
+  # Backup: /var/lib/thread is the Thread network itself — the network
+  # key and dataset every paired device trusts. Losing it means
+  # re-commissioning every Thread device in the house, so it is
+  # critical. Restore it only to a border router on this same node:
+  # two border routers running from one copy fight over one identity.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: BackupPlan
+    metadata: { name: thread, node: "{{ .Params.node }}" }
+    spec:
+      volumes: [otbr-data]
+      repository: thread-backup-repo
+      passwordSecret: secret/restic-thread
+      schedule: daily
+      class: critical
+      retention: { keepDaily: 7, keepWeekly: 4, keepMonthly: 6 }

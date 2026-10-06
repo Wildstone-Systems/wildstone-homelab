@@ -157,6 +157,95 @@ func TestExportFuncNamesAreUsableAsTemplateFunctions(t *testing.T) {
 	}
 }
 
+// TestMqttBrokerCarriesTheConsumerContract pins the keys Zigbee2MQTT,
+// Frigate and Home Assistant render against (#438). Renaming one is a
+// change to three consumer packages, not to this table alone.
+func TestMqttBrokerCarriesTheConsumerContract(t *testing.T) {
+	tr, ok := Lookup("mqtt")
+	if !ok {
+		t.Fatal("trait mqtt is missing")
+	}
+	if tr.Structural {
+		t.Error("mqtt is satisfied by a broker package, not by the system")
+	}
+	m, ok := tr.LookupMode("broker")
+	if !ok {
+		t.Fatal("mqtt has no broker mode")
+	}
+	want := []string{"MqttHost", "MqttPasswordSecretRef", "MqttPort", "MqttURL", "MqttUsername"}
+	if got := strings.Join(m.ExportKeys(), ","); got != strings.Join(want, ",") {
+		t.Errorf("mqtt:broker exports %s, want %s", got, strings.Join(want, ","))
+	}
+}
+
+// TestZwaveServerCarriesTheConsumerContract pins the keys Home
+// Assistant renders its Z-Wave JS connection from (#444). No key may
+// carry a security key: those belong to the server, not its clients.
+func TestZwaveServerCarriesTheConsumerContract(t *testing.T) {
+	tr, ok := Lookup("zwave")
+	if !ok {
+		t.Fatal("trait zwave is missing")
+	}
+	if tr.Structural {
+		t.Error("zwave is satisfied by a Z-Wave server package, not by the system")
+	}
+	m, ok := tr.LookupMode("server")
+	if !ok {
+		t.Fatal("zwave has no server mode")
+	}
+	want := []string{"ZwaveWsHost", "ZwaveWsPort", "ZwaveWsURL"}
+	if got := strings.Join(m.ExportKeys(), ","); got != strings.Join(want, ",") {
+		t.Errorf("zwave:server exports %s, want %s", got, strings.Join(want, ","))
+	}
+	for _, k := range m.ExportKeys() {
+		if strings.Contains(strings.ToLower(k), "key") || strings.Contains(strings.ToLower(k), "secret") {
+			t.Errorf("zwave:server export %s looks like key material; the network keys never leave the server", k)
+		}
+	}
+}
+
+// TestMatterServerCarriesTheConsumerContract pins the keys Home
+// Assistant renders its Matter connection from (#442). No key may carry
+// fabric key material: that belongs to the server, not its clients.
+func TestMatterServerCarriesTheConsumerContract(t *testing.T) {
+	tr, ok := Lookup("matter")
+	if !ok {
+		t.Fatal("trait matter is missing")
+	}
+	if tr.Structural {
+		t.Error("matter is satisfied by a Matter server package, not by the system")
+	}
+	m, ok := tr.LookupMode("server")
+	if !ok {
+		t.Fatal("matter has no server mode")
+	}
+	want := []string{"MatterWsHost", "MatterWsPort", "MatterWsURL"}
+	if got := strings.Join(m.ExportKeys(), ","); got != strings.Join(want, ",") {
+		t.Errorf("matter:server exports %s, want %s", got, strings.Join(want, ","))
+	}
+	for _, k := range m.ExportKeys() {
+		l := strings.ToLower(k)
+		if strings.Contains(l, "key") || strings.Contains(l, "secret") || strings.Contains(l, "fabric") {
+			t.Errorf("matter:server export %s looks like fabric material; it never leaves the server", k)
+		}
+	}
+}
+
+// TestExportContextNamesTheConsumer:.Consumer is what lets a provider
+// issue per-consumer credentials; losing it from the declared context
+// would make pkgspec refuse the shipped broker.
+func TestExportContextNamesTheConsumer(t *testing.T) {
+	have := map[string]bool{}
+	for _, f := range ExportContext {
+		have[f] = true
+	}
+	for _, f := range []string{"Params", "Consumer"} {
+		if !have[f] {
+			t.Errorf("ExportContext lacks %s", f)
+		}
+	}
+}
+
 // TestLookupsAgreeWithTheTable. Names/ModeNames/ClassNames feed "must be
 // one of ..." messages, and a list that disagrees with what Lookup
 // accepts tells an author their correct spelling is wrong.

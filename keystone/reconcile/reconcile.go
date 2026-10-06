@@ -838,7 +838,8 @@ func (r *Reconciler) observe(ctx context.Context, nodeID string, desired []resou
 				observed = append(observed, obs)
 			}
 		case resource.KindContainer:
-			res, obs, oerr := r.observeContainer(ctx, nodeID, k, want, isDesired, cfgContents, hostAliases)
+			res, obs, oerr := r.observeContainer(ctx, nodeID, k, want, isDesired, cfgContents,
+				r.containerHostAliases(nodeID, k.Name, hostAliases, desiredByKey))
 			if oerr != nil {
 				return nil, nil, nil, oerr
 			}
@@ -972,7 +973,7 @@ func (r *Reconciler) observeContainer(ctx context.Context, nodeID string, k resK
 	// verdict turns out to be: a converged container whose app says
 	// "unhealthy" is exactly the case this exists to make visible.
 	appHealth := inspect.GetAppHealth()
-	if inspect.GetLabels()[specHashLabel] == specHash(want.Container, ContainerNetwork, configDigest(r.ManagedPrefix, want.Container, cfgContents), hostAliases) && inspect.GetRunning() {
+	if inspect.GetLabels()[specHashLabel] == specHash(want.Container, containerNetworkFor(want.Container), configDigest(r.ManagedPrefix, want.Container, cfgContents), hostAliases) && inspect.GetRunning() {
 		return &containerObserveResult{appHealth: appHealth}, want, nil
 	}
 	// Present but stale (spec drifted, or a pre-spec-hash container) or
@@ -1500,7 +1501,7 @@ func (r *Reconciler) ManagedNodes() []string {
 // ---------------------------------------------------------------- apply: Container
 
 func (r *Reconciler) applyContainerStep(ctx context.Context, nodeID string, step plan.PlanStep, desiredByKey map[resKey]resource.Resource, cfgContents map[string]string) StepResult {
-	hostAliases := r.hostAliasesForNode(nodeID, desiredByKey)
+	hostAliases := r.containerHostAliases(nodeID, step.Name, r.hostAliasesForNode(nodeID, desiredByKey), desiredByKey)
 	sr := StepResult{Step: step}
 	key := resKey{step.Kind, step.Name}
 
@@ -1524,6 +1525,14 @@ func (r *Reconciler) applyContainerStep(ctx context.Context, nodeID string, step
 			sr.Error = ne
 			return sr
 		}
+		if ne := r.refuseIfHostPortTaken(ctx, nodeID, want, desiredByKey); ne != "" {
+			sr.Error = ne
+			return sr
+		}
+		if ne := r.refuseIfHostBlueZMissing(ctx, nodeID, want); ne != "" {
+			sr.Error = ne
+			return sr
+		}
 		if ne := r.ensureNodePrereqs(ctx, nodeID); ne != "" {
 			sr.Error = ne
 			return sr
@@ -1532,7 +1541,7 @@ func (r *Reconciler) applyContainerStep(ctx context.Context, nodeID string, step
 			sr.Error = pr
 			return sr
 		}
-		res, err := r.retryDispatch(ctx, nodeID, containerEnsureOp(step.Name, want.Container, ContainerNetwork, configDigest(r.ManagedPrefix, want.Container, cfgContents), hostAliases))
+		res, err := r.retryDispatch(ctx, nodeID, containerEnsureOp(step.Name, want.Container, containerNetworkFor(want.Container), configDigest(r.ManagedPrefix, want.Container, cfgContents), hostAliases))
 		if err != nil {
 			sr.Error = err.Error()
 			return sr
@@ -1677,6 +1686,20 @@ const ContainerNetwork = "wildstone"
 // resolved by name on ContainerNetwork.
 const DefaultAutheliaAddr = "authelia:9091"
 
+// containerNetworkFor is the managed network a container is attached to:
+// ContainerNetwork, or nothing for a container in the host's network
+// namespace, which cannot also join a bridge (protocol minor 23). The
+// same value feeds specHash, so a move between bridge and host changes
+// the "\x00net=" suffix as well as the spec's own networkMode and the
+// container is replaced; a container that never set networkMode keeps
+// ContainerNetwork and therefore the hash it already had.
+func containerNetworkFor(spec *resource.ContainerSpec) string {
+	if spec.HostNetwork() {
+		return ""
+	}
+	return ContainerNetwork
+}
+
 func (r *Reconciler) autheliaAddr() string {
 	if r.AutheliaAddr != "" {
 		return r.AutheliaAddr
@@ -1819,6 +1842,20 @@ func (r *Reconciler) refuseIfAgentTooOld(nodeID string, step plan.PlanStep, spec
 	if !known || have >= need {
 		return ""
 	}
+	if need >= resource.HostSystemMountProtocolMinor {
+		return fmt.Sprintf("%s/%s needs wardstone protocol minor %d (a read-only mount of the host's /run/dbus, for "+
+			"Bluetooth through the host's BlueZ) and the agent on node %s speaks minor %d: upgrade wardstoned there "+
+			"first. An older agent refuses the mount as outside its managed prefixes, so it is refused here, before "+
+			"the existing container is touched",
+			step.Kind, step.Name, need, nodeID, have)
+	}
+	if need >= resource.HostNetworkProtocolMinor {
+		return fmt.Sprintf("%s/%s needs wardstone protocol minor %d (networkMode: host) and the agent on node %s "+
+			"speaks minor %d: upgrade wardstoned there first. An older agent would ignore the network mode and start "+
+			"the container on the bridge with nothing published, running but unreachable, so it is refused before "+
+			"the existing container is touched",
+			step.Kind, step.Name, need, nodeID, have)
+	}
 	if need >= resource.HardeningProtocolMinor {
 		return fmt.Sprintf("%s/%s needs wardstone protocol minor %d (readOnlyRootfs, capDrop, noNewPrivileges, "+
 			"resources or shmSize) and the agent on node %s speaks minor %d: upgrade wardstoned there first. An "+
@@ -1864,6 +1901,13 @@ func containerEnsureOp(name string, spec *resource.ContainerSpec, network, cfgDi
 	if r := spec.Resources; r != nil {
 		resources = &wsv1.ContainerResources{Memory: r.Memory, Cpus: r.Cpus, PidsLimit: int64(r.PidsLimit)}
 	}
+	// Host networking (protocol minor 23): refuseIfAgentTooOld keeps a
+	// host-mode spec away from an agent that would ignore this and start
+	// the container on the bridge instead.
+	networkMode := wsv1.ContainerNetworkMode_CONTAINER_NETWORK_MODE_UNSPECIFIED
+	if spec.HostNetwork() {
+		networkMode = wsv1.ContainerNetworkMode_CONTAINER_NETWORK_MODE_HOST
+	}
 	return &wsv1.Operation{Op: &wsv1.Operation_EnsureContainer{EnsureContainer: &wsv1.EnsureContainer{
 		Name: name, Image: spec.Image, Env: spec.Env, Ports: ports, Mounts: mounts, RestartPolicy: spec.Restart,
 		Command:         spec.Command,
@@ -1876,6 +1920,7 @@ func containerEnsureOp(name string, spec *resource.ContainerSpec, network, cfgDi
 		NoNewPrivileges: spec.NoNewPrivileges,
 		Resources:       resources,
 		ShmSize:         spec.ShmSize,
+		NetworkMode:     networkMode,
 		Labels:          map[string]string{specHashLabel: specHash(spec, network, cfgDigest, aliases)},
 	}}}
 }
@@ -1966,6 +2011,10 @@ func (r *Reconciler) applyRouteStep(ctx context.Context, nodeID string, step pla
 			return sr
 		}
 		wantSpec = want.Route
+		if ne := r.refuseHostRouteIfAgentTooOld(nodeID, step, wantSpec); ne != "" {
+			sr.Error = ne
+			return sr
+		}
 		content = renderRouteFragment(wantSpec, r.autheliaAddr(), r.currentPosture())
 	case plan.ActionDelete:
 		// No delete-file op exists (only WriteManagedFile/ReadManagedFile)
@@ -2051,8 +2100,8 @@ func (r *Reconciler) runReload(ctx context.Context) error {
 }
 
 // probeRoute health-gates a Route Create/Update (ADR-W004 A4 step 5:
-// "Route -> ProbeHttp/ProbeTcp"). Only "ip:port"-shaped upstreams are
-// actually dialed — a "container/<name>:<port>" upstream needs the
+// "Route -> ProbeHttp/ProbeTcp"). Only "ip:port"-shaped and "host/<port>"
+// upstreams are actually dialed — a "container/<name>:<port>" upstream needs the
 // container's Docker-network address, which Keystone has no way to
 // resolve from the op surface available to S2b, so such routes are
 // gate-pass-by-construction (the WriteManagedFile success is the whole
@@ -2094,26 +2143,19 @@ func (r *Reconciler) probeRoute(ctx context.Context, nodeID string, spec *resour
 	// routing — one service's link reaching another, a second reaching
 	// nothing — for as long as nobody looked.
 	if host, port, ok := r.routeFrontDoor(spec); ok {
-		attempts, backoff := r.routeGateParams()
-		for i := 0; i < attempts; i++ {
-			// A TCP connect can succeed against an unrelated host process
-			// holding Caddy's port (rpc.statd did exactly that). Require a
-			// trusted HTTPS response from the routed tailnet name instead.
-			res, err := r.Applier.Apply(ctx, nodeID, &wsv1.Operation{Op: &wsv1.Operation_ProbeHttp{
-				ProbeHttp: &wsv1.ProbeHttp{Url: fmt.Sprintf("https://%s:%d/", host, port), TimeoutSeconds: 2},
-			}})
-			if err == nil && res.GetError() == nil && res.GetProbeHttp().GetReachable() {
-				return true
-			}
-			if i < attempts-1 {
-				select {
-				case <-ctx.Done():
-					return false
-				case <-time.After(backoff):
-				}
-			}
+		if !r.probeFrontDoor(ctx, nodeID, host, port) {
+			return false
 		}
-		return false
+		// The front door answering says Caddy took the config, not that
+		// anything is behind it: Caddy answers 502 for a dead upstream,
+		// and a Route with auth answers 302 to the sign-in page first.
+		// A host upstream is one the agent CAN reach, so it gets #433's
+		// probe below as well. Before this, the tailnet posture returned
+		// here and never ran it: the live run applied a Route change
+		// against a stopped host service.
+		if _, isHost, _ := resource.ParseHostUpstream(spec.Upstream); !isHost {
+			return true
+		}
 	}
 	if strings.HasPrefix(spec.Upstream, "container/") {
 		// No front door to probe and a container upstream the agent
@@ -2121,10 +2163,42 @@ func (r *Reconciler) probeRoute(ctx context.Context, nodeID string, spec *resour
 		return true
 	}
 	url := "http://" + spec.Upstream
+	if port, isHost, _ := resource.ParseHostUpstream(spec.Upstream); isHost {
+		// A host service (#433). The agent runs in the host's own network
+		// namespace, so the service is on its loopback — the same process
+		// the proxy reaches through the host-gateway alias. The literal
+		// upstream is not a URL at all ("http://host/8123" would ask
+		// whatever DNS calls "host" for /8123).
+		url = fmt.Sprintf("http://127.0.0.1:%d/", port)
+	}
 	attempts, backoff := r.healthGateParams()
 	for i := 0; i < attempts; i++ {
 		res, err := r.Applier.Apply(ctx, nodeID, &wsv1.Operation{Op: &wsv1.Operation_ProbeHttp{
 			ProbeHttp: &wsv1.ProbeHttp{Url: url},
+		}})
+		if err == nil && res.GetError() == nil && res.GetProbeHttp().GetReachable() {
+			return true
+		}
+		if i < attempts-1 {
+			select {
+			case <-ctx.Done():
+				return false
+			case <-time.After(backoff):
+			}
+		}
+	}
+	return false
+}
+
+// probeFrontDoor polls the Route's tailnet address until Caddy answers.
+// A TCP connect can succeed against an unrelated host process holding
+// Caddy's port (rpc.statd did exactly that), so this requires a trusted
+// HTTPS response from the routed tailnet name.
+func (r *Reconciler) probeFrontDoor(ctx context.Context, nodeID, host string, port uint32) bool {
+	attempts, backoff := r.routeGateParams()
+	for i := 0; i < attempts; i++ {
+		res, err := r.Applier.Apply(ctx, nodeID, &wsv1.Operation{Op: &wsv1.Operation_ProbeHttp{
+			ProbeHttp: &wsv1.ProbeHttp{Url: fmt.Sprintf("https://%s:%d/", host, port), TimeoutSeconds: 2},
 		}})
 		if err == nil && res.GetError() == nil && res.GetProbeHttp().GetReachable() {
 			return true

@@ -28,6 +28,23 @@ import (
 	"sort"
 )
 
+// hostGatewayAlias is the one alias the node does NOT resolve (protocol
+// minor 24, #433). It names the node host as seen from a bridge
+// container, and the only party that knows that address is Docker: the
+// daemon substitutes its bridge gateway for the literal "host-gateway"
+// when it writes /etc/hosts. Keystone asks for it on the ingress proxy
+// and the dashboard so a Route can reach a host-networked service
+// ("host/<port>") with no machine-specific IP in desired state.
+//
+// It widens nothing. A bridge container can already route to its
+// gateway; this gives that address a name. The value is a closed
+// constant — Keystone cannot make the agent write any other magic value,
+// because every other name still goes through the resolver below.
+const hostGatewayAlias = "host.docker.internal"
+
+// dockerHostGateway is Docker's own ExtraHosts value for the host.
+const dockerHostGateway = "host-gateway"
+
 // resolveHostAliases turns names into Docker "name:ip" ExtraHosts
 // entries, in a deterministic order.
 //
@@ -47,6 +64,10 @@ func resolveHostAliases(ctx context.Context, names []string, log *slog.Logger) [
 			continue
 		}
 		seen[name] = true
+		if name == hostGatewayAlias {
+			out = append(out, name+":"+dockerHostGateway)
+			continue
+		}
 		addrs, err := net.DefaultResolver.LookupHost(ctx, name)
 		if err != nil || len(addrs) == 0 {
 			if log != nil {

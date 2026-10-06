@@ -3,7 +3,10 @@ package pkgspec
 import (
 	"fmt"
 	"net/mail"
+	"net/netip"
 	"net/url"
+	"path"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -23,12 +26,15 @@ import (
 // a value must LOOK LIKE once it arrives, whoever supplied it. Most
 // params have a source and no shape, or a shape and no source.
 var ParamShapes = map[string]func(string) error{
-	"iana_timezone": validateIANATimezone,
-	"url":           validateURL,
-	"hostname":      validateHostname,
-	"email":         validateEmail,
-	"port":          validatePort,
-	"duration":      validateDuration,
+	"iana_timezone":  validateIANATimezone,
+	"url":            validateURL,
+	"hostname":       validateHostname,
+	"email":          validateEmail,
+	"port":           validatePort,
+	"duration":       validateDuration,
+	"private_ipv4":   validatePrivateIPv4,
+	"interface_name": validateInterfaceName,
+	"serial_by_id":   validateSerialByID,
 }
 
 // ParamShapeNames lists the vocabulary, for a diagnostic that names what
@@ -203,6 +209,82 @@ func validatePort(v string) error {
 func validateDuration(v string) error {
 	if _, err := time.ParseDuration(v); err != nil {
 		return fmt.Errorf("%q is not a duration (e.g. 30s, 5m, 24h): %v", v, err)
+	}
+	return nil
+}
+
+// privateIPv4Ranges are the ranges a `private_ipv4` value may fall in:
+// RFC 1918, and the shared address space a tailnet hands out.
+var privateIPv4Ranges = []netip.Prefix{
+	netip.MustParsePrefix("10.0.0.0/8"),
+	netip.MustParsePrefix("172.16.0.0/12"),
+	netip.MustParsePrefix("192.168.0.0/16"),
+	netip.MustParsePrefix("100.64.0.0/10"),
+}
+
+// validatePrivateIPv4 is for a listener that must be reachable from the
+// household's network and nowhere else — the MQTT broker's LAN listener
+// is the case that asked for it. Every rejection is one an operator could
+// plausibly type: 0.0.0.0 (every interface, the public one included),
+// 127.0.0.1 (unreachable from any container, so it looks up and serves
+// nobody), a hostname, or a public address.
+func validatePrivateIPv4(v string) error {
+	a, err := netip.ParseAddr(v)
+	if err != nil || !a.Is4() {
+		return fmt.Errorf("%q is not an IPv4 address: give this machine's LAN or tailnet address, e.g. 192.168.1.10", v)
+	}
+	if a.IsUnspecified() {
+		return fmt.Errorf("%q means every interface, including a public one: give the one private address to listen on", v)
+	}
+	if a.IsLoopback() {
+		return fmt.Errorf("%q is loopback, which no container and no other machine can reach: give this machine's LAN address", v)
+	}
+	for _, p := range privateIPv4Ranges {
+		if p.Contains(a) {
+			return nil
+		}
+	}
+	return fmt.Errorf("%q is not a private address (10/8, 172.16/12, 192.168/16, or a tailnet's 100.64/10)", v)
+}
+
+// interfaceNameRegexp is a Linux network interface name as the kernel
+// accepts one (IFNAMSIZ: at most 15 bytes) narrowed to the characters
+// real names use — enp1s0, eth0, br-lan, eth0.100 — so the value is safe
+// to land in a sysfs path, an argv and an upstream script's sed pattern.
+var interfaceNameRegexp = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,14}$`)
+
+// validateInterfaceName is for a param that names one of the node's own
+// network interfaces — the thread-otbr backbone asked for it, and
+// matter-matterjs's primary interface (#442) shares it. The node is the
+// authority on which interfaces EXIST (the home-automation readiness
+// probe lists them); this only refuses what could never be one, and
+// loopback, which exists everywhere and is never the LAN.
+func validateInterfaceName(v string) error {
+	if !interfaceNameRegexp.MatchString(v) {
+		return fmt.Errorf("%q is not a network interface name: give the node's LAN-facing interface as `ip link` shows it, e.g. eth0 or enp1s0 (at most 15 characters)", v)
+	}
+	if v == "lo" {
+		return fmt.Errorf("%q is loopback, which carries no LAN traffic: give the interface the node's LAN address is on", v)
+	}
+	return nil
+}
+
+// serialByIDRegexp is one entry directly under /dev/serial/by-id/.
+var serialByIDRegexp = regexp.MustCompile(`^/dev/serial/by-id/[A-Za-z0-9][A-Za-z0-9._:+-]*$`)
+
+// validateSerialByID is for a radio a container is handed. /dev/ttyUSB0
+// and /dev/ttyACM0 are numbered in plug order, so a second stick or a
+// reboot can swap them and hand a Thread radio's port to a Zigbee
+// stack; the by-id alias names the device itself. The device allowlist
+// admits the numbered names for older packages, so the stable form is
+// asked for here, where the value arrives.
+func validateSerialByID(v string) error {
+	if path.Clean(v) != v || !serialByIDRegexp.MatchString(v) {
+		hint := ""
+		if strings.HasPrefix(v, "/dev/tty") {
+			hint = " — /dev/tty* names change with plug order"
+		}
+		return fmt.Errorf("%q is not a /dev/serial/by-id/ path%s: use the stick's name under /dev/serial/by-id/ (the node's radio inventory lists it)", v, hint)
 	}
 	return nil
 }

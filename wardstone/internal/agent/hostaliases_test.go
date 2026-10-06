@@ -47,3 +47,16 @@ func TestResolveHostAliasesOnEmptyIsNil(t *testing.T) {
 		t.Errorf("want nil, got %v", got)
 	}
 }
+
+// The host-gateway alias is written as Docker's own "host-gateway" value
+// rather than resolved (protocol minor 24): the node has no DNS answer
+// for it, and the daemon is the only party that knows its bridge
+// gateway. Every other name is still resolved, so this is one closed
+// value, not a way to hand Docker arbitrary ExtraHosts.
+func TestResolveHostAliasesMapsTheHostGatewayAlias(t *testing.T) {
+	got := resolveHostAliases(context.Background(),
+		[]string{"localhost", hostGatewayAlias, hostGatewayAlias, "host-gateway.invalid"}, nil)
+	if len(got) != 2 || !strings.HasPrefix(got[0], "localhost:") || got[1] != "host.docker.internal:host-gateway" {
+		t.Fatalf("want [localhost:<ip> host.docker.internal:host-gateway], got %v", got)
+	}
+}

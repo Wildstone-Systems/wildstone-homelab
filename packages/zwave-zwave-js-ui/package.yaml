@@ -1,0 +1,334 @@
+# Z-Wave capability, profile "zwave-js-ui": runs Z-Wave JS UI against a
+# Z-Wave controller stick plugged into this machine, so Home Assistant
+# can drive the household's Z-Wave locks, switches and sensors.
+#
+# TWO DOORS, TWO AUDIENCES.
+#
+#   - The WebSocket server (Z-Wave JS UI's "WS Server", zwave-js-server)
+#     on port 3000 is what Home Assistant connects to. It has NO
+#     authentication of its own — anything that reaches it can unlock a
+#     lock — so it is published on ONE private address of this machine
+#     that the operator names (listen_addr), never on every interface.
+#     Prefer the node's tailnet address, or a LAN address on a network
+#     only household devices share. That address, not the container
+#     name, is what the zwave:server trait hands a consumer: Home
+#     Assistant moves to host networking (#431) and cannot resolve
+#     "zwave-js-ui" by Docker DNS.
+#   - The management UI on 8091 — pairing, the network map, firmware and
+#     NVM backups — is an operator tool: an admin_tailscale Route behind
+#     the Authelia portal, and not published anywhere else.
+#
+# THE STICK. Set usb_device to the controller's name under
+# /dev/serial/by-id/ (ls that directory with it plugged in, or read the
+# node's radio inventory: GET /api/v1/nodes/<node>/probes/radios lists
+# each radio's byIdPaths). Never /dev/ttyUSB0 or /dev/ttyACM0: those
+# numbers follow plug order and can swap with a Zigbee stick on reboot,
+# and the by-id name is also how Wildstone notices two packages claiming
+# the same radio. The agent hands the device to the container (protocol
+# minor 12) and refuses any path outside its device allowlist.
+#
+# Inside the container the stick is always /dev/zwave, and Z-Wave JS UI
+# is told so through ZWAVE_PORT, which the pinned image treats as
+# authoritative: changing the stick is a param change, not a UI edit.
+# The fixed name is not cosmetic. A by-id name is a long mixed-case run
+# the policy engine reads as secret-shaped, so putting the host path in
+# env would get every real install refused (secret-values-forbidden);
+# the device mapping carries it instead, where it is a path, not a value.
+#
+# ONE CONTROLLER PER INSTALL, AND THIS PACKAGE IS NOT INSTANCED. A
+# Z-Wave network has exactly one primary controller, and one Z-Wave JS
+# server owns exactly one controller: two sticks are two networks, with
+# two sets of keys, and need two servers — never one server claiming
+# both. Almost every household has one, so this package installs once
+# per deployment and provides the one zwave:server Home Assistant
+# consumes. A second network is a second package instance, which this
+# package deliberately does not offer yet: an instanced provider would
+# leave a consumer with two zwave:server answers and no way to choose.
+#
+# THE SECURITY KEYS. S0 and S2 (and Long Range S2) keys are what every
+# securely-included device — every lock — is bound to. They are
+# APP-OWNED GENERATED STATE: the first time the container starts,
+# start.mjs below generates any key the store does not already hold,
+# straight into Z-Wave JS UI's own settings.json on the store volume,
+# and then hands over to Z-Wave JS UI unchanged. A key that is present
+# is never touched again. So the keys are never a param, never a
+# Wildstone secret, never in a plan, a template or a log; they live
+# where the network's other state lives, and the daily backup takes
+# them with it. Restarting, upgrading the image, or changing usb_device
+# or listen_addr keeps them, because none of those touch the volume.
+#
+# WHAT IS MANAGED AND WHAT IS YOURS. Two files, deliberately different:
+#
+#   - external-settings.json is Wildstone's (a ConfigFile, rewritten
+#     every tick). The pinned image reads it through
+#     ZWAVE_EXTERNAL_SETTINGS and shows those settings as managed in
+#     its UI: the WS server on, on port 3000, with mDNS advertising off
+#     (it would advertise a bridge address nothing can reach).
+#   - settings.json is Z-Wave JS UI's (a SeedFile, written once, then
+#     never rewritten). It starts with the MQTT gateway DISABLED — Home
+#     Assistant talks to the WS server, and nothing here needs MQTT — the
+#     UI's own login off (the portal guards the Route), and a nightly NVM
+#     backup on. Everything in it is the household's to change.
+#
+# FIRST INSTALL. Plug the stick in, install with usb_device and
+# listen_addr, open zwave.<admin_domain>, and pick the RF region in
+# Settings > Z-Wave. Include devices from there or from Home Assistant.
+#
+# MOVING AN EXISTING CONTROLLER HERE. Two things travel: the keys and
+# the controller's NVM (its routes and node table — most of which lives
+# on the stick itself, so a stick moved as-is keeps its network).
+#
+#   1. On the old install, copy the four S0/S2 keys (and the two Long
+#      Range keys, if any) from Settings > Z-Wave > Security Keys, and
+#      take an NVM backup (Advanced actions > NVM Management).
+#   2. Install this package and open the UI BEFORE including anything.
+#      Paste the old keys over the generated ones and save: a generated
+#      key that no device was ever included with is safe to replace, and
+#      start.mjs never regenerates a key that is present.
+#   3. Plug the old stick in. If it is a NEW stick, restore the NVM
+#      backup onto it from the same screen. Home Assistant then needs
+#      its Z-Wave JS integration pointed at the new server; the
+#      zwave:server trait supplies the URL.
+#
+# Alternatively restore a whole Z-Wave JS UI store backup into the
+# zwave-js-ui-store volume before the first start: start.mjs sees the
+# keys already there and generates nothing.
+#
+# BACKUPS. Every night Z-Wave JS UI writes an NVM backup into
+# backups/nvm/ inside the store (keeping 7), and then the store volume —
+# settings.json with the keys, nodes.json, the NVM backups, the driver
+# cache — is backed up daily with restic. Losing the store without a
+# backup means excluding and re-including every secure device.
+#
+# REMOVAL keeps the store volume and its settings.json, as every
+# capability's removal keeps its data (ADR-W004 A4): reinstalling
+# picks up the same keys and the same network.
+#
+# Image digest is REAL, resolved 2026-09-30 via Docker Hub:
+#   zwavejs/zwave-js-ui:11.24.2 (= latest) -> sha256:717f9d26...2f89
+apiVersion: wildstone.dev/v1
+kind: Package
+metadata:
+  name: zwave-zwave-js-ui
+  # 1.0.1: the backup is class critical (the security keys are
+  # irreplaceable). Nothing that runs changes.
+  version: 1.0.1
+  capability: zwave
+  profile: zwave-js-ui
+requires:
+  - { trait: identity, mode: oidc }
+  - { trait: ingress, mode: private }
+provides:
+  # WHAT A CONSUMER RENDERS AGAINST (keystone/trait, zwave:server): the
+  # address this package INSTALLED the WS server on, read back from the
+  # port it published — an export cannot see the params it was installed
+  # with (ADR-W025 Part B item 4). Before this package is installed these
+  # render empty and are not published, so a consumer fails on a missing
+  # key rather than connecting somewhere nobody chose.
+  - trait: zwave
+    mode: server
+    exports:
+      ZwaveWsHost: '{{ publishedHost "zwave-js-ui" 3000 }}'
+      ZwaveWsPort: '{{ publishedPort "zwave-js-ui" 3000 }}'
+      ZwaveWsURL: '{{ with publishedHost "zwave-js-ui" 3000 }}ws://{{ . }}:{{ publishedPort "zwave-js-ui" 3000 }}{{ end }}'
+params:
+  - { name: admin_domain, required: true, description: "The domain your admin-only services are named under. Under a tailnet this is a label rather than an address you type.", source: domain }
+  - { name: node, required: true, description: "Which machine to install this on: the one the Z-Wave stick is plugged into.", source: node }
+  - { name: timezone, default: UTC, source: timezone, validate: iana_timezone, description: "Your timezone, e.g. Europe/London." }
+  - { name: usb_device, required: true, example: "/dev/serial/by-id/usb-Nabu_Casa_ZWA-2_REPLACED-SERIAL-if00", description: "The Z-Wave controller stick plugged into this machine, by its name under /dev/serial/by-id/ — never /dev/ttyUSB0 or /dev/ttyACM0, which change with plug order. The node's radio inventory lists it." }
+  - { name: listen_addr, required: true, example: "192.168.1.10", validate: private_ipv4, description: "The private address on this machine Home Assistant connects to — its tailnet address, or its LAN address, e.g. 192.168.1.10. The Z-Wave server has no password, so choose an address only your own devices can reach. Every-interface (0.0.0.0) and loopback are refused." }
+  - { name: ws_port, default: "3000", validate: port, description: "The port the Z-Wave server listens on at that address. 3000 is what Home Assistant expects." }
+policies:
+  classifications: [admin_tailscale]
+  dataSensitivity: high
+templates:
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: restic-zwave, node: "{{ .Params.node }}" }
+    spec: { name: restic-zwave, purpose: "Encrypts the Z-Wave store's backups (security keys, node table, NVM backups)." }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: zwave-js-ui-store, node: "{{ .Params.node }}" }
+    spec: { name: zwave-js-ui-store }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: zwave-backup-repo, node: "{{ .Params.node }}" }
+    spec: { name: zwave-backup-repo }
+  # Z-Wave JS UI's own settings, seeded once and then the household's.
+  # No security keys here: a seed is plan content, and the keys are
+  # generated on the node by start.mjs. No serial port either: the
+  # container's ZWAVE_PORT (/dev/zwave) is authoritative for that.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: SeedFile
+    metadata: { name: zwave-js-ui-settings, node: "{{ .Params.node }}" }
+    spec:
+      volume: zwave-js-ui-store
+      path: settings.json
+      content: |
+        {
+          "mqtt": {
+            "name": "zwave-js-ui",
+            "host": "localhost",
+            "port": 1883,
+            "qos": 1,
+            "prefix": "zwave",
+            "reconnectPeriod": 3000,
+            "retain": true,
+            "clean": true,
+            "auth": false,
+            "disabled": true
+          },
+          "gateway": {
+            "type": 0,
+            "payloadType": 0,
+            "nodeNames": true,
+            "hassDiscovery": false,
+            "authEnabled": false,
+            "logEnabled": true,
+            "logLevel": "info",
+            "logToFile": false,
+            "values": [],
+            "plugins": []
+          },
+          "zwave": {
+            "enabled": true,
+            "serverEnabled": true,
+            "serverPort": 3000,
+            "serverServiceDiscoveryDisabled": true,
+            "enableSoftReset": true,
+            "logEnabled": true,
+            "logLevel": "info",
+            "logToFile": false
+          },
+          "backup": {
+            "storeBackup": false,
+            "nvmBackup": true,
+            "nvmBackupOnEvent": false,
+            "nvmCron": "30 2 * * *",
+            "nvmKeep": 7
+          }
+        }
+  # The settings Wildstone enforces, through the pinned image's
+  # ZWAVE_EXTERNAL_SETTINGS file (server/lib/externalSettings.js): these
+  # override settings.json on every start and show as managed in the UI.
+  # serverHost is left unset — every interface INSIDE the container —
+  # because the host-side bind below is what decides who can reach it.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: ConfigFile
+    metadata: { name: zwave-external-settings, node: "{{ .Params.node }}" }
+    spec:
+      filename: external-settings.json
+      content: |
+        {
+          "serverEnabled": true,
+          "serverPort": 3000,
+          "serverServiceDiscoveryDisabled": true
+        }
+  # The container's entrypoint: give the controller its security keys
+  # the first time, then run Z-Wave JS UI exactly as the image would.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: ConfigFile
+    metadata: { name: zwave-start, node: "{{ .Params.node }}" }
+    spec:
+      filename: start.mjs
+      content: |
+        // Managed by Wildstone — do not edit; rewritten on every reconcile.
+        //
+        // Generates any S0/S2 security key Z-Wave JS UI's store does not
+        // already hold, into its own settings.json, then starts Z-Wave JS UI
+        // unchanged. A key that is present — generated earlier, pasted in the
+        // UI, or restored from a backup — is never touched. Key values are
+        // never printed.
+        import { randomBytes } from 'node:crypto'
+        import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+        import { join } from 'node:path'
+
+        const app = '/usr/src/app'
+        const store = process.env.STORE_DIR || join(app, 'store')
+        const file = join(store, 'settings.json')
+        const wanted = {
+          securityKeys: ['S0_Legacy', 'S2_Unauthenticated', 'S2_Authenticated', 'S2_AccessControl'],
+          securityKeysLongRange: ['S2_Authenticated', 'S2_AccessControl'],
+        }
+
+        let settings = {}
+        if (existsSync(file)) {
+          try {
+            settings = JSON.parse(readFileSync(file, 'utf8'))
+          } catch (err) {
+            // Unreadable settings are someone's to repair, not ours to
+            // replace: start without touching them, and Z-Wave JS UI says why.
+            console.error(`wildstone: ${file} does not parse (${err.message}); generating no keys`)
+            settings = null
+          }
+        }
+        if (settings) {
+          settings.zwave ??= {}
+          const added = []
+          for (const [group, names] of Object.entries(wanted)) {
+            settings.zwave[group] ??= {}
+            for (const name of names) {
+              if (!settings.zwave[group][name]) {
+                settings.zwave[group][name] = randomBytes(16).toString('hex').toUpperCase()
+                added.push(`${group}.${name}`)
+              }
+            }
+          }
+          if (added.length > 0) {
+            mkdirSync(store, { recursive: true })
+            const tmp = `${file}.wildstone-tmp`
+            writeFileSync(tmp, JSON.stringify(settings, null, 2), { mode: 0o600 })
+            renameSync(tmp, file)
+            console.log(`wildstone: generated ${added.join(', ')} into ${file}`)
+          }
+        }
+
+        process.chdir(app)
+        await import(join(app, 'server/bin/www.js'))
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: zwave-js-ui, node: "{{ .Params.node }}" }
+    spec:
+      image: "zwavejs/zwave-js-ui@sha256:717f9d2609021b001d3543ec7144c4fc3ba0e31b61dbcd616383b93613b22f89"
+      command: ["node", "/etc/wildstone/zwave/start.mjs"]
+      env:
+        TZ: "{{ .Params.timezone }}"
+        ZWAVE_PORT: /dev/zwave
+        ZWAVE_EXTERNAL_SETTINGS: /etc/wildstone/zwave/external-settings.json
+      ports:
+        - "{{ .Params.listen_addr }}:{{ .Params.ws_port }}:3000"
+      mounts:
+        - { source: zwave-js-ui-store, target: /usr/src/app/store }
+        - { source: /etc/wildstone/zwave, target: /etc/wildstone/zwave, readOnly: true }
+      devices: [{ source: "{{ .Params.usb_device }}", target: /dev/zwave }]
+      restart: unless-stopped
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Route
+    metadata: { name: zwave, node: "{{ .Params.node }}" }
+    spec:
+      host: "zwave.{{ .Params.admin_domain }}"
+      upstream: "container/zwave-js-ui:8091"
+      auth: authelia_oidc
+      classification: admin_tailscale
+  # The store holds the security keys, the node table and the nightly
+  # NVM backups: losing it means re-including every secure device, so
+  # it is critical.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: BackupPlan
+    metadata: { name: zwave, node: "{{ .Params.node }}" }
+    spec:
+      volumes: [zwave-js-ui-store]
+      repository: zwave-backup-repo
+      passwordSecret: secret/restic-zwave
+      schedule: daily
+      class: critical
+      retention: { keepDaily: 7, keepWeekly: 4, keepMonthly: 6 }

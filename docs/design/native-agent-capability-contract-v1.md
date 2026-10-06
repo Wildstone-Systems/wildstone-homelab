@@ -384,6 +384,12 @@ and surface checks. Members have no Console configuration access.
 | `PUT /api/v1/research/default-provider` | Owner default selection, expected config revision. |
 | `PUT /api/v1/agents/{agent}/research-provider` | Owner explicit override/null-inherit; not a tool grant. |
 
+For the S12 read routes, household SSO uses the same suffixes under
+`/api/v1/assistant/agents/{agent}/artifacts`; Console and CLI retain the table's
+`/api/v1/agents` family. Each uses its existing admission/surface checks and
+returns canonical links for that surface. The [S12 API notes](../../keystone/api/ARTIFACTS.md)
+specify the implemented read response and pagination shapes.
+
 API Agent path selectors resolve the existing stable Agent record; no display
 name-to-folder mapping. Artifact navigation links are canonical same-origin
 UI links backed by these APIs. Open/download checks current identity/grants;

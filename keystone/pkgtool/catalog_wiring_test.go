@@ -39,14 +39,32 @@ var secretRefRegexp = regexp.MustCompile(`secret/([A-Za-z0-9._-]+)`)
 // this prevents is the one F37 recorded: an operator meets each missing
 // secret as ERROR_CODE_NOT_FOUND, one per tick, after approving a plan
 // that could never have converged.
+//
+// A reference a provider EXPORTED (mqtt:broker's MqttPasswordSecretRef)
+// is declared by that provider, not by the consumer: it counts when a
+// package providing a trait this one requires declares it. Expansion
+// already refused the consumer if the provider issues no such secret or
+// declares it on another node (capability.SecretPlacementError).
 func TestShippedSecretReferencesAreDeclared(t *testing.T) {
 	checked := 0
-	for name, rendered := range renderShippedPackages(t) {
+	walk := walkShipped(t)
+	secretsOf := func(rendered []resource.Resource, into map[string]bool) {
+		for _, r := range rendered {
+			if r.Kind == resource.KindSecret && r.Secret != nil {
+				into[r.Secret.Name] = true
+			}
+		}
+	}
+	for name, sp := range walk {
+		rendered := sp.rendered
 		t.Run(name, func(t *testing.T) {
 			declared := map[string]bool{}
-			for _, r := range rendered {
-				if r.Kind == resource.KindSecret && r.Secret != nil {
-					declared[r.Secret.Name] = true
+			secretsOf(rendered, declared)
+			for _, req := range sp.pkg.Requires {
+				for _, provider := range walk {
+					if exportsSecretFor(provider.pkg, req) {
+						secretsOf(provider.rendered, declared)
+					}
 				}
 			}
 			var refs []string
@@ -88,6 +106,24 @@ func TestShippedSecretReferencesAreDeclared(t *testing.T) {
 	if checked == 0 {
 		t.Fatal("no shipped package referenced a secret — the walk is broken, not the packages")
 	}
+}
+
+// exportsSecretFor reports whether p hands a consumer requiring req a
+// secret reference: a provides entry with the same trait and mode with
+// an export whose value is secret/<...>. A provider that exports only
+// addresses (identity:oidc's IssuerURL) credits none of its secrets.
+func exportsSecretFor(p *pkgspec.Package, req pkgspec.Requirement) bool {
+	for _, prov := range p.Provides {
+		if prov.Trait != req.Trait || prov.Mode != req.Mode {
+			continue
+		}
+		for _, expr := range prov.Exports {
+			if strings.HasPrefix(strings.TrimSpace(expr), "secret/") {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // TestShippedMountsNameDeclaredVolumes: a mount whose source is not a
@@ -515,7 +551,7 @@ func TestHomeAssistantSeedsItsProxyTrust(t *testing.T) {
 		}
 	}
 	if !sawDockerRange {
-		t.Errorf("trusted_proxies should come from .Resolved.ProxyTrustCIDRs; got %v", parsed.Data.Stable.TrustedProxies)
+		t.Errorf("trusted_proxies should come from .Resolved.HostNetworkProxyTrustCIDRs; got %v", parsed.Data.Stable.TrustedProxies)
 	}
 
 	// With the migration marked done, a leftover http: block in YAML is

@@ -2102,3 +2102,129 @@ tr[aria-pressed="true"] { box-shadow: inset 2px 0 0 var(--color-accent); }
   user-select: all;
   margin: var(--space-2) 0 0;
 }
+
+/* ------------------------------------------------- home automation */
+/* The setup flow (#448). Every choice is a whole-row target — a native
+   radio or checkbox inside a label — so a keyboard reaches it with Tab
+   and arrows, a screen reader hears one named control with its
+   consequence as the description, and a thumb has more than a 16px box
+   to hit. */
+.ha { max-width: 880px; }
+.ha-fieldset { border: 0; padding: 0; margin: 0 0 var(--space-8); min-width: 0; }
+.ha-nested { margin: var(--space-6) 0 0; }
+.ha-legend { font-size: 15px; font-weight: 500; padding: 0; margin: 0 0 var(--space-3); }
+.ha-legend-sub { font-size: 13.5px; font-weight: 500; padding: 0; margin: 0 0 var(--space-3); }
+.ha-hint { margin: calc(-1 * var(--space-2)) 0 var(--space-3); font-size: 12.5px; }
+.ha-options { display: flex; flex-direction: column; gap: var(--space-2); }
+.ha-options-2 { display: grid; grid-template-columns: 1fr 1fr; }
+.ha-option {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  min-height: 44px;
+  border-radius: var(--radius-md);
+  box-shadow: 0 0 0 1px var(--hair);
+  background: var(--color-surface);
+  cursor: pointer;
+}
+.ha-option:hover { box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-text) 30%, transparent); }
+.ha-option.on { box-shadow: 0 0 0 1px var(--color-accent); }
+.ha-option:has(input:focus-visible) { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+.ha-option:has(input:disabled) { cursor: default; }
+.ha-option input { margin: 3px 0 0; flex: none; width: 16px; height: 16px; accent-color: var(--color-accent); }
+.ha-option-body { display: flex; flex-direction: column; gap: var(--space-1); min-width: 0; flex: 1; }
+.ha-option-title { font-size: 14px; font-weight: 500; color: var(--color-text); cursor: inherit; }
+.ha-option-text { font-size: 12.5px; color: var(--muted); line-height: 1.5; }
+.ha-option-note { color: var(--st-warn); }
+.ha-option .st { align-self: flex-start; }
+.ha-pills { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-1); }
+.ha-pill-line { display: inline-flex; align-items: center; gap: var(--space-2); }
+.ha-now { margin-bottom: var(--space-6); }
+.ha-now-head { display: flex; align-items: baseline; gap: var(--space-3); justify-content: space-between; }
+.ha-now-head h3 { margin: 0; }
+.ha-list { list-style: none; margin: var(--space-2) 0 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); }
+.ha-list > li { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); flex-wrap: wrap; font-size: 13.5px; }
+.ha-readiness-list > li { display: block; padding: var(--space-3) 0; border-bottom: 1px solid var(--faint); }
+.ha-readiness-row { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); flex-wrap: wrap; }
+.ha-next { margin-bottom: var(--space-8); }
+.ha-deps { display: flex; align-items: center; gap: var(--space-2); font-size: 12.5px; color: var(--muted); margin-top: var(--space-3); }
+.ha-advanced {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 12.5px;
+  color: var(--muted);
+  border-top: 1px solid var(--hair);
+  padding-top: var(--space-4);
+}
+.ha-advanced svg { flex: none; }
+
+/* The readiness step (#449). Evidence is a table (a screen reader reads
+   each row with its heading); a blocker keeps what was found above its
+   remedies so "Check again" never replaces the reason with a spinner. */
+.callout-ok { border-color: var(--st-ok); background: var(--st-ok-bg); }
+.ha-checked { font-size: 12.5px; }
+.ha-sub-head { margin-top: var(--space-6); }
+.ha-card { margin: var(--space-4) 0; }
+.ha-card h3 { margin: 0; }
+.ha-card > .ha-readiness-row { margin-bottom: var(--space-3); }
+.ha-facts { display: grid; grid-template-columns: max-content 1fr; gap: var(--space-1) var(--space-4); margin: var(--space-2) 0 0; font-size: 13px; }
+.ha-facts dt { color: var(--muted); }
+.ha-facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; }
+.ha-mono { font-family: var(--font-mono); font-size: 12px; overflow-wrap: anywhere; }
+.ha-table { width: 100%; border-collapse: collapse; margin: var(--space-3) 0 0; font-size: 13px; }
+.ha-table th, .ha-table td { text-align: left; padding: var(--space-2) var(--space-3) var(--space-2) 0; border-bottom: 1px solid var(--faint); vertical-align: top; }
+.ha-table th[scope="row"] { font-weight: 400; }
+.ha-table thead th { font-size: 12px; color: var(--muted); font-weight: 500; }
+.ha-caption { text-align: left; font-size: 12.5px; font-weight: 500; color: var(--muted); padding-bottom: var(--space-1); }
+.ha-radios { list-style: none; margin: var(--space-2) 0 0; padding: 0; }
+.ha-radio { padding: var(--space-3) 0; border-bottom: 1px solid var(--faint); }
+.ha-radio:last-child { border-bottom: 0; }
+.ha-picker { margin-top: var(--space-2); }
+.ha-current { font-size: 13px; margin: var(--space-2) 0; }
+.ha-option-off { cursor: default; background: var(--faint); }
+.ha-manual { margin-top: var(--space-3); }
+.ha-manual-panel { display: flex; flex-direction: column; gap: var(--space-2); margin-top: var(--space-2); }
+.ha-manual-panel input { max-width: 480px; width: 100%; }
+.ha-hint-inline { font-size: 12.5px; }
+.ha-field-err { color: var(--st-bad); font-size: 12.5px; }
+.ha-blocker-msg { font-weight: 500; }
+.ha-evidence { font-size: 12.5px; }
+.ha-manual-step { margin-top: var(--space-3); }
+.ha-manual-step ol { margin: var(--space-2) 0 0; padding-left: 20px; overflow-wrap: anywhere; }
+.ha-manual-step li { margin-bottom: var(--space-1); }
+.ha-actions { margin-top: var(--space-3); gap: var(--space-2); flex-wrap: wrap; }
+.ha-manual-label { font-size: 12.5px; color: var(--muted); align-self: center; }
+/* The setup sequence (#450). */
+.ha-setup-lead { font-size: 13px; line-height: 1.5; margin: 0 0 var(--space-4); }
+.ha-setup-p { font-size: 13.5px; line-height: 1.5; margin: var(--space-3) 0; }
+.ha-setup-error { display: flex; flex-direction: column; gap: var(--space-2); align-items: flex-start; }
+.ha-next-step .row { margin-top: var(--space-3); gap: var(--space-2); flex-wrap: wrap; }
+.ha-preview { margin-top: var(--space-3); font-size: 13px; }
+.ha-preview summary { cursor: pointer; font-weight: 500; }
+.ha-sequence > li { display: block; padding: var(--space-3) var(--space-3); border-left: 2px solid var(--faint); }
+.ha-sequence > li.current { border-left-color: var(--color-accent); }
+.ha-seq-n { color: var(--muted); font-variant-numeric: tabular-nums; }
+.ha-instructions { margin: var(--space-2) 0; padding-left: 20px; font-size: 13px; line-height: 1.5; }
+.ha-instructions li { white-space: pre-wrap; overflow-wrap: anywhere; margin-bottom: var(--space-1); }
+.ha-confirm { display: inline-flex; align-items: center; gap: var(--space-2); font-size: 13px; cursor: pointer; margin-top: var(--space-2); }
+.ha-confirm input { width: 16px; height: 16px; accent-color: var(--color-accent); margin: 0; }
+.ha-confirm input:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+.ha-action-field { margin: var(--space-3) 0; }
+.ha-action-field .row { gap: var(--space-2); flex-wrap: wrap; }
+.ha-action-field input[type="text"] { max-width: 360px; width: 100%; }
+/* The composed status page (#451). */
+.ha-status-list { list-style: none; margin: var(--space-4) 0 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-4); }
+.ha-status-card { margin: 0; }
+.ha-panel { margin-top: var(--space-4); padding-top: var(--space-4); border-top: 1px solid var(--faint); }
+.ha-panel h4 { margin: 0 0 var(--space-2); }
+.ha-back { margin-bottom: var(--space-3); }
+
+@media (max-width: 720px) {
+  .ha-options-2 { grid-template-columns: 1fr; }
+  .ha-facts { grid-template-columns: 1fr; }
+  .ha-facts dd { margin-bottom: var(--space-2); }
+  .ha-next .btn-primary { width: 100%; }
+  .ha-next-step .btn-primary { width: 100%; }
+}

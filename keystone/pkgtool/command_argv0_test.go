@@ -133,6 +133,33 @@ var imageArgv0 = map[string][]string{
 	// does not reach — so the Dockerfile is the check, and a docker
 	// inspect on a node is the stronger one when one is available.
 	"ghcr.io/kozea/radicale": {""},
+
+	// Z-Wave JS UI declares no ENTRYPOINT (Entrypoint null) with
+	// WorkingDir /usr/src/app and CMD ["node", "server/bin/www"], so a
+	// command is the whole argv and names node — the caddy shape. The
+	// package runs its managed start.mjs, which imports server/bin/www.js
+	// itself. Evidence: `docker image inspect` of the pinned digest
+	// sha256:717f9d26…2f89 (11.24.2), pulled from Docker Hub on
+	// 2026-09-30, and TestZwaveJSUIServesHomeAssistant boots it.
+	"zwavejs/zwave-js-ui": {"node"},
+	// The OpenThread project's border router image declares
+	// ENTRYPOINT ["/app/etc/docker/test/docker_entrypoint.sh"], which
+	// parses --radio-url/--backbone-interface/--debug-level itself and
+	// drops anything else, so a command carries those flags only.
+	// Evidence: `docker image inspect` of the pinned digest on 2026-09-30,
+	// and TestOTBRImageContract, which starts it.
+	"openthread/otbr": {""},
+
+	// The Matter.js Server declares ENTRYPOINT ["node",
+	// "--enable-source-maps", "/app/node_modules/matter-server/dist/esm/
+	// MatterServer.js"] with CMD [], so a command would be server flags
+	// only — the cloudflared shape. matter-matterjs sets none (env only,
+	// TestMatterRunsTheMatterJSServerImage); the entry is here so one
+	// added later starts from the right answer. Evidence: upstream's
+	// docker/matterjs-server/Dockerfile at v1.4.0, the release pinned as
+	// sha256:54232d0d…b236. The config blob itself was not readable from
+	// the authoring sandbox (GHCR's blob host is refused there).
+	"ghcr.io/matter-js/matterjs-server": {""},
 }
 
 // TestPackageCommandsNameTheirBinary walks every shipped package's

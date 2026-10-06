@@ -42,6 +42,10 @@ import (
 // Server serves the public plane. All fields are required except Log and
 // OnApproved.
 type Server struct {
+	artifactCursorMu sync.Mutex
+	artifactCursors  map[string]artifactCursor
+	// Test seam only; production reloads settings and verifies confined bytes.
+	artifactReadBytes func(context.Context, runtimedb.Workspace, runtimedb.WorkspaceRevision) ([]byte, error)
 	// ResearchTest tests stored, validated configuration using a bounded context.
 	// The adapter must resolve service/secret references and check their current
 	// revisions. Nil is deliberately unavailable. Production wiring also requires a verified
@@ -379,6 +383,7 @@ func New(p *principal.Store, db *runtimedb.DB, state *statefile.Store, log *slog
 // Handler returns the routed public-plane handler.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	s.registerArtifactRoutes(mux)
 
 	// healthz is the single unauthenticated route: static, no state read,
 	// nothing to redact, still rate-limited via the anonymous bucket.
@@ -455,6 +460,19 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/nodes/{node}/probes/http", s.handle(principal.VerbRead, s.probeHttp))
 	mux.Handle("GET /api/v1/nodes/{node}/probes/nfs", s.handle(principal.VerbRead, s.probeDial("nfs")))
 	mux.Handle("GET /api/v1/nodes/{node}/probes/smb", s.handle(principal.VerbRead, s.probeDial("smb")))
+	mux.Handle("GET /api/v1/nodes/{node}/probes/radios", s.handle(principal.VerbRead, s.probeRadios))
+	mux.Handle("GET /api/v1/nodes/{node}/probes/home-automation", s.handle(principal.VerbRead, s.probeHomeAutomation))
+	// The home-automation aggregate (#446): a read joining the probes
+	// above with catalog, desired/observed state, plans and backups.
+	mux.Handle("GET /api/v1/home-automation", s.handle(principal.VerbRead, s.homeAutomationStatus))
+	// Its orchestration (#447): the next safe package step for a
+	// household's goals, previewed or filed as ONE ordinary plan through
+	// the capability pipeline. Never approves, never waits.
+	mux.Handle("POST /api/v1/home-automation/preview", s.handle(principal.VerbPropose, s.homeAutomationPreview))
+	mux.Handle("POST /api/v1/home-automation/propose", s.handle(principal.VerbPropose, s.homeAutomationPropose))
+	// What each installed part keeps where (#451): its data and backup
+	// class, what a radio swap preserves, what removal stops and keeps.
+	mux.Handle("GET /api/v1/home-automation/continuity", s.handle(principal.VerbRead, s.homeAutomationContinuity))
 
 	// Container logs (ADR-W015 A2): read verb; the response passes the
 	// redacting encoder like everything else.
@@ -1088,8 +1106,22 @@ func (s *Server) Handler() http.Handler {
 // returned status.
 type handlerFunc func(r *http.Request, id principal.Identity) (any, int, error)
 
+type responseHandlerFunc func(http.ResponseWriter, *http.Request, principal.Identity) (any, int, error)
+
 // handle builds the fixed middleware chain for one route (ADR-W007 A5).
 func (s *Server) handle(verb principal.Verb, h handlerFunc) http.Handler {
+	return s.handleResponse(verb, func(_ http.ResponseWriter, r *http.Request, id principal.Identity) (any, int, error) {
+		body, status, err := h(r, id)
+		if body == nil && err == nil {
+			body = map[string]bool{"ok": true}
+		}
+		return body, status, err
+	})
+}
+
+// handleResponse retains the same authentication/RBAC/rate/audit chain for
+// inert attachments. A successful nil body means the handler wrote the bytes.
+func (s *Server) handleResponse(verb principal.Verb, h responseHandlerFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// --- authn
 		id, ok := s.authenticate(r)
@@ -1136,14 +1168,14 @@ func (s *Server) handle(verb principal.Verb, h handlerFunc) http.Handler {
 		}
 
 		// --- handler.
-		body, st, err := h(r, id)
+		body, st, err := h(w, r, id)
 		status = st
 		if err != nil {
 			s.writeErrorBody(w, st, err.Error(), body)
 			return
 		}
 		if body == nil {
-			body = map[string]bool{"ok": true}
+			return
 		}
 		s.writeJSON(w, st, body)
 	})
@@ -1271,7 +1303,9 @@ func (s *Server) actingPersonMayStillHold(id principal.Identity) bool {
 // the serialized bytes, so no handler can leak a secret-shaped value even
 // by mistake (ADR-W007 A5 — redaction is a serialization property). The
 // typed exceptions are minted tokens, authorized protected Household
-// reveal/submission review, and the admin-only password-reset link. Ordinary chat and tool replies cannot use those
+// reveal/submission review, artifact selectors/cursors and canonical links,
+// preview text/HTML already redacted in full before pagination,
+// and the admin-only password-reset link. Ordinary chat and tool replies cannot use those
 // response types.
 func (s *Server) writeJSON(w http.ResponseWriter, status int, body any) {
 	if a, ok := body.(audioResponse); ok {
@@ -1285,6 +1319,16 @@ func (s *Server) writeJSON(w http.ResponseWriter, status int, body any) {
 		return
 	}
 	switch body.(type) {
+	case artifactListResponse:
+		if raw, err = body.(artifactListResponse).redacted(); err != nil {
+			s.writeError(w, http.StatusInternalServerError, "internal")
+			return
+		}
+	case artifactPreviewResponse:
+		if raw, err = body.(artifactPreviewResponse).redacted(); err != nil {
+			s.writeError(w, http.StatusInternalServerError, "internal")
+			return
+		}
 	case secretRevealResponse:
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("Pragma", "no-cache")

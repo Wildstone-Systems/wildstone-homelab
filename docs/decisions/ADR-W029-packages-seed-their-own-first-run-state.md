@@ -175,3 +175,11 @@ nothing asks Docker what that subnet is. The practical trust boundary is
 since everything on that network can reach its port directly. Narrowing
 it means teaching HostFacts about networks, and is worth doing when a
 second node makes the difference real.
+
+That argument holds only on the bridge. An app on the host's network
+(`networkMode: host`, #432) is reached by the LAN directly, and a LAN is
+usually `192.168.0.0/16` or `10.0.0.0/8`, so `home-assistant` 2.x seeds
+`HostNetworkProxyTrustCIDRs` instead: `172.16.0.0/12` (Docker's default
+bridge pool, where the proxy's own address is — bridge-to-host traffic
+is not masqueraded) and loopback (#440). An install seeded by 1.x keeps
+its broader list, because a seed is never rewritten.

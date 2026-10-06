@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"github.com/chickenrat17/wildstone-homelab/keystone/sharedcalendar"
 	"sort"
+	"strconv"
 	"strings"
 	"text/template"
 
@@ -77,6 +78,15 @@ func (e *TemplateError) Unwrap() error { return e.Err }
 // providing package's params.
 type Catalog struct {
 	pkgs []*pkgspec.Package
+	// rehearsal marks a catalog with no deployment behind it — lint, the
+	// shipped-package walk — where installed-state export functions answer
+	// from each provider rendered with its own defaults and examples
+	// (Rehearsal). Never set on the install path.
+	rehearsal bool
+	// rehearsalNested marks the catalog a rehearsal renders a PROVIDER
+	// against: its installed-state questions answer nothing, so the
+	// rehearsal goes one provider deep and never recurses (installed).
+	rehearsalNested bool
 	// current is the node's desired state at expansion time. It carries
 	// the Ingress declaration, which is where a deployment's ADDRESSING
 	// lives (ADR-W019 A8/A10) — and addressing is not derivable from the
@@ -140,6 +150,12 @@ func (e *Engine) Expand(pkg *pkgspec.Package, params map[string]string, catalog 
 	}
 
 	for _, req := range pkg.Requires {
+		if !req.AppliesTo(merged) {
+			// A switched-off integration (requires[].when) needs no
+			// provider. Its templates must not read the keys one would
+			// supply; a missing key there still fails loudly.
+			continue
+		}
 		if trait.IsStructural(req.Trait) {
 			// ingress/storage are system mechanisms, always satisfiable
 			// (ADR-W010 A1 making ADR-W005 A2's prose real): ingress by the
@@ -154,24 +170,26 @@ func (e *Engine) Expand(pkg *pkgspec.Package, params map[string]string, catalog 
 		}
 	}
 
-	resolved, err := buildResolved(pkg, merged, catalog)
-	if err != nil {
-		return nil, err
-	}
 	// The capability THIS install is: the package's own, or one instance
-	// of it (#246). Everything the install owns is owned by that name.
+	// of it (#246). Everything the install owns is owned by that name,
+	// and it is who a provider's exports are resolved FOR (.Consumer).
 	capName, err := pkg.CapabilityFor(merged)
 	if err != nil {
 		return nil, &MissingParamError{Package: pkg.Metadata.Name, Param: pkgspec.InstanceParam, Reason: err.Error()}
 	}
 	wantOwner := "capability/" + capName
 
+	resolved, exportedBy, err := buildResolved(pkg, merged, capName, catalog)
+	if err != nil {
+		return nil, err
+	}
+
 	ctx := templateContext{Params: merged, Resolved: resolved, Capability: capName, Instance: merged[pkgspec.InstanceParam]}
 	var current []resource.Resource
 	if catalog != nil {
 		current = catalog.current
 	}
-	funcs := exportFuncs(ingressorigin.Of(current))
+	funcs := addressingFuncs(ingressorigin.Of(current))
 
 	out := make([]resource.Resource, 0, len(pkg.Templates))
 	for i, tmplStr := range pkg.Templates {
@@ -292,6 +310,18 @@ func (e *Engine) Expand(pkg *pkgspec.Package, params map[string]string, catalog 
 				Secret:     &resource.SecretSpec{Name: name, Provided: true},
 			})
 		}
+	}
+
+	// A secret a provider EXPORTS lives on the provider's node, and a
+	// consumer can only read it there. See checkExportedSecrets.
+	if err := checkExportedSecrets(out, resolved, exportedBy, catalog); err != nil {
+		return nil, err
+	}
+	// The same holds for a URL a provider exports on loopback: it means
+	// the provider's own node, from its host network. See
+	// checkExportedLoopback.
+	if err := checkExportedLoopback(out, resolved, exportedBy, catalog); err != nil {
+		return nil, err
 	}
 
 	return out, nil
@@ -417,6 +447,9 @@ func isYAMLHostileRune(r rune) bool {
 //   - PublisherSecretRef: "secret/<capability>-publisher", the token a
 //     package that publishes household events presents to the intake
 //     (ADR-W024 A10); put it in the shim's env.
+//   - ProxyTrustCIDRs / HostNetworkProxyTrustCIDRs: whose X-Forwarded-For
+//     an app behind the proxy may believe, on the bridge and on the
+//     host's network respectively (see the constants below).
 //   - TailnetHost: the node's MagicDNS name under the tailnet posture,
 //     empty otherwise. Always present, so a template may test it without
 //     tripping missingkey=error. It exists for the packages that must
@@ -456,7 +489,11 @@ func isYAMLHostileRune(r rune) bool {
 // it fails loudly at its own template rather than receiving a half-built
 // URL. A portal origin derived from a domain nobody has supplied yet is
 // not a better answer than no answer.
-func buildResolved(pkg *pkgspec.Package, params map[string]string, catalog *Catalog) (map[string]string, error) {
+//
+// The second return names, for each TRAIT-CARRIED key, the provider that
+// supplied it, so Expand can hold a consumer to where that provider's
+// exported secrets actually live (checkExportedSecrets).
+func buildResolved(pkg *pkgspec.Package, params map[string]string, consumer string, catalog *Catalog) (map[string]string, map[string]*pkgspec.Package, error) {
 	var current []resource.Resource
 	var pkgs []*pkgspec.Package
 	if catalog != nil {
@@ -470,32 +507,37 @@ func buildResolved(pkg *pkgspec.Package, params map[string]string, catalog *Cata
 		"PublisherSecretRef": "secret/" + PublisherSecretName(pkg.Metadata.Capability),
 		"TailnetHost":        posture.TailnetName,
 		"ProxyTrustCIDRs":    proxyTrustCIDRs,
+
+		"HostNetworkProxyTrustCIDRs": hostNetworkProxyTrustCIDRs,
 	}
 
-	funcs := exportFuncs(posture)
+	exportedBy := map[string]*pkgspec.Package{}
 	for _, provider := range pkgs {
 		var ctx *exportContext // built lazily: most packages export nothing
+		var funcs template.FuncMap
 		for _, prov := range provider.Provides {
 			for _, key := range sortedKeys(prov.Exports) {
 				if _, taken := resolved[key]; taken {
 					continue
 				}
 				if ctx == nil {
-					ctx = &exportContext{Params: exportParams(provider, params)}
+					ctx = &exportContext{Params: exportParams(provider, params), Consumer: consumer}
+					funcs = exportFuncs(posture, catalog.installedLookup(provider))
 				}
 				value, err := renderExport(provider.Metadata.Name, key, prov.Exports[key], *ctx, funcs)
 				if err != nil {
-					return nil, err
+					return nil, nil, err
 				}
 				if value == "" {
 					continue
 				}
 				resolved[key] = value
+				exportedBy[key] = provider
 			}
 		}
 	}
 
-	return resolved, nil
+	return resolved, exportedBy, nil
 }
 
 // proxyTrustCIDRs is the .Resolved value an app behind the reverse proxy
@@ -521,16 +563,48 @@ func buildResolved(pkg *pkgspec.Package, params map[string]string, catalog *Cata
 // that lands.
 const proxyTrustCIDRs = `["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.1/32"]`
 
-// exportContext is what an export template renders over. Deliberately
-// only .Params: an export answers "what do I hand my consumers", and the
-// only inputs to that are what the provider was configured with and where
-// this deployment serves things — the latter arriving as functions rather
-// than as data, because it is computed rather than declared.
+// hostNetworkProxyTrustCIDRs is proxyTrustCIDRs for an app that runs
+// with networkMode: host and is reached through a "host/<port>" Route
+// (#433, #440).
+//
+// The proxy stays on the Wildstone bridge and dials the host gateway, so
+// the peer such an app sees is the proxy's own bridge address, unchanged:
+// Docker routes bridge-to-host traffic without masquerading it. That
+// address is in Docker's default bridge pool, 172.16.0.0/12 (172.17 to
+// 172.31, one /16 per network).
+//
+// Narrower than proxyTrustCIDRs because the reason that list may be
+// broad no longer holds. On a bridge, the peers able to reach the app's
+// port at all are containers on this host, so trusting all of them costs
+// nothing. On the host's network the LAN reaches the port directly, and
+// a household LAN is usually 192.168.0.0/16 or 10.0.0.0/8: trusting
+// those would let any device on it — a guest phone, an IoT plug — set
+// X-Forwarded-For and be believed about its own address.
+//
+// The cost is stated rather than hidden: a daemon configured with
+// default-address-pools outside 172.16.0.0/12, or one that has used up
+// that pool and allocated Wildstone's network from 192.168.0.0/16, sees
+// its proxied requests refused by the app. That is a loud failure an
+// operator can fix in the app's own settings, which is the right side to
+// fail on for a trust boundary.
+const hostNetworkProxyTrustCIDRs = `["172.16.0.0/12", "127.0.0.1/32"]`
+
+// exportContext is what an export template renders over (trait.
+// ExportContext). An export answers "what do I hand my consumers", and
+// the inputs to that are what the provider was configured with, WHO is
+// asking, and where this deployment serves things — the last arriving as
+// functions rather than as data, because it is computed rather than
+// declared.
 type exportContext struct {
 	Params map[string]string
+	// Consumer is the capability the export is being resolved for. It is
+	// how a provider issues per-consumer values — mqtt:broker's username
+	// and password reference — without the engine knowing what either is.
+	Consumer string
 }
 
-// exportFuncs binds trait.ExportFuncs to a posture.
+// exportFuncs binds trait.ExportFuncs to a posture and to the resources
+// the providing package has installed (Catalog.installedLookup).
 //
 // Every function is total — it takes `any`, stringifies, and cannot fail
 // — so a rendered export cannot error on a type. That matters because the
@@ -542,7 +616,34 @@ type exportContext struct {
 // trait.ExportFuncs. A name declared there and not bound here would parse
 // at lint and fail at expansion, which is exactly the split between "the
 // vocabulary" and "the engine" that this design exists to prevent.
-func exportFuncs(p ingressorigin.Posture) template.FuncMap {
+func exportFuncs(p ingressorigin.Posture, installed func() []resource.Resource) template.FuncMap {
+	fm := addressingFuncs(p)
+	fm["publishedHost"] = func(container, port any) string {
+		m, ok := publishedMapping(installed(), fmt.Sprint(container), fmt.Sprint(port))
+		if !ok {
+			return ""
+		}
+		return m.HostIP
+	}
+	fm["publishedPort"] = func(container, port any) string {
+		m, ok := publishedMapping(installed(), fmt.Sprint(container), fmt.Sprint(port))
+		if !ok {
+			return ""
+		}
+		return strconv.FormatUint(uint64(m.HostPort), 10)
+	}
+	fm["hostNetworkEnv"] = func(container, key any) string {
+		return hostNetworkEnv(installed(), fmt.Sprint(container), fmt.Sprint(key))
+	}
+	return fm
+}
+
+// addressingFuncs are the export functions that also make sense inside a
+// package's own templates: where a host is served. publishedHost and
+// publishedPort are deliberately NOT among them — inside a template they
+// would have no provider to answer for, and an undefined function is a
+// parse error naming itself, where a function returning "" is silence.
+func addressingFuncs(p ingressorigin.Posture) template.FuncMap {
 	return template.FuncMap{
 		"origin":        func(host any) string { return p.OriginFor(fmt.Sprint(host)) },
 		"sessionDomain": func(domain any) string { return p.SessionDomain(fmt.Sprint(domain)) },

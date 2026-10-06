@@ -153,7 +153,7 @@ drill pass.
 
 ADR-W030 adds recoverable Butler runtime state: task/step ledgers,
 conversations and selected memory, bindings and identity-link projections,
-temporary grants and immediate denials, routines/procedures, access settings,
+grants and immediate denials, routines/procedures, access settings,
 delivery state, structured work traces/feedback labels, and evaluator/config
 versions. Its encrypted off-host backup or replica must publish a
 measured recovery point; replication lag is possible data loss, not proof of
@@ -654,6 +654,153 @@ Skip steps 1: keystone and the Statefile are intact. Re-join the node
 under the same id (step 2), re-enter that node's secrets (step 3), let
 reconcile rebuild (step 4), restore data (step 5).
 
+## Home automation controllers
+
+A home-automation controller is not an ordinary app. Each one holds the
+keys its paired devices trust, and a controller that comes back with a
+different key is, to every device in the house, a stranger. Getting the
+data back is not enough: it has to come back **before** the controller
+first starts on an empty volume, onto the **same** kind of radio, with
+**only one copy** running. This section is the inventory and the order.
+`keystone/pkgtool/controller_backup_test.go` holds the packages to the
+table below, and [testing/home-automation](../testing/home-automation/README.md)
+is the drill that proves it on real hardware.
+
+### What each controller keeps
+
+| Package (plan) | Volume, path in container | Identity-bearing state in the volume | Also on the radio (NVM) | Wildstone secrets | Lost with no backup |
+|---|---|---|---|---|---|
+| `zigbee-zigbee2mqtt` (`zigbee`, critical) | `zigbee2mqtt-data`, `/app/data` | `configuration.yaml`: `network_key`, `pan_id`, `ext_pan_id`, `channel`. `database.db`: every pairing. `coordinator_backup.json`: Zigbee2MQTT's own copy of the coordinator's network. `state.json`. | The coordinator stores the same network (key, PAN ids, channel, frame counter) and its child table. | `restic-zigbee`; `mqtt-zigbee` (on the broker's node) | Re-pair every Zigbee device. |
+| `zwave-zwave-js-ui` (`zwave`, critical) | `zwave-js-ui-store`, `/usr/src/app/store` | `settings.json` → `zwave.securityKeys` (S0, three S2 keys) and `securityKeysLongRange`. `nodes.json`, the driver cache, and `backups/nvm/NVM_*.bin` (nightly, keeps 7). | The stick **is** the network: home ID, node table, routes. The keys are **not** on the stick. | `restic-zwave` | Stick intact: plain devices keep working; every secure (S0/S2) device, every lock, must be excluded and re-included. |
+| `thread-otbr` (`thread`, critical) | `otbr-data`, `/var/lib/thread` | The active and pending operational datasets (network key, PAN ID, extended PAN ID, channel, mesh-local prefix, PSKc) and frame counters. | Nothing. An RCP is a radio without memory; the host keeps the network. | `restic-thread` | Re-commission every Thread device, unless Home Assistant still holds the dataset (see below). |
+| `matter-matterjs` (`matter`, critical) | `matter-data`, `/data` | The fabric: root CA key, operational certificates, fabric ID, every node's ID, credentials and ACLs. | No radio. Matter-over-Thread devices also need the Thread network above. | `restic-matter` | Factory-reset and re-commission every Matter device. |
+| `home-assistant` (`home-assistant`, important) | `home-assistant-config`, `/config` | `.storage/`: users and logins, config entries (including the MQTT password you typed in, and the Z-Wave, Matter and OTBR URLs), `thread.datasets` (Home Assistant's copy of Thread credentials), ESPHome device keys. YAML automations, scripts, scenes. `home-assistant_v2.db` (history). | None. `bluetooth: host-bluez` pairing keys live in the **host's** BlueZ (`/var/lib/bluetooth`), which Wildstone does not back up. | `restic-home-assistant`; `mqtt-home-assistant` | Rebuild automations, dashboards and users. No device is paired to Home Assistant itself. |
+| `mqtt-mosquitto` (no plan) | `mosquitto-data`, `/mosquitto/data` | Nothing identity-bearing: retained messages, which Zigbee2MQTT and Home Assistant republish. | — | `mqtt-zigbee`, `mqtt-cameras`, `mqtt-home-assistant`, rendered into the password file. | Nothing, if the secrets survive. |
+
+Two copies live outside these volumes and are worth knowing about:
+
+- **Home Assistant's copy of the Thread dataset.** When Home Assistant
+  adds the OpenThread Border Router integration it records the dataset
+  under Settings → Thread. If `otbr-data` is lost but Home Assistant is
+  restored, Home Assistant can give that dataset to a fresh border router
+  that has none (re-adding the OpenThread Border Router integration
+  applies Home Assistant's preferred dataset to an empty router). Treat
+  this as the second copy, not the plan: restore `otbr-data`, and check
+  this path in the drill before relying on it.
+- **Phones.** The Home Assistant companion app can copy the Thread
+  credentials onto the phone (*Sync Thread credentials*, under the
+  companion app's own settings; the menu differs between iOS, Android
+  and app versions). That lets the phone commission Matter-over-Thread
+  devices onto **this** network instead of an Apple or Google one. It is
+  a copy for commissioning, not a backup: you cannot restore a border
+  router from a phone. Sync again after restoring or changing the
+  network.
+
+**The broker's passwords.** The three `mqtt-*` secrets are generated on
+the broker's node and written into Mosquitto's password file from there.
+Every Wildstone consumer gets its password by reference and follows a
+rotation by itself. **Home Assistant does not**: its MQTT integration
+holds the password you typed in. If `mqtt-home-assistant` is rotated,
+or regenerated because it was not restored, update it in Home Assistant
+(Settings → Devices & services → MQTT → Reconfigure) with the value
+`docker exec home-assistant printenv WILDSTONE_MQTT_PASSWORD` shows.
+
+### What survives what
+
+| Event | Zigbee | Z-Wave | Thread | Matter | Home Assistant |
+|---|---|---|---|---|---|
+| Restart, image upgrade, a param change that re-creates the container | Kept | Kept | Kept | Kept | Kept |
+| Disable then enable the capability | Kept: the volume stays (ADR-W004 A4) | Kept | Kept | Kept | Kept |
+| Volume restored from a backup, same radio | Back to the snapshot. Devices paired since are lost and re-pair. | Keys back; the stick still has every node. Nodes included since are on the stick but unknown to the cache: re-interview them. | Back to the snapshot. The router re-attaches; allow a few minutes for routes. | Back to the snapshot. Devices commissioned since must be reset and re-commissioned. | Back to the snapshot. |
+| Radio replaced, volume intact | Same chip family (`zstack` → `zstack`, `ember` → `ember`): Zigbee2MQTT writes `coordinator_backup.json` onto the new coordinator at start; check its log. Some devices may still need re-pairing. Across families: not supported here. | Restore the newest `backups/nvm/NVM_*.bin` onto the new stick (Z-Wave JS UI → Settings → NVM Management → Restore). The keys come from the store. | Flash OpenThread RCP firmware, set `radio_device` to the new stick's by-id path. Nothing to restore on the radio. | — | — |
+| Volume lost, radio intact | **Do not start Zigbee2MQTT on an empty volume with the old coordinator plugged in**: it generates a new key and may form a new network on the stick over the old one. Unplug the coordinator until the volume is restored. | The store is regenerated with **new** keys. Restoring the store later puts the old keys back. | The router starts with no network. Restore, or give it Home Assistant's dataset (above). | A new, empty fabric is created. Restoring the volume over it (with the server stopped) brings the old one back, as long as nothing was commissioned into the new one. | Onboarding starts again. Do not onboard; restore. |
+| Both lost | Re-pair everything. | Re-include everything. | Re-commission everything. | Re-commission everything. | Rebuild. |
+
+Each new stick has a different `/dev/serial/by-id/` name: the name
+contains the stick's serial number. Replacing a radio is always a param
+change (`usb_device` or `radio_device`) as well.
+
+**Only one copy at a time.** Never run two Zigbee2MQTTs with the same
+configuration, two border routers from one `otbr-data`, or two Matter
+servers from one fabric: they answer for the same identity and fight
+over it. Before restoring onto a new machine, make sure the old one is
+off or its controller is disabled.
+
+### Backups that can outlive the node
+
+The four critical plans write to a repository **volume on the same
+node**, and their restic passwords are **generated on that node**: you
+never saw them. A dead disk takes the volume, the repository and the
+password together. For a household that depends on these devices:
+
+1. set up the whole-site contract above (the reserved `wildstone` plan
+   and the recovery kit), which seals every node's secrets, restic
+   passwords included, so a new node can import them; and
+2. give the critical plans an off-site route (`local-and-offsite`, see
+   [Off-site copies](#off-site-copies-s3-compatible-storage)).
+
+Without both, a backup of these controllers protects against mistakes on
+a node that still works, and nothing else.
+
+### Restore order for a replacement node
+
+Follow [Losing a host](#losing-a-host-the-restore-procedure) (or [Losing
+a single node](#losing-a-single-node-host-survives)), with these
+additions. The order matters because a controller that starts on an
+empty volume makes a new identity, and with a radio attached it may
+write that identity to the radio.
+
+1. **Before re-joining the node, prepare the host.** None of this is
+   restored, because it is host setup the agent cannot do:
+   Docker; the tailnet; for Thread, IPv6 forwarding with `accept_ra = 2`
+   on the LAN interface and the `ip6table_filter` module (see
+   [install.md](install.md#6-home-automation-hardware)); for
+   `bluetooth: host-bluez`, BlueZ installed and running.
+2. **Leave every radio unplugged** (or not passed through to the VM).
+   When reconcile rebuilds the shape, the agent refuses the Zigbee,
+   Z-Wave and Thread containers with `device "/dev/serial/by-id/..."
+   does not exist on this node`. That refusal is what you want: those
+   controllers cannot start on empty volumes.
+3. **Re-join, import secrets, let reconcile rebuild** (steps 2 to 4 of
+   the host procedure). The broker comes back by itself; it has nothing
+   to restore. Matter and Home Assistant start on empty volumes. Do not
+   commission anything into Matter and do not onboard Home Assistant.
+4. **Restore each controller, in this order:** `thread`, `matter`,
+   `zigbee`, `zwave`, `home-assistant`. Thread comes before Matter
+   because Matter-over-Thread devices are reached through it; Home
+   Assistant comes last so that when it starts, every server it
+   connects to already has its old identity. For each plan:
+
+   ```sh
+   wild backup restore <plan>               # or: -from offsite
+   ```
+
+   check the restored copy (the identity checks in the drill), then move
+   it into place with the capability **disabled**, so nothing is running
+   on the volume while it is replaced:
+
+   ```sh
+   wild capability disable <package>        # approve the plan; the volume stays
+   sudo docker run --rm -v <plan>-restore:/from:ro -v <volume>:/to alpine:3.20 \
+     sh -c 'find /to -mindepth 1 -delete && cp -a /from/backup/<volume>/. /to/'
+   # plug the radio in now, if this controller has one
+   wild capability enable <package> -set ...   # the same params as before; approve
+   ```
+
+   `cp -a` keeps file ownership, which matters for `matter-data` (owned
+   by UID 1000). If a stick is new, its by-id name is new: pass it in
+   the enable's params.
+5. **Verify each identity**, not just that the container is healthy:
+   Zigbee devices respond without re-pairing, a lock still reports, the
+   Thread dataset hash and Matter `compressed_fabric_id` match what you
+   recorded, Home Assistant shows the same users and automations.
+   Home Assistant's history database is copied while it is being
+   written; if Home Assistant reports it corrupt, it moves it aside and
+   starts a new one, and only history is lost.
+6. **Delete the `<plan>-restore` volumes** once you are satisfied
+   (`sudo docker volume rm <plan>-restore`), so the next restore starts
+   from an empty volume instead of mixing two snapshots.
+
 ## Drill cadence
 
 - **Weekly, automated:** the `exit drill` workflow runs the full
@@ -663,3 +810,9 @@ reconcile rebuild (step 4), restore data (step 5).
   (`DrillEvery`, ADR-W011 A4) restores each plan's latest snapshot
   alongside and records the result in the ledger; the morning report
   surfaces failures.
+- **Quarterly, and after replacing a radio:** the home-automation
+  controller drill in
+  [testing/home-automation](../testing/home-automation/README.md)
+  (section 5): a canary in each controller's volume, a backup, a
+  restore alongside, and the identity checks. The monthly drill proves
+  the bytes come back; only this one proves the devices still answer.

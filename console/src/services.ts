@@ -72,6 +72,11 @@ const GROUP_OF: Record<string, Group> = {
   "home-automation": "Home",
   cameras: "Home",
   zigbee: "Home",
+  zwave: "Home",
+  // The Matter server and the Thread border router (#431): radios and
+  // protocols Home Assistant reaches, filed beside Zigbee and Z-Wave.
+  matter: "Home",
+  thread: "Home",
   mqtt: "Home",
   inventory: "Home",
   recipes: "Home",

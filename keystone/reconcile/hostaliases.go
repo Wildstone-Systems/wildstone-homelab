@@ -25,6 +25,10 @@ package reconcile
 // package.
 
 import (
+	"fmt"
+	"strings"
+
+	"github.com/chickenrat17/wildstone-homelab/keystone/plan"
 	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
 )
 
@@ -78,4 +82,96 @@ func hostAliasesFor(desiredByKey map[resKey]resource.Resource) []string {
 		}
 	}
 	return nil
+}
+
+// containerHostAliases is nodeAliases plus, for the containers that dial
+// Route upstreams, resource.HostGatewayAlias (#433).
+//
+// Per container rather than per node, unlike the tailnet name above: the
+// alias is only useful to something that proxies or probes a
+// "host/<port>" Route, and every container that carries it has its hash
+// changed and is recreated once. Two kinds of container dial Route
+// upstreams — the ingress proxy, which serves them, and the dashboard,
+// whose status dot polls the same address (homepageMonitor) — so those
+// two, and nothing else, get it.
+//
+// Only while a host Route exists on the node: a household with no
+// host-networked service keeps its proxy's hash exactly as it was, and
+// the first host Route recreates the proxy with the alias in the same
+// plan that writes its fragment. Granting it grants nothing new either —
+// a bridge container can already route to its gateway; the alias only
+// gives that address a name, resolved by Docker on the node.
+//
+// Gated on the agent the same way hostAliasesForNode is, and for the same
+// reason: an agent that cannot map the name to host-gateway would skip
+// it while still labelling the container with the alias-aware hash, and
+// the proxy would never be recreated once the agent could.
+func (r *Reconciler) containerHostAliases(nodeID, name string, nodeAliases []string, desiredByKey map[resKey]resource.Resource) []string {
+	if !r.agentMapsHostGateway(nodeID) || !dialsHostUpstreams(nodeID, name, desiredByKey) {
+		return nodeAliases
+	}
+	out := make([]string, 0, len(nodeAliases)+1)
+	out = append(out, nodeAliases...)
+	return append(out, resource.HostGatewayAlias)
+}
+
+// refuseHostRouteIfAgentTooOld returns the step error for a "host/<port>"
+// Route on a node whose agent is KNOWN to predate the host-gateway
+// mapping, or "". Written anyway, the fragment would render and the
+// proxy would answer 502 for it, because the proxy container never got
+// the alias (containerHostAliases withholds it there). An unknown minor
+// is not refused, matching refuseIfAgentTooOld: nothing can say.
+func (r *Reconciler) refuseHostRouteIfAgentTooOld(nodeID string, step plan.PlanStep, spec *resource.RouteSpec) string {
+	if spec == nil || !resource.IsHostUpstream(spec.Upstream) || r.AgentProtocolMinor == nil {
+		return ""
+	}
+	have, known := r.AgentProtocolMinor(nodeID)
+	if !known || have >= resource.HostGatewayProtocolMinor {
+		return ""
+	}
+	return fmt.Sprintf("%s/%s routes to %s, which needs wardstone protocol minor %d, and the agent on node %s "+
+		"speaks minor %d: upgrade wardstoned there first. An older agent cannot give the proxy a route to the "+
+		"host, so the site would answer 502 with every resource reporting healthy",
+		step.Kind, step.Name, spec.Upstream, resource.HostGatewayProtocolMinor, nodeID, have)
+}
+
+// agentMapsHostGateway reports whether the node's agent writes
+// resource.HostGatewayAlias as Docker's host-gateway. Unknown is no, for
+// the reason hostAliasesForNode gives.
+func (r *Reconciler) agentMapsHostGateway(nodeID string) bool {
+	if r.AgentProtocolMinor == nil {
+		return false
+	}
+	minor, known := r.AgentProtocolMinor(nodeID)
+	return known && minor >= resource.HostGatewayProtocolMinor
+}
+
+// dialsHostUpstreams reports whether Container/<name> is the node's
+// ingress proxy or its dashboard, and the node has a "host/<port>" Route.
+func dialsHostUpstreams(nodeID, name string, desiredByKey map[resKey]resource.Resource) bool {
+	c, ok := desiredByKey[resKey{resource.KindContainer, name}]
+	if !ok || c.Container == nil || c.Container.HostNetwork() {
+		// A host-networked container is already on the host.
+		return false
+	}
+	hostRoute, ingressOwner := false, ""
+	for _, res := range desiredByKey {
+		switch {
+		case res.Kind == resource.KindRoute && res.Route != nil &&
+			(res.Metadata.Node == "" || res.Metadata.Node == nodeID) &&
+			resource.IsHostUpstream(res.Route.Upstream):
+			hostRoute = true
+		case res.Kind == resource.KindIngress:
+			ingressOwner = res.Metadata.Owner
+		}
+	}
+	if !hostRoute {
+		return false
+	}
+	// The proxy is matched by owner, as ingressContainerNames does, so a
+	// new ingress profile needs no entry here.
+	if ingressOwner != "" && c.Metadata.Owner == ingressOwner {
+		return true
+	}
+	return strings.TrimPrefix(c.Metadata.Owner, "capability/") == "dashboard"
 }

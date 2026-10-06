@@ -615,7 +615,7 @@ check("sign-in offers no token box", !gate.includes("<input") && !/token/i.test(
 const shell = renderToString(h(ConsoleStateProvider, { children: h(Shell) }));
 check("shell renders with no data yet", shell.length > 0);
 check("shell shows the icon rail", shell.includes('aria-label="Console sections"'), shell);
-for (const label of ["Home", "Services", "Butler", "Chat", "Household", "Plans", "Activity", "Backups", "Commitments", "Nodes", "Secrets", "Identity"]) {
+for (const label of ["Home", "Services", "Home automation", "Butler", "Chat", "Household", "Plans", "Activity", "Backups", "Commitments", "Nodes", "Secrets", "Identity"]) {
   check(`rail offers ${label}`, shell.includes(`aria-label="${label}"`));
 }
 check("the rail has no separate Connect chat screen", !shell.includes('aria-label="Connect chat"'));
@@ -858,11 +858,23 @@ check("every shipped capability has an explicit group",
   unmapped.length === 0, `unmapped: ${unmapped.join(", ")} — add them to GROUP_OF in src/services.ts`);
 // And the other way: a row for a capability nothing ships is a row that
 // outlived its package.
-const stale_ = mappedCapabilities().filter((c) => !shippedCapabilities.includes(c));
+// The one exception is a capability the home-automation component table
+// (keystone/api/home_automation_components.go) already names: the
+// aggregate reports it as `unavailable` until its package ships, so its
+// row is vocabulary the Console must already file, not a leftover. Read
+// from that table rather than listed here, so it cannot excuse anything
+// else.
+const haTableCapabilities = (() => {
+  const src = readFileSync(join(process.cwd(), "..", "keystone", "api", "home_automation_components.go"), "utf8");
+  return [...src.matchAll(/Capability:\s*"([A-Za-z0-9_.-]+)"/g)].map((m) => m[1]);
+})();
+check("the home-automation component table was actually read", haTableCapabilities.includes("zigbee"),
+  haTableCapabilities.join(", "));
+const stale_ = mappedCapabilities().filter((c) => !shippedCapabilities.includes(c) && !haTableCapabilities.includes(c));
 check("the group map names no capability the catalog dropped",
   stale_.length === 0, `no longer shipped: ${stale_.join(", ")}`);
 for (const [cap, want] of [["media", "Media"], ["photos", "Media"], ["dns", "Network"], ["zigbee", "Home"],
-                           ["identity", "Identity"], ["ai-chat", "AI"], ["chat-matrix", "Chat"],
+                           ["identity", "Identity"], ["ai-chat", "AI"], ["zwave", "Home"], ["matter", "Home"], ["thread", "Home"], ["chat-matrix", "Chat"],
                            ["matrix-homeserver", "Chat"], ["matrix-client", "Chat"],
                            ["documents", "Documents"], ["monitoring", "Ops"]] as const) {
   check(`${cap} files under ${want}`, groupOf({ capability: cap }) === want);
@@ -2644,6 +2656,1014 @@ check("back from a password confirmation, the move is one click from done",
     .includes("Password confirmed. Move now to finish."));
 clearStepUp();
 
+// Home automation setup (#448). The screen renders the aggregate's
+// answer (#446) and a draft of the household's choices, and must never
+// let the second read as the first.
+import { EMPTY_DRAFT, GOAL_COPY, BLUETOOTH_COPY, HomeAutomationView, componentStanding, loadDraft, queryOf, saveDraft } from "../src/views/HomeAutomation";
+import type { Draft as HADraft } from "../src/views/HomeAutomation";
+import type { HomeAutomationComponent, HomeAutomationComponentId, HomeAutomationStatus } from "../src/api";
+
+const haComp = (id: HomeAutomationComponentId, title: string, over: Partial<HomeAutomationComponent> = {}): HomeAutomationComponent => ({
+  id, title, capability: id, topology: "shared", protocol: false, requires: [], packages: [],
+  selection: "none", state: "not_selected", reason: "not selected", blockers: [], actions: [], externalSteps: [], ...over,
+});
+const haStatus = (over: Partial<HomeAutomationStatus> = {}, comps: Partial<Record<HomeAutomationComponentId, Partial<HomeAutomationComponent>>> = {}): HomeAutomationStatus => ({
+  generatedAt: new Date().toISOString(),
+  topology: "none",
+  node: "node-a",
+  nodes: [
+    { id: "node-a", connected: true, selected: true, blockers: [], hostAddress: "node-a.example.internal" },
+    { id: "node-b", connected: false, selected: false, blockers: [], lastSeenAt: new Date(Date.now() - 3600_000).toISOString() },
+  ],
+  blockers: [],
+  components: ([
+    ["mqtt", "MQTT broker"], ["home-assistant", "Home Assistant (runs here)"], ["home-automation", "Existing Home Assistant"],
+    ["zigbee", "Zigbee"], ["zwave", "Z-Wave"], ["matter", "Matter"], ["thread", "Thread border router"], ["bluetooth", "Bluetooth"],
+  ] as [HomeAutomationComponentId, string][]).map(([id, title]) => haComp(id, title, comps[id])),
+  ...over,
+});
+const haRender = (status: HomeAutomationStatus, draft: HADraft, extra: Record<string, unknown> = {}) =>
+  text(renderToString(h(HomeAutomationView, { status, draft, onDraft: () => {}, onOpenPackage: () => {}, onOpenServices: () => {}, ...extra })));
+
+// One input tag, whatever order SSR writes its attributes in.
+const haInput = (html: string, attr: string) => new RegExp(`<input[^>]*${attr}[^>]*>`).exec(html)?.[0] ?? "";
+
+const haFresh = haRender(haStatus(), EMPTY_DRAFT);
+check("home automation offers both topologies",
+  haFresh.includes("Connect existing Home Assistant") && haFresh.includes("Run it here"), haFresh.slice(0, 800));
+check("the topologies are a keyboard-reachable radio group",
+  (haFresh.match(/type="radio" name="ha-topology"/g) ?? []).length === 2 && haFresh.includes("<legend"), haFresh.slice(0, 800));
+check("before a topology is chosen, no protocol or machine is asked for",
+  !haFresh.includes("Which kinds of devices") && !haFresh.includes("Which machine"));
+check("a fresh house is told nothing is installed", haFresh.includes("Nothing for home automation is installed yet"));
+check("and nothing on it reads as installed", !haFresh.includes(">Installed<"));
+check("the advanced path to Services stays one click away", haFresh.includes("Open Services"));
+
+const haManagedDraft: HADraft = { topology: "managed", goals: ["zigbee", "matter-thread"], bluetooth: "proxy", step: "choose" };
+const haManaged = haRender(haStatus({}, { mqtt: { selection: "dependency" } }), haManagedDraft);
+for (const g of Object.values(GOAL_COPY)) check(`the managed path explains ${g.title}`, haManaged.includes(g.body.slice(0, 40)));
+for (const b of ["host-bluez", "proxy"] as const) check(`the managed path explains Bluetooth: ${BLUETOOTH_COPY[b].title}`,
+  haManaged.includes(BLUETOOTH_COPY[b].body.slice(0, 40)));
+check("the managed path asks which machine, offline ones included",
+  haManaged.includes("Which machine") && haManaged.includes("node-a") && haManaged.includes("Offline, last seen"), haManaged);
+check("a chosen protocol is a ticked checkbox", haInput(haManaged, 'id="ha-goal-zigbee"').includes('checked=""'), haManaged);
+check("an unchosen protocol is not", !haInput(haManaged, 'id="ha-goal-zwave"').includes('checked=""'));
+check("each protocol checkbox is named and described",
+  haManaged.includes('aria-labelledby="ha-goal-zigbee-title"') && haManaged.includes('aria-describedby="ha-goal-zigbee-desc"'));
+check("a chosen protocol reads as chosen and not installed",
+  haManaged.includes(">Chosen<") && haManaged.includes("Not installed") && !haManaged.includes(">Installed<"), haManaged);
+check("the set-up-now card lists nothing that is only chosen", haManaged.includes("Nothing for home automation is installed yet"));
+check("what a choice pulls in is named from the API", haManaged.includes("Also needed: MQTT broker"));
+check("the managed path continues to the readiness step", haManaged.includes("Next: check the machine is ready") && haManaged.includes("Continue"));
+check("Bluetooth is only offered where Home Assistant runs here",
+  !haRender(haStatus(), { ...haManagedDraft, topology: "external" }).includes('name="ha-bluetooth"'));
+
+// Installed is the API's word, not the draft's.
+const haInstalledStatus = haStatus({ topology: "managed" }, {
+  "home-assistant": { selection: "installed", state: "ready" },
+  zigbee: { selection: "installed", state: "degraded" },
+  zwave: { selection: "pending", state: "awaiting_approval" },
+  thread: { selection: "requested", state: "unavailable", reason: "No catalog package provides thread." },
+});
+// A house already running something opens on its status (#451); the
+// choices are for adding to it, on the topology it already runs.
+const haInstalledHome = haRender(haInstalledStatus, { ...EMPTY_DRAFT });
+check("a house already running Home Assistant opens on its status, not the choices",
+  haInstalledHome.includes("Your home automation") && !haInstalledHome.includes('name="ha-topology"'), haInstalledHome.slice(0, 1200));
+const haInstalled = haRender(haInstalledStatus, { ...EMPTY_DRAFT, step: "add" });
+check("adding to it keeps the topology it runs and does not ask again",
+  haInstalled.includes("Add to your home automation") && haInstalled.includes("Home Assistant runs here") &&
+  !haInstalled.includes('name="ha-topology"') && haInstalled.includes("Back to status"), haInstalled.slice(0, 1200));
+check("installed parts are listed under set up now",
+  haInstalled.includes("Home Assistant (runs here)") && haInstalled.includes("Installed, needs attention"));
+check("a pending plan reads as waiting, not installed", haInstalled.includes("Plan waiting for approval"));
+check("an installed protocol cannot be unticked here", /checked="".*disabled=""|disabled="".*checked=""/.test(haInput(haInstalled, 'id="ha-goal-zigbee"')), haInstalled);
+check("an unavailable protocol says why", haInstalled.includes("Not available here: No catalog package provides thread."));
+check("standing never promotes a request to installed",
+  componentStanding(haComp("zigbee", "Zigbee", { selection: "requested", state: "ready_to_propose" })).label === "Not installed");
+
+const haExternal = haRender(haStatus({}, {
+  "home-automation": { selection: "requested", state: "ready_to_propose", package: "home-automation",
+    actions: [{ kind: "install_package", label: "Install", package: "home-automation" }] },
+}), { ...EMPTY_DRAFT, topology: "external" });
+check("the external path leads to the guided setup, the package form still one click away",
+  haExternal.includes("Set up the connector") && haExternal.includes("Next: the Home Assistant connector") &&
+  haExternal.includes("Use the package form instead"), haExternal);
+check("the external path does not jump to the managed readiness step", !haExternal.includes("Next: check the machine is ready"));
+
+const haReady = haRender(haStatus({}, {
+  "home-assistant": { selection: "requested", state: "blocked", reason: "blocked by node",
+    blockers: [{ code: "ipv6_missing", severity: "blocking", message: "IPv6 is off on node-a.", evidence: [], actions: [] }] },
+}), { ...haManagedDraft, step: "readiness" });
+check("the readiness step shows the API's own blockers", haReady.includes("Is node-a ready?") && haReady.includes("IPv6 is off on node-a."), haReady);
+check("the readiness step can go back and check again", haReady.includes("Back to choices") && haReady.includes("Check again"));
+
+// The draft: kept across leaving and coming back, and never trusted.
+const haStore = new Map<string, string>();
+const haStorage = { getItem: (k: string) => haStore.get(k) ?? null, setItem: (k: string, v: string) => void haStore.set(k, v) };
+saveDraft(haManagedDraft, haStorage);
+const haBack = loadDraft(haStorage);
+check("choices survive leaving the screen", JSON.stringify(haBack) === JSON.stringify({ ...haManagedDraft, node: undefined }), JSON.stringify(haBack));
+haStore.set("wildstone.homeAutomation.draft", JSON.stringify({ topology: "cloud", goals: ["zigbee", "wifi-toaster"], bluetooth: "laser", step: "readiness" }));
+const haJunk = loadDraft(haStorage);
+check("a junk draft keeps only what it recognises",
+  haJunk.topology === undefined && haJunk.goals.join() === "zigbee" && haJunk.bluetooth === "none" && haJunk.step === "choose", JSON.stringify(haJunk));
+check("a throwing storage reads as a clean start",
+  JSON.stringify(loadDraft({ getItem: () => { throw new Error("denied"); } })) === JSON.stringify(EMPTY_DRAFT));
+saveDraft(haManagedDraft, { setItem: () => { throw new Error("quota"); } });
+check("a throwing storage does not break saving", true);
+const haQ = queryOf(haManagedDraft);
+check("the draft asks the API about exactly the chosen components",
+  haQ.topology === "managed" && haQ.select?.slice().sort().join() === "bluetooth,matter,thread,zigbee" && haQ.bluetooth === "proxy", JSON.stringify(haQ));
+check("Bluetooth is not asked about on the external path",
+  !queryOf({ ...haManagedDraft, topology: "external" }).select?.includes("bluetooth"));
+
+// Home automation readiness (#449): the chosen machine's evidence and
+// the radio picker, rendered from the aggregate's answer (#446) alone.
+import { manualPathProblem, radioIdentity, selectedRadios } from "../src/views/HomeAutomation";
+import type { HomeAutomationBlocker, HomeAutomationNode, HomeAutomationRadio, ReadinessCheck } from "../src/api";
+
+const haVisible = (html: string) => html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
+const haChecksReady: ReadinessCheck[] = [
+  { check: "ipv6", state: "ready", subject: "all", value: "enabled" },
+  { check: "interface_ipv6", state: "ready", subject: "eth0", value: "fd00::10/64" },
+  { check: "multicast", state: "ready", subject: "eth0" },
+  { check: "ipv6_forwarding", state: "ready", subject: "all", value: "1" },
+  { check: "dbus_system_bus", state: "ready", subject: "/run/dbus/system_bus_socket" },
+  { check: "bluez_service", state: "ready", subject: "bluetooth.service", value: "active" },
+  { check: "bluetooth_adapter", state: "ready", subject: "hci0" },
+  { check: "tun", state: "ready", subject: "/dev/net/tun" },
+];
+const haWithChecks = (over: Partial<Record<string, Partial<ReadinessCheck>>>) =>
+  haChecksReady.map((c) => ({ ...c, ...(over[c.check] ?? {}) }));
+const haZigbeeRadio: HomeAutomationRadio = {
+  id: "serial-by-id:usb-Example_Zigbee_Coordinator_0001-if00-port0", kind: "zigbee", kindReason: "USB id 10c4:ea60 is a known Zigbee coordinator",
+  kernelName: "ttyUSB0", devPath: "/dev/ttyUSB0", byIdPaths: ["/dev/serial/by-id/usb-Example_Zigbee_Coordinator_0001-if00-port0"],
+  usb: { vendorId: "10c4", productId: "ea60", manufacturer: "Example", product: "Zigbee Coordinator" },
+  owners: [], suitableFor: [{ component: "zigbee", fit: "detected" }],
+};
+const haSpareZigbee: HomeAutomationRadio = {
+  ...haZigbeeRadio, id: "usb:SPARE0002", kernelName: "ttyACM1", devPath: "/dev/ttyACM1", byIdPaths: [],
+  usb: { vendorId: "1a86", productId: "55d4", product: "Spare Zigbee Stick", serial: "SPARE0002" },
+};
+const haUnknownRadio: HomeAutomationRadio = {
+  id: "sysfs:/devices/pci0000:00/usb1/1-3", kind: "unknown", kindReason: "generic USB-serial bridge; the protocol is not identifiable",
+  kernelName: "ttyUSB1", devPath: "/dev/ttyUSB1", byIdPaths: [],
+  owners: [], suitableFor: [{ component: "zigbee", fit: "possible" }, { component: "zwave", fit: "possible" }, { component: "thread", fit: "possible" }],
+};
+const haNodeOk = (over: Partial<HomeAutomationNode> = {}, radios: HomeAutomationRadio[] = [haZigbeeRadio], checks = haChecksReady): HomeAutomationNode => ({
+  id: "node-a", connected: true, selected: true, agentVersion: "0.40.0", protocolMinor: 27, hostAddress: "192.0.2.10", blockers: [],
+  readiness: { probe: "ok", platformSupported: true, checks,
+    interfaces: [{ name: "eth0", up: true, multicast: true, defaultRoute: true, addresses: ["192.0.2.10/24", "fd00::10/64"] }] },
+  radioInventory: { probe: "ok", platformSupported: true, radios, unresolvedClaims: [] },
+  ...over,
+});
+const haRetry = { kind: "retry_probe" as const, label: "Check again", node: "node-a" };
+const haReadiness = (node: HomeAutomationNode, comps: Parameters<typeof haStatus>[1], draft: Partial<HADraft> = {}, extra: Record<string, unknown> = {}) => {
+  const status = haStatus({ nodes: [node] }, comps);
+  const d: HADraft = { topology: "managed", goals: [], bluetooth: "none", step: "readiness", ...draft };
+  const html = text(renderToString(h(HomeAutomationView, { status, draft: d, onDraft: () => {}, onOpenPackage: () => {}, onOpenServices: () => {}, ...extra })));
+  return { html, seen: haVisible(html), status, draft: d };
+};
+
+// Fully ready: every check passes and the one identified radio is the
+// pick, without anyone reading a serial path.
+const haZigbeeReady = { selection: "requested" as const, state: "ready_to_propose" as const, reason: "ready to propose",
+  radioCandidates: [haZigbeeRadio.id] };
+const haFull = haReadiness(haNodeOk(), {
+  zigbee: haZigbeeReady,
+  mqtt: { selection: "dependency", state: "ready_to_propose", reason: "ready to propose" },
+  matter: { selection: "requested", state: "ready_to_propose", reason: "ready to propose" },
+}, { goals: ["zigbee", "matter-wifi"] });
+check("a fully ready machine says so", haFull.seen.includes("Ready: nothing stands in the way of what you chose"), haFull.seen);
+check("the machine's connectivity and address are shown", haFull.seen.includes("Connected") && haFull.seen.includes("192.0.2.10"));
+check("every readiness check is evidence in a table with row headers",
+  haFull.html.includes('<th scope="row">IPv6') && haFull.seen.includes("TUN device") && haFull.seen.includes("BlueZ Bluetooth service") &&
+  !haFull.seen.includes("Missing"), haFull.seen);
+check("the broker the choice needs is on the page with its standing", haFull.seen.includes("MQTT broker") && haFull.seen.includes("needed by your choices"));
+check("the radio is named by what it says it is", haFull.seen.includes("Example Zigbee Coordinator") && haFull.seen.includes("Zigbee radio"));
+check("its stable identity is explained", haFull.seen.includes("Recognised by its own name, in any USB port"));
+check("its suitability is the API's", haFull.seen.includes("Zigbee (identified)"));
+check("the radio picker is a labelled radio group",
+  haFull.html.includes('name="ha-radio-zigbee"') && haFull.seen.includes("Radio for Zigbee") && haFull.html.includes("<legend"));
+check("the only identified radio is picked for the household",
+  haInput(haFull.html, 'name="ha-radio-zigbee"').includes('checked=""') && haFull.seen.includes("chosen for you"), haFull.html);
+check("the pick is the radio's stable id", selectedRadios(haFull.draft, haFull.status).zigbee === haZigbeeRadio.id);
+check("the ordinary flow asks for no device path", !/<input[^>]*type="text"/.test(haFull.html) && !haFull.seen.includes("/dev/tty"), haFull.seen);
+check("typing a path is behind an explicit advanced control",
+  /<button[^>]*aria-expanded="false"[^>]*>Advanced: enter a device path by hand/.test(haFull.html), haFull.html);
+check("a component that takes no radio gets no picker (Matter over Wi-Fi)", !haFull.seen.includes("Radio for Matter"));
+
+// No radios: the remedy is the API's exact, node-specific step.
+const haNoRadioBlocker = (title: string, severity: "blocking" | "warning"): HomeAutomationBlocker => ({
+  code: "no_radio", severity, message: `No ${title} radio is plugged into node-a.`,
+  evidence: [{ source: "radios", subject: "node-a", state: "none", value: "0 radio(s) inventoried" }],
+  actions: [{ kind: "manual_step", label: "Plug in a radio", node: "node-a", component: "zwave",
+    instructions: [`Plug a ${title} adapter into node-a (a USB extension cable away from the machine helps reception), then check again.`] }, haRetry],
+});
+const haNone = haReadiness(haNodeOk({}, []), {
+  zwave: { selection: "requested", state: "blocked", reason: "blocked", blockers: [haNoRadioBlocker("Z-Wave", "blocking")] },
+}, { goals: ["zwave"] });
+check("no radios says none were found", haNone.seen.includes("No radios found"), haNone.seen);
+check("no radios counts as standing in the way", haNone.seen.includes("One thing stands in the way"));
+check("the plug-in step is the API's own words for this machine",
+  haNone.seen.includes("Plug a Z-Wave adapter into node-a (a USB extension cable away from the machine helps reception), then check again."));
+check("the failing evidence is on the page", haNone.seen.includes("node-a: none — 0 radio(s) inventoried"), haNone.seen);
+check("the manual step offers Check again", /<button[^>]*>Check again<\/button>/.test(haNone.html.slice(haNone.html.indexOf("ha-blocker-msg"))));
+check("an empty picker says why", haNone.seen.includes("No radio on node-a suits Z-Wave"));
+
+// Unknown radio: offered only where the API says "possible", never named
+// a Zigbee stick because of what it is called.
+const haUnknownComps = {
+  zigbee: { selection: "requested" as const, state: "ready_to_propose" as const, reason: "ready", radioCandidates: [haUnknownRadio.id] },
+  zwave: { selection: "requested" as const, state: "ready_to_propose" as const, reason: "ready", radioCandidates: [haUnknownRadio.id] },
+};
+const haUnknown = haReadiness(haNodeOk({}, [haUnknownRadio]), haUnknownComps, { goals: ["zigbee", "zwave"] });
+check("an unidentified radio is called that", haUnknown.seen.includes("Unidentified serial device"), haUnknown.seen);
+check("its suitability is only possible", haUnknown.seen.includes("Zigbee (possible, not identified)"));
+check("a port-bound identity is flagged as not stable",
+  haUnknown.seen.includes("moving it to another port makes it a different radio") && haUnknown.seen.includes("Not stable"));
+check("an unidentified radio is never picked for the household",
+  JSON.stringify(selectedRadios(haUnknown.draft, haUnknown.status)) === "{}" && !haUnknown.seen.includes("chosen for you"));
+check("the household is asked to choose", haUnknown.seen.includes("Choose which radio to use for Zigbee and Z-Wave"));
+check("picking it warns it did not identify itself", haUnknown.seen.includes("could be a Zigbee radio, but it did not say so"));
+const haUnknownPicked = haReadiness(haNodeOk({}, [haUnknownRadio]), haUnknownComps, { goals: ["zigbee", "zwave"], radios: { zigbee: haUnknownRadio.id } });
+check("one radio cannot be picked for two protocols",
+  /disabled=""/.test(haInput(haUnknownPicked.html, 'name="ha-radio-zwave"')) && haUnknownPicked.seen.includes("Chosen for Zigbee"), haUnknownPicked.html);
+check("and only the first pick counts",
+  JSON.stringify(selectedRadios({ ...haUnknownPicked.draft, radios: { zigbee: haUnknownRadio.id, zwave: haUnknownRadio.id } }, haUnknownPicked.status)) ===
+    JSON.stringify({ zigbee: haUnknownRadio.id }));
+const haStale = haReadiness(haNodeOk(), { zigbee: haZigbeeReady }, { goals: ["zigbee"], radios: { zigbee: "usb:GONE" } });
+check("a pick that is no longer offered is said so, not kept",
+  haStale.seen.includes("no longer offered") && selectedRadios(haStale.draft, haStale.status).zigbee === undefined, haStale.seen);
+
+// Duplicate owner: two services hold one radio.
+const haShared: HomeAutomationRadio = { ...haZigbeeRadio, owners: [
+  { device: "/dev/ttyUSB0", radioId: haZigbeeRadio.id, container: "zigbee2mqtt", package: "zigbee2mqtt", component: "zigbee", capability: "zigbee", source: "/dev/serial/by-id/usb-Example_Zigbee_Coordinator_0001-if00-port0" },
+  { device: "/dev/ttyUSB0", radioId: haZigbeeRadio.id, container: "camera-app", package: "camera-app", source: "/dev/ttyUSB0" },
+] };
+const haDup = haReadiness(haNodeOk({}, [haShared, haSpareZigbee]), {
+  zigbee: { selection: "installed", state: "degraded", reason: "shares its radio", radios: [haShared.owners[0]],
+    blockers: [{ code: "radio_conflict", severity: "blocking", message: "Zigbee shares its radio with another service; a radio answers one program at a time.",
+      evidence: [{ source: "statefile", subject: "Container/zigbee2mqtt", value: "/dev/serial/by-id/usb-Example_Zigbee_Coordinator_0001-if00-port0", detail: "zigbee2mqtt" },
+        { source: "statefile", subject: "Container/camera-app", value: "/dev/ttyUSB0", detail: "camera-app" }],
+      actions: [{ kind: "open_service", label: "Open camera-app", package: "camera-app" },
+        { kind: "select_radio", label: "Choose another radio", component: "zigbee", node: "node-a", radioIds: [haSpareZigbee.id] }] }] },
+}, { goals: ["zigbee"] });
+check("a radio held twice is shown as held twice", haDup.seen.includes("Used by 2 services") && haDup.seen.includes("More than one service has this radio"), haDup.seen);
+check("its owners are named", haDup.seen.includes("Zigbee (zigbee2mqtt)") && haDup.seen.includes("camera-app"));
+check("the conflict's evidence stays on the page", haDup.seen.includes("Container/camera-app — /dev/ttyUSB0 · camera-app"), haDup.seen);
+check("the owning service can be opened", /<button[^>]*>Open camera-app<\/button>/.test(haDup.html));
+check("choosing another radio goes to the picker", /<a[^>]*href="#ha-radio-zigbee"[^>]*>Choose another radio<\/a>/.test(haDup.html) && haDup.html.includes('id="ha-radio-zigbee"'));
+check("the replacement offered is the API's", haDup.seen.includes("Replacement radio for Zigbee") && haDup.seen.includes("Spare Zigbee Stick"));
+check("the radio in use now is named", haDup.seen.includes("Using Example Zigbee Coordinator"));
+
+// Offline machine: nothing checked, nothing pretended.
+const haOfflineBlocker: HomeAutomationBlocker = { code: "node_offline", severity: "blocking",
+  message: "node-a is not connected, so its radios and prerequisites cannot be checked and nothing can change on it.",
+  evidence: [{ source: "node", subject: "node-a", state: "disconnected" }], actions: [haRetry] };
+const haOffline = haReadiness(haNodeOk({ connected: false, lastSeenAt: new Date(Date.now() - 7200_000).toISOString(), blockers: [haOfflineBlocker],
+  readiness: { probe: "offline", platformSupported: false, interfaces: [], checks: [] },
+  radioInventory: { probe: "offline", platformSupported: false, radios: [], unresolvedClaims: [] } }), {
+  zigbee: { selection: "requested", state: "blocked", reason: "blocked", blockers: [haOfflineBlocker] },
+}, { goals: ["zigbee"] });
+check("an offline machine reads as offline", haOffline.seen.includes("Offline") && haOffline.seen.includes("Last seen 2h ago"), haOffline.seen);
+check("its checks are not checked, and say why", haOffline.seen.includes("Not checked: node-a is offline."));
+check("no check reads as ready when nothing was checked", !haOffline.seen.includes(" Ready "));
+check("the node blocker offers Check again", haOffline.seen.includes("node-a is not connected") && haOffline.seen.includes("Check again"));
+check("an offline machine offers no radio to pick", !haOffline.html.includes('name="ha-radio-zigbee"'));
+
+// Missing IPv6: exact instructions, and Check again keeps the evidence.
+const haIpv6Blocker: HomeAutomationBlocker = { code: "ipv6_forwarding_missing", severity: "blocking",
+  message: "Thread border router: IPv6 forwarding is missing on node-a.", check: { check: "ipv6_forwarding", subject: "all" },
+  evidence: [{ source: "readiness", subject: "all", state: "missing", value: "0", detail: "net.ipv6.conf.all.forwarding" }],
+  actions: [{ kind: "manual_step", label: "How to fix this", node: "node-a", component: "thread", instructions: [
+    "IPv6 forwarding is off on node-a; a Thread border router routes IPv6 between Thread and your LAN.",
+    "Run: sudo sysctl -w net.ipv6.conf.all.forwarding=1 net.ipv6.conf.eth0.accept_ra=2",
+    "Persist both in /etc/sysctl.d/60-wildstone-thread.conf (accept_ra=2 keeps the machine's own IPv6 route while forwarding).",
+  ] }, haRetry] };
+const haIpv6Node = haNodeOk({}, [], haWithChecks({ ipv6_forwarding: { state: "missing", value: "0", detail: "net.ipv6.conf.all.forwarding" },
+  bluetooth_adapter: { state: "missing" } }));
+const haIpv6Comps = { thread: { selection: "requested" as const, state: "blocked" as const, reason: "blocked", blockers: [haIpv6Blocker] } };
+const haIpv6 = haReadiness(haIpv6Node, haIpv6Comps, { goals: ["matter-thread"] });
+check("missing IPv6 forwarding is shown in the evidence table", /IPv6 forwarding.*Missing/.test(haIpv6.seen), haIpv6.seen);
+check("it is marked as what blocks the choice", /IPv6 forwarding[^]*?st-bad[^>]*>Missing/.test(haIpv6.html));
+check("a missing check nothing chosen needs is a fact, not an alarm",
+  /Bluetooth adapter[^]*?st-mute[^>]*>Missing/.test(haIpv6.html) && haIpv6.seen.includes("not needed for what you chose"), haIpv6.html);
+check("the fix is the API's exact node-specific command",
+  haIpv6.seen.includes("Run: sudo sysctl -w net.ipv6.conf.all.forwarding=1 net.ipv6.conf.eth0.accept_ra=2") && haIpv6.seen.includes("How to fix this on node-a"));
+check("the instructions are an ordered list", haIpv6.html.includes("<ol>"));
+const haIpv6Again = haReadiness(haIpv6Node, haIpv6Comps, { goals: ["matter-thread"] }, { loading: true });
+check("checking again keeps the failing evidence visible",
+  haIpv6Again.seen.includes("all: missing — 0 · net.ipv6.conf.all.forwarding") && haIpv6Again.seen.includes("sudo sysctl -w") && haIpv6Again.seen.includes("Checking…"), haIpv6Again.seen);
+check("and cannot be pressed twice", /<button[^>]*disabled=""[^>]*>Check again<\/button>/.test(haIpv6Again.html));
+
+// Missing BlueZ: the host path's remedy, and no picker for an adapter
+// BlueZ uses without claiming.
+const haBtAdapter: HomeAutomationRadio = { ...haZigbeeRadio, id: "sysfs:/devices/usb1/1-4", kind: "bluetooth", kindReason: "bluetooth class",
+  kernelName: "hci0", byIdPaths: [], usb: { vendorId: "0a12", productId: "0001", product: "Bluetooth Dongle" },
+  suitableFor: [{ component: "bluetooth", fit: "detected" }] };
+const haBlueZ = haReadiness(haNodeOk({}, [haBtAdapter], haWithChecks({ bluez_service: { state: "missing", value: "inactive" } })), {
+  bluetooth: { selection: "requested", state: "blocked", reason: "blocked", mode: "host-bluez", blockers: [{
+    code: "bluez_service_missing", severity: "blocking", check: { check: "bluez_service", subject: "bluetooth.service" }, message: "Bluetooth: BlueZ Bluetooth service is missing on node-a.",
+    evidence: [{ source: "readiness", subject: "bluetooth.service", state: "missing", value: "inactive" }],
+    actions: [{ kind: "manual_step", label: "How to fix this", node: "node-a", component: "bluetooth", instructions: [
+      "The BlueZ Bluetooth service is not running on node-a.",
+      "Install and start it: sudo apt install bluez && sudo systemctl enable --now bluetooth",
+    ] }, haRetry] }] },
+}, { bluetooth: "host-bluez" });
+check("missing BlueZ is in the Bluetooth evidence", /BlueZ Bluetooth service[^]*?st-bad[^>]*>Missing/.test(haBlueZ.html), haBlueZ.seen);
+check("with the API's install step", haBlueZ.seen.includes("Install and start it: sudo apt install bluez &amp;&amp; sudo systemctl enable --now bluetooth"), haBlueZ.seen);
+check("the adapter is listed but not put in a picker", haBlueZ.seen.includes("Bluetooth Dongle") && !haBlueZ.seen.includes("Radio for Bluetooth"));
+
+// Advanced/manual path: only when asked for, validated, and it takes
+// the component out of the radio-id selection.
+const haManualDraft = { goals: ["zigbee" as const], radios: { zigbee: haZigbeeRadio.id }, manualRadios: { zigbee: "/dev/ttyAMA0" } };
+const haManual = haReadiness(haNodeOk(), { zigbee: haZigbeeReady }, haManualDraft);
+check("a remembered manual path opens the advanced panel",
+  /<input[^>]*id="ha-manual-zigbee"[^>]*>/.test(haManual.html) && haManual.html.includes('aria-expanded="true"') && haManual.html.includes('<label for="ha-manual-zigbee"'), haManual.html);
+check("a manual path replaces the picked radio id", selectedRadios(haManual.draft, haManual.status).zigbee === undefined);
+check("a manual path must be a device path",
+  manualPathProblem("ttyUSB0") !== undefined && manualPathProblem("/dev/serial/by-id/x") === undefined && manualPathProblem("") === undefined);
+const haManualBad = haReadiness(haNodeOk(), { zigbee: haZigbeeReady }, { ...haManualDraft, manualRadios: { zigbee: "COM3" } });
+check("a bad manual path is announced", haManualBad.html.includes('aria-invalid="true"') && haManualBad.seen.includes("A device path starts with /dev/"));
+check("radio identities are read from the documented id prefixes",
+  radioIdentity("usb:X").stable && radioIdentity("serial-by-id:x").stable && !radioIdentity("sysfs:/x").stable);
+
+// The picks are part of the draft, and survive only as known ids.
+haStore.set("wildstone.homeAutomation.draft", JSON.stringify({ topology: "managed", goals: ["zigbee"], step: "readiness",
+  radios: { zigbee: haZigbeeRadio.id, toaster: "usb:1", zwave: 5 }, manualRadios: [] }));
+const haRadioDraft = loadDraft(haStorage);
+check("radio picks survive leaving the screen, junk dropped",
+  JSON.stringify(haRadioDraft.radios) === JSON.stringify({ zigbee: haZigbeeRadio.id }) && haRadioDraft.manualRadios === undefined, JSON.stringify(haRadioDraft));
+
+check("the readiness step continues to the setup sequence",
+  haRender(haStatus({}, { zigbee: haZigbeeReady }), { ...haManagedDraft, step: "readiness" }).includes("Continue to setup"));
+
+// Home automation setup sequence (#450). A fake Keystone with the
+// orchestration's semantics (#447): one plan at a time, expectStep, a
+// 409 carrying the fresh answer, approval only from the Plans side, and
+// unverifiable Home Assistant steps that end only on confirmedSteps.
+// The screen's own functions drive it — planRequestOf, fetchPreview,
+// proposeStep — and the screen is rendered at every state. A "reload"
+// is a fresh draft read back from storage plus a fresh preview: nothing
+// else survives it, which is the point.
+import {
+  externalStanding, fetchPreview, planRequestOf, pollDelay, proposeStep, stepStanding, withConfirmed, withOption,
+} from "../src/views/HomeAutomationSetup";
+import type { SetupClient, SetupState } from "../src/views/HomeAutomationSetup";
+import { ApiError } from "../src/api";
+import type { HomeAutomationChecklistStep, HomeAutomationPlanAnswer, HomeAutomationPlanRequest, HomeAutomationPlanStep } from "../src/api";
+
+type HAPhase = "none" | "proposed" | "applying" | "observing" | "ready" | "failed";
+interface HAFakePlan { id: string; comp: HomeAutomationComponentId; state: "proposed" | "approved" | "applied" | "failed" | "rejected" }
+
+class FakeOrchestrator implements SetupClient {
+  order: { id: HomeAutomationComponentId; title: string; pkg: string }[] = [
+    { id: "mqtt", title: "MQTT broker", pkg: "mqtt-mosquitto" },
+    { id: "home-assistant", title: "Home Assistant (runs here)", pkg: "home-assistant" },
+    { id: "zigbee", title: "Zigbee", pkg: "zigbee2mqtt" },
+    { id: "matter", title: "Matter", pkg: "matter-matterjs" },
+  ];
+  phase = new Map<HomeAutomationComponentId, HAPhase>(this.order.map((c) => [c.id, "none"]));
+  plans: HAFakePlan[] = [];
+  zigbeeRadios = ["usb:zb1"];
+  calls = { preview: 0, propose: 0 };
+  external: Omit<HomeAutomationChecklistStep, "due" | "confirmed" | "status">[] = [
+    { component: "zigbee", id: "ha_mqtt_integration", title: "Connect Home Assistant to the MQTT broker", instructions: [
+      "In Home Assistant: Settings → Devices & services → Add integration → MQTT.",
+      "Broker node-a.example.internal, port 1883, username home-assistant, and the password Wildstone keeps as secret/mqtt-home-assistant on node-a.",
+    ] },
+    { component: "matter", id: "ha_matter_integration", title: "Add the Matter integration in Home Assistant", instructions: [
+      "In Home Assistant: Settings → Devices & services → Add integration → Matter.",
+      "Untick the add-on option and enter ws://127.0.0.1:5580/ws.",
+    ] },
+  ];
+
+  // The Plans screen and the house — never reachable from the wizard.
+  plan(id: string) { return this.plans.find((p) => p.id === id)!; }
+  approve(id: string) { const p = this.plan(id); p.state = "approved"; this.phase.set(p.comp, "applying"); }
+  failApply(id: string) { const p = this.plan(id); p.state = "failed"; this.phase.set(p.comp, "failed"); }
+  finishApply(id: string) { const p = this.plan(id); p.state = "applied"; this.phase.set(p.comp, "observing"); }
+  observeHealthy(comp: HomeAutomationComponentId) { this.phase.set(comp, "ready"); }
+  openPlan(comp: HomeAutomationComponentId) {
+    return this.plans.find((p) => p.comp === comp && (p.state === "proposed" || p.state === "approved"));
+  }
+
+  answer(req: HomeAutomationPlanRequest): HomeAutomationPlanAnswer {
+    const rejected: HomeAutomationBlocker[] = [];
+    const rid = req.radios?.zigbee;
+    if (rid && this.phase.get("zigbee") === "none" && !this.zigbeeRadios.includes(rid)) {
+      rejected.push({ code: "radio_stale", severity: "blocking", message: "The radio chosen for Zigbee is no longer a free Zigbee radio on node-a.",
+        evidence: [{ source: "radios", subject: rid, state: "unavailable" }],
+        actions: [{ kind: "select_radio", label: "Choose a radio", component: "zigbee", node: "node-a", radioIds: this.zigbeeRadios }] });
+    }
+    const radio = rid && !rejected.length ? rid : undefined;
+    const steps: HomeAutomationPlanStep[] = this.order.map((c) => {
+      const ph = this.phase.get(c.id)!;
+      const open = this.openPlan(c.id);
+      const st: HomeAutomationPlanStep = { id: "", component: c.id, title: c.title, action: "done", status: "upcoming",
+        reason: "", package: c.pkg, node: "node-a", blockers: [], actions: [] };
+      switch (ph) {
+        case "none":
+          if (c.id === "zigbee" && !radio) {
+            st.action = "resolve_blockers";
+            st.reason = "Choose which radio Zigbee should use.";
+            st.blockers = [{ code: "radio_choice_needed", severity: "blocking", message: st.reason, evidence: [],
+              actions: [{ kind: "select_radio", label: "Choose a radio", component: "zigbee", radioIds: this.zigbeeRadios }] }];
+          } else {
+            st.action = "install_package"; st.state = "ready_to_propose"; st.reason = `${c.title} is ready to be proposed.`;
+            st.params = { node: "node-a", ...(c.id === "zigbee" ? { usb_device: `/dev/serial/by-id/${radio}` } : {}) };
+            if (c.id === "zigbee") st.radioId = radio;
+          }
+          break;
+        case "proposed": st.action = "await_approval"; st.state = "awaiting_approval"; st.planId = open!.id; st.reason = "A plan is waiting for your approval."; break;
+        case "applying": st.action = "await_apply"; st.state = "applying"; st.planId = open!.id; st.reason = "An approved plan is being applied."; break;
+        case "observing": st.action = "await_observation"; st.state = "applying"; st.reason = "Installed; waiting for the first healthy observation."; break;
+        case "ready": st.action = "done"; st.state = "ready"; st.reason = "Installed and healthy."; break;
+        case "failed":
+          st.action = "resolve_blockers"; st.state = "degraded"; st.reason = "The last change did not finish applying.";
+          st.blockers = [{ code: "plan_failed", severity: "blocking", message: `The plan for ${c.title} failed to apply.`, evidence: [],
+            actions: [{ kind: "open_plan", label: "Review the plan", planId: this.plans.filter((p) => p.comp === c.id).pop()!.id }] }];
+          break;
+      }
+      st.id = `${c.id}:${st.action}` + (st.planId ? `:${st.planId}` : st.action === "install_package" ? `:${c.pkg}` : "");
+      return st;
+    });
+    let current = steps.findIndex((s) => s.action === "await_approval" || s.action === "await_apply");
+    if (current < 0) current = steps.findIndex((s) => s.action !== "done");
+    steps.forEach((s, i) => (s.status = i === current ? "current" : s.action === "done" ? "done" : "upcoming"));
+    const confirmed = new Set(req.confirmedSteps ?? []);
+    const externalSteps: HomeAutomationChecklistStep[] = this.external.map((e) => ({ ...e, status: "unverified",
+      due: this.phase.get(e.component) === "ready", confirmed: confirmed.has(`${e.component}/${e.id}`) }));
+    const base = { generatedAt: new Date().toISOString(), topology: req.topology, node: "node-a", sequence: steps, externalSteps,
+      rejected: rejected.length ? rejected : undefined };
+    if (current >= 0) return { ...base, complete: false, next: steps[current] };
+    const left = externalSteps.filter((e) => e.due && !e.confirmed);
+    if (left.length) {
+      return { ...base, complete: false, next: { id: "external_step:" + left.map((e) => `${e.component}/${e.id}`).join(","),
+        title: "Finish setup outside Wildstone", action: "external_step", status: "current",
+        reason: `Every package is installed; ${left.length} step(s) outside Wildstone remain. Wildstone cannot see these; confirm each once it is done.`,
+        blockers: [], actions: [], externalSteps: left } };
+    }
+    return { ...base, complete: true, next: { id: "done", title: "Home automation is set up", action: "done", status: "done",
+      reason: "Every selected component is installed and healthy, and every step outside Wildstone is done.", blockers: [], actions: [] } };
+  }
+
+  async homeAutomationPreview(req: HomeAutomationPlanRequest) {
+    this.calls.preview++;
+    const a = this.answer(req);
+    if (a.rejected) throw new ApiError(409, a.rejected.map((b) => b.message).join(" "), undefined, undefined, JSON.parse(JSON.stringify(a)));
+    if (isPkgStep(a.next)) a.preview = { plan: { summary: `Install ${a.next.package}`, steps: [] }, providedSecrets: [] };
+    return JSON.parse(JSON.stringify(a)) as HomeAutomationPlanAnswer;
+  }
+
+  async homeAutomationPropose(req: HomeAutomationPlanRequest) {
+    this.calls.propose++;
+    const a = this.answer(req);
+    const conflict = (msg: string) => new ApiError(409, msg, undefined, undefined, JSON.parse(JSON.stringify(a)));
+    if (a.rejected) throw conflict(a.rejected.map((b) => b.message).join(" "));
+    if (req.expectStep && req.expectStep !== a.next.id) throw conflict(`the next step is now ${a.next.id}, not ${req.expectStep}: nothing was proposed`);
+    if (!isPkgStep(a.next)) throw conflict(`nothing to propose: ${a.next.reason}`);
+    const p: HAFakePlan = { id: `plan-${this.plans.length + 1}`, comp: a.next.component!, state: "proposed" };
+    this.plans.push(p);
+    this.phase.set(p.comp, "proposed");
+    const after = this.answer(req);
+    after.plan = { id: p.id, seq: this.plans.length, createdAt: "", principal: "owner", summary: `Install ${a.next.package}`, risk: "low", state: "proposed" };
+    return JSON.parse(JSON.stringify(after)) as HomeAutomationPlanAnswer;
+  }
+}
+const isPkgStep = (s: HomeAutomationPlanStep) => s.action === "install_package" || s.action === "reconfigure_package";
+
+async function haSetupChecks() {
+  const ks = new FakeOrchestrator();
+  const store = new Map<string, string>();
+  const storage = { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => void store.set(k, v) };
+  let status = haStatus({ topology: "none" }, {
+    mqtt: { selection: "dependency" }, "home-assistant": { selection: "requested" },
+    zigbee: { selection: "requested", radioCandidates: ["usb:zb1"] }, matter: { selection: "requested" },
+  });
+  saveDraft({ topology: "managed", goals: ["zigbee", "matter-wifi"], bluetooth: "none", step: "setup", radios: { zigbee: "usb:zb1" } }, storage);
+
+  // What opening (or reloading) the page does: the draft from storage,
+  // then the server's answer. Nothing else is carried across.
+  const open = async () => {
+    const draft = loadDraft(storage);
+    const req = planRequestOf(draft, status, "managed");
+    const r = await fetchPreview(ks, req);
+    return { draft, req, answer: r.answer!, error: r.error };
+  };
+  const navigations: string[] = [];
+  const show = (draft: HADraft, setup: SetupState) => {
+    const html = haRender(status, draft, { setup, onNavigate: (v: string) => navigations.push(v) });
+    return { html, seen: haVisible(html) };
+  };
+  // No control on the page approves or rejects: the only mention of
+  // approval is the way to the Plans screen.
+  const noApprove = (html: string) => !/<button[^>]*>\s*(Approve|Reject)\b/i.test(html);
+  // One full package step: propose from the wizard, approve on the Plans
+  // side, apply, observe. Returns the plan id filed.
+  const runPackageStep = async (comp: HomeAutomationComponentId) => {
+    let s = await open();
+    check(`setup: ${comp} is the next step to propose`, s.answer.next.component === comp && s.answer.next.action === "install_package",
+      JSON.stringify(s.answer.next));
+    const filed = await proposeStep(ks, s.req, s.answer);
+    check(`setup: proposing ${comp} files one plan`, filed.notice.kind === "filed" && ks.openPlan(comp)?.state === "proposed", JSON.stringify(filed.notice));
+    s = await open();
+    check(`setup: ${comp} then waits on approval`, s.answer.next.action === "await_approval");
+    const id = s.answer.next.planId!;
+    ks.approve(id);
+    ks.finishApply(id);
+    ks.observeHealthy(comp);
+    return id;
+  };
+
+  // 1. A fresh start: the first package is ready to propose.
+  let s = await open();
+  check("setup: the request carries the chosen goals, node and radio id",
+    s.req.topology === "managed" && s.req.node === "node-a" && s.req.radios?.zigbee === "usb:zb1" &&
+    s.req.select?.slice().sort().join() === "matter,zigbee" && !s.req.confirmedSteps, JSON.stringify(s.req));
+  check("setup: the server orders it, dependency first", s.answer.next.component === "mqtt" && s.answer.sequence.length === 4);
+  let v = show(s.draft, { answer: s.answer });
+  check("setup: the screen routes to the setup step and names the next plan",
+    v.seen.includes("Set up, one plan at a time") && v.seen.includes("Next: MQTT broker") && v.seen.includes("Propose this plan"), v.seen.slice(0, 2000));
+  check("setup: proposing is said to only file the plan", v.seen.includes("Proposing only files the plan"));
+  check("setup: the sequence is listed in order", /MQTT broker.*Home Assistant \(runs here\).*Zigbee.*Matter/.test(v.seen.split("In order")[1] ?? ""));
+  check("setup: outside steps for parts not yet installed cannot be ticked",
+    v.seen.includes("After Zigbee is installed") && /<input[^>]*type="checkbox"[^>]*disabled=""/.test(v.html), v.seen);
+  check("setup: nothing reads as installed or set up yet", !v.html.includes(">Installed<") && !v.seen.includes("Home automation is set up"));
+  check("setup: nothing to poll for while it waits on the person to propose", pollDelay(s.answer) === null);
+
+  // 2. Propose: a plan is filed and the screen waits on approval.
+  const filed = await proposeStep(ks, s.req, s.answer);
+  check("setup: propose files exactly the previewed step", filed.notice.kind === "filed" && ks.plans.length === 1 && ks.calls.propose === 1);
+  const stale = s.answer;
+  s = await open();
+  check("setup: after proposing, the answer is re-fetched and waits on approval",
+    s.answer.next.action === "await_approval" && s.answer.next.planId === "plan-1", JSON.stringify(s.answer.next));
+  v = show(s.draft, { answer: s.answer, notice: filed.notice });
+  check("setup: waiting for approval is its own state, with the plan named",
+    v.seen.includes("Waiting for your approval") && v.seen.includes("plan-1") && v.seen.includes("is filed"), v.seen.slice(0, 3000));
+  check("setup: it sends the person to the Plans screen", v.seen.includes("Open Plans to review and approve"));
+  check("setup: there is no approve button and no propose button while waiting", noApprove(v.html) && !v.seen.includes("Propose this plan"), v.seen);
+  check("setup: it polls modestly while waiting on approval", (pollDelay(s.answer) ?? 0) >= 10_000);
+
+  // Cannot bypass approval: a stale preview, a direct propose, and the
+  // wizard's own propose all leave the one plan where it is.
+  const moved = await proposeStep(ks, s.req, stale);
+  check("setup: a stale step is refused with a 409 and the fresh answer",
+    moved.notice.kind === "moved" && moved.answer?.next.action === "await_approval" && ks.plans.length === 1, JSON.stringify(moved));
+  v = show(s.draft, { answer: moved.answer!, notice: moved.notice });
+  check("setup: the stale step is explained, nothing was proposed", v.seen.includes("Nothing was proposed: the next step changed"), v.seen);
+  const callsBefore = ks.calls.propose;
+  const noop = await proposeStep(ks, s.req, s.answer);
+  check("setup: the wizard does not even ask to propose while a plan waits",
+    noop.notice.kind === "refused" && ks.calls.propose === callsBefore);
+  const direct = await ks.homeAutomationPropose(s.req).then(() => null, (e: ApiError) => e);
+  check("setup: the server refuses a second plan while one is open", direct?.status === 409 && ks.plans.length === 1);
+  for (let i = 0; i < 3; i++) await open();
+  check("setup: asking again never advances an unapproved plan", ks.phase.get("mqtt") === "proposed" && ks.plan("plan-1").state === "proposed");
+  const setupSrc = readFileSync(join(process.cwd(), "src", "views", "HomeAutomationSetup.tsx"), "utf8") +
+    readFileSync(join(process.cwd(), "src", "views", "HomeAutomation.tsx"), "utf8");
+  check("setup: the wizard has no path to approving a plan", !/approvePlan|\/approve\b/.test(setupSrc));
+
+  // Reload #1, mid-approval: a fresh page resumes at the same plan.
+  s = await open();
+  check("setup: reload while awaiting approval resumes at the same plan",
+    s.answer.next.action === "await_approval" && s.answer.next.planId === "plan-1");
+
+  // 3. Approved on the Plans screen: applying, then observation.
+  ks.approve("plan-1");
+  s = await open();
+  v = show(s.draft, { answer: s.answer });
+  check("setup: applying is its own state", s.answer.next.action === "await_apply" && v.seen.includes("Applying") &&
+    !v.seen.includes("Waiting for your approval"), v.seen);
+  check("setup: approval does not read as installed", !v.html.includes(">Installed<"));
+  check("setup: it polls sooner while applying", (pollDelay(s.answer) ?? 99_999) <= 5_000);
+  ks.finishApply("plan-1");
+  // Reload #2, mid-observation (a closed Console, a rebooted host):
+  // only the server's state survives, and it is enough.
+  s = await open();
+  v = show(s.draft, { answer: s.answer });
+  check("setup: reload while waiting to see it running resumes there",
+    s.answer.next.action === "await_observation" && v.seen.includes("Applied, waiting to see it running"), v.seen);
+  check("setup: applied is still not installed", !v.html.includes(">Installed<"));
+  ks.observeHealthy("mqtt");
+  s = await open();
+  v = show(s.draft, { answer: s.answer });
+  check("setup: only an observed-healthy part reads as installed, and the sequence moves on",
+    v.html.includes(">Installed<") && s.answer.next.component === "home-assistant", v.seen);
+
+  // 4. Home Assistant.
+  await runPackageStep("home-assistant");
+
+  // 5. Zigbee: the radio is replaced, then another tab proposes first.
+  ks.zigbeeRadios = ["usb:zb2"];
+  s = await open();
+  check("setup: a radio that went away is refused with the fresh answer",
+    (s.answer.rejected ?? []).some((b) => b.code === "radio_stale") && ks.plans.length === 2, JSON.stringify(s.answer.rejected));
+  v = show(s.draft, { answer: s.answer });
+  check("setup: the refused radio is explained with a way to choose again",
+    v.seen.includes("no longer a free Zigbee radio") && v.seen.includes("Choose a radio"), v.seen);
+  // The refreshed inventory, and the person picking the new radio: the
+  // choices that remain valid (goals, machine, matter) are untouched.
+  status = haStatus({ topology: "none" }, {
+    mqtt: { selection: "installed", state: "ready" }, "home-assistant": { selection: "installed", state: "ready" },
+    zigbee: { selection: "requested", radioCandidates: ["usb:zb2"] }, matter: { selection: "requested" },
+  });
+  const afterUnplug = loadDraft(storage);
+  check("setup: a stale pick is not sent once the inventory no longer offers it",
+    planRequestOf(afterUnplug, status, "managed").radios?.zigbee === undefined);
+  saveDraft({ ...afterUnplug, radios: { zigbee: "usb:zb2" } }, storage);
+  s = await open();
+  check("setup: with a valid radio, the other choices carry on unchanged",
+    s.answer.next.component === "zigbee" && s.answer.next.radioId === "usb:zb2" && !s.answer.rejected &&
+    s.draft.goals.join() === "zigbee,matter-wifi" && s.draft.node === undefined, JSON.stringify(s.answer.next));
+  const otherTab = await ks.homeAutomationPropose({ ...s.req, expectStep: s.answer.next.id });
+  const race = await proposeStep(ks, s.req, s.answer);
+  check("setup: when another tab proposed first, this one files nothing",
+    race.notice.kind === "moved" && ks.plans.length === 3 && race.answer?.next.planId === otherTab.plan?.id, JSON.stringify(race.notice));
+  ks.approve(otherTab.plan!.id);
+  ks.finishApply(otherTab.plan!.id);
+  ks.observeHealthy("zigbee");
+
+  // 6. Matter: the apply fails, the failure is its own state, and the
+  // retry is a new plan, approved again.
+  s = await open();
+  await proposeStep(ks, s.req, s.answer);
+  s = await open();
+  const matterPlan = s.answer.next.planId!;
+  ks.approve(matterPlan);
+  ks.failApply(matterPlan);
+  s = await open();
+  v = show(s.draft, { answer: s.answer });
+  check("setup: a failed plan reads as failed, with the server's reason",
+    stepStanding(s.answer.next).label === "Plan failed" && v.seen.includes("The plan for Matter failed to apply.") &&
+    !v.seen.includes("Propose this plan"), v.seen);
+  check("setup: nothing is proposed from a failure", (await proposeStep(ks, s.req, s.answer)).notice.kind === "refused" && ks.plans.length === 4);
+  ks.phase.set("matter", "none"); // the household fixed what failed
+  await runPackageStep("matter");
+  check("setup: every plan was approved outside the wizard, one at a time",
+    ks.plans.length === 5 && ks.plans.filter((p) => p.state === "applied").length === 4 && ks.plans.filter((p) => p.state === "failed").length === 1,
+    JSON.stringify(ks.plans));
+
+  // 7. Every package is in and healthy. Not done: Home Assistant steps.
+  s = await open();
+  v = show(s.draft, { answer: s.answer });
+  check("setup: with every package in, it is not complete until the outside steps are",
+    !s.answer.complete && s.answer.next.action === "external_step" && !v.seen.includes("Home automation is set up"), v.seen);
+  check("setup: the outside steps are their own state", v.seen.includes("Steps left in Home Assistant") && v.seen.includes("To do in Home Assistant"));
+  check("setup: the exact Home Assistant instructions are shown",
+    v.seen.includes("ws://127.0.0.1:5580/ws") && v.seen.includes("Broker node-a.example.internal, port 1883"), v.seen);
+  check("setup: each step can be ticked off", (v.html.match(/<input[^>]*type="checkbox"/g) ?? []).length === 2 &&
+    !/<input[^>]*type="checkbox"[^>]*disabled=""/.test(v.html) && v.seen.includes("I have done this in Home Assistant"));
+
+  // Confirm one; reload #3: still not complete, and the tick is the
+  // person's word, not a verification.
+  saveDraft(withConfirmed(s.draft, "zigbee/ha_mqtt_integration", true), storage);
+  s = await open();
+  v = show(s.draft, { answer: s.answer });
+  check("setup: a confirmation survives a reload and is sent", s.req.confirmedSteps?.join() === "zigbee/ha_mqtt_integration");
+  check("setup: one step confirmed is not complete", !s.answer.complete && s.answer.next.action === "external_step");
+  check("setup: a confirmed step reads as confirmed by you, not verified",
+    v.seen.includes("You confirmed") && !v.seen.includes("Verified by Wildstone") && /<input[^>]*type="checkbox"[^>]*checked=""/.test(v.html), v.seen);
+  saveDraft(withConfirmed(s.draft, "matter/ha_matter_integration", true), storage);
+  s = await open();
+  v = show(s.draft, { answer: s.answer });
+  check("setup: complete only once every outside step is confirmed",
+    s.answer.complete && v.seen.includes("Home automation is set up") && v.seen.includes("every step in Home Assistant is done"), v.seen);
+  check("setup: nothing left to poll once complete", pollDelay(s.answer) === null);
+  // Un-confirming is honoured, and undoes "complete".
+  saveDraft(withConfirmed(s.draft, "matter/ha_matter_integration", false), storage);
+  s = await open();
+  check("setup: un-ticking a step takes completion back", !s.answer.complete && s.req.confirmedSteps?.join() === "zigbee/ha_mqtt_integration");
+  check("setup: the Plans link was offered, never used by the checks themselves", navigations.length === 0);
+
+  // Standing words, one per state the household must tell apart.
+  const kinds = (["await_approval", "await_apply", "await_observation", "external_step", "resolve_blockers", "done"] as const)
+    .map((a) => stepStanding({ id: a, title: "x", action: a, status: "current", reason: "", blockers: [], actions: [] }).label);
+  check("setup: approval, applying, observation, outside, failure and ready all read differently", new Set(kinds).size === kinds.length, kinds.join());
+  const es: HomeAutomationChecklistStep = { component: "zigbee", id: "x", title: "x", instructions: [], status: "unverified", due: true, confirmed: false };
+  check("setup: verified and confirmed are different words",
+    externalStanding({ ...es, status: "done" }, false, "Zigbee").label !== externalStanding(es, true, "Zigbee").label);
+
+  // The draft: confirmations and typed options survive, junk does not.
+  store.set("wildstone.homeAutomation.draft", JSON.stringify({ topology: "external", goals: [], step: "setup",
+    confirmedSteps: ["zigbee/ha_mqtt_integration", "toaster/x", 7, "matter/../../etc"],
+    options: { "home-automation": { ha_url: "http://ha.example.internal:8123", "bad key": "x", n: 5 }, toaster: { a: "b" } } }));
+  const d2 = loadDraft(storage);
+  check("setup: the setup step and its draft survive a reload, junk dropped",
+    d2.step === "setup" && d2.confirmedSteps?.join() === "zigbee/ha_mqtt_integration" &&
+    JSON.stringify(d2.options) === JSON.stringify({ "home-automation": { ha_url: "http://ha.example.internal:8123" } }), JSON.stringify(d2));
+  check("setup: clearing a typed option removes it", withOption(d2, "home-automation", "ha_url", "").options === undefined);
+  store.set("wildstone.homeAutomation.draft", JSON.stringify({ goals: [], step: "setup" }));
+  check("setup: no topology, no setup step", loadDraft(storage).step === "choose");
+
+  // A param only the household knows is asked for in place.
+  const ext = haRender(haStatus({}, {}), { ...EMPTY_DRAFT, topology: "external", step: "setup" }, { setup: { answer: {
+    generatedAt: new Date().toISOString(), topology: "external", node: "node-a", complete: false, sequence: [], externalSteps: [],
+    next: { id: "home-automation:resolve_blockers", component: "home-automation", title: "Existing Home Assistant", action: "resolve_blockers",
+      status: "current", reason: "Existing Home Assistant needs a value for ha_url.", blockers: [{ code: "param_needed", severity: "blocking",
+        message: "Existing Home Assistant needs a value for ha_url.", evidence: [], actions: [{ kind: "provide_option", label: "Provide ha_url",
+          component: "home-automation", package: "home-automation", params: { ha_url: "http://homeassistant.example.internal:8123" },
+          instructions: ["Where your Home Assistant answers."] }] }], actions: [] } } } });
+  check("setup: a needed value gets a labelled field with the package's example",
+    ext.includes('for="ha-opt-home-automation-ha_url"') && ext.includes('placeholder="http://homeassistant.example.internal:8123"') &&
+    ext.includes("Where your Home Assistant answers."), ext);
+}
+
+// Home automation status, repair and migration (#451). Once anything is
+// installed the screen is a composed status page: every fixture here is
+// the aggregate's answer plus the continuity read, and every repair on
+// screen must be one the API offered.
+import {
+  RadioReplaceView, RemovalView, addGoalDraft, backupLine, lastHealthy, removalSteps, replacementParams,
+} from "../src/views/HomeAutomationStatus";
+import type { CareClient } from "../src/views/HomeAutomationStatus";
+import type {
+  HomeAutomationContinuity, HomeAutomationContinuityView, HomeAutomationRadioOwner, PackageView as HAPackage, PlanRecord as HAPlanRecord,
+} from "../src/api";
+
+const haNow = new Date().toISOString();
+const haRes = (name: string, healthy = true, appHealth = "healthy") =>
+  ({ kind: "Container", name, node: "node-a", observed: true, healthy, appHealth, observedAt: haNow });
+const haSvc = (pkg: string) => ({ kind: "open_service" as const, label: "Open the service", package: pkg });
+const haZigbeeOwner: HomeAutomationRadioOwner = { device: haZigbeeRadio.byIdPaths[0], radioId: haZigbeeRadio.id,
+  container: "zigbee2mqtt", component: "zigbee", package: "zigbee-zigbee2mqtt", source: haZigbeeRadio.byIdPaths[0] };
+const haInstalledAs = (pkg: string, over: Partial<HomeAutomationComponent> = {}): Partial<HomeAutomationComponent> => ({
+  selection: "installed", state: "ready", reason: "Installed and healthy.", node: "node-a", package: pkg,
+  version: "2.0.1", installedVersion: "2.0.1", actions: [haSvc(pkg)], ...over,
+});
+const haHealthy: Parameters<typeof haStatus>[1] = {
+  mqtt: haInstalledAs("mqtt-mosquitto", { resources: [haRes("mosquitto")] }),
+  "home-assistant": haInstalledAs("home-assistant", {
+    resources: [haRes("home-assistant")],
+    addresses: [{ route: "home-assistant", url: "https://home.example.internal", healthy: true }],
+    backup: { plans: ["home-assistant"], volumes: ["home-assistant-config"], uncovered: [], lastSuccessAt: haNow, lastRunStatus: "succeeded" },
+  }),
+  zigbee: haInstalledAs("zigbee-zigbee2mqtt", {
+    resources: [haRes("zigbee2mqtt")], radios: [haZigbeeOwner],
+    backup: { plans: ["zigbee"], volumes: ["zigbee2mqtt-data"], uncovered: [], lastSuccessAt: haNow, lastRunStatus: "succeeded" },
+  }),
+};
+const haZigbeeCont: HomeAutomationContinuity = {
+  component: "zigbee", package: "zigbee-zigbee2mqtt", node: "node-a", holds: "the Zigbee network key and every paired device",
+  data: [{ volume: "zigbee2mqtt-data", backupPlan: "zigbee", class: "important", schedule: "daily" }, { volume: "zigbee-backup-repo", repository: true }],
+  radio: {
+    networkOn: "radio_and_machine", param: "usb_device",
+    moved: { outcome: "kept", summary: "The same stick in another USB port keeps every device." },
+    replaced: { outcome: "restore", summary: "A new stick of the same chip family takes the network over from Zigbee2MQTT's own coordinator backup.",
+      steps: ["Unplug the old stick and plug in the new one."], otherwise: "A stick of a different chip family starts a new network: every Zigbee device has to be paired again." },
+    replacements: [{ radioId: haSpareZigbee.id, path: "/dev/ttyACM1" }],
+  },
+  removal: { stops: ["zigbee2mqtt"], keeps: ["zigbee-backup-repo", "zigbee2mqtt-data"], dependents: [],
+    consequence: "Zigbee devices stop answering Home Assistant. They stay paired to the network kept on this machine, and reinstalling picks them back up." },
+};
+const haMqttCont: HomeAutomationContinuity = { component: "mqtt", package: "mqtt-mosquitto", node: "node-a", data: [],
+  removal: { stops: ["mosquitto"], keeps: [], dependents: ["zigbee"], consequence: "Everything that talks through MQTT stops reaching Home Assistant." } };
+const haHassCont: HomeAutomationContinuity = { component: "home-assistant", package: "home-assistant", node: "node-a",
+  holds: "your automations, dashboards, history and integrations",
+  data: [{ volume: "home-assistant-config", backupPlan: "home-assistant", class: "important", schedule: "daily" }],
+  removal: { stops: ["home-assistant"], keeps: ["home-assistant-config"], dependents: ["bluetooth"], consequence: "Home Assistant stops." } };
+const haCont: HomeAutomationContinuityView = { generatedAt: haNow, components: [haMqttCont, haHassCont, haZigbeeCont] };
+const haNoCare: CareClient = {
+  packages: () => Promise.reject(new Error("not in the render check")),
+  previewCapability: () => Promise.reject(new Error("no")), enableCapability: () => Promise.reject(new Error("no")),
+  previewDisablePackage: () => Promise.reject(new Error("no")), disablePackage: () => Promise.reject(new Error("no")),
+};
+const haPage = (comps: Parameters<typeof haStatus>[1], extra: Record<string, unknown> = {}, node = haNodeOk({}, [haZigbeeRadio, haSpareZigbee])) => {
+  const status = haStatus({ topology: "managed", nodes: [node] }, comps);
+  const html = text(renderToString(h(HomeAutomationView, { status, draft: { ...EMPTY_DRAFT }, onDraft: () => {}, onOpenPackage: () => {},
+    onOpenServices: () => {}, onNavigate: () => {}, continuity: haCont, care: haNoCare, ...extra })));
+  return { html, seen: haVisible(html).replace(/ ([.,)])/g, "$1"), status };
+};
+const haButton = (html: string, label: string) => new RegExp(`<button[^>]*>(?:<svg.*?</svg>)?\\s*${label}\\s*<`).exec(html)?.[0] ?? "";
+const haCount = (s: string, sub: string) => s.split(sub).length - 1;
+
+// 1. Healthy.
+const haOk = haPage(haHealthy);
+check("status: an installed house opens on its status page", haOk.seen.includes("Your home automation") && !haOk.html.includes('name="ha-topology"'), haOk.seen);
+check("status: healthy reads as everything running", haOk.seen.includes("Everything is running: all 3 parts installed are healthy."), haOk.seen);
+check("status: each part has its card", ["MQTT broker", "Home Assistant (runs here)", "Zigbee"].every((t) => haOk.html.includes(`>${t}</h3>`)));
+check("status: where it runs, how it is reached, and when it was last seen",
+  haOk.seen.includes("Machine node-a") && haOk.seen.includes("https://home.example.internal") && haOk.seen.includes("Answering") &&
+  haOk.seen.includes("Healthy, last checked"), haOk.seen);
+check("status: the radio is named, not a device path", haOk.seen.includes("Radio Example Zigbee Coordinator"), haOk.seen);
+check("status: backup coverage and how much the data matters, from the package's backup class",
+  haOk.seen.includes("Backed up") && haOk.seen.includes("Its data is painful to rebuild"), haOk.seen);
+check("status: what the part keeps, from the continuity read", haOk.seen.includes("Keeps the Zigbee network key and every paired device"));
+check("status: healthy offers no repair, only the service, radio and removal",
+  !haOk.html.includes("callout-bad") && haCount(haOk.seen, "Open the service") === 3 &&
+  haOk.seen.includes("Replace or move the radio") && haCount(haOk.seen, "Remove…") === 3, haOk.seen);
+check("status: the radio swap is offered only where there is a radio", haCount(haOk.seen, "Replace or move the radio") === 1);
+check("status: the generic Services detail stays one click away", haOk.seen.includes("Open Services"));
+check("status: protocols not installed can be added", haOk.seen.includes("Add Z-Wave") && haOk.seen.includes("Add Matter over Wi-Fi") && !haOk.seen.includes("Add Zigbee"), haOk.seen);
+check("status: a fresh house still gets the choices, not a status page",
+  !haRender(haStatus(), { ...EMPTY_DRAFT, step: "status" }).includes("Your home automation"));
+
+// 2. One degraded controller.
+const haDegraded = haPage({ ...haHealthy, zigbee: { ...haHealthy.zigbee, state: "degraded",
+  reason: "Container/zigbee2mqtt is running but reports itself unhealthy.", resources: [haRes("zigbee2mqtt", true, "unhealthy")],
+  blockers: [{ code: "app_unhealthy", severity: "blocking", message: "Container/zigbee2mqtt is running but reports itself unhealthy.",
+    evidence: [{ source: "observed", subject: "Container/zigbee2mqtt", state: "healthy", value: "unhealthy" }],
+    actions: [{ kind: "open_service", label: "Open the service", package: "zigbee-zigbee2mqtt" }] }] } });
+check("status: one degraded controller is named, the rest still healthy",
+  haDegraded.seen.includes("Zigbee needs attention") && haDegraded.html.includes("callout callout-bad") &&
+  haDegraded.seen.includes("Not healthy when last checked") && haCount(haDegraded.seen, "Healthy, last checked") === 2, haDegraded.seen);
+check("status: its blocker shows what was found and opens the service", haDegraded.seen.includes("Container/zigbee2mqtt: healthy — unhealthy") &&
+  haCount(haDegraded.seen, "Open the service") === 4, haDegraded.seen);
+
+// 3. Missing radio: the stick was unplugged. The remedy opens the
+// replacement panel, which explains what a swap keeps.
+const haMissingComps = { ...haHealthy, zigbee: { ...haHealthy.zigbee, state: "degraded" as const, reason: "The radio is not plugged in.",
+  radios: [{ ...haZigbeeOwner, radioId: undefined }],
+  blockers: [{ code: "radio_missing", severity: "blocking" as const, message: "The radio Zigbee was given is not plugged into node-a.",
+    evidence: [{ source: "radios", subject: haZigbeeOwner.source, state: "absent" }],
+    actions: [{ kind: "select_radio" as const, label: "Choose a replacement radio", component: "zigbee" as const, radioIds: [haSpareZigbee.id] },
+      haRetry] }] } };
+const haMissing = haPage(haMissingComps, { panel: { kind: "radio", component: "zigbee" } }, haNodeOk({}, [haSpareZigbee]));
+check("status: a missing radio says it is not plugged in", haMissing.seen.includes("Not plugged in") &&
+  haMissing.seen.includes("The radio Zigbee was given is not plugged into node-a."), haMissing.seen);
+check("status: its remedies are the API's: choose a replacement, check again",
+  haMissing.seen.includes("Choose a replacement radio") && haMissing.seen.includes("Check again"));
+check("radio: the panel says where the network lives and what each kind of swap keeps",
+  haMissing.seen.includes("Replacing or moving the Zigbee radio") &&
+  haMissing.seen.includes("lives partly on the radio itself and partly on node-a") &&
+  haMissing.seen.includes("Devices keep working") && haMissing.seen.includes("Kept by restoring a backup") &&
+  haMissing.seen.includes("every Zigbee device has to be paired again"), haMissing.seen);
+check("radio: the free replacement is offered by name with the path it would be given",
+  haMissing.seen.includes("Spare Zigbee Stick") && haMissing.seen.includes("/dev/ttyACM1"), haMissing.seen);
+check("radio: nothing can be previewed or proposed before a radio is chosen",
+  haButton(haMissing.html, "Preview the change").includes('disabled=""') && haButton(haMissing.html, "Propose this change").includes('disabled=""'),
+  haButton(haMissing.html, "Preview the change"));
+const haZigbeeComp = haComp("zigbee", "Zigbee", haMissingComps.zigbee);
+const haRadioView = (state: Record<string, unknown>, cont = haZigbeeCont, c = haZigbeeComp) => {
+  const html = text(renderToString(h(RadioReplaceView, { c, cont, node: haNodeOk({}, [haSpareZigbee]), state,
+    handlers: { onRefresh: () => {}, onBack: () => {}, onOpenPackage: () => {}, onOpenServices: () => {}, onNavigate: () => {}, loading: false },
+    onChoose: () => {}, onPreview: () => {}, onPropose: () => {} })));
+  return { html, seen: haVisible(html).replace(/ ([.,)])/g, "$1") };
+};
+const haPreviewed = haRadioView({ choice: haSpareZigbee.id, preview: { plan: { summary: "reconfigure zigbee",
+  steps: [{ kind: "Container", name: "zigbee2mqtt", action: "update", description: "Container/zigbee2mqtt: update" }] }, providedSecrets: [] } });
+check("radio: once previewed, the plan is shown and can be proposed, never approved",
+  haPreviewed.seen.includes("What the change does") && !haButton(haPreviewed.html, "Propose this change").includes('disabled=""') &&
+  haPreviewed.seen.includes("keeps its current radio until you approve it") && !haPreviewed.seen.includes("Approve"), haPreviewed.seen);
+const haFiled = haRadioView({ choice: haSpareZigbee.id, filed: { id: "plan-12", seq: 12, createdAt: haNow, principal: "o", summary: "s", risk: "low", state: "proposed" } });
+check("radio: a filed change points at Plans", haFiled.seen.includes("Plan plan-12 is filed") && haFiled.seen.includes("Open Plans"));
+const haNoBackupRadio = haRadioView({}, haZigbeeCont, haComp("zigbee", "Zigbee", { ...haMissingComps.zigbee, backup: undefined }));
+check("radio: with no finished backup, the swap says to take one first", haNoBackupRadio.seen.includes("has no finished backup to fall back on") &&
+  haNoBackupRadio.seen.includes("Open backups"), haNoBackupRadio.seen);
+const haThreadRadio = haRadioView({}, { ...haZigbeeCont, component: "thread", radio: { ...haZigbeeCont.radio!, networkOn: "machine",
+  replaced: { outcome: "kept", summary: "A new dongle joins the same Thread network." }, replacements: [] } },
+  haComp("thread", "Thread border router", { selection: "installed", state: "ready", node: "node-a", backup: haHealthy.zigbee!.backup }));
+check("radio: Thread keeps its network on the machine, so a new dongle keeps devices",
+  haThreadRadio.seen.includes("lives on node-a, not on the radio") && !haThreadRadio.seen.includes("Kept by restoring") &&
+  haThreadRadio.seen.includes("No free Thread border router radio is plugged into node-a"), haThreadRadio.seen);
+const haPortBound = haRadioView({}, haZigbeeCont, haComp("zigbee", "Zigbee", { ...haHealthy.zigbee, radios: [{ ...haZigbeeOwner, radioId: "sysfs:/devices/usb1/1-2" }] }));
+check("radio: a radio known only by its port is warned about before it is moved", haPortBound.seen.includes("recognised by the USB port it is in"));
+const haPkgParams: HAPackage = { name: "zigbee-zigbee2mqtt", version: "2.0.1", capability: "zigbee", enabled: true, params: [
+  { name: "node", installed: "node-a" }, { name: "usb_device", installed: haZigbeeRadio.byIdPaths[0] },
+  { name: "coordinator_adapter", installed: "ember" }, { name: "timezone", default: "UTC" }] };
+const haParams = replacementParams(haPkgParams, "usb_device", "/dev/ttyACM1");
+check("radio: a replacement keeps every installed param and changes only the radio",
+  JSON.stringify(haParams) === JSON.stringify({ node: "node-a", usb_device: "/dev/ttyACM1", coordinator_adapter: "ember" }), JSON.stringify(haParams));
+
+// 4. Stale package (an upgrade is available).
+const haStalePkg = haPage({ ...haHealthy, zigbee: { ...haHealthy.zigbee, installedVersion: "2.0.0", stale: true,
+  actions: [haSvc("zigbee-zigbee2mqtt"), { kind: "upgrade_package", label: "Preview the upgrade", package: "zigbee-zigbee2mqtt" }],
+  blockers: [{ code: "stale_package", severity: "warning", message: "Zigbee runs zigbee-zigbee2mqtt 2.0.0; the catalog now has 2.0.1.",
+    evidence: [{ source: "catalog", subject: "zigbee-zigbee2mqtt", value: "2.0.1" }],
+    actions: [{ kind: "upgrade_package", label: "Preview the upgrade", package: "zigbee-zigbee2mqtt" }] }] } });
+check("status: a stale package says an update is available", haStalePkg.seen.includes("Update available: 2.0.1") &&
+  haStalePkg.seen.includes("zigbee-zigbee2mqtt 2.0.0"), haStalePkg.seen);
+check("status: the upgrade is offered once, as a warning not a failure",
+  haCount(haStalePkg.seen, "Preview the upgrade") === 1 && haStalePkg.html.includes("callout callout-warn") && !haStalePkg.html.includes("callout callout-bad"), haStalePkg.seen);
+
+// 5. Missing backup.
+const haNoBackup = haPage({ ...haHealthy, "home-assistant": { ...haHealthy["home-assistant"],
+  backup: { plans: [], volumes: ["home-assistant-config"], uncovered: ["home-assistant-config"] },
+  blockers: [{ code: "backup_missing", severity: "warning", message: "Home Assistant (runs here) keeps data no backup plan covers: home-assistant-config.",
+    evidence: [{ source: "backup", subject: "home-assistant-config", state: "uncovered" }], actions: [{ kind: "open_backups", label: "Open backups" }] }] } });
+check("status: missing backup coverage is named, with the way to Backups",
+  haNoBackup.seen.includes("Not backed up: home-assistant-config") && haNoBackup.seen.includes("Open backups") &&
+  haNoBackup.seen.includes("Home Assistant (runs here) needs attention"), haNoBackup.seen);
+check("backup: a failed newest run is not read as backed up",
+  backupLine(haComp("zigbee", "Zigbee", { backup: { plans: ["z"], volumes: ["v"], uncovered: [], lastRunStatus: "failed" } }))!.kind === "bad");
+check("health: no observation reads as nothing, not as healthy", lastHealthy(haComp("zigbee", "Zigbee", { resources: [] })) === undefined);
+
+// 6. Pending repair: a reconfigure waits for approval.
+const haPending = haPage({ ...haHealthy, zigbee: { ...haHealthy.zigbee, state: "awaiting_approval", reason: "A plan is waiting for your approval.",
+  pendingPlan: { id: "plan-7", state: "proposed", summary: "reconfigure zigbee", package: "zigbee-zigbee2mqtt" },
+  actions: [haSvc("zigbee-zigbee2mqtt"), { kind: "open_plan", label: "Review the plan", planId: "plan-7" }] } });
+check("status: a pending repair says what is in flight and waits on approval",
+  haPending.seen.includes("In flight reconfigure zigbee (plan plan-7, waiting for your approval)") &&
+  haPending.seen.includes("Installed, a change waits for approval"), haPending.seen);
+check("status: it leads to Plans and back into setup, approving nothing itself",
+  haCount(haPending.seen, "Review the plan") === 1 && haPending.seen.includes("Zigbee: a change is in flight") && haPending.seen.includes("Continue setup") && !haPending.html.includes(">Approve"), haPending.seen);
+
+// 7. Protocol addition: only that slice is re-entered.
+const haAddDraft = addGoalDraft({ ...EMPTY_DRAFT }, haPage(haHealthy).status, "managed", "zwave");
+check("add: adding Z-Wave goes to the readiness check for Z-Wave alone, on the machine already in use",
+  haAddDraft.step === "readiness" && haAddDraft.goals.join() === "zwave" && haAddDraft.node === "node-a" && haAddDraft.topology === "managed",
+  JSON.stringify(haAddDraft));
+check("add: on an existing Home Assistant it goes straight to the setup sequence",
+  addGoalDraft({ ...EMPTY_DRAFT }, haPage(haHealthy).status, "external", "zwave").step === "setup");
+check("add: the draft asks the API about Z-Wave only", queryOf(haAddDraft).select?.join() === "zwave");
+const haAdding = haReadiness(haNodeOk(), { ...haHealthy, zwave: { selection: "requested", state: "blocked", reason: "No Z-Wave radio is plugged into node-a.",
+  blockers: [haNoRadioBlocker("Z-Wave", "blocking")] } }, haAddDraft);
+check("add: the slice shows what is added beside what is installed, and leads back to status",
+  haAdding.seen.includes("No Z-Wave radio is plugged into node-a.") && haAdding.seen.includes("Back to status") &&
+  haAdding.seen.includes("Installed"), haAdding.seen);
+
+// 8. Removal: household words, data kept, the dry run is the authority.
+const haTitles = new Map(haStatus().components.map((c) => [c.id, c.title]));
+const haRemove = (cont: HomeAutomationContinuity, c: HomeAutomationComponent, extra: Record<string, unknown> = {}) => {
+  const html = text(renderToString(h(RemovalView, { c, cont, titles: haTitles,
+    handlers: { onRefresh: () => {}, onBack: () => {}, onOpenPackage: () => {}, onOpenServices: () => {}, onNavigate: () => {}, loading: false },
+    preview: null, onPropose: () => {}, onClose: () => {}, ...extra })));
+  return { html, seen: haVisible(html).replace(/ ([.,)])/g, "$1") };
+};
+const haDryRun = (steps: { kind: string; name: string }[]): HAPlanRecord =>
+  ({ id: "dry", seq: 0, createdAt: haNow, principal: "o", summary: "disable zigbee", risk: "low", state: "proposed", plan: { steps } });
+const haZigbeeInstalled = haComp("zigbee", "Zigbee", haHealthy.zigbee);
+const haRm = haRemove(haZigbeeCont, haZigbeeInstalled, { preview: haDryRun([{ kind: "Container", name: "zigbee2mqtt" }, { kind: "Route", name: "zigbee" }, { kind: "Secret", name: "restic-zigbee" }]) });
+check("removal: says what stops and what the household loses, in its words",
+  haRm.seen.includes("Removing Zigbee") && haRm.seen.includes("Zigbee devices stop answering Home Assistant") && haRm.seen.includes("Stops zigbee2mqtt"), haRm.seen);
+check("removal: stored data stays, named with what it holds",
+  haRm.seen.includes("zigbee2mqtt-data (the Zigbee network key and every paired device)") && haRm.seen.includes("zigbee-backup-repo (its backup copies)") &&
+  haRm.seen.includes("Wildstone never deletes stored data"), haRm.seen);
+check("removal: exactly what the plan removes comes from the dry run", haRm.seen.includes("Exactly what the plan removes (3 items)") &&
+  !haButton(haRm.html, "Propose removing Zigbee").includes('disabled=""'), haRm.seen);
+const haRmData = haRemove(haZigbeeCont, haZigbeeInstalled, { preview: haDryRun([{ kind: "Container", name: "zigbee2mqtt" }, { kind: "Volume", name: "zigbee2mqtt-data" }]) });
+check("removal: a plan that would delete stored data is refused, never offered",
+  haRmData.seen.includes("would delete stored data") && haButton(haRmData.html, "Propose removing Zigbee").includes('disabled=""'), haRmData.seen);
+check("removal: the data check reads the dry run's steps", removalSteps(haDryRun([{ kind: "SeedFile", name: "x" }])).touchesData);
+const haRmErr = haRemove(haZigbeeCont, haZigbeeInstalled, { previewError: "keystone unreachable" });
+check("removal: without a dry run nothing is proposed", haRmErr.seen.includes("cannot be proposed from here") &&
+  haButton(haRmErr.html, "Propose removing Zigbee").includes('disabled=""'), haRmErr.seen);
+const haRmMqtt = haRemove(haMqttCont, haComp("mqtt", "MQTT broker", haHealthy.mqtt), { preview: haDryRun([{ kind: "Container", name: "mosquitto" }]) });
+check("removal: what depends on it is named before it goes", haRmMqtt.seen.includes("Zigbee needs MQTT broker, and will stop working too"), haRmMqtt.seen);
+const haRmBt = haRemove({ component: "bluetooth", package: "home-assistant", data: [],
+  removal: { setting: true, stops: [], keeps: [], dependents: [], consequence: "Turning Bluetooth off is a change to Home Assistant's settings; nothing is deleted and nothing else stops." } },
+  haComp("bluetooth", "Bluetooth", { selection: "installed", state: "ready", package: "home-assistant" }));
+check("removal: Bluetooth is turned off in Home Assistant's settings, not removed",
+  haRmBt.seen.includes("Turning off Bluetooth") && haRmBt.seen.includes("Open Home Assistant's settings") && !haRmBt.html.includes("btn-danger"), haRmBt.seen);
+const haRmFiled = haRemove(haZigbeeCont, haZigbeeInstalled, { filed: { ...haDryRun([]), id: "plan-9" } });
+check("removal: a filed removal removes nothing until approved", haRmFiled.seen.includes("Removal proposed as plan plan-9. Nothing is removed until you approve it"));
+const haRmPage = haPage(haHealthy, { panel: { kind: "remove", component: "zigbee" } });
+check("removal: on the page, nothing is offered before the dry run answers",
+  haRmPage.seen.includes("Working out exactly what the removal would delete") && haButton(haRmPage.html, "Propose removing Zigbee").includes('disabled=""'), haRmPage.seen);
+
+// API follow-ups (#446/#447): readiness rows are matched by the
+// blocker's `check` reference, never by parsing its code; and
+// choose_topology switches the draft rather than proposing anything.
+import { BlockerCard as HABlockerCard, withTopology } from "../src/views/HomeAutomation";
+const haNoRef = haReadiness(haIpv6Node, { thread: { ...haIpv6Comps.thread, blockers: [{ ...haIpv6Blocker, check: undefined }] } }, { goals: ["matter-thread"] });
+check("readiness: a blocker without a check reference marks no row, whatever its code says",
+  !/IPv6 forwarding[^]*?st-bad[^>]*>Missing/.test(haNoRef.html) && haNoRef.seen.includes("Thread border router: IPv6 forwarding is missing"), haNoRef.seen);
+const haWrongRow = haReadiness(haIpv6Node, { thread: { ...haIpv6Comps.thread, blockers: [{ ...haIpv6Blocker, check: { check: "ipv6_forwarding", subject: "eth9" } }] } }, { goals: ["matter-thread"] });
+check("readiness: a check reference for another row does not mark this one", !/IPv6 forwarding[^]*?st-bad[^>]*>Missing/.test(haWrongRow.html));
+
+const haTopoBlocker: HomeAutomationBlocker = { code: "requires_managed_home_assistant", severity: "blocking",
+  message: "Matter answers only at ws://127.0.0.1:5580/ws, so it needs a Home Assistant Wildstone runs on the same machine.",
+  evidence: [{ source: "component", subject: "home-automation", state: "external", value: "ws://127.0.0.1:5580/ws" }],
+  actions: [{ kind: "choose_topology", label: "Let Wildstone run Home Assistant", component: "matter", topology: "managed" }] };
+const haTopoHandlers = { onRefresh: () => {}, onBack: () => {}, onOpenPackage: () => {}, onOpenServices: () => {}, loading: false };
+const haTopoCard = haVisible(text(renderToString(h(HABlockerCard, { b: haTopoBlocker, handlers: { ...haTopoHandlers, onChooseTopology: () => {} } }))));
+check("topology: requires_managed_home_assistant offers the switch the API names", haTopoCard.includes("Let Wildstone run Home Assistant") &&
+  haTopoCard.includes("needs a Home Assistant Wildstone runs"), haTopoCard);
+check("topology: no switch is drawn where the screen cannot make it",
+  !haVisible(text(renderToString(h(HABlockerCard, { b: haTopoBlocker, handlers: haTopoHandlers })))).includes("Let Wildstone run Home Assistant"));
+const haSwitched = withTopology({ ...EMPTY_DRAFT, topology: "external", goals: ["matter-wifi"], step: "setup" }, "managed", false);
+check("topology: the switch changes the draft's topology, keeps the goals and returns to the choices",
+  haSwitched.topology === "managed" && haSwitched.goals.join() === "matter-wifi" && haSwitched.step === "choose", JSON.stringify(haSwitched));
+check("topology: once something is installed the switch lands on the add page", withTopology({ ...EMPTY_DRAFT }, "managed", true).step === "add");
+const haExtSetup = haRender(haStatus({}, {}), { ...EMPTY_DRAFT, topology: "external", goals: ["matter-wifi"], step: "setup" }, { setup: { answer: {
+  generatedAt: haNow, topology: "external", node: "node-a", complete: false, sequence: [], externalSteps: [],
+  next: { id: "matter:resolve_blockers", component: "matter", title: "Matter", action: "resolve_blockers", status: "current",
+    reason: haTopoBlocker.message, blockers: [haTopoBlocker], actions: [] } } } });
+check("topology: the setup step renders the switch on its blocker", haExtSetup.includes("Let Wildstone run Home Assistant"), haExtSetup);
+
+// Thread RCP firmware cannot be verified: a warning with the API's steps.
+const haRcp = haPage({ ...haHealthy, thread: haInstalledAs("thread-otbr", { resources: [haRes("otbr")], blockers: [{
+  code: "thread_rcp_firmware_unverified", severity: "warning", message: "Wildstone cannot see which firmware the Thread radio runs.",
+  evidence: [{ source: "radios", subject: "thread", state: "unverified" }],
+  actions: [{ kind: "manual_step", label: "Check the radio's firmware", node: "node-a", component: "thread",
+    instructions: ["Flash OpenThread RCP firmware onto the dongle."] }] }] }) });
+check("status: an unverifiable Thread firmware is a warning with its steps, not a failure",
+  haRcp.seen.includes("Wildstone cannot see which firmware the Thread radio runs.") && haRcp.seen.includes("Flash OpenThread RCP firmware") &&
+  haRcp.seen.includes("Thread border router needs attention") && !haRcp.html.includes("callout callout-bad"), haRcp.seen);
+
+haSetupChecks().then(
+  () => {
+    console.log(failures === 0 ? "\nALL CHECKS PASSED" : `\n${failures} CHECK(S) FAILED`);
+    process.exit(failures === 0 ? 0 : 1);
+  },
+  (e) => {
+    console.log("FAIL: the setup sequence checks threw", e);
+    process.exit(1);
+  },
+);
 // Watch this mailbox (epic #326 S07). Every setup step is decided from
 // the server's read model, so each one renders from a fixture of it;
 // the two approvals are always two states; the password field never

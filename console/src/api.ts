@@ -183,9 +183,452 @@ export interface ListeningPort {
   localIp: string;
 }
 
+// Radio inventory (GET /api/v1/nodes/{node}/probes/radios, #434). `kind`
+// is never guessed from a tty name: a generic USB-serial bridge is
+// "unknown". `id` is the stable identity key — prefix "serial-by-id:"
+// follows the device across ports, "usb:" is a USB serial number,
+// "sysfs:" is bound to the physical port.
+export type RadioKind = "unknown" | "bluetooth" | "zigbee" | "zwave" | "thread";
+
+export interface RadioUsbIdentity {
+  vendorId: string;
+  productId: string;
+  manufacturer?: string;
+  product?: string;
+  serial?: string;
+  port?: string;
+}
+
+export interface Radio {
+  id: string;
+  kind: RadioKind;
+  kindReason: string;
+  kernelName: string;
+  devPath?: string;
+  byIdPaths: string[];
+  sysfsPath?: string;
+  bus?: string;
+  driver?: string;
+  usb?: RadioUsbIdentity;
+}
+
+export interface RadioInventory {
+  node: string;
+  platformSupported: boolean;
+  radios: Radio[];
+}
+
+// Home-automation readiness (GET /api/v1/nodes/{node}/probes/home-automation,
+// #436). A per-interface or per-adapter check repeats `check` once per
+// `subject`; `subject` names the path, interface, unit or adapter that
+// produced `state`.
+export type ReadinessState = "ready" | "missing" | "unsupported" | "unknown";
+
+export type ReadinessCheckName =
+  | "ipv6"
+  | "interface_ipv6"
+  | "ipv6_forwarding"
+  | "multicast"
+  | "dbus_system_bus"
+  | "bluez_service"
+  | "bluetooth_adapter"
+  | "tun";
+
+export interface ReadinessCheck {
+  check: ReadinessCheckName;
+  state: ReadinessState;
+  subject: string;
+  value?: string;
+  detail?: string;
+}
+
+export interface NodeInterface {
+  name: string;
+  addresses: string[];
+  up: boolean;
+  multicast: boolean;
+  defaultRoute: boolean;
+}
+
+export interface HomeAutomationReadiness {
+  node: string;
+  platformSupported: boolean;
+  interfaces: NodeInterface[];
+  checks: ReadinessCheck[];
+}
+
 export interface ProbeResult {
   reachable: boolean;
   detail?: string;
+}
+
+// Home-automation aggregate (GET /api/v1/home-automation, #446). The
+// server is the authority for dependencies, radio suitability, blockers
+// and remedies; render these, never re-derive them. Query goals
+// (select/topology/node/bluetooth) shape one answer and are never stored.
+export type HomeAutomationComponentId =
+  | "mqtt"
+  | "home-assistant"
+  | "home-automation"
+  | "zigbee"
+  | "zwave"
+  | "matter"
+  | "thread"
+  | "bluetooth";
+
+export type HomeAutomationState =
+  | "not_selected"
+  | "blocked"
+  | "ready_to_propose"
+  | "awaiting_approval"
+  | "applying"
+  | "external_step"
+  | "ready"
+  | "degraded"
+  | "unavailable";
+
+export type HomeAutomationTopology = "managed" | "external";
+export type HomeAutomationSelection = "installed" | "pending" | "requested" | "dependency" | "none";
+export type BluetoothMode = "host-bluez" | "proxy";
+
+export type HomeAutomationActionKind =
+  | "retry_probe"
+  | "install_package"
+  | "reconfigure_package"
+  | "upgrade_package"
+  | "open_plan"
+  | "open_service"
+  | "select_radio"
+  | "manual_step"
+  | "mint_publisher"
+  | "open_backups"
+  | "choose_node"
+  | "pair_node"
+  | "resolve_dependency"
+  // The orchestration's own remedies (#447): pick a mode component's
+  // mode, or give a package param only the household knows.
+  | "choose_mode"
+  | "provide_option"
+  | "choose_topology";
+
+export interface HomeAutomationEvidence {
+  // node, readiness, radios, observed, plan, catalog, statefile, backup,
+  // principal, component
+  source: string;
+  subject?: string;
+  state?: string;
+  value?: string;
+  detail?: string;
+  observedAt?: string;
+}
+
+export interface HomeAutomationAction {
+  kind: HomeAutomationActionKind;
+  label: string;
+  component?: HomeAutomationComponentId;
+  // choose_topology: the topology to switch to.
+  topology?: "managed" | "external";
+  package?: string;
+  capability?: string;
+  node?: string;
+  planId?: string;
+  radioIds?: string[];
+  params?: Record<string, string>;
+  instructions?: string[];
+}
+
+export interface HomeAutomationBlocker {
+  // Stable codes: package_unavailable, mode_unavailable, catalog_unavailable,
+  // no_node, choose_node, node_offline, agent_plane_unavailable,
+  // agent_outdated, probe_failed, platform_unsupported,
+  // <check>_<missing|unsupported|unknown> (e.g. ipv6_forwarding_missing),
+  // dependency_not_ready, dependency_unavailable, no_radio, radio_in_use,
+  // radio_conflict, radio_missing, unhealthy, app_unhealthy, plan_failed,
+  // stale_package, backup_missing, backup_failed, service_blocker,
+  // requires_managed_home_assistant, dependency_on_other_node,
+  // thread_rcp_firmware_unverified (warning).
+  code: string;
+  severity: "blocking" | "warning";
+  message: string;
+  evidence: HomeAutomationEvidence[];
+  actions: HomeAutomationAction[];
+  // Set on blockers derived from a readiness check: the check and the
+  // row's subject, matching the node's readiness.checks.
+  check?: { check: ReadinessCheckName; subject?: string };
+}
+
+export interface HomeAutomationExternalStep {
+  id: string;
+  title: string;
+  instructions: string[];
+  // unverified: Wildstone cannot observe it; offer a recheck/tick.
+  status: "done" | "pending" | "unverified";
+  evidence?: HomeAutomationEvidence[];
+  action?: HomeAutomationAction;
+}
+
+export interface HomeAutomationResource {
+  kind: string;
+  name: string;
+  node?: string;
+  observed: boolean;
+  healthy: boolean;
+  awaitingApproval?: boolean;
+  appHealth?: string;
+  detail?: string;
+  observedAt?: string;
+}
+
+export interface HomeAutomationPlanRef {
+  id: string;
+  state: string;
+  summary: string;
+  package?: string;
+}
+
+export interface HomeAutomationBackup {
+  plans: string[];
+  volumes: string[];
+  uncovered: string[];
+  lastSuccessAt?: string;
+  lastRunStatus?: string;
+  lastRunFinishedAt?: string;
+}
+
+export interface HomeAutomationRadioOwner {
+  device: string;
+  radioId?: string;
+  container: string;
+  package?: string;
+  capability?: string;
+  component?: HomeAutomationComponentId;
+  source: string;
+}
+
+export interface HomeAutomationComponent {
+  id: HomeAutomationComponentId;
+  title: string;
+  capability: string;
+  topology: "managed" | "external" | "shared";
+  protocol: boolean;
+  requires: HomeAutomationComponentId[];
+  packages: string[];
+  package?: string;
+  version?: string;
+  installedVersion?: string;
+  stale?: boolean;
+  mode?: string;
+  modes?: string[];
+  selection: HomeAutomationSelection;
+  state: HomeAutomationState;
+  reason: string;
+  node?: string;
+  radios?: HomeAutomationRadioOwner[];
+  radioCandidates?: string[];
+  addresses?: ServiceAddress[];
+  resources?: HomeAutomationResource[];
+  pendingPlan?: HomeAutomationPlanRef;
+  failedPlan?: HomeAutomationPlanRef;
+  backup?: HomeAutomationBackup;
+  blockers: HomeAutomationBlocker[];
+  actions: HomeAutomationAction[];
+  externalSteps: HomeAutomationExternalStep[];
+}
+
+export type HomeAutomationProbeState = "ok" | "offline" | "agent_outdated" | "failed" | "not_wired";
+
+export interface HomeAutomationRadio extends Radio {
+  owners: HomeAutomationRadioOwner[];
+  suitableFor: { component: HomeAutomationComponentId; fit: "detected" | "possible" }[];
+}
+
+export interface HomeAutomationNode {
+  id: string;
+  connected: boolean;
+  agentVersion?: string;
+  protocolMinor?: number;
+  lastSeenAt?: string;
+  selected: boolean;
+  hostAddress?: string;
+  readiness?: {
+    probe: HomeAutomationProbeState;
+    detail?: string;
+    platformSupported: boolean;
+    interfaces: NodeInterface[];
+    checks: ReadinessCheck[];
+  };
+  radioInventory?: {
+    probe: HomeAutomationProbeState;
+    detail?: string;
+    platformSupported: boolean;
+    radios: HomeAutomationRadio[];
+    unresolvedClaims: HomeAutomationRadioOwner[];
+  };
+  blockers: HomeAutomationBlocker[];
+}
+
+export interface HomeAutomationStatus {
+  generatedAt: string;
+  topology: "none" | "external" | "managed" | "both";
+  requestedTopology?: HomeAutomationTopology;
+  node?: string;
+  nodes: HomeAutomationNode[];
+  components: HomeAutomationComponent[];
+  blockers: HomeAutomationBlocker[];
+}
+
+export interface HomeAutomationQuery {
+  topology?: HomeAutomationTopology;
+  select?: HomeAutomationComponentId[];
+  node?: string;
+  bluetooth?: BluetoothMode;
+}
+
+function homeAutomationPath(q: HomeAutomationQuery = {}): string {
+  const p = new URLSearchParams();
+  if (q.topology) p.set("topology", q.topology);
+  if (q.select && q.select.length > 0) p.set("select", q.select.join(","));
+  if (q.node) p.set("node", q.node);
+  if (q.bluetooth) p.set("bluetooth", q.bluetooth);
+  const qs = p.toString();
+  return "/api/v1/home-automation" + (qs ? "?" + qs : "");
+}
+
+// Home-automation orchestration (POST /api/v1/home-automation/preview and
+// /propose, #447). The server orders the selected components and names the
+// ONE next safe step; propose files exactly that step as an ordinary plan
+// (approved on the Plans screen, never here). Nothing is stored: send the
+// same goals on every call, and the answer is rebuilt from installed and
+// pending state, so a reload or a restart resumes honestly. A 409 (stale
+// or conflicting radio, a changed next step, nothing to propose) still
+// carries the full fresh answer on ApiError.body.
+export type HomeAutomationStepAction =
+  | "install_package"
+  | "reconfigure_package"
+  | "await_approval"
+  | "await_apply"
+  | "await_observation"
+  | "resolve_blockers"
+  | "external_step"
+  | "done";
+
+export interface HomeAutomationPlanRequest {
+  topology: HomeAutomationTopology;
+  node?: string;
+  select?: HomeAutomationComponentId[];
+  // component -> radio id from the node's inventory; "" asks for none
+  // (Zigbee's network coordinator).
+  radios?: Partial<Record<HomeAutomationComponentId, string>>;
+  modes?: { bluetooth?: BluetoothMode };
+  // component -> further package params (not node, radio, mode or the
+  // settings a dependency decides).
+  options?: Partial<Record<HomeAutomationComponentId, Record<string, string>>>;
+  // "<component>/<step id>" for steps Wildstone cannot observe.
+  confirmedSteps?: string[];
+  // propose only: the next.id the caller previewed.
+  expectStep?: string;
+}
+
+export interface HomeAutomationChecklistStep extends HomeAutomationExternalStep {
+  component: HomeAutomationComponentId;
+  // The component is installed, so the step can be done now.
+  due: boolean;
+  confirmed: boolean;
+}
+
+export interface HomeAutomationPlanStep {
+  // Stable while it is the same step; pass as expectStep.
+  id: string;
+  component?: HomeAutomationComponentId;
+  title: string;
+  action: HomeAutomationStepAction;
+  status: "done" | "current" | "upcoming";
+  state?: HomeAutomationState;
+  reason: string;
+  package?: string;
+  version?: string;
+  node?: string;
+  // Full params of the current package step (installed ones carried).
+  params?: Record<string, string>;
+  radioId?: string;
+  planId?: string;
+  // Adds to the aggregate's codes: radio_choice_needed, mode_needed,
+  // param_needed, dependency_on_other_node, radio_unsupported,
+  // plan_refused, plan_conflict. Action kinds add choose_mode and
+  // provide_option.
+  blockers: HomeAutomationBlocker[];
+  actions: HomeAutomationAction[];
+  externalSteps?: HomeAutomationChecklistStep[];
+}
+
+export interface HomeAutomationPlanAnswer {
+  generatedAt: string;
+  topology: HomeAutomationTopology;
+  node?: string;
+  complete: boolean;
+  next: HomeAutomationPlanStep;
+  sequence: HomeAutomationPlanStep[];
+  externalSteps: HomeAutomationChecklistStep[];
+  // Refused choices (radio_stale, radio_conflict), with a 409.
+  rejected?: HomeAutomationBlocker[];
+  // preview: the capability dry run for next.
+  preview?: EnablePreview & { blockers?: string[] };
+  // propose: the plan record filed.
+  plan?: PlanRecord;
+}
+
+// Home-automation continuity (GET /api/v1/home-automation/continuity,
+// #451): per INSTALLED component, its data and backup class (from the
+// BackupPlans the package rendered), what moving or replacing its radio
+// keeps, and what removing it stops and keeps. Explanations come from
+// here, never from the Console's own guesses.
+export interface HomeAutomationDataVolume {
+  volume: string;
+  // A local backup copy rather than the data itself.
+  repository?: boolean;
+  backupPlan?: string;
+  // critical, important or rebuildable.
+  class?: string;
+  schedule?: string;
+}
+
+export interface HomeAutomationRadioOutcome {
+  // kept: devices keep working; restore: kept by restoring a backup.
+  outcome: "kept" | "restore";
+  summary: string;
+  steps?: string[];
+  // What happens when the restore is not possible.
+  otherwise?: string;
+}
+
+export interface HomeAutomationContinuity {
+  component: HomeAutomationComponentId;
+  package?: string;
+  node?: string;
+  holds?: string;
+  data: HomeAutomationDataVolume[];
+  radio?: {
+    networkOn: "machine" | "radio_and_machine";
+    moved: HomeAutomationRadioOutcome;
+    replaced: HomeAutomationRadioOutcome;
+    // The package param a replacement radio's path goes in, and the free
+    // suitable radios with the path each would be given.
+    param?: string;
+    replacements: { radioId: string; path: string }[];
+  };
+  removal: {
+    // A setting of another package (Bluetooth): turned off, not removed.
+    setting?: boolean;
+    stops: string[];
+    keeps: string[];
+    dependents: HomeAutomationComponentId[];
+    consequence: string;
+  };
+}
+
+export interface HomeAutomationContinuityView {
+  generatedAt: string;
+  components: HomeAutomationContinuity[];
 }
 
 export interface JoinTokenResponse {
@@ -238,6 +681,9 @@ export class ApiError extends Error {
     // task cannot submit it either — the operator has to ask again, and
     // will not know to unless this is shown.
     public proposalErrors?: string[],
+    // The refusal's whole JSON body, for endpoints whose refusals carry a
+    // fresh answer (the home-automation orchestration's 409s).
+    public body?: unknown,
   ) {
     super(message);
   }
@@ -342,6 +788,7 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
       failed.error ?? res.statusText,
       failed.sessionId,
       failed.proposalErrors,
+      data,
     );
   }
   // The interrupted action has now been done.
@@ -2325,6 +2772,24 @@ export const api = {
       "GET",
       `/api/v1/nodes/${encodeURIComponent(node)}/probes/ports`,
     ),
+  probeRadios: (node: string) =>
+    call<RadioInventory>(
+      "GET",
+      `/api/v1/nodes/${encodeURIComponent(node)}/probes/radios`,
+    ),
+  probeHomeAutomation: (node: string) =>
+    call<HomeAutomationReadiness>(
+      "GET",
+      `/api/v1/nodes/${encodeURIComponent(node)}/probes/home-automation`,
+    ),
+  homeAutomation: (q?: HomeAutomationQuery) =>
+    call<HomeAutomationStatus>("GET", homeAutomationPath(q)),
+  homeAutomationPreview: (req: HomeAutomationPlanRequest) =>
+    call<HomeAutomationPlanAnswer>("POST", "/api/v1/home-automation/preview", req),
+  homeAutomationPropose: (req: HomeAutomationPlanRequest) =>
+    call<HomeAutomationPlanAnswer>("POST", "/api/v1/home-automation/propose", req),
+  homeAutomationContinuity: () =>
+    call<HomeAutomationContinuityView>("GET", "/api/v1/home-automation/continuity"),
   probeHttp: (node: string, url: string) =>
     call<ProbeResult>(
       "GET",

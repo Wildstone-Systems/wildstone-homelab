@@ -244,6 +244,59 @@ func TestHomepageDoesNotMonitorANonContainerUpstream(t *testing.T) {
 	}
 }
 
+// hostHub is a host-networked Container and its "host/<port>" Route, from
+// one package on node-a (#433).
+func hostHub(pkg, container string) []resource.Resource {
+	route := ownedRouteFull("home", "home-automation", "home.example.com", "host/8123", "family_public")
+	route.Metadata.Package = pkg
+	return []resource.Resource{route, {
+		Kind:      resource.KindContainer,
+		Metadata:  resource.Metadata{Name: container, Owner: "capability/home-automation", Node: "node-a", Package: pkg},
+		Container: &resource.ContainerSpec{Image: "example@sha256:abc", NetworkMode: resource.NetworkModeHost},
+	}}
+}
+
+// TestHomepagePresentsAHostServiceAsTheKnownApp: a host Route names no
+// container, but its package runs exactly one host-networked container,
+// and that is the app — its row, its icon, and a status dot dialled the
+// way Caddy dials it, never an anonymous address card.
+func TestHomepagePresentsAHostServiceAsTheKnownApp(t *testing.T) {
+	desired := append([]resource.Resource{dashboardContainer("node-a")}, hostHub("home-assistant", "home-assistant")...)
+	got := string(renderHomepageServices(desired))
+	want := "    - Home Assistant:\n" +
+		"        href: https://home.example.com\n" +
+		"        description: Lights, sensors and automations\n" +
+		"        icon: home-assistant\n" +
+		"        siteMonitor: http://" + resource.HostGatewayAlias + ":8123\n"
+	if !strings.Contains(got, want) {
+		t.Errorf("want entry:\n%s\ngot:\n%s", want, got)
+	}
+	for _, e := range homepageEntries(desired) {
+		if e.name == "home" && e.container != "home-assistant" {
+			t.Errorf("entry container = %q, want the host-networked container", e.container)
+		}
+	}
+}
+
+// TestHomepageDoesNotGuessBetweenTwoHostContainers: with two candidates
+// the port is the only thing saying which, so the card stays unbranded
+// rather than carrying the wrong app's name.
+func TestHomepageDoesNotGuessBetweenTwoHostContainers(t *testing.T) {
+	desired := append([]resource.Resource{dashboardContainer("node-a")}, hostHub("hub", "home-assistant")...)
+	desired = append(desired, resource.Resource{
+		Kind:      resource.KindContainer,
+		Metadata:  resource.Metadata{Name: "matter-server", Owner: "capability/home-automation", Node: "node-a", Package: "hub"},
+		Container: &resource.ContainerSpec{Image: "example@sha256:abc", NetworkMode: resource.NetworkModeHost},
+	})
+	got := string(renderHomepageServices(desired))
+	if strings.Contains(got, "Home Assistant") {
+		t.Errorf("guessed which host container the Route serves:\n%s", got)
+	}
+	if !strings.Contains(got, "siteMonitor: http://"+resource.HostGatewayAlias+":8123") {
+		t.Errorf("the host service is still dialled at its alias:\n%s", got)
+	}
+}
+
 // TestHomepageDisambiguatesDuplicateTitles. A title is a YAML KEY: two
 // Routes to the same app collapse into one card and a service vanishes
 // from the dashboard silently. Resource names are unique per kind, so
