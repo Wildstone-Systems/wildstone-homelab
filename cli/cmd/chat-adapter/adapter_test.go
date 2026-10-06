@@ -710,3 +710,19 @@ func TestInboundRelayStopsWhenContextIsDone(t *testing.T) {
 		t.Fatalf("posts = %d, want 1", n)
 	}
 }
+
+func TestRetryRelayStopsOnceTheWindowIsSpent(t *testing.T) {
+	a := &adapter{retryBase: time.Millisecond, retryWindow: 20 * time.Millisecond}
+	calls := 0
+	_, err := a.retryRelay(context.Background(), func() (bool, error) {
+		calls++
+		time.Sleep(30 * time.Millisecond) // a hung attempt outlasts the window
+		return false, &statusError{Code: http.StatusBadGateway}
+	})
+	if err == nil {
+		t.Fatal("want the failure returned")
+	}
+	if calls != 1 {
+		t.Fatalf("calls = %d, want 1: a spent window must not retry", calls)
+	}
+}

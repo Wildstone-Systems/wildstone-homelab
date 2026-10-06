@@ -225,6 +225,9 @@ type adapter struct {
 	// retryBase is the wait before the second relay attempt; the third
 	// waits twice as long. Zero means relayRetryBase.
 	retryBase time.Duration
+	// retryWindow caps the whole retry sequence, attempts included. Zero
+	// means relayRetryWindow.
+	retryWindow time.Duration
 }
 
 // relayAttempts and relayRetryBase bound how long an inbound message is
@@ -232,6 +235,10 @@ type adapter struct {
 const (
 	relayAttempts  = 3
 	relayRetryBase = 2 * time.Second
+	// relayRetryWindow is the longest an inbound message is held by the
+	// retry sequence. A post that hangs to the client timeout has used it
+	// up, so a hung Keystone is not retried into a multiple of that wait.
+	relayRetryWindow = 30 * time.Second
 )
 
 // retryRelay runs post until it succeeds, fails with an answer that
@@ -244,9 +251,18 @@ func (a *adapter) retryRelay(ctx context.Context, post func() (bool, error)) (bo
 	if wait <= 0 {
 		wait = relayRetryBase
 	}
+	window := a.retryWindow
+	if window <= 0 {
+		window = relayRetryWindow
+	}
+	deadline := time.Now().Add(window)
 	for attempt := 1; ; attempt++ {
 		bound, err := post()
 		if err == nil || attempt >= relayAttempts || !retryable(err) {
+			return bound, err
+		}
+		// Not enough of the window left to wait and try again.
+		if !time.Now().Add(wait).Before(deadline) {
 			return bound, err
 		}
 		select {
