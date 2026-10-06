@@ -5,6 +5,8 @@ package api
 // matters as much as what it accepts.
 
 import (
+	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -278,12 +280,8 @@ func TestEditRefusesASpecThatIsNotARule(t *testing.T) {
 	// names nothing the engine can dispatch.
 	//
 	// Note this is a SCHEMA refusal. A tier above domestic is schema-valid
-	// and refused only by the automation-action-tier policy rule, which
-	// runs when an Automation is proposed to the statefile and not on this
-	// registry write — so the form offering only read and domestic is
-	// currently the only thing keeping a household rule inside A5 through
-	// the Console. Closing that properly is the routine-versus-Automation
-	// question, not this slice's.
+	// and refused by the automation-action-tier policy rule instead; see
+	// TestEditRefusesAnActionTierAboveDomestic.
 	bad.Action.Tool = "notify"
 	if resp := h.do(runtimedb.RoleAdmin, http.MethodPost,
 		"/api/v1/household/routines/evening-mail/edit",
@@ -296,5 +294,60 @@ func TestEditRefusesASpecThatIsNotARule(t *testing.T) {
 	}
 	if after.Revision != 1 {
 		t.Fatalf("a refused spec still recorded a revision: %+v", after)
+	}
+}
+
+// A household routine acts without a per-firing approval, so the registry
+// write is held to the automation-action-tier rule directly. These drive
+// the API, not the form, whose dropdown is not a guard (ADR-W024 A5).
+func TestEditRefusesAnActionTierAboveDomestic(t *testing.T) {
+	h := newHarness(t)
+	seedRoutine(t, h, "evening-mail", "mail-check", runtimedb.RoutineTrial)
+
+	high := editedSpec(t, "12:00")
+	high.Action.Tier = "high"
+	whole := strings.Replace(routineDoc("mail-check"), "tier: domestic", "tier: high", 1)
+	for name, body := range map[string]map[string]any{
+		"spec":     {"spec": high},
+		"document": {"document": whole},
+	} {
+		var got map[string]any
+		resp := h.do(runtimedb.RoleAdmin, http.MethodPost,
+			"/api/v1/household/routines/evening-mail/edit", body, &got)
+		if resp.StatusCode != http.StatusUnprocessableEntity {
+			t.Fatalf("%s: a high-tier edit was not refused: %s", name, resp.Status)
+		}
+		if msg := fmt.Sprint(got); !strings.Contains(msg, "automation-action-tier") {
+			t.Fatalf("%s: refusal does not name the policy rule: %s", name, msg)
+		}
+		after, err := h.s.DB.GetHouseholdRoutine("evening-mail")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if after.Revision != 1 {
+			t.Fatalf("%s: a refused edit still wrote revision %d", name, after.Revision)
+		}
+	}
+}
+
+func TestCreateRefusesAnActionTierAboveDomesticButNotForNative(t *testing.T) {
+	h := newHarness(t)
+	whole := strings.Replace(routineDoc("mail-check"), "tier: domestic", "tier: high", 1)
+
+	resp := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/household/routines",
+		map[string]any{"name": "sneaky", "ownership": "wildstone", "document": whole}, nil)
+	if resp.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("a high-tier Wildstone routine was stored: %s", resp.Status)
+	}
+	if _, err := h.s.DB.GetHouseholdRoutine("sneaky"); !errors.Is(err, runtimedb.ErrNotFound) {
+		t.Fatalf("a refused create left a row behind: %v", err)
+	}
+
+	// A native routine's document is the application's, not Wildstone's.
+	resp = h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/household/routines",
+		map[string]any{"name": "ha-high", "ownership": "native", "externalId": "automation.x",
+			"connection": "home", "document": whole}, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("a native routine was refused: %s", resp.Status)
 	}
 }

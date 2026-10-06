@@ -237,6 +237,17 @@ func (s *Server) createHouseholdRoutine(r *http.Request, id principal.Identity) 
 			"a routine is created as a draft and activated separately, so it cannot be created %q — put it in trial or enable it once someone has reviewed it (ADR-W030 A6)",
 			req.State)
 	}
+	// A Wildstone-run routine acts without a per-firing approval, so it
+	// is held to the same standing policy as an Automation (ADR-W024 A5),
+	// whichever door it arrives through. A native routine's document is
+	// not Wildstone's, and an unparseable one cannot fire.
+	if req.Ownership == runtimedb.RoutineWildstone {
+		if proposed, perr := automation.ParseDraft(req.Document); perr == nil {
+			if err := s.checkRoutinePlanPolicy(proposed, id); err != nil {
+				return nil, http.StatusUnprocessableEntity, err
+			}
+		}
+	}
 	seq, err := s.DB.CreateHouseholdRoutine(runtimedb.HouseholdRoutine{
 		Name: req.Name, Ownership: req.Ownership, ExternalID: req.ExternalID,
 		Connection: req.Connection, Document: req.Document,
@@ -353,6 +364,16 @@ func (s *Server) editHouseholdRoutine(r *http.Request, id principal.Identity) (a
 			"this rule is called %q and an edit cannot rename it to %q: its runs are recorded under the name it had when it fired, "+
 				"so renaming would split its history in two",
 			existing.Metadata.Name, proposed.Metadata.Name)
+	}
+
+	// The registry write is held to the same standing policy as the
+	// Statefile path, so the Console form is not the only guard on a
+	// routine's action tier (ADR-W024 A5). An unparseable whole document
+	// is still stored as sent: it cannot be checked, and cannot fire.
+	if perr2 == nil {
+		if err := s.checkRoutinePlanPolicy(proposed, id); err != nil {
+			return nil, http.StatusUnprocessableEntity, err
+		}
 	}
 
 	revision, err := s.DB.EditHouseholdRoutine(name, document, actingMember(id), req.Note)
