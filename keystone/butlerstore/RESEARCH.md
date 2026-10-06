@@ -3,6 +3,7 @@
 Implements #497 under ADR-W047 and `native-agent-capability-contract-v1`.
 This is dormant platform plumbing: no tool registration, provider dispatch
 wiring, cache implementation, extraction, publication, or continuation route.
+S25's separate dormant cache/reuse seam is documented in [SEARCH.md](SEARCH.md).
 
 `Research` wraps one upstream attempt inside an existing Slice/Invoke tool
 attempt. `Authorize` is required on every attempt, checkpoint and retained read;
