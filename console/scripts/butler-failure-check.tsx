@@ -14,7 +14,7 @@ const store = new Map<string, string>();
 } as Storage;
 
 import {api, ApiError} from "../src/api";
-import {failedAsk, Turn} from "../src/views/Butler";
+import {applyFailedAsk, failedAsk, Turn} from "../src/views/Butler";
 
 // The browser half of a failed Butler ask (#233): the rejected request,
 // what the screen adopts and says, and the failed turn's trace.
@@ -34,6 +34,12 @@ async function main() {
       assert.deepEqual(err.proposalErrors, ["400: refused by policy"]);
       const failed = failedAsk(err);
       assert.equal(failed.adopt, "bs-7", "the preserved session is adopted");
+      // The screen adopts the preserved session and shows the error.
+      const adopted: string[] = [];
+      const shown: string[] = [];
+      applyFailedAsk(err, {adopt: (id) => adopted.push(id), showError: (m) => shown.push(m)});
+      assert.deepEqual(adopted, ["bs-7"], "the screen adopts the preserved session");
+      assert.deepEqual(shown, [failed.message]);
       for (const text of ["model failed", "refused", "400: refused by policy", "new conversation"]) {
         assert.ok(failed.message.includes(text), `error text omits ${text}`);
       }
@@ -45,6 +51,9 @@ async function main() {
   const bare = failedAsk(new ApiError(502, "model failed"));
   assert.equal(bare.adopt, null);
   assert.equal(bare.message, "model failed");
+  const noAdopt: string[] = [];
+  applyFailedAsk(new ApiError(502, "model failed"), {adopt: (id) => noAdopt.push(id), showError: () => {}});
+  assert.deepEqual(noAdopt, [], "no preserved session, nothing adopted");
   const plain = failedAsk(new Error("offline"));
   assert.equal(plain.adopt, null);
   assert.equal(plain.message, "offline");

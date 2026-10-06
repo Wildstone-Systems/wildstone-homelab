@@ -257,17 +257,19 @@ export function Butler({
         setReloads((n) => n + 1);
       })
       .then(() => sessions.reload())
-      .catch((e: Error) => {
-        // What a failed turn means for the screen is decided by
-        // failedAsk, so it can be tested without driving React.
-        const failed = failedAsk(e);
-        if (failed.adopt) {
-          setOpenID(failed.adopt);
-          setReloads((n) => n + 1);
-          void sessions.reload();
-        }
-        setAskError(failed.message);
-      })
+      .catch((e: Error) =>
+        // What a failed turn means for the screen lives in
+        // applyFailedAsk, so the adoption wiring can be tested without
+        // driving React.
+        applyFailedAsk(e, {
+          adopt: (id) => {
+            setOpenID(id);
+            setReloads((n) => n + 1);
+            void sessions.reload();
+          },
+          showError: setAskError,
+        }),
+      )
       .finally(() => {
         setBusy(false);
         setPending(null);
@@ -887,6 +889,14 @@ export function failedAsk(e: unknown): { adopt: string | null; message: string }
       ? `${message} — and a change it tried to propose was refused before reaching the approval queue (${refused.join("; ")}). Nothing is waiting there. Start a new conversation and ask again; continuing this one resumes the same task, which will not attempt that change a second time.`
       : message,
   };
+}
+
+// Applies a failed ask to the screen: adopt the preserved session (if
+// the server kept one) and show the error. send's catch is only this call.
+export function applyFailedAsk(e: unknown, screen: { adopt: (id: string) => void; showError: (message: string) => void }) {
+  const failed = failedAsk(e);
+  if (failed.adopt) screen.adopt(failed.adopt);
+  screen.showError(failed.message);
 }
 
 export function Turn({
