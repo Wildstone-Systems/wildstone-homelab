@@ -8,9 +8,27 @@
 # Secrets (ADR-W012): Wardstone materializes WHOLE env values, and
 # allauth's provider config is one JSON blob with the client secret
 # inside — so the ENTIRE PAPERLESS_SOCIALACCOUNT_PROVIDERS value is the
-# secret paperless-oauth-providers (seed it with `wild secret set`,
-# shaped like the reference compose's value). SECRET_KEY and the DB
-# password are ordinary references.
+# secret paperless-oauth-providers. SECRET_KEY and the DB password are
+# ordinary references.
+#
+# Before installing, seed the two operator-provided secrets, in order:
+#   1. Generate one client secret:  SECRET=$(openssl rand -hex 32)
+#   2. printf '%s' "$SECRET" | wild secret set paperless-oidc -node <identity node>
+#      (the identity node is `identity_node`, or `node` when that is empty)
+#   3. wild secret set paperless-oauth-providers -node <node>   with this
+#      JSON on stdin:
+#      {"openid_connect":{"APPS":[{"provider_id":"authelia","name":"Authelia",
+#       "client_id":"paperless","secret":"<same value as paperless-oidc>",
+#       "settings":{"server_url":"<issuer URL>/.well-known/openid-configuration"}}]}}
+#
+# Rules for that JSON (#134):
+#   - provider_id must stay `authelia`: the OidcClient redirect URI is
+#     /accounts/authelia/login/callback/ and allauth builds that path
+#     from the provider id.
+#   - client_id must stay `paperless` (the OidcClient's client id).
+#   - secret must be byte-for-byte equal to secret/paperless-oidc.
+#   - <issuer URL> is the login portal's address (what other packages
+#     get as .Resolved.IssuerURL).
 #
 # Image digests are REAL, resolved 2026-08-25 via the OCI registry API:
 #   ghcr.io/paperless-ngx/paperless-ngx:latest -> sha256:65a4cabf...b456b
@@ -22,7 +40,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: documents-paperless
-  version: 1.0.5
+  version: 1.0.6
   capability: documents
   profile: paperless
 requires:
@@ -82,12 +100,18 @@ templates:
     apiVersion: wildstone.dev/v1
     kind: Secret
     metadata: { name: paperless-oidc, node: "{{ or .Params.identity_node .Params.node }}" }
-    spec: { name: paperless-oidc, provided: true }
+    spec:
+      name: paperless-oidc
+      provided: true
+      purpose: "Paperless's login client secret, as plain text. Must equal the `secret` inside paperless-oauth-providers."
   - |
     apiVersion: wildstone.dev/v1
     kind: Secret
     metadata: { name: paperless-oauth-providers, node: "{{ .Params.node }}" }
-    spec: { name: paperless-oauth-providers, provided: true }
+    spec:
+      name: paperless-oauth-providers
+      provided: true
+      purpose: "Paperless's whole sign-in provider JSON, with the paperless-oidc value inside it. See the package header for the exact shape."
   - |
     apiVersion: wildstone.dev/v1
     kind: Volume
