@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/agentapi"
+	"github.com/chickenrat17/wildstone-homelab/keystone/butler"
 	"github.com/chickenrat17/wildstone-homelab/keystone/policy"
 	"github.com/chickenrat17/wildstone-homelab/keystone/proposals"
 	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
@@ -222,4 +223,100 @@ func mustButlerSeq(t *testing.T, f *fixture, name string) int64 {
 		t.Fatal(err)
 	}
 	return b.Seq
+}
+
+// proposeSteps returns the propose_change steps recorded for a task.
+func proposeSteps(t *testing.T, f *fixture, taskID string) []butler.LedgerStep {
+	t.Helper()
+	all, err := f.ledger.Steps(taskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []butler.LedgerStep
+	for _, s := range all {
+		if s.Name == "propose_change" {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// A proposal the gateway accepted but could not file did not take
+// effect, so its step is failed rather than verified and a retry on the
+// same handle re-dispatches and files instead of being served from the
+// ledger with nothing queued (#234).
+func TestARefusedProposalIsRetriedNotServedFromTheLedger(t *testing.T) {
+	f := newFixture(t)
+	f.wireProposals()
+	// No runtime principal is bound, so filing is refused.
+	_, h := f.openTask(t, "alfred", "mika")
+	args, err := json.Marshal(grafanaRouteArgs())
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := agentapi.InvokeRequest{Handle: h, Tool: "propose_change", Args: args}
+
+	first, err := f.g.Invoke(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+	if first.Outcome != agentapi.OutcomeError || first.Proposal != nil {
+		t.Fatalf("first = %+v; want an error with no proposal", first)
+	}
+	if calls := f.g.Records(h.TaskID()); len(calls) != 1 || calls[0].ProposalError == "" || calls[0].Rejected {
+		t.Fatalf("recorded call = %+v; want ProposalError set and Rejected unset", calls)
+	}
+	steps := proposeSteps(t, f, h.TaskID())
+	if len(steps) != 1 || steps[0].State != butler.LedgerStepFailed {
+		t.Fatalf("steps = %+v; want one failed propose_change step", steps)
+	}
+
+	// Whatever caused the refusal is fixed; the same call retries.
+	f.bindRuntime(t, "runtime-alfred-1", "alfred")
+	if err := f.db.SetButlerRuntime(mustButlerSeq(t, f, "alfred"), runtimedb.ButlerRuntime{
+		Type: agentapi.RuntimeNative, Principal: "runtime-alfred-1",
+	}, "mika"); err != nil {
+		t.Fatal(err)
+	}
+	second, err := f.g.Invoke(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+	if second.Outcome != agentapi.OutcomeOK || second.ServedFromLedger || second.Proposal == nil || second.Proposal.ID == "" {
+		t.Fatalf("second = %+v; want a fresh filed proposal", second)
+	}
+	if _, err := f.db.GetPlan(second.Proposal.ID); err != nil {
+		t.Fatalf("GetPlan(%s): %v", second.Proposal.ID, err)
+	}
+}
+
+// A filed proposal is still served from the ledger on a repeat, so a
+// resume never files a duplicate Plan.
+func TestAFiledProposalIsStillServedFromTheLedger(t *testing.T) {
+	f := newFixture(t)
+	f.wireProposals()
+	f.bindRuntime(t, "runtime-alfred-1", "alfred")
+	ctx := WithPrincipal(context.Background(), "runtime-alfred-1")
+	_, h := f.openTask(t, "alfred", "mika")
+	args, err := json.Marshal(grafanaRouteArgs())
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := agentapi.InvokeRequest{Handle: h, Tool: "propose_change", Args: args}
+
+	first, err := f.g.Invoke(ctx, req)
+	if err != nil || first.Outcome != agentapi.OutcomeOK || first.Proposal == nil {
+		t.Fatalf("first = %+v, %v", first, err)
+	}
+	second, err := f.g.Invoke(ctx, req)
+	if err != nil || second.Outcome != agentapi.OutcomeOK || !second.ServedFromLedger {
+		t.Fatalf("second = %+v, %v; want it served from the ledger", second, err)
+	}
+	plans, err := f.db.ListPlans(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plans) != 1 {
+		t.Fatalf("plans = %d, want exactly one", len(plans))
+	}
 }

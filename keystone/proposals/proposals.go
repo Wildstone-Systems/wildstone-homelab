@@ -337,7 +337,14 @@ func File(deps Deps, id principal.Identity, req Request, opts Options) (any, int
 	deps.event("plan.proposed", planID, id, req.Summary)
 	rec, err := deps.DB.GetPlan(planID)
 	if err != nil {
-		return nil, http.StatusInternalServerError, err
+		// The plan is already committed: failing here would tell the
+		// caller nothing was queued, and a retry would queue a duplicate
+		// (#234). Answer from what was just inserted instead.
+		rec = runtimedb.PlanRecord{
+			ID: planID, Principal: id.Name, ActingFor: id.ActingFor,
+			Summary: req.Summary, Risk: p.OverallRisk.String(),
+			State: runtimedb.PlanProposed, PlanJSON: string(stored),
+		}
 	}
 	return ViewPlan(rec), http.StatusCreated, nil
 }

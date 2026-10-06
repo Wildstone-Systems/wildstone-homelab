@@ -278,10 +278,11 @@ export function Butler({
         // It says to start a NEW conversation rather than just to ask
         // again, and the difference is not politeness. This thread has
         // just adopted the preserved session, so asking again resumes
-        // that task — and the server recorded the accepted
-        // propose_change as a verified step, which a resumed task
-        // replays from its ledger instead of re-running. Retrying here
-        // would look like it worked and queue nothing (#234).
+        // that task. The agent gateway now fails the step of a refused
+        // proposal so a resume re-files it (#234), but the legacy
+        // single-provider path still records it as verified and replays
+        // it from the ledger, which would queue nothing. A new
+        // conversation works on both.
         const refused =
           e instanceof ApiError && e.proposalErrors?.length ? e.proposalErrors : null;
         setAskError(
