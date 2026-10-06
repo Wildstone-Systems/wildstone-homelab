@@ -140,9 +140,11 @@ Wiring makes the tools available; it grants them to no Agent. Each Agent
 uses them only under an Owner's grant to that Agent, by tool class,
 bundle or explicit selection, with opt-in tools excluded from broad grants
 (ADR-W033 A0, B3–B5).
-_Code not yet conformant: calendar actions are reached through the single
-`do_household_action` tool and filtered by declared tier, not granted per
-action to each Agent._
+Calendar actions are checked per action: `do_household_action` and the
+action's own tool name must both allow, as Member-class, non-opt-in tools of
+the `calendar` service. Migration 0104 explicitly assigns the seven declared
+actions to each governed Agent already holding `do_household_action`, so
+nothing narrows silently.
 
 On either road, deleting an event is additionally gated per call by the
 `confirm` tier (A10).
