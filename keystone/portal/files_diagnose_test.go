@@ -100,3 +100,48 @@ func TestDiagnoseStorageSkipsWriteProbesWhenFenced(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// A root that cannot be examined is an error, not a healthy empty result.
+func TestDiagnoseStoragePropagatesRootStatFailure(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "f")
+	if err := os.WriteFile(file, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s := &FileStore{Root: filepath.Join(file, "root")}
+	if got, err := s.DiagnoseStorage(); err == nil {
+		t.Fatalf("want error, got findings %v", got)
+	}
+}
+
+// The requesting member's own directory is write-probed; others are not.
+func TestDiagnoseStorageProbesRequestersOwnDirectory(t *testing.T) {
+	s := store(t)
+	s.Member = "alice"
+	for _, d := range []string{"Members/alice", "Members/bob"} {
+		if err := os.MkdirAll(filepath.Join(s.Root, d), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var wrote []string
+	s.access = func(_ *os.Root, rel string, write bool) error {
+		if write {
+			wrote = append(wrote, rel)
+			if rel == "Members/alice" {
+				return errors.New("permission denied")
+			}
+		}
+		return nil
+	}
+	got, err := s.DiagnoseStorage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Need != "write" || !strings.HasSuffix(got[0].Path, "Members/alice") {
+		t.Fatalf("findings = %v", got)
+	}
+	for _, rel := range wrote {
+		if rel == "Members/bob" {
+			t.Fatal("another member's directory was write-probed")
+		}
+	}
+}

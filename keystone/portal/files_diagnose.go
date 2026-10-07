@@ -32,9 +32,10 @@ const RepairAdvice = "On the storage server, change ownership of only the listed
 // personal root, and the listing of each existing member directory. A writable
 // root says nothing about the directories below it (#551).
 //
-// It never creates a configured directory and never writes into a member's
-// private directory; the only writes are a bounded probe directory in the
-// root, the namespace directories and Members, removed straight away. When the
+// It never creates a configured directory and never writes into another
+// member's private directory; the only writes are a bounded probe directory in
+// the root, the namespace directories, Members and the requesting member's own
+// existing directory, removed straight away. When the
 // runtime write fence refuses writes the probes are skipped, since no upload
 // could happen either. A nil result means nothing is known to be wrong.
 func (s *FileStore) DiagnoseStorage() ([]StorageFinding, error) {
@@ -45,8 +46,14 @@ func (s *FileStore) DiagnoseStorage() ([]StorageFinding, error) {
 		return nil, err
 	}
 	if s.RequiredMount == "" {
+		// Only a root that does not exist yet is the intentional empty
+		// result (uploads create it). Any other failure means the root
+		// cannot be used and must not read as healthy.
 		if _, err := os.Stat(s.Root); err != nil {
-			return nil, nil
+			if errors.Is(err, os.ErrNotExist) {
+				return nil, nil
+			}
+			return nil, err
 		}
 	}
 	base, err := s.openStorageRoot()
@@ -88,7 +95,10 @@ func (s *FileStore) DiagnoseStorage() ([]StorageFinding, error) {
 			add(rel, "list", err)
 		}
 	}
-	// Existing member directories: listable only. Nothing is written into one.
+	// The requesting member's own directory must also take writes, or Mine is
+	// advertised ready while every upload fails.
+	ownRel, hasOwn := PersonalDirFor(s.Member, s.Folders)
+	// Existing member directories: listable only, except the requester's own.
 	if members, err := base.Open(personalRoot); err == nil {
 		names, _ := members.Readdirnames(-1)
 		members.Close()
@@ -96,6 +106,11 @@ func (s *FileStore) DiagnoseStorage() ([]StorageFinding, error) {
 			rel := personalRoot + "/" + name
 			if info, err := base.Lstat(rel); err != nil || !info.IsDir() {
 				continue
+			}
+			if canWrite && hasOwn && rel == ownRel {
+				if err := check(base, rel, true); err != nil {
+					add(rel, "write", err)
+				}
 			}
 			if err := check(base, rel, false); err != nil {
 				add(rel, "list", err)
