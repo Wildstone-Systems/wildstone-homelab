@@ -157,6 +157,9 @@ type FileStore struct {
 	// (#372). Without it, or for a member with no Person on record, the
 	// folder is the one PersonalDir derives from the handle.
 	Folders PersonalFolders
+
+	// access, when set, replaces the real filesystem probe in DiagnoseStorage.
+	access func(root *os.Root, rel string, write bool) error
 }
 
 // PersonalFolders records which folder under Members/ belongs to which

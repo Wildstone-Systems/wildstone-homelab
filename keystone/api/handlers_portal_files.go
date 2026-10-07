@@ -136,6 +136,12 @@ func (s *Server) filedropCapabilities(_ http.ResponseWriter, r *http.Request, me
 		body["reason"] = "no storage root is configured for this household's files"
 	} else if !store.Available() {
 		body["reason"] = "the required storage mount is unavailable"
+	} else if findings, err := store.DiagnoseStorage(); err == nil && len(findings) > 0 {
+		// A writable root does not make the namespaces below it writable
+		// (#551): not ready, with the exact paths.
+		body["ready"] = false
+		body["reason"] = portal.StorageProblem(findings)
+		body["storageFindings"] = findings
 	}
 	return body, http.StatusOK, nil
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"golang.org/x/sys/unix"
 	"os"
+	"syscall"
 )
 
 // Open a single child without following symlinks. /proc/self/fd names an
@@ -79,4 +80,11 @@ func openNoFollow(root *os.Root, name string, flags int) (*os.File, error) {
 		return nil, err
 	}
 	return os.NewFile(uintptr(fd), name), nil
+}
+
+func ownerString(info os.FileInfo) string {
+	if st, ok := info.Sys().(*syscall.Stat_t); ok {
+		return fmt.Sprintf("%d:%d %04o", st.Uid, st.Gid, info.Mode().Perm())
+	}
+	return fmt.Sprintf("%04o", info.Mode().Perm())
 }
