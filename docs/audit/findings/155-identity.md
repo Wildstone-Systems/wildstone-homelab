@@ -97,7 +97,7 @@ database and the harness scripts were deleted afterwards.
 | R14 | §16 | Group audiences retrieve only what is appropriate to all recipients | partial | The household timeline is narrowed (`butler/household.go:490-495`, code); memory is not — observed, `recall` and the memory preamble each carry the asker's private records into a group room (F-155-11), and a thread's history crosses a group/direct change (F-155-18) |
 | R15 | §16 | Re-check the destination before sending if audience or membership changed | missing | The reply is rendered and queued at answer time and delivered with no re-check (F-155-09, observed end to end); a thread keeps its history when its audience changes (F-155-18) |
 | R16 | §16 | Revocation: pause affected work, end its grants | implemented | `runtimedb/offboarding.go:96-140` — personal work pauses, shared transfers keeping its author, task grants revoked; `TestOffboardingReportsPerStore` |
-| R17 | §16 | Revocation: invalidate cached private context and outstanding approvals | partial | Private memory is quarantined and notices stopped (`runtimedb/offboarding.go:176-197`); bearer tokens (F-155-07), queued replies (F-155-09) and proposed plans (F-155-14) survive, and a model round in flight retries after the pause (F-155-20) |
+| R17 | §16 | Revocation: invalidate cached private context and outstanding approvals | partial | Private memory is quarantined and notices stopped (`runtimedb/offboarding.go:176-197`); bearer tokens of linked principals are revoked (F-155-07); queued replies (F-155-09) and proposed plans (F-155-14) survive, and a model round in flight retries after the pause (F-155-20) |
 | R18 | §16 | Revocation lands at the next check rather than at a cache expiry | partial | True on the chat path at each slice and each round (binding revoked *and* admission rechecked); not between a model round's retries (F-155-20); the link-generation mechanism designed for this is unwired (F-155-08) and the Console path checks neither (F-155-05) |
 | R19 | §18 | Person-specific enforcement for adults, children, guests and operators reaching the same Butler | missing | Enforcement is per Butler and per surface. The only per-person decision is whether the person may open a session at all (F-155-01, F-155-03) |
 
@@ -244,8 +244,8 @@ matters most.
 
 ### F-155-07 — offboarding leaves the person's API tokens live
 
-- **Current status:** open
-- **Current evidence:** `keystone/runtimedb/offboarding.go` revokes the identity link but does not call `RevokeTokensFor`; principal authentication still accepts an offboarded person's live bearer token.
+- **Current status:** implemented
+- **Current evidence:** `keystone/runtimedb/offboarding.go` collects the person's live `api-principal` links before the denial and calls `RevokeTokensFor` for each afterwards (reported as the `api-tokens` store); tokens of unlinked principals and of links revoked earlier are left alone. `TestOffboardingRevokesLinkedAPITokens`, `TestOffboardingRevokesLinkedPrincipalToken`.
 - **Current owner:** chickenrat17
 - **Tracking:** #316
 - **Audit status:** partial

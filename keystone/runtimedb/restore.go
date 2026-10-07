@@ -251,6 +251,14 @@ func (db *DB) ReconcileRestore() (applied int, err error) {
 				}
 			}
 		case "link":
+			// Token revocation: the id is "api-tokens:<principal>".
+			if principal, ok := strings.CutPrefix(e.id, apiTokensJournalPrefix); ok {
+				if _, err := db.RevokeTokensFor(principal); err != nil {
+					return applied, err
+				}
+				applied++
+				continue
+			}
 			// Re-revoke. The id is "<type>:<external>".
 			for i := range e.id {
 				if e.id[i] == ':' {

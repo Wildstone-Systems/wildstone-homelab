@@ -176,3 +176,34 @@ func TestRestoreReconciliationNeedsAReplay(t *testing.T) {
 		t.Fatal("a full reconciliation did not release quarantine")
 	}
 }
+
+// F-155-07: offboarding a Person revokes the bearer tokens of the
+// principals linked to them, so a token minted before offboarding stops
+// authenticating.
+func TestOffboardingRevokesLinkedPrincipalToken(t *testing.T) {
+	h := freshnessHarness(t)
+	if resp := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/principals",
+		map[string]string{"name": "sandy-cli", "role": "operator"}, nil); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create principal = %d", resp.StatusCode)
+	}
+	var mint mintResponse
+	if resp := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/principals/sandy-cli/tokens",
+		map[string]int{"ttlSeconds": 3600}, &mint); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("mint = %d", resp.StatusCode)
+	}
+	if err := h.s.DB.LinkSurfaceIdentity(runtimedb.LinkAPIPrincipal, "sandy-cli", "sandy", "root-admin"); err != nil {
+		t.Fatal(err)
+	}
+	if resp := h.doToken(mint.Token, http.MethodGet, "/api/v1/butlers", nil, nil); resp.StatusCode != http.StatusOK {
+		t.Fatalf("precondition: token before offboarding = %d", resp.StatusCode)
+	}
+	session := h.s.StartConsoleSession("mika", time.Now())
+	res := h.consoleRequest(http.MethodPost, "/api/v1/butler/members/sandy/offboarding", "mika", sessionCookie(session))
+	res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("offboarding = %d", res.StatusCode)
+	}
+	if resp := h.doToken(mint.Token, http.MethodGet, "/api/v1/butlers", nil, nil); resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("offboarded Person's token = %d, want 401", resp.StatusCode)
+	}
+}

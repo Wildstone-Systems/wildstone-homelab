@@ -34,6 +34,12 @@ type OffboardingResult struct {
 	TransferredTo string `json:"transferredTo,omitempty"`
 }
 
+// apiTokensJournalPrefix marks a journalled link entry as the revocation of
+// a principal's bearer tokens rather than of a surface link, so
+// ReconcileRestore can replay it: a restored snapshot brings the tokens
+// back live, and the link revocation alone does not take them away again.
+const apiTokensJournalPrefix = "api-tokens:"
+
 // OffboardMember denies access everywhere and settles the work.
 //
 // Order matters and is not arbitrary. Admission and links go first —
@@ -51,6 +57,21 @@ func (db *DB) OffboardMember(member, actor, administrator string) (OffboardingRe
 	result := OffboardingResult{
 		Member: member, At: time.Now().UTC(), Stores: map[string]int{},
 		TransferredTo: administrator,
+	}
+
+	// Collect the live api-principal links before the denial: step 1
+	// revokes every link, and afterwards an earlier-revoked link cannot be
+	// told apart from one this offboarding revoked, and may belong to
+	// someone else now.
+	before, err := db.ListSurfaceLinks(member)
+	if err != nil {
+		return result, err
+	}
+	var principals []string
+	for _, l := range before {
+		if l.LinkType == LinkAPIPrincipal && l.RevokedAt.IsZero() {
+			principals = append(principals, l.ExternalID)
+		}
 	}
 
 	// 1. Deny. Admission off, generation bumped, every link revoked.
@@ -75,6 +96,20 @@ func (db *DB) OffboardMember(member, actor, administrator string) (OffboardingRe
 		}
 	}
 	result.Stores["identity-links"] = revoked
+
+	// 1b. Bearer tokens. Only principals the Person was linked to — equal
+	//     names are not proof of identity. The principal is neither
+	//     disabled nor deleted; an Owner can mint a token on purpose.
+	for _, principal := range principals {
+		n, err := db.RevokeTokensFor(principal)
+		if err != nil {
+			return result, err
+		}
+		result.Stores["api-tokens"] += int(n)
+		if err := db.journal("link", apiTokensJournalPrefix+principal, "revoked", actor, "api tokens revoked: owner offboarded"); err != nil {
+			return result, err
+		}
+	}
 
 	// 2. Chat bindings. The link table already refuses them, but a
 	//    revoked binding is also what a Console shows, and someone
