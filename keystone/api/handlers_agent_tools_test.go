@@ -228,3 +228,41 @@ func TestTheBackfillDoesNotRestoreARemovedTool(t *testing.T) {
 			"an agent that is already enrolled, not re-seed it")
 	}
 }
+
+// Calendar actions are granted per action (ADR-W034 A5) but live in the
+// household manifest's Actions, not its Tools. A new Agent must still be
+// seeded with them, or it would hold do_household_action and be refused
+// every calendar action.
+func TestNewMemberAgentIsSeededWithCalendarActions(t *testing.T) {
+	h := butlerConsole(t)
+	h.s.ToolInventory = fakeInventory
+	h.s.ButlerHost = &ButlerHost{Household: butler.HouseholdSeams{
+		Vocabulary: func() (butler.HouseholdVocabulary, error) {
+			return butler.HouseholdVocabulary{Actions: []butler.HouseholdAction{
+				{Tool: "calendar.get_agenda", Tier: "domestic"},
+				{Tool: "notifications.notify", Tier: "domestic"},
+			}}, nil
+		},
+	}}
+
+	res := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/butlers",
+		map[string]any{"name": "jeeves", "agentClass": "member", "model": "kitchen-box"}, nil)
+	if res.StatusCode != http.StatusCreated {
+		t.Fatalf("creating a member agent = %d", res.StatusCode)
+	}
+	got := assignedNames(t, h.s.DB, "jeeves")
+	if !got["calendar.get_agenda"] {
+		t.Errorf("a new agent was not given the calendar action it needs: %v", got)
+	}
+	if got["notifications.notify"] {
+		t.Error("an action not granted per action was assigned as a tool")
+	}
+
+	b, err := h.s.DB.GetButler("jeeves")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := h.s.assignableTool(b, "calendar.get_agenda"); !ok {
+		t.Error("a calendar action cannot be assigned through the endpoint")
+	}
+}

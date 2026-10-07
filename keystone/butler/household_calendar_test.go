@@ -150,3 +150,30 @@ func TestCalendarActionsAreGrantedPerAction(t *testing.T) {
 		}
 	}
 }
+
+func TestManifestAdvertisesOnlyGrantedCalendarActions(t *testing.T) {
+	seams, _ := householdSeams(t)
+	seams.Vocabulary = func() (HouseholdVocabulary, error) {
+		return HouseholdVocabulary{Actions: []HouseholdAction{
+			{Tool: "calendar.get_agenda", Tier: "read"},
+			{Tool: "calendar.create_event", Tier: "domestic"},
+			{Tool: "notifications.notify", Tier: "domestic"},
+		}}, nil
+	}
+	gw := newTestHouseholdGateway("mika", seams)
+	gw.SetAuthorizer(&calendarGrantAuthorizer{deny: map[string]bool{"calendar.create_event": true}})
+	m := gw.Capabilities(false)
+	got := map[string]bool{}
+	for _, a := range m.Actions {
+		got[a.Tool] = true
+	}
+	if !got["calendar.get_agenda"] || !got["notifications.notify"] || got["calendar.create_event"] {
+		t.Fatalf("manifest actions disagree with dispatch: %v", got)
+	}
+	tools := PerActionCapabilityTools(CapabilityManifest{Actions: []CapabilityAction{
+		{Tool: "calendar.get_agenda"}, {Tool: "notifications.notify"},
+	}})
+	if len(tools) != 1 || tools[0].Name != "calendar.get_agenda" || tools[0].Service != "calendar" {
+		t.Fatalf("per-action inventory wrong: %+v", tools)
+	}
+}

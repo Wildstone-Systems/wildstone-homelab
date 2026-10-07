@@ -355,6 +355,28 @@ func actionService(tool string) string {
 	return svc
 }
 
+// PerActionCapabilityTools lists the per-action grants a manifest's actions
+// stand for, as assignable tools. An action granted per action is held by
+// name like any tool, so the seeding and assignment paths, which read the
+// tool inventory, must be able to see it.
+func PerActionCapabilityTools(m CapabilityManifest) []CapabilityTool {
+	var out []CapabilityTool
+	for _, a := range m.Actions {
+		svc := actionService(a.Tool)
+		if svc == "" {
+			continue
+		}
+		out = append(out, CapabilityTool{
+			Name:       a.Tool,
+			Summary:    "Household action " + a.Tool + ".",
+			Service:    svc,
+			AgentClass: AgentClassMember,
+			Available:  true,
+		})
+	}
+	return out
+}
+
 // checkAction asks the seam whether this Agent holds one action. It is
 // only a second gate: do_household_action must also allow, so it can
 // narrow what that tool reaches and never widen it. Actions whose service
