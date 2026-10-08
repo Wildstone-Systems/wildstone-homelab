@@ -171,6 +171,43 @@ func (db *DB) AppliedPlanJSONMentioning(needle string) ([]string, error) {
 	return out, rows.Err()
 }
 
+// LatestAppliedOriginJSON returns, newest first, the stored JSON of the
+// newest committed plan for each installed package instance (the same
+// state set as AppliedPlanJSON). Plans without an origin are skipped.
+//
+// Install provenance cannot be read from a bounded window of recent plans:
+// unrelated plans (backups among them) push an old install out of it, and
+// the installed version and chosen parameters vanish. Selecting per
+// package#instance in SQL keeps the result small however many plans there
+// are, and never returns the full JSON of a plan that is not an origin.
+func (db *DB) LatestAppliedOriginJSON() ([]string, error) {
+	rows, err := db.sql.Query(
+		`SELECT plan_json FROM (
+		   SELECT plan_json, seq, ROW_NUMBER() OVER (
+		     PARTITION BY json_extract(plan_json, '$.origin.package'),
+		                  COALESCE(json_extract(plan_json, '$.origin.params.instance'), '')
+		     ORDER BY seq DESC) AS rn
+		   FROM plans
+		   WHERE state IN (?, ?, ?, ?)
+		     AND json_valid(plan_json)
+		     AND json_extract(plan_json, '$.origin.package') IS NOT NULL
+		 ) WHERE rn = 1 ORDER BY seq DESC`,
+		string(PlanApproved), string(PlanApplying), string(PlanApplied), string(PlanFailed))
+	if err != nil {
+		return nil, fmt.Errorf("runtimedb: listing latest package origins: %w", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var j string
+		if err := rows.Scan(&j); err != nil {
+			return nil, fmt.Errorf("runtimedb: scanning package origin: %w", err)
+		}
+		out = append(out, j)
+	}
+	return out, rows.Err()
+}
+
 func (db *DB) AppliedPlanJSON(limit int) ([]string, error) {
 	if limit <= 0 {
 		limit = 50

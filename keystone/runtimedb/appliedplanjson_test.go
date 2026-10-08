@@ -135,3 +135,48 @@ func TestPlansMentioningKeepsStateAndOrder(t *testing.T) {
 		t.Fatalf("PlansMentioning = %+v", recs)
 	}
 }
+
+func applyPlan(t *testing.T, db *DB, summary, doc string) {
+	t.Helper()
+	id, err := db.InsertPlan("admin", "", summary, "low", doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, to := range []PlanState{PlanApproved, PlanApplying, PlanApplied} {
+		if err := db.TransitionPlan(id, to, "admin"); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// #185: an install must stay visible however many unrelated plans follow
+// it, and only the newest origin per package#instance comes back.
+func TestLatestAppliedOriginJSONSurvivesUnrelatedPlans(t *testing.T) {
+	db := open(t)
+	applyPlan(t, db, "old x", `{"origin":{"package":"pkg-x","version":"1.0.0"}}`)
+	applyPlan(t, db, "new x", `{"origin":{"package":"pkg-x","version":"2.0.0"}}`)
+	applyPlan(t, db, "inst a", `{"origin":{"package":"pkg-y","version":"1.0.0","params":{"instance":"a"}}}`)
+	applyPlan(t, db, "inst b", `{"origin":{"package":"pkg-y","version":"1.0.0","params":{"instance":"b"}}}`)
+	if _, err := db.InsertPlan("admin", "", "proposed only", "low", `{"origin":{"package":"never","version":"1"}}`); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 1000; i++ {
+		applyPlan(t, db, "backup", `{"summary":"backup"}`)
+	}
+
+	docs, err := db.LatestAppliedOriginJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(docs) != 3 {
+		t.Fatalf("want newest origin for pkg-x, pkg-y#a and pkg-y#b, got %d: %v", len(docs), docs)
+	}
+	joined := strings.Join(docs, "\n")
+	if !strings.Contains(joined, `"version":"2.0.0"`) ||
+		strings.Contains(joined, `"package":"never"`) {
+		t.Errorf("wrong selection: %s", joined)
+	}
+	if strings.Count(joined, `"package":"pkg-x"`) != 1 {
+		t.Errorf("pkg-x should appear once, newest only: %s", joined)
+	}
+}
