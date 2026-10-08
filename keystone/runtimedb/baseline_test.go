@@ -119,3 +119,40 @@ func TestTheSquashedListIsTheWholeChain(t *testing.T) {
 		seen[name] = true
 	}
 }
+
+// Two processes (or two handles in one) opening the same finished
+// database at once both see the baseline unrecorded; adopting it must
+// not fail the one that loses the race.
+func TestConcurrentOpensAdoptTheBaselineOnce(t *testing.T) {
+	path := migrated.Path(t)
+	asIfMigratedTheLongWay(t, path, len(squashedMigrations))
+
+	const n = 8
+	errs := make(chan error, n)
+	start := make(chan struct{})
+	for i := 0; i < n; i++ {
+		go func() {
+			<-start
+			db, err := Open(path)
+			if err == nil {
+				db.Close()
+			}
+			errs <- err
+		}()
+	}
+	close(start)
+	for i := 0; i < n; i++ {
+		if err := <-errs; err != nil {
+			t.Errorf("a concurrent open failed: %v", err)
+		}
+	}
+	db, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var recorded int
+	if err := db.sql.QueryRow(`SELECT COUNT(*) FROM schema_migrations WHERE name = ?`, baselineMigration).Scan(&recorded); err != nil || recorded != 1 {
+		t.Fatalf("baseline recorded %d times, %v", recorded, err)
+	}
+}

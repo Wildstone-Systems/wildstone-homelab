@@ -83,8 +83,10 @@ func (db *DB) adoptBaseline(src fs.FS) error {
 	case len(squashedMigrations):
 		return nil
 	case 0:
+		// OR IGNORE: another handle opening the same database can see the
+		// baseline unrecorded at the same moment and record it first.
 		if _, err := db.sql.Exec(
-			`INSERT INTO schema_migrations (name, applied_at) VALUES (?, ?)`, baselineMigration, now()); err != nil {
+			`INSERT OR IGNORE INTO schema_migrations (name, applied_at) VALUES (?, ?)`, baselineMigration, now()); err != nil {
 			return fmt.Errorf("runtimedb: adopting %s: %w", baselineMigration, err)
 		}
 		return nil
