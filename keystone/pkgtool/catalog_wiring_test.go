@@ -838,3 +838,48 @@ func TestEveryRequiredParamCanBeAnswered(t *testing.T) {
 		t.Fatal("no required param needed a description — this test walked nothing")
 	}
 }
+
+// documents-paperless asks the operator to hand-write allauth's provider
+// JSON (#134). Its header documents provider_id "authelia", which is only
+// true while the OidcClient redirect URI carries that id, so this pins
+// both, and checks the two provided secrets explain themselves.
+func TestPaperlessOAuthProviderContractIsDocumented(t *testing.T) {
+	rendered, ok := renderShippedPackages(t)["documents-paperless"]
+	if !ok {
+		t.Fatal("documents-paperless is not in the catalog")
+	}
+
+	purposes := map[string]string{}
+	var redirects []string
+	for _, r := range rendered {
+		switch {
+		case r.Kind == resource.KindSecret && r.Secret != nil:
+			purposes[r.Secret.Name] = r.Secret.Purpose
+		case r.Kind == resource.KindOidcClient && r.OidcClient != nil && r.Metadata.Name == "paperless":
+			redirects = r.OidcClient.RedirectUris
+		}
+	}
+
+	for _, name := range []string{"paperless-oidc", "paperless-oauth-providers"} {
+		p, ok := purposes[name]
+		if !ok {
+			t.Fatalf("secret %s is not rendered", name)
+		}
+		if strings.TrimSpace(p) == "" {
+			t.Errorf("secret %s has no purpose: the operator is shown a bare name", name)
+		}
+		if name == "paperless-oauth-providers" && !strings.Contains(p, `"provider_id":"authelia"`) {
+			t.Errorf("secret %s purpose must carry the provider JSON: the Console shows no package header", name)
+		}
+	}
+
+	found := false
+	for _, u := range redirects {
+		if strings.Contains(u, "/accounts/oidc/authelia/login/callback/") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("paperless OidcClient redirects %v lack /accounts/oidc/authelia/login/callback/: the package header documents provider_id authelia", redirects)
+	}
+}
