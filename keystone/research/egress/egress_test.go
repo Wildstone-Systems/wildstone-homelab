@@ -24,7 +24,7 @@ func (f *fakeAdapters) Fetch(context.Context, string) (publicfetch.Page, error) 
 }
 
 func TestAdaptersReceiveNothingOnDeniedEgress(t *testing.T) {
-	db, err := runtimedb.Open(filepath.Join(t.TempDir(), "runtime.db"))
+	db, err := runtimedb.Open(migrated.Into(t, filepath.Join(t.TempDir(), "runtime.db")))
 	if err != nil {
 		t.Fatal(err)
 	}

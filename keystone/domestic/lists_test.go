@@ -14,7 +14,7 @@ import (
 // runtime database, declared exactly as the package declares them.
 func listsGateway(t *testing.T, enabled bool) (*Gateway, *runtimedb.DB, *[]ConfirmRequest, *Confirmation) {
 	t.Helper()
-	db, err := runtimedb.Open(filepath.Join(t.TempDir(), "lists.db"))
+	db, err := runtimedb.Open(migrated.Into(t, filepath.Join(t.TempDir(), "lists.db")))
 	if err != nil {
 		t.Fatal(err)
 	}

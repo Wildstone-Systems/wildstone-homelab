@@ -34,7 +34,7 @@ type personalAuthFixture struct {
 // authorization itself and mika's approval — the whole intersection.
 func newPersonalAuthFixture(t *testing.T) *personalAuthFixture {
 	t.Helper()
-	db, err := runtimedb.Open(filepath.Join(t.TempDir(), "keystone.db"))
+	db, err := runtimedb.Open(migrated.Into(t, filepath.Join(t.TempDir(), "keystone.db")))
 	if err != nil {
 		t.Fatal(err)
 	}

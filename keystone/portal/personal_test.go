@@ -197,7 +197,7 @@ func TestRecentDoesNotLeakAnotherPersonsFiles(t *testing.T) {
 // recorded for their Person is the one they keep.
 func TestThePersonalSpaceFollowsThePersonThroughARename(t *testing.T) {
 	root := t.TempDir()
-	db, err := runtimedb.Open(filepath.Join(t.TempDir(), "keystone.db"))
+	db, err := runtimedb.Open(migrated.Into(t, filepath.Join(t.TempDir(), "keystone.db")))
 	if err != nil {
 		t.Fatal(err)
 	}
