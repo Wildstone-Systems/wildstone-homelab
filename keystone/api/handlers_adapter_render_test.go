@@ -309,3 +309,27 @@ func TestAdapterPlacementLeavesWhenTheSubscriptionIsDisabled(t *testing.T) {
 		t.Fatalf("after disabling: %+v", renders)
 	}
 }
+
+// #185: an install's version and params must survive any number of later,
+// unrelated plans — they are read from the newest origin per package, not
+// from a window of recent plans.
+func TestInstalledFromPlansSurvivesManyUnrelatedPlans(t *testing.T) {
+	c := newCredentialHarness(t)
+	pkg := installMailForTest(t, c)
+	for i := 0; i < 250; i++ {
+		id, err := c.s.DB.InsertPlan("root-admin", "", "backup", "low", `{"summary":"backup"}`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := c.s.DB.TransitionPlan(id, runtimedb.PlanApproved, "mika"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	versions, params := c.s.installedFromPlans()
+	if versions["mail-roundcube"] != pkg.Metadata.Version {
+		t.Errorf("installed version lost behind unrelated plans: %v", versions)
+	}
+	if params["mail-roundcube"]["public_domain"] != "example.internal" {
+		t.Errorf("installed params lost behind unrelated plans: %v", params)
+	}
+}

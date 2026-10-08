@@ -367,7 +367,11 @@ func (s *Server) installedFromPlans() (versions map[string]string, params map[st
 	// plan_json, so reading origins from it silently found nothing on
 	// every deployment — which is how F91's "you are behind the catalog"
 	// came to report nothing at all.
-	docs, err := s.DB.AppliedPlanJSON(200)
+	//
+	// The newest origin per package#instance, not a window of recent plans:
+	// a capped window let unrelated plans push an install out of view,
+	// hiding its version and losing the params chosen for it (#185).
+	docs, err := s.DB.LatestAppliedOriginJSON()
 	if err != nil {
 		return versions, params
 	}
