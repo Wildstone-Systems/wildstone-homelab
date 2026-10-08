@@ -21,7 +21,7 @@ A skill declares requirements and composes tools that Keystone already authorize
 | --- | --- |
 | Identity | Every skill has an immutable stable ID. Names are unique labels per scope and may change without detaching assignments. |
 | Versions | Published versions are immutable and content-hashed. Editing creates a new draft. |
-| Lifecycle | Version states: `draft`, `in_review`, `published`, `retired`, `revoked`. Assignment states: `pending`, `active`, `unavailable`, `unassigned`, `revoked`. |
+| Lifecycle | Version states: `draft`, `in_review`, `published`, `retired`, `revoked`. Assignment states: `pending`, `active`, `unavailable`, `paused`, `unassigned`, `revoked`. |
 | Retire / revoke / unassign | Three distinct operations (section 3.3). Retired and revoked versions stay addressable in history and cannot be newly activated. |
 | Dependencies | Declared on the version, resolved to exact versions at assignment, rechecked at task start and continuation. Failures use a closed set of reason codes (section 5). |
 | Bulk operations | Preview first; partial success by default, optional all-or-nothing per operation; idempotency key per operation (section 6). |
@@ -58,6 +58,7 @@ draft ──submit──▶ in_review ──approve/publish──▶ published �
 | `pending` | Awaiting an approval the change needs (section 6.4). Not effective. |
 | `active` | Effective for future task starts and continuation boundaries. |
 | `unavailable` | Assigned, but a dependency, tool, or compatibility check currently fails. Not effective; reason code recorded. Returns to `active` when the cause clears. |
+| `paused` | Stopped for safety by an Owner, or by the assignment's Person. Not effective. Resumes only by an explicit audited action, never automatically (section 3.3). |
 | `unassigned` | Stopped for future runs. History retained. |
 | `revoked` | Fail-closed. Re-enablement needs an explicit authorized action and an audit record (section 8). |
 
@@ -66,11 +67,12 @@ draft ──submit──▶ in_review ──approve/publish──▶ published �
 | Operation | Target | Effect on running tasks | Effect on history | Reversible |
 | --- | --- | --- | --- | --- |
 | Unassign | one assignment | continue under the version recorded at start; stop at the next start | kept | yes, by assigning again |
+| Pause | one assignment | interrupted at the next tool-call or continuation boundary, as for revocation | kept | yes: an Owner resumes it, or the Person resumes a pause they set themselves; resume is a compare-and-set write with an audit record and revalidation (section 5.4) |
 | Retire | a version | none directly | kept; version stays addressable | no new assignments; existing ones persist until unassigned |
 | Revoke | a version or an assignment | interrupted fail-closed at the next tool-call or continuation boundary | kept | version revocation is terminal; assignment re-enablement is a new audited action |
 | Delete | a referenced version | not allowed in v1 | n/a | n/a |
 
-An Owner may revoke or pause a personal skill assignment for safety without gaining the right to read its private content (ADR-W033 separation of administrative and disclosure authority).
+An Owner may pause, revoke, or unassign a personal skill assignment for safety without gaining the right to read its private content (ADR-W033 separation of administrative and disclosure authority). Pause is the reversible safety stop; revoke is the fail-closed one (section 8). Revocation overrides a pause: a paused assignment that is revoked stays revoked when the pause is lifted.
 
 ## 4. Retirement, replacement, and migration guidance
 
@@ -108,7 +110,9 @@ Validation returns every failing check, ordered by a fixed code order, so identi
 | `dependency_cycle` | The dependency graph contains a cycle. |
 | `tool_unassigned` | The Agent lacks the assigned tool; the skill does not grant it. |
 | `scope_ceiling` | Member skill on an incompatible surface, or Owner skill on a non-Owner Agent. |
-| `approval_required` | The change expands requirements and no valid approval exists. |
+| `approval_required` | The change expands requirements and no valid approval exists. In a rollout or migration this stages the change for approval (section 6.4) rather than blocking it. |
+| `rollback_target_retired` | A rollback item's prior version has been retired since the rollout (section 6.6). |
+| `rollback_target_revoked` | A rollback item's prior version has been revoked since the rollout (section 6.6). |
 | `stale_assignment` | The assignment revision no longer matches (section 7). |
 
 Codes are a closed set. Adding one is an ADR amendment. Reasons are shown to the user and recorded in audit; they contain no private skill content.
@@ -125,20 +129,20 @@ A rollout may target one Agent, selected Agents, an Agent class, a household sco
 
 ### 6.2 Preview
 
-Before any change, the preview classifies every candidate assignment as `eligible`, `blocked` (with section 5.3 codes), `incompatible`, `revoked`, or `already_current`. The preview is computed from a snapshot that records each assignment revision (section 7). Execution revalidates against live state; the preview is advisory.
+Before any change, the preview classifies every candidate assignment as `eligible`, `needs_approval` (passes every check except `approval_required`), `blocked` (with section 5.3 codes), `incompatible`, `revoked`, or `already_current`. The preview is computed from a snapshot that records each assignment revision (section 7). Execution revalidates against live state; the preview is advisory.
 
 ### 6.3 Modes and partial success
 
 | Mode | Behavior |
 | --- | --- |
-| `partial` (default) | Apply every eligible assignment independently. Report each success and failure. Blocked ones are untouched. |
-| `all_or_nothing` | Selected at operation creation. Validate all, then apply all in one transaction. Any blocked or stale item fails the whole operation with no change. |
+| `partial` (default) | Apply every eligible assignment independently and stage every `needs_approval` one (section 6.4). Report each success, staged item, and failure. Blocked ones are untouched. |
+| `all_or_nothing` | Selected at operation creation. Validate all, then apply the eligible items and stage the `needs_approval` items in one transaction. Any blocked or stale item fails the whole operation with no change. |
 
 The result always lists every assignment with its outcome and code. Neither mode ever reports a blocked assignment as done.
 
 ### 6.4 Capability expansion and approval
 
-If the new version requires additional tools, connections, memory scope, processing class, output audience, or unattended behavior compared with the version it replaces, the diff is shown in review and the affected assignment is created `pending`. It becomes `active` only after the applicable approval (Owner for anything beyond a safe personal overlay). An approval is bound to the exact version, hash, and requirement diff; a changed element invalidates it and a new approval is required. Approvals are auditable and support expiration and cancellation.
+If the new version requires additional tools, connections, memory scope, processing class, output audience, or unattended behavior compared with the version it replaces, the diff is shown in review and the change waits for approval. A new assignment is created `pending`. An existing `active` assignment stays `active` on its current version and records the target as a staged change; the operation reports the item `pending`, never applied. The change takes effect only after the applicable approval (Owner for anything beyond a safe personal overlay). Approval applies the staged change with a compare-and-set (section 7); rejection, expiry, or cancellation discards it and the assignment stays on its current version. An approval is bound to the exact version, hash, and requirement diff; a changed element invalidates it and a new approval is required. Approvals are auditable and support expiration and cancellation.
 
 ### 6.5 Idempotency and retry
 
@@ -149,15 +153,15 @@ If the new version requires additional tools, connections, memory scope, process
 
 ### 6.6 Rollback
 
-Bulk rollback reverses the assignment changes recorded by a specific rollout, using the prior pinned version stored per assignment. It is itself a bulk operation with its own idempotency key and audit parent. Items that changed since the rollout (their revision no longer matches the rollout's resulting revision) are reported `stale_assignment` and left alone, so a later deliberate change is never overwritten. Individual assignments remain independently recoverable. A failed candidate never overwrites the last known-good version; rollback re-points to it and keeps the candidate in history.
+Bulk rollback reverses the assignment changes recorded by a specific rollout, using the prior pinned version stored per assignment. It is itself a bulk operation with its own idempotency key and audit parent. Items that changed since the rollout (their revision no longer matches the rollout's resulting revision) are reported `stale_assignment` and left alone, so a later deliberate change is never overwritten. If an item's prior version has been retired or revoked since the rollout, the item is not re-pointed: it is reported `rollback_target_retired` or `rollback_target_revoked`, left on its current version, and listed for an explicit migration to a published version (section 4). Retired and revoked versions are never newly activated, by rollback or any other path, so a revocation stays fail-closed. Individual assignments remain independently recoverable. A failed candidate never overwrites the last known-good version; while that version is still published, rollback re-points to it and keeps the candidate in history.
 
 ### 6.7 Agent offline during rollout
 
-Assignments are server-side state, not pushed content. An offline or sleeping runtime changes nothing about the rollout outcome. The Agent picks up the effective assignment at its next task start or continuation boundary, after revalidation. The operation result reports assignments as applied; the UI additionally shows the Agent's `last_seen_assignment_revision` so an operator can see which Agents have not yet observed the change. A rollout never waits for, blocks on, or times out because of an offline Agent.
+Assignments are server-side state, not pushed content. An offline or sleeping runtime changes nothing about the rollout outcome. The Agent picks up the effective assignment at its next task start or continuation boundary, after revalidation. The operation result reports assignments as applied. Each manifest fetch reports the revision of every assignment the runtime loaded, and Keystone records it per assignment as `observed_revision`; the UI shows, per Agent, every assignment whose `observed_revision` is behind its current `revision`, so an operator can see exactly which changes an Agent has not yet loaded. A rollout never waits for, blocks on, or times out because of an offline Agent.
 
 ## 7. Concurrency
 
-- Every assignment has a monotonically increasing `revision`. Every write (assign, pin, promote, unassign, revoke, rollout item, rollback item) states the revision it expects and succeeds only if it matches. A mismatch returns `stale_assignment` and the caller must re-read.
+- Every assignment has a monotonically increasing `revision`. Every write (assign, pin, promote, pause, resume, unassign, revoke, rollout item, rollback item) states the revision it expects and succeeds only if it matches. A mismatch returns `stale_assignment` and the caller must re-read.
 - Publishing, approving, and retiring a version are guarded by a `version_state` check on the version row; a transition from an unexpected state is rejected.
 - Approvals bind to a specific version, hash, and requirement diff. If any of them changed since the approval was granted, the approval no longer applies.
 - Simultaneous edits to a draft use a draft revision counter; the second writer receives a conflict and keeps its text for manual merge. Last-writer-wins is never used.
@@ -205,7 +209,7 @@ Each state change writes an append-only record containing: actor and surface, op
 
 ### 11.2 Metrics
 
-Counters and gauges, without Person-identifying labels: rollouts started, completed, partially completed; assignments applied, blocked by code, stale; rollbacks by outcome; revocations by scope; assignments `unavailable` by code; Agents behind the current assignment revision; approvals requested, granted, expired, invalidated.
+Counters and gauges, without Person-identifying labels: rollouts started, completed, partially completed; assignments applied, blocked by code, stale; rollbacks by outcome; revocations by scope; assignments `unavailable` by code; assignments whose observed revision is behind their current revision; approvals requested, granted, expired, invalidated.
 
 ## 12. Boundaries and non-goals
 
@@ -221,11 +225,11 @@ These refine the S02–S11 slices in #559. Each is one bounded PR and carries ne
 | Slice | Content | Depends on |
 | --- | --- | --- |
 | L1 | Registry schema: stable ID, version states, hash, parent, `replaced_by`, lifecycle transition guards, no hard delete | S02 |
-| L2 | Assignment table with `revision`, states, compare-and-set writes, `stale_assignment` | L1 |
+| L2 | Assignment table with `revision`, states including `paused`, compare-and-set writes (pause and resume included), `stale_assignment` | L1 |
 | L3 | Dependency declaration schema, resolver, cycle check, closed reason-code set, validation at assign/start/continuation | L1, L2, S03 |
 | L4 | Revocation epoch, manifest validity check at tool-call and continuation boundaries, fail-closed interruption, re-enable audit | L2, S03 |
-| L5 | Bulk operation engine: preview, `partial` and `all_or_nothing`, idempotency keys, retry-of-blocked, parent/child audit | L2, L3 |
-| L6 | Rollout rollback with stale-item reporting and side-effect disclosure list | L5, S06 |
+| L5 | Bulk operation engine: preview (including `needs_approval`), `partial` and `all_or_nothing`, staged changes for approval, idempotency keys, retry-of-blocked, parent/child audit, per-assignment `observed_revision` | L2, L3 |
+| L6 | Rollout rollback with stale-item and retired/revoked-target reporting, and the side-effect disclosure list | L5, S06 |
 | L7 | Capability-expansion diff and approval binding (version, hash, diff), expiry and cancellation | L3, L5 |
 | L8 | Retirement flow with `replaced_by` and bulk migration UI hooks | L1, L5, S08/S09 |
 | L9 | Metrics and audit exports | L5 |
