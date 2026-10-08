@@ -142,13 +142,14 @@ func describe(pass string, err error) error {
 // source files owned by a different UID).
 const resticExitIncomplete = 3
 
-// describeBackupPass is describe for the backup pass. For an incomplete
+// describeSourcePass is describe for a pass that reads the plan's sources
+// (the local backup pass and a direct off-site backup). For an incomplete
 // snapshot it adds that this is a storage-permission failure and names the
 // plan's sources, where the unreadable files are. The engine does not read
 // restic's output, so the individual file is not named here; restic's own
 // container log lists it.
-func describeBackupPass(err error, srcs []string) error {
-	base := describe("backup pass", err)
+func describeSourcePass(pass string, err error, srcs []string) error {
+	base := describe(pass, err)
 	if code, ok := exitCode(err); ok && code == resticExitIncomplete {
 		return fmt.Errorf("%w; storage-permission failure: check that the storage identity can read every file under %s", base, strings.Join(srcs, ", "))
 	}
@@ -352,7 +353,7 @@ func (e *Engine) runBackup(ctx context.Context, r resource.Resource, desired []r
 				if errors.As(err, &low) {
 					return err
 				}
-				return describeBackupPass(err, sources(spec))
+				return describeSourcePass("backup pass", err, sources(spec))
 			}
 			forgetArgs := retentionArgs(spec.Retention)
 			if forgetArgs == nil {
