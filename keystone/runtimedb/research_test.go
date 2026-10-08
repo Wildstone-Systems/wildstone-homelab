@@ -3,7 +3,6 @@ package runtimedb
 import (
 	"encoding/json"
 	"errors"
-	"path/filepath"
 	"testing"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/research"
@@ -53,9 +52,9 @@ func researchReady(t *testing.T, db *DB, p research.Provider) {
 		t.Fatal(err)
 	}
 }
-func TestResearchMigrationAndSelectionNeverGrantTools(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "registry.db")
-	db, err := openThrough(t, path, "migrations/0097_agent_workspaces.sql")
+func TestResearchSelectionNeverGrantsTools(t *testing.T) {
+	path := migrated.Path(t)
+	db, err := Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,12 +62,9 @@ func TestResearchMigrationAndSelectionNeverGrantTools(t *testing.T) {
 	if _, err = db.sql.Exec(`INSERT INTO butler_tool_assignments(butler,tool,assigned_at,assigned_by) VALUES(?,'node_status','2026-09-30T00:00:00Z','owner')`, agent); err != nil {
 		t.Fatal(err)
 	}
-	if err = db.migrate(); err != nil {
-		t.Fatal(err)
-	}
 	ps, err := db.SearchProviders()
 	if err != nil || len(ps) != 0 {
-		t.Fatalf("upgrade created providers: %v %v", ps, err)
+		t.Fatalf("a new database has providers: %v %v", ps, err)
 	}
 	if _, reason, err := db.ResolveSearchProvider(agent); err != nil || reason == "" {
 		t.Fatalf("unconfigured ready: %q %v", reason, err)

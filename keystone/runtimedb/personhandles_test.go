@@ -5,7 +5,6 @@ package runtimedb
 // never handed to somebody else.
 
 import (
-	"path/filepath"
 	"testing"
 )
 
@@ -106,41 +105,6 @@ func TestAPersonalFolderStaysPutThroughARename(t *testing.T) {
 	}
 }
 
-// A household on 0092 keeps its display choices and its folders, and its
-// existing handles resolve, once 0093 has run.
-func TestMigration0093CarriesHandlesPreferencesAndFolders(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "keystone.db")
-	old, err := openThrough(t, path, "migrations/0092_chat_outbound_speech.sql")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, stmt := range []string{
-		`INSERT INTO butler_members (person_id, member, role, admitted, generation, created_at)
-		 VALUES ('psn_00000000000000aa', 'Sam', 'owner', 1, 1, '2026-01-01T00:00:00Z')`,
-		`INSERT INTO calendar_visibility (member, calendar_id, visible) VALUES ('Sam', 'school', 0), ('ghost', 'school', 0)`,
-	} {
-		if _, err := old.sql.Exec(stmt); err != nil {
-			t.Fatalf("seeding: %v", err)
-		}
-	}
-	old.Close()
-
-	db, err := Open(path)
-	if err != nil {
-		t.Fatalf("Open (applies 0093): %v", err)
-	}
-	defer db.Close()
-	if got, _ := db.ResolvePersonRef("Sam"); got != "psn_00000000000000aa" {
-		t.Fatalf("Sam resolves to %q", got)
-	}
-	if prefs, err := db.CalendarVisibility("Sam"); err != nil || len(prefs) != 1 || prefs["school"] {
-		t.Fatalf("carried preferences = %v, %v", prefs, err)
-	}
-	if dir, ok, err := db.PersonalFilesDir("Sam", ""); err != nil || !ok || dir != "sam" {
-		t.Fatalf("carried folder = %q, %v, %v; want the lower-cased folder already in use", dir, ok, err)
-	}
-}
-
 func TestPersonHandlesListsTheCurrentNameFirst(t *testing.T) {
 	db := openWith(t, "sam")
 	if err := db.RenameButlerMemberHandle("sam", "samuel"); err != nil {
@@ -208,47 +172,5 @@ func TestAFolderUsedBeforeBecomingAPersonStaysTheirs(t *testing.T) {
 	// A case variant of a Person's handle is theirs too.
 	if _, ok, err := db.PersonalFilesDir("SAMUEL", "samuel"); ok || err == nil {
 		t.Fatal("a case variant reached the Person's folder")
-	}
-}
-
-// A Person recorded between 0093 and 0094 is backfilled by 0095 from the handle
-// they were created with, so a rename before their next Files visit keeps
-// their folder (#426 review).
-func TestMigration0095BackfillsPeopleMissedBy0093(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "keystone.db")
-	old, err := openThrough(t, path, "migrations/0093_person_handles.sql")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, stmt := range []string{
-		`INSERT INTO butler_members (person_id, member, role, admitted, generation, created_at)
-		 VALUES ('psn_00000000000000aa', 'sam', 'member', 1, 1, '2026-01-01T00:00:00Z'),
-		        ('psn_00000000000000bb', 'Alex', 'member', 1, 1, '2026-01-01T00:00:00Z'),
-		        ('psn_00000000000000cc', 'alex', 'member', 1, 1, '2026-01-01T00:00:00Z')`,
-		`UPDATE butler_members SET member = 'samuel' WHERE member = 'sam'`,
-	} {
-		if _, err := old.sql.Exec(stmt); err != nil {
-			t.Fatalf("seeding: %v", err)
-		}
-	}
-	// A pilot that already applied 0094 as first published, before the
-	// backfill existed.
-	if err := old.migrateThrough("migrations/0094_person_file_dirs_at_creation.sql"); err != nil {
-		t.Fatalf("migrating through 0094: %v", err)
-	}
-	old.Close()
-	db, err := Open(path)
-	if err != nil {
-		t.Fatalf("Open (applies 0095): %v", err)
-	}
-	defer db.Close()
-	if dir, ok, err := db.PersonalFilesDir("samuel", "samuel"); err != nil || !ok || dir != "sam" {
-		t.Fatalf("samuel's folder = %q %v %v; want the one made as sam", dir, ok, err)
-	}
-	// Two people whose names fold to one folder: only the earlier gets it.
-	a, _, errA := db.PersonalFilesDir("Alex", "alex")
-	b, _, errB := db.PersonalFilesDir("alex", "alex")
-	if (errA == nil) == (errB == nil) || (a != "alex" && b != "alex") {
-		t.Fatalf("Alex=%q %v, alex=%q %v; want exactly one of them in the folder", a, errA, b, errB)
 	}
 }

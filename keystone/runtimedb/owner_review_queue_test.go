@@ -1,8 +1,6 @@
 package runtimedb
 
 import (
-	"fmt"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -423,58 +421,36 @@ func TestMixedCaseProposerRemainsBoundToRevocation(t *testing.T) {
 	}
 }
 
-func TestCaseCollidingProposersDoNotBreakQueueOrUpgrade(t *testing.T) {
-	for _, upgrade := range []bool{false, true} {
-		t.Run(fmt.Sprint(upgrade), func(t *testing.T) {
-			var db *DB
-			var err error
-			if upgrade {
-				replaysMigrations(t)
-				db, err = openUnmigrated(filepath.Join(t.TempDir(), "runtime.db"))
-				if err != nil {
-					t.Fatal(err)
-				}
-				defer db.Close()
-				if err = db.migrateThrough("migrations/0069_household_secrets.sql"); err != nil {
-					t.Fatal(err)
-				}
-			} else {
-				db = butlerFixture(t)
+func TestCaseCollidingProposersDoNotBreakQueue(t *testing.T) {
+	db := butlerFixture(t)
+	var err error
+	for _, name := range []string{"Admin", "admin"} {
+		if err = db.RecordButlerMember(name, RoleMember, "", ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ids := map[string]string{}
+	for _, name := range []string{"Admin", "admin", "ADMIN"} {
+		id, e := db.InsertPlan("butler", name, "case test", "low", "{}")
+		if e != nil {
+			t.Fatal(e)
+		}
+		ids[name] = id
+	}
+	for name, id := range ids {
+		var actual string
+		if err = db.sql.QueryRow("SELECT COALESCE(proposer_person_id,'') FROM owner_review_queue WHERE plan=?", strings.TrimPrefix(id, "plan-")).Scan(&actual); err != nil {
+			t.Fatal(err)
+		}
+		var expected string
+		if name != "ADMIN" {
+			if err = db.sql.QueryRow("SELECT person_id FROM butler_members WHERE member=? COLLATE BINARY", name).Scan(&expected); err != nil {
+				t.Fatal(err)
 			}
-			for _, name := range []string{"Admin", "admin"} {
-				if err = db.RecordButlerMember(name, RoleMember, "", ""); err != nil {
-					t.Fatal(err)
-				}
-			}
-			ids := map[string]string{}
-			for _, name := range []string{"Admin", "admin", "ADMIN"} {
-				id, e := db.InsertPlan("butler", name, "case test", "low", "{}")
-				if e != nil {
-					t.Fatal(e)
-				}
-				ids[name] = id
-			}
-			if upgrade {
-				if err = db.migrate(); err != nil {
-					t.Fatal(err)
-				}
-			}
-			for name, id := range ids {
-				var actual string
-				if err = db.sql.QueryRow("SELECT COALESCE(proposer_person_id,'') FROM owner_review_queue WHERE plan=?", strings.TrimPrefix(id, "plan-")).Scan(&actual); err != nil {
-					t.Fatal(err)
-				}
-				var expected string
-				if name != "ADMIN" {
-					if err = db.sql.QueryRow("SELECT person_id FROM butler_members WHERE member=? COLLATE BINARY", name).Scan(&expected); err != nil {
-						t.Fatal(err)
-					}
-				}
-				if actual != expected {
-					t.Fatalf("%s resolved to %q want %q", name, actual, expected)
-				}
-			}
-		})
+		}
+		if actual != expected {
+			t.Fatalf("%s resolved to %q want %q", name, actual, expected)
+		}
 	}
 }
 

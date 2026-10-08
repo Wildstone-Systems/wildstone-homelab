@@ -1,6 +1,6 @@
 # ADR-W007: Keystone core — public API, principals, runtime DB, Statefile ingestion
 
-- **Status:** accepted; amended by ADR-W033
+- **Status:** accepted; amended by ADR-W033; A4 amended (migration baseline, #231)
 - **Relates to:** architecture proposal §3/§6/§9.2, implementation scope E2
 - **Governed by:** ADR-W033 where they overlap.
 - **Audience:** decision record AND implementation spec for E2, written so
@@ -120,6 +120,26 @@ darwin/arm64 cross-compile CI check). One database file
 Migrations: embedded `.sql` files (`embed.FS`), applied in filename order
 inside a transaction each, tracked in `schema_migrations`. Forward-only; a
 bad migration is fixed by a new migration.
+
+**Baseline (2026-10, #231).** Migrations 0001 through 0104 (112 files) are
+squashed into `migrations/0000_baseline.sql`: the schema and seed rows that
+chain produced, verified identical to it (schema, rows, `integrity_check`,
+`foreign_key_check`) when the baseline was cut. Replaying the chain into
+every new database had become most of the test suite's cost, and the
+intermediate states it walked through exist only on databases that have
+already finished them. On open (`runtimedb/baseline.go`):
+
+- a new database runs the baseline, then any later migration;
+- a database that recorded every squashed migration adopts the baseline:
+  its name is recorded as applied and the file never runs, so nothing in
+  the schema or rows changes;
+- a database that recorded only some of them is refused, naming the first
+  missing one. It is opened once with a build from before the baseline,
+  which finishes the chain, and then upgraded.
+
+The baseline is a migration like any other: never edited, and a schema
+change after it is a new migration. Forward-only still holds for everything
+after it. A later re-baseline follows the same three rules.
 
 E2 tables (owned by `keystone/runtimedb`):
 

@@ -3,7 +3,8 @@ package runtimedb
 import (
 	"database/sql"
 	"errors"
-	"path/filepath"
+	"io/fs"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -281,84 +282,6 @@ func TestWorkspaceNamespaceConcurrentDestinationHasOneWinner(t *testing.T) {
 		t.Fatalf("wins=%d conflicts=%d", wins, conflicts)
 	}
 }
-func TestWorkspaceNamespacePopulatedUpgradeAndRestart(t *testing.T) {
-	replaysMigrations(t)
-	// Recreate a pre-0103 schema with existing nested, immutable file history.
-	pathName := filepath.Join(t.TempDir(), "upgrade.db")
-	old, err := openUnmigrated(pathName)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { old.Close() }()
-	if err = old.migrateThrough("migrations/0102_workspace_quota_policy.sql"); err != nil {
-		t.Fatal(err)
-	}
-	record(t, old, "mika")
-	if err = old.UpsertModel(Model{Name: "local", Kind: ModelLocal, Provider: "ollama", ProviderModel: "fixture", Readiness: ModelReady, Enabled: true}, "admin"); err != nil {
-		t.Fatal(err)
-	}
-	agent, err := old.CreateButler(Butler{Name: "alfred", Directive: "fixture", Surface: ButlerSurfaceAdmin, AgentClass: AgentClassOwner, Model: "local"}, "admin")
-	if err != nil {
-		t.Fatal(err)
-	}
-	member, err := old.GetButlerMember("mika")
-	if err != nil {
-		t.Fatal(err)
-	}
-	scope := Workspace{ID: "upgrade-workspace", PersonID: member.PersonID, AgentID: agent}
-	if err = old.CreateWorkspace(scope); err != nil {
-		t.Fatal(err)
-	}
-	if err = old.CreateWorkspaceArtifact(WorkspaceArtifact{ID: "upgrade-file", WorkspaceID: scope.ID, Path: "nested/child/report.txt"}); err != nil {
-		t.Fatal(err)
-	}
-	id := newTask(t, old, nil)
-	if err = old.SetTaskButler(id, "alfred"); err != nil {
-		t.Fatal(err)
-	}
-	task, err := parseButlerTaskID(id)
-	if err != nil {
-		t.Fatal(err)
-	}
-	p := workspaceIntent(t, old, scope, task, "retained", "old-r1", "", 5)
-	workspacePublish(t, old, p, "old-receipt")
-	if _, err = old.sql.Exec(`UPDATE workspace_artifacts SET path='nested/child/retained.txt' WHERE id='retained'`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err = old.AcquireCoordinator("upgrade-test"); err != nil {
-		t.Fatal(err)
-	}
-	staged := WorkspaceWriteSession{ID: strings.Repeat("e", 32), WorkspaceID: scope.ID, TaskID: task, ArtifactID: "upgrade-staging", Path: "staged/parent/report.txt", BeginKey: "upgrade-begin", RequestHash: strings.Repeat("f", 64), ConfigRevision: "config", MaxBytes: 1024, Privacy: "normal"}
-	if _, err = old.BeginWorkspaceWrite(staged); err != nil {
-		t.Fatal(err)
-	}
-	if err = old.migrate(); err != nil {
-		t.Fatal(err)
-	}
-	assertIntegrationSchema(t, old)
-	dirs, err := old.WorkspaceDirectories(scope.ID)
-	if err != nil || len(dirs) != 4 || dirs[0].Path != "nested" || dirs[1].Path != "nested/child" || dirs[2].Path != "staged" || dirs[3].Path != "staged/parent" {
-		t.Fatalf("upgrade: %+v %v", dirs, err)
-	}
-	if err = old.Close(); err != nil {
-		t.Fatal(err)
-	}
-	old, err = Open(pathName)
-	if err != nil {
-		t.Fatal(err)
-	}
-	assertIntegrationSchema(t, old)
-	after, err := old.WorkspaceDirectories(scope.ID)
-	if err != nil || len(after) != 4 || after[0] != dirs[0] || after[1] != dirs[1] || after[2] != dirs[2] || after[3] != dirs[3] {
-		t.Fatalf("restart identities: %+v %v", after, err)
-	}
-	if r, err := old.WorkspaceRevision(scope.ID, "old-r1"); err != nil || r.SizeBytes != 5 {
-		t.Fatalf("upgrade lost history: %+v %v", r, err)
-	}
-	if s, err := old.WorkspaceWriteSession(scope.ID, staged.ID); err != nil || s.State != "open" || s.Path != staged.Path {
-		t.Fatalf("upgrade lost staging: %+v %v", s, err)
-	}
-}
 
 func TestWorkspaceNamespaceWritePinsAndCommitFault(t *testing.T) {
 	db, w, task := namespaceFixture(t)
@@ -504,5 +427,44 @@ func TestWorkspaceNamespacePendingIntentSurvivesRestart(t *testing.T) {
 	}
 	if a, err := reopened.WorkspaceArtifact(w.ID, "restart"); err != nil || a.Path != "after.txt" || a.CurrentRevision != "restart-r1" {
 		t.Fatalf("reconciliation: %+v %v", a, err)
+	}
+}
+
+// assertIntegrationSchema: every shipped migration applied exactly once,
+// the tables the workspace, research and mail work added are present,
+// and foreign keys are on and whole.
+func assertIntegrationSchema(t *testing.T, db *DB) {
+	t.Helper()
+	want, err := fs.Glob(migrationFS, "migrations/*.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := db.AppliedMigrations()
+	if err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("full filename inventory: got=%v want=%v err=%v", got, want, err)
+	}
+	var count int
+	if err := db.sql.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&count); err != nil || count != len(want) {
+		t.Fatalf("each full filename once: %d/%d %v", count, len(want), err)
+	}
+	// Tables from every line of work that landed in the baseline.
+	for _, table := range []string{"agent_workspaces", "search_providers", "workspace_task_sources", "workspace_write_sessions", "research_budgets", "integration_secrets", "agent_subscription_schedules", "mail_candidates", "mail_reviews"} {
+		if err := db.sql.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&count); err != nil || count != 1 {
+			t.Fatalf("missing %s: %d %v", table, count, err)
+		}
+	}
+	rows, err := db.sql.Query(`PRAGMA foreign_key_check`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	if rows.Next() {
+		t.Fatal("foreign key violation after combined migration/reopen")
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.sql.QueryRow(`PRAGMA foreign_keys`).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("foreign keys disabled: %d %v", count, err)
 	}
 }

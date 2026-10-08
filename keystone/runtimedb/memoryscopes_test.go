@@ -327,69 +327,6 @@ func TestAgentMemoryRestrictionOnlyNarrows(t *testing.T) {
 	}
 }
 
-func TestMemoryScopeMigrationRetroactivelyAppliesDefaults(t *testing.T) {
-	replaysMigrations(t)
-	path := filepath.Join(t.TempDir(), "before.db")
-	old, err := openUnmigrated(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := old.migrateThrough("migrations/0066_person_agent_sessions.sql"); err != nil {
-		old.Close()
-		t.Fatal(err)
-	}
-	if err := old.RecordButlerMember("sam", RoleOwner, "", ""); err != nil {
-		t.Fatal(err)
-	}
-	if err := old.AdmitButlerMember("sam", "root-admin"); err != nil {
-		t.Fatal(err)
-	}
-	sam, err := old.GetButlerMember("sam")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, tc := range []struct {
-		kind     string
-		owner    any
-		audience string
-	}{{"fact", sam.PersonID, AudienceOwner}, {"fact", nil, AudienceHousehold}, {"inference", sam.PersonID, AudienceOwner}} {
-		if _, err := old.sql.Exec(`INSERT INTO butler_memory(kind,content,audience,permission_label,owner_person_id,source_kind,source_id,created_at,author_person_id,envelope_version,butler)
- VALUES(?, 'migration jasmine', ?, 'household', ?, 'conversation', 'old-session', ?, ?, 1, 'health')`, tc.kind, tc.audience, tc.owner, now(), sam.PersonID); err != nil {
-			t.Fatal(err)
-		}
-	}
-	// A factual summary of an Agent-local inference must remain local too.
-	if _, err := old.sql.Exec(`INSERT INTO butler_memory(kind,content,audience,permission_label,owner_person_id,source_kind,source_id,created_at,author_person_id,envelope_version,butler)
- VALUES('fact', 'derived migration jasmine', 'aud_owner', 'household', ?, 'conversation', 'old-session', ?, ?, 1, 'health')`, sam.PersonID, now(), sam.PersonID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := old.sql.Exec(`INSERT INTO butler_memory_derivations(derivative,source) VALUES(4,3)`); err != nil {
-		t.Fatal(err)
-	}
-	old.Close()
-	db, err := Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	for i, scope := range []string{MemoryScopePersonal, MemoryScopeHousehold, MemoryScopeAgentLocal, MemoryScopeAgentLocal} {
-		m, err := db.GetMemory(int64(i + 1))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if m.Scope != scope || m.Butler != "health" || m.SourceID != "old-session" {
-			t.Fatalf("migration changed scope/provenance incorrectly: %+v", m)
-		}
-	}
-	got, err := db.RetrieveMemory(MemoryQuery{Reader: "sam", Butler: "nutrition"})
-	if err != nil || len(got) != 2 {
-		t.Fatalf("retroactive defaults: %+v, %v", got, err)
-	}
-	if bad := foreignKeyCheck(t, db); len(bad) != 0 {
-		t.Fatal(bad)
-	}
-}
-
 func TestInvalidScopeAndCorrectionCannotPromote(t *testing.T) {
 	db := butlerFixture(t)
 	m := scopedFact(t, MemoryScopePersonal, "health", "sam")
