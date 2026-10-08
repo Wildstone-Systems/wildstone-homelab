@@ -3,7 +3,6 @@ package runtimedb
 import (
 	"context"
 	"errors"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -165,35 +164,11 @@ func TestWorkspacePrivacyMissingContextAndFailuresLeaveNoRevision(t *testing.T) 
 	}
 }
 
-func TestWorkspacePrivacyMigrationAndRunnerGaps(t *testing.T) {
-	replaysMigrations(t)
-	db, err := openUnmigrated(filepath.Join(t.TempDir(), "upgrade.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	if err = db.migrateThrough("migrations/0097_agent_workspaces.sql"); err != nil {
-		t.Fatal(err)
-	}
-	if err = db.migrate(); err != nil {
-		t.Fatal(err)
-	}
-	if err = db.migrate(); err != nil {
-		t.Fatal(err)
-	}
-	var n int
-	if err = db.sql.QueryRow(`SELECT COUNT(*) FROM schema_migrations WHERE name='migrations/0099_workspace_privacy.sql'`).Scan(&n); err != nil || n != 1 {
-		t.Fatalf("migration count: %d %v", n, err)
-	}
-	var applied string
-	if err = db.sql.QueryRow(`SELECT group_concat(version,',') FROM (
- SELECT substr(name,12,4) AS version FROM schema_migrations
- WHERE name IN ('migrations/0097_agent_workspaces.sql','migrations/0098_search_providers.sql','migrations/0099_workspace_privacy.sql')
- ORDER BY rowid)`).Scan(&applied); err != nil || applied != "0097,0098,0099" {
-		t.Fatalf("real ordered migration chain: %s %v", applied, err)
-	}
-	// Synthetic runner fixtures prove the actual ordering behavior. These are
-	// not a placeholder for #490's real 0098, whose ordered chain must be tested.
+// A migration that lands after a later one was already applied (two
+// branches numbering independently) still runs; the runner does not
+// treat a gap as "already past it".
+func TestMigrationRunnerAppliesALateGapMigration(t *testing.T) {
+	var err error
 	runner := runnerDB(t)
 	fs := migrationSet(map[string]string{"0001_base.sql": "CREATE TABLE ordering(n INTEGER); INSERT INTO ordering VALUES(1);", "0003_later.sql": "INSERT INTO ordering VALUES(3);"})
 	if err = runner.migrateFrom(fs, ""); err != nil {

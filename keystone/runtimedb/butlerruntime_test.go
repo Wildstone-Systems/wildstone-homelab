@@ -7,7 +7,6 @@ package runtimedb
 
 import (
 	"errors"
-	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -31,67 +30,6 @@ func runtimeFixture(t *testing.T) (*DB, Butler) {
 		t.Fatal(err)
 	}
 	return db, b
-}
-
-// An Agent made before 0081 comes out of the migration on the native
-// runtime and connected — built from a real pre-0081 database rather
-// than asserted about the SQL, because the question is what happens to
-// a household that already has Agents.
-func TestMigrationBackfillsANativeRuntimeForExistingAgents(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "keystone.db")
-	old, err := openThrough(t, path, "migrations/0080_shared_calendars.sql")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := old.UpsertModel(Model{
-		Name: "kitchen-box", Kind: ModelLocal, Provider: "ollama", ProviderModel: "llama",
-		Readiness: ModelReady, Enabled: true,
-	}, "root-admin"); err != nil {
-		t.Fatal(err)
-	}
-	newButler(t, old, "alfred", "kitchen-box")
-	newButler(t, old, "hobson", "kitchen-box")
-	if err := old.RetireButler("hobson", "mika"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := old.GetButlerRuntime(1); !errors.Is(err, ErrNotFound) {
-		// Sanity: the table does not exist yet, so nothing can be read.
-		// A found row here would mean the test migrated too far.
-		if err == nil {
-			t.Fatal("a runtime record exists before 0081 ran")
-		}
-	}
-	if err := old.migrate(); err != nil {
-		t.Fatalf("migrating the rest of the way: %v", err)
-	}
-
-	alfred, err := old.GetButlerRuntimeByName("alfred")
-	if err != nil {
-		t.Fatalf("alfred has no runtime after the backfill: %v", err)
-	}
-	if alfred.Type != agentapi.RuntimeNative {
-		t.Errorf("alfred's runtime is %q, want native", alfred.Type)
-	}
-	if alfred.Health != agentapi.HealthConnected {
-		t.Errorf("alfred's native runtime is %q, want connected — it is in-process and has nothing to register", alfred.Health)
-	}
-	if alfred.Principal != "" {
-		t.Errorf("the migration synthesised a principal %q; a native credential is minted, not synthesised (§3.3)", alfred.Principal)
-	}
-	if alfred.Delivery != agentapi.DeliveryPush || alfred.ExecutionProfile != "platform-only" {
-		t.Errorf("backfilled defaults = delivery %q, profile %q", alfred.Delivery, alfred.ExecutionProfile)
-	}
-	if alfred.Endpoint != "" || !alfred.LastHeartbeat.IsZero() {
-		t.Errorf("a native runtime carries an endpoint %q or a heartbeat %v", alfred.Endpoint, alfred.LastHeartbeat)
-	}
-
-	hobson, err := old.GetButlerRuntimeByName("hobson")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if hobson.Health != agentapi.HealthRevoked {
-		t.Errorf("a retired agent's runtime is %q, want revoked — nothing may act for it", hobson.Health)
-	}
 }
 
 // A new Agent gets a runtime record from the platform, and reading it

@@ -2,7 +2,6 @@ package runtimedb
 
 import (
 	"encoding/json"
-	"path/filepath"
 	"testing"
 	"time"
 )
@@ -72,48 +71,6 @@ func TestHouseholdEventRequiredColumns(t *testing.T) {
 		if _, _, err := db.AppendHouseholdEvent(e); err == nil {
 			t.Errorf("%s: appended, want error", name)
 		}
-	}
-}
-
-// The 0005 migration rebuilds the principals table to admit the publisher
-// role. Rows and the tokens foreign key must survive the rebuild.
-func TestMigration0005PreservesPrincipalsAndTokens(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "keystone.db")
-	db, err := openThrough(t, path, "migrations/0004_nodes.sql")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.CreatePrincipal("mika", RoleAdmin, ""); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.InsertToken("hash-1", "mika", "", time.Time{}); err != nil {
-		t.Fatal(err)
-	}
-	// The old CHECK refuses the new role — that is what 0005 fixes.
-	if err := db.CreatePrincipal("publisher-home", RolePublisher, ""); err == nil {
-		t.Fatal("pre-0005 schema accepted role publisher; the migration under test is moot")
-	}
-	db.Close()
-
-	db2, err := Open(path)
-	if err != nil {
-		t.Fatalf("Open (applies 0005): %v", err)
-	}
-	defer db2.Close()
-	p, err := db2.GetPrincipal("mika")
-	if err != nil || p.Role != RoleAdmin {
-		t.Fatalf("principal after rebuild: %+v err=%v", p, err)
-	}
-	tok, err := db2.GetToken("hash-1")
-	if err != nil || tok.Principal != "mika" {
-		t.Fatalf("token after rebuild: %+v err=%v", tok, err)
-	}
-	if err := db2.CreatePrincipal("publisher-home", RolePublisher, ""); err != nil {
-		t.Fatalf("publisher role after 0005: %v", err)
-	}
-	// The foreign key still binds tokens to principals.
-	if err := db2.InsertToken("hash-2", "nobody", "", time.Time{}); err == nil {
-		t.Fatal("token for a non-existent principal was accepted: the FK did not survive the rebuild")
 	}
 }
 

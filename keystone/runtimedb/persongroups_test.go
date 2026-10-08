@@ -11,7 +11,6 @@ package runtimedb
 import (
 	"errors"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -414,116 +413,6 @@ func TestTheDesignsGroupsAreSeededEmpty(t *testing.T) {
 	}
 	if _, err := db.GroupBySeedKey("nobody"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("an unknown seed key resolved: %v", err)
-	}
-}
-
-// The seeds arrive empty on an UPGRADE too, not only on a fresh
-// install.
-//
-// This test exists because its absence was a real hole, found by
-// mutation rather than by reading. TestChildPresetDoesNotImplyKidsMembership
-// covers the runtime half — recording a child does not add them to
-// Kids — and a migration that seeded Kids from the preset passed it
-// anyway, because a fresh database has no children at migration time.
-//
-// The households where that would matter are exactly the ones that
-// already have children: an upgrade is the one moment a migration can
-// look at existing People and draw a conclusion about them. §18.1 says
-// the preset and the group are separate mechanisms, and a migration
-// inferring one from the other would break that on every deployment
-// that has been running long enough to have members — while every
-// fresh-install test stayed green.
-func TestTheGroupsArriveEmptyOnAnUpgradeToo(t *testing.T) {
-	const before = "migrations/0050_completion_note.sql"
-
-	path := filepath.Join(t.TempDir(), "keystone.db")
-	old, err := openThrough(t, path, before)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// A household with a child and an adult, as it stood before this
-	// slice existed.
-	if err := old.RecordButlerMember("mika", RoleOwner, "", ""); err != nil {
-		t.Fatal(err)
-	}
-	if err := old.AdmitButlerMember("mika", "root-admin"); err != nil {
-		t.Fatal(err)
-	}
-	if err := old.RecordButlerMember("sam", RoleMember, "child", "mika"); err != nil {
-		t.Fatal(err)
-	}
-	old.Close()
-
-	db, err := Open(path)
-	if err != nil {
-		t.Fatalf("the group migration refused an existing household: %v", err)
-	}
-	defer db.Close()
-
-	// Read the raw rows rather than the resolver throughout: the
-	// resolver hides an un-admitted child behind its standing filter,
-	// and this test is about what the MIGRATIONS wrote, not about what
-	// resolves.
-	count := func(key string) int {
-		t.Helper()
-		g, err := db.GroupBySeedKey(key)
-		if err != nil {
-			t.Fatalf("GroupBySeedKey(%s) after upgrade: %v", key, err)
-		}
-		var n int
-		if err := db.sql.QueryRow(
-			`SELECT COUNT(*) FROM person_group_members WHERE group_id = ?`, g.ID).Scan(&n); err != nil {
-			t.Fatal(err)
-		}
-		return n
-	}
-
-	// The property slice 6 defended, unchanged: no migration may infer
-	// a DISTINCTION between household members. `Kids` is the one this
-	// was written for — a migration seeding it from the child preset
-	// passes every fresh-install test and breaks §18.1 on exactly the
-	// households that have children.
-	for _, key := range []string{SeedAdults, SeedKids} {
-		if n := count(key); n != 0 {
-			t.Errorf("upgrading put %d people in %s; who is in a group is the "+
-				"household's to say, and a migration that infers membership from "+
-				"the child preset breaks §18.1 on every deployment that already "+
-				"has members", n, key)
-		}
-	}
-
-	// `Family` is the exception, and slice 8 is why. §18.2 makes it the
-	// group a Member inherits, and 0053 backfills the households that
-	// already existed.
-	//
-	// This is not the inference the loop above refuses. That one reads
-	// a preset and concludes something about a person; this one puts
-	// every member of the household in the group that means "member of
-	// the household", which distinguishes nobody from anybody. The
-	// reason it is not merely tidy: entitlements default to deny, so an
-	// upgrade leaving `Family` empty would mean every existing
-	// household holds no inherited entitlement and loses access to
-	// everything the moment projection lands — a silent lockout caused
-	// by a migration that looked like it only added a table.
-	//
-	// ACTIVE PEOPLE ONLY, which this fixture tests by construction: sam
-	// was recorded but never admitted, so a backfill that ignored
-	// standing would put two people here.
-	if n := count(SeedFamily); n != 1 {
-		t.Errorf("the default group holds %d people, want 1 — the backfill takes "+
-			"every ACTIVE member and sam was never admitted", n)
-	}
-	var who string
-	if err := db.sql.QueryRow(
-		`SELECT b.member FROM person_group_members m
-		   JOIN butler_members b ON b.person_id = m.person_id
-		   JOIN person_groups g ON g.group_id = m.group_id
-		  WHERE g.seed_key = ?`, SeedFamily).Scan(&who); err != nil {
-		t.Fatal(err)
-	}
-	if who != "mika" {
-		t.Errorf("the default group holds %q, want the admitted member", who)
 	}
 }
 

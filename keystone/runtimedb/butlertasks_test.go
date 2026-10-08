@@ -6,7 +6,6 @@ package runtimedb
 
 import (
 	"errors"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -555,54 +554,5 @@ func TestButlerTasksInStateIsTheResumeQueue(t *testing.T) {
 	}
 	if none, err := db.ListButlerTasks(10, "sam"); err != nil || len(none) != 0 {
 		t.Fatalf("listing another member's tasks = %+v, %v", none, err)
-	}
-}
-
-// 0017 adds tables; it touches nothing that already existed. A
-// conversation written before the migration reads back identically
-// afterwards, and the household timeline's deterministic replay still
-// works with an empty task table (ADR-W030 A4, P1).
-func TestMigration0017LeavesExistingConversationsReadable(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "keystone.db")
-	db, err := openThrough(t, path, "migrations/0016_observed_app_health.sql")
-	if err != nil {
-		t.Fatal(err)
-	}
-	id := insertSessionAtSchema(t, db, "n2 has been offline since 14:04.", []ButlerTurn{
-		{Role: ButlerRoleUser, Text: "why is n2 offline?"},
-		{Role: ButlerRoleAssistant, Text: "n2 has been offline since 14:04."},
-	})
-	db.Close()
-
-	db2, err := Open(path)
-	if err != nil {
-		t.Fatalf("Open (applies 0017): %v", err)
-	}
-	defer db2.Close()
-	sess, err := db2.GetButlerSession(id)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if sess.ActingFor != "mika" || sess.Surface != ButlerSurfaceAdmin ||
-		sess.FinalText != "n2 has been offline since 14:04." || len(sess.Turns) != 2 {
-		t.Fatalf("0017 changed an existing conversation: %+v", sess)
-	}
-	if sess.Turns[0].Role != ButlerRoleUser || sess.Turns[0].Text != "why is n2 offline?" {
-		t.Fatalf("turn attribution changed: %+v", sess.Turns[0])
-	}
-	// No tasks exist for it, and nothing requires any.
-	tasks, err := db2.ListButlerTasks(10, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(tasks) != 0 {
-		t.Fatalf("migration invented tasks: %+v", tasks)
-	}
-	// And the conversation can still be continued.
-	if err := db2.AppendButlerTurns(id, []ButlerTurn{
-		{Role: ButlerRoleUser, Text: "and now?"},
-		{Role: ButlerRoleAssistant, Text: "still offline."},
-	}); err != nil {
-		t.Fatalf("appending after 0017: %v", err)
 	}
 }

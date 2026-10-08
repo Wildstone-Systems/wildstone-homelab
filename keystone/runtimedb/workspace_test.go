@@ -3,75 +3,9 @@ package runtimedb
 import (
 	"database/sql"
 	"errors"
-	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 )
-
-func TestWorkspaceMigrationPreservesExistingToolAuthority(t *testing.T) {
-	replaysMigrations(t)
-	path := filepath.Join(t.TempDir(), "upgrade.db")
-	db, err := openUnmigrated(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { db.Close() }()
-	if err := db.migrateThrough("migrations/0096_backup_verification.sql"); err != nil {
-		t.Fatal(err)
-	}
-	record(t, db, "mika")
-	// Existing authority is deliberately populated before the workspace migration.
-	if err := db.UpsertModel(Model{Name: "local", Kind: ModelLocal, Provider: "ollama", ProviderModel: "llama", Readiness: ModelReady, Enabled: true}, "root-admin"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.CreateButler(Butler{Name: "existing", Directive: "help", Surface: ButlerSurfaceFamily, AgentClass: AgentClassMember, Model: "local"}, "root-admin"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.sql.Exec(`INSERT INTO butler_tool_governance(butler,since,enrolled_by) SELECT seq,'2026-09-30T00:00:00Z','mika' FROM butlers WHERE name='existing'`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.sql.Exec(`INSERT INTO butler_tool_assignments(butler,tool,assigned_at,assigned_by) SELECT seq,'node_status','2026-09-30T00:00:00Z','mika' FROM butlers WHERE name='existing'`); err != nil {
-		t.Fatal(err)
-	}
-	snapshot := func() []string {
-		t.Helper()
-		rows, err := db.sql.Query(`SELECT printf('%d|%s|%s|%s|%s|%s',butler,tool,assigned_at,assigned_by,revoked_at,revoked_by) FROM butler_tool_assignments ORDER BY seq`)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer rows.Close()
-		var out []string
-		for rows.Next() {
-			var s string
-			if err := rows.Scan(&s); err != nil {
-				t.Fatal(err)
-			}
-			out = append(out, s)
-		}
-		if err := rows.Err(); err != nil {
-			t.Fatal(err)
-		}
-		return out
-	}
-	before := snapshot()
-	if err := db.migrate(); err != nil {
-		t.Fatal(err)
-	}
-	if after := snapshot(); !reflect.DeepEqual(before, after) {
-		t.Fatalf("migration changed assignments: before=%v after=%v", before, after)
-	}
-	if err := db.Close(); err != nil {
-		t.Fatal(err)
-	}
-	db, err = Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if after := snapshot(); !reflect.DeepEqual(before, after) {
-		t.Fatalf("reopen changed assignments: before=%v after=%v", before, after)
-	}
-}
 
 func workspaceFixture(t *testing.T) (*DB, Workspace, int64) {
 	t.Helper()

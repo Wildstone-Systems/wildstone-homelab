@@ -325,8 +325,8 @@ func TestRebuildMigrationRefusesAnUnnamedDatabase(t *testing.T) {
 	}
 }
 
-// The real migration set: 0039 is the only migration that declares the
-// directive, and the database it produces enforces foreign keys.
+// The real migration set: no shipped migration declares the directive,
+// and the database it produces enforces foreign keys.
 func TestRealMigrationSetDeclaresTheDirectiveOnlyWhereIntended(t *testing.T) {
 	names, err := migrationFS.ReadDir("migrations")
 	if err != nil {
@@ -345,25 +345,13 @@ func TestRealMigrationSetDeclaresTheDirectiveOnlyWhereIntended(t *testing.T) {
 	// Each rebuilds a table other tables reference, and nothing else
 	// may: the directive turns enforcement off for a whole migration, so
 	// a file that declares it without needing it is a hole nobody
-	// notices. The list is the point — adding a name here is a decision,
+	// notices. The list is the point: adding a name here is a decision,
 	// and one that has to be argued for in the migration's own header.
 	//
-	// 0052 rebuilds six tables at once to widen the audience column, and
-	// several of them reference each other (butler_index.memory names
-	// butler_memory, butler_task_evidence.task names butler_tasks), so
-	// enforcement cannot hold while the shadow tables exist.
-	//
-	// 0058 rebuilds `butlers`, which six other tables reference by seq
-	// (butler_access, butler_addresses, butler_tool_scope,
-	// butler_connection_scope, butler_pool_disclosures and the grants
-	// table it adds the column to). The row ids are carried across
-	// unchanged, so the references are still valid on the other side —
-	// but they cannot be enforced against a table that is being
-	// replaced underneath them.
-	want := []string{
-		"0039_person_core.sql", "0043_person_id_references.sql",
-		"0052_audiences.sql", "0058_agent_class.sql",
-	}
+	// The four that once did (0039, 0043, 0052, 0058) are inside the
+	// baseline now, which creates its tables directly and needs no
+	// rebuild.
+	var want []string
 	if len(declared) != len(want) {
 		t.Fatalf("migrations declaring foreign_keys=off = %v, want %v", declared, want)
 	}

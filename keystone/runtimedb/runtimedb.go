@@ -71,9 +71,9 @@ func Open(path string) (*DB, error) {
 	return db, nil
 }
 
-// openUnmigrated opens the handle without applying migrations — test
+// openUnmigrated opens the handle without applying migrations: test
 // support for exercising a migration against data written by the schema
-// before it (the rebuild in 0005 is the first that had to preserve rows).
+// before it.
 func openUnmigrated(path string) (*DB, error) {
 	dsn := fmt.Sprintf("file:%s?_txlock=immediate&_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)&_pragma=synchronous(FULL)", path)
 	sqlDB, err := sql.Open("sqlite", dsn)
@@ -117,6 +117,9 @@ func (db *DB) migrateFrom(src fs.FS, last string) error {
 	if _, err := db.sql.Exec(
 		`CREATE TABLE IF NOT EXISTS schema_migrations (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)`); err != nil {
 		return fmt.Errorf("runtimedb: creating schema_migrations: %w", err)
+	}
+	if err := db.adoptBaseline(src); err != nil {
+		return err
 	}
 	names, err := fs.Glob(src, "migrations/*.sql")
 	if err != nil {
@@ -277,28 +280,19 @@ func now() string {
 	return time.Now().UTC().Format(time.RFC3339Nano)
 }
 
-// OpenThroughForTest opens the database applying migrations only up to
-// and including last, named as it appears on disk (e.g.
-// "0039_person_core.sql").
+// OpenUnmigratedForTest opens the database without applying any
+// migration.
 //
-// It exists for tests in other packages that must exercise the schema
-// as it stood at a particular point. personref is the one that needs
-// it: its whole legacy classification describes columns 0043 removed,
-// and the only way to survey those is a database that has not reached
-// 0043 — which is exactly the deployment the pre-flight report is for.
-// Nothing in production calls it.
-func OpenThroughForTest(path, last string) (*DB, error) {
-	dsn := fmt.Sprintf("file:%s?_txlock=immediate&_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)&_pragma=synchronous(FULL)", path)
-	sqlDB, err := sql.Open("sqlite", dsn)
-	if err != nil {
-		return nil, fmt.Errorf("runtimedb: open %s: %w", path, err)
-	}
-	db := &DB{sql: sqlDB, path: path}
-	if err := db.migrateThrough("migrations/" + last); err != nil {
-		sqlDB.Close()
-		return nil, err
-	}
-	return db, nil
+// It exists for tests in other packages that must exercise a schema this
+// build no longer produces. personref is the one that needs it: its
+// legacy classification describes columns 0043 removed, and the only way
+// to survey those is a database that has not reached 0043, which is
+// exactly the deployment the pre-flight report is for. That chain is
+// squashed into the baseline now, so the test loads a frozen copy of the
+// old schema into the empty file this returns. Nothing in production
+// calls it.
+func OpenUnmigratedForTest(path string) (*DB, error) {
+	return openUnmigrated(path)
 }
 
 // ExecForTest runs a raw statement. It exists so tests in other

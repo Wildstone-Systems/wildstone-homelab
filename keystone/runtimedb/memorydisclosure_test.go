@@ -1,7 +1,6 @@
 package runtimedb
 
 import (
-	"path/filepath"
 	"testing"
 )
 
@@ -220,73 +219,6 @@ func TestStandaloneIndexedDocumentCannotBypassDisclosure(t *testing.T) {
 		if err != nil || len(hits) != want {
 			t.Fatalf("document trusted=%v: %v %v", trusted, hits, err)
 		}
-	}
-}
-
-func TestMemoryDisclosureMigrationCapturesLegacyOrigins(t *testing.T) {
-	replaysMigrations(t)
-	path := filepath.Join(t.TempDir(), "before.db")
-	old, err := openUnmigrated(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer old.Close()
-	if err = old.migrateThrough("migrations/0067_memory_scopes.sql"); err != nil {
-		t.Fatal(err)
-	}
-	if err = old.UpsertModel(Model{Name: "kitchen-box", Kind: ModelLocal, Provider: "ollama", ProviderModel: "llama", Readiness: ModelReady, Enabled: true}, "root-admin"); err != nil {
-		t.Fatal(err)
-	}
-	for _, p := range []struct{ name, role string }{{"mika", RoleOwner}, {"sam", RoleMember}} {
-		if err = old.RecordButlerMember(p.name, p.role, "", ""); err != nil {
-			t.Fatal(err)
-		}
-		if err = old.AdmitButlerMember(p.name, "root-admin"); err != nil {
-			t.Fatal(err)
-		}
-	}
-	// Write the historical task shape, not the current store's newer columns.
-	at := connect(t, old, "memory-agent", "telegram", ButlerSurfaceFamily)
-	if err := old.GrantButlerAccess("memory-agent", "sam", "mika"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := old.sql.Exec(`UPDATE connection_disclosure SET retention='provider' WHERE connection=?`, at.Seq); err != nil {
-		t.Fatal(err)
-	}
-	person, err := resolvePersonID(old.sql, "sam")
-	if err != nil {
-		t.Fatal(err)
-	}
-	result, err := old.sql.Exec(`INSERT INTO butler_tasks(created_at,updated_at,kind,state,author_person_id,owner_person_id,surface,agent_class,audience,objective,completion_criteria,retention,envelope_version,origin_connection,origin_connection_ref) VALUES(?,?,'conversation','pending',?,?,'family','member','aud_owner','remember','','manual',1,?,?)`, now(), now(), person, person, at.Name(), at.Seq)
-	if err != nil {
-		t.Fatal(err)
-	}
-	taskSeq, err := result.LastInsertId()
-	if err != nil {
-		t.Fatal(err)
-	}
-	task := butlerTaskID(taskSeq)
-	seq := disclosedMemory(t, old, task)
-	unknown := disclosedMemory(t, old, "legacy-unresolvable")
-	if err = old.migrate(); err != nil {
-		t.Fatal(err)
-	}
-	var count int
-	if err = old.sql.QueryRow(`SELECT count(*) FROM memory_disclosure_origins WHERE memory IN (?,?)`, seq, unknown).Scan(&count); err != nil || count != 2 {
-		t.Fatalf("backfill count=%d err=%v", count, err)
-	}
-	read := old.BindMemoryRead("sam", "memory-agent", MemoryDestination{ConnectionRef: at.Seq})
-	disclosurePaths(t, old, read, 1)
-	if _, err = old.sql.Exec(`UPDATE connection_disclosure SET encryption='end_to_end'`); err != nil {
-		t.Fatal(err)
-	}
-	disclosurePaths(t, old, read, 0)
-	if err = old.migrate(); err != nil {
-		t.Fatal(err)
-	}
-	var after int
-	if err = old.sql.QueryRow(`SELECT count(*) FROM memory_disclosure_origins`).Scan(&after); err != nil || after != count {
-		t.Fatalf("migration was not idempotent: %d %v", after, err)
 	}
 }
 

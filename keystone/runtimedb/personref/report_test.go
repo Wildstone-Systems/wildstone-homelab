@@ -10,6 +10,17 @@ import (
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb/personref"
 )
 
+// schema0039 is the schema as migration 0039 left it. The migrations that
+// built it are squashed into the baseline, so it is a frozen copy.
+func schema0039(t *testing.T) []byte {
+	t.Helper()
+	b, err := os.ReadFile("testdata/schema-0039.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
 // surveyed builds a database AS IT STOOD BEFORE MIGRATION 0043, lets
 // the caller write realistic legacy rows into it, and then surveys it
 // through a READ-ONLY handle — the same way the CLI does.
@@ -27,9 +38,12 @@ import (
 func surveyed(t *testing.T, seed func(*runtimedb.DB)) (personref.Report, string) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "keystone.db")
-	db, err := runtimedb.OpenThroughForTest(path, "0039_person_core.sql")
+	db, err := runtimedb.OpenUnmigratedForTest(path)
 	if err != nil {
-		t.Fatalf("OpenThroughForTest: %v", err)
+		t.Fatalf("OpenUnmigratedForTest: %v", err)
+	}
+	if _, err := db.ExecForTest(string(schema0039(t))); err != nil {
+		t.Fatalf("loading the 0039 schema: %v", err)
 	}
 	if seed != nil {
 		seed(db)

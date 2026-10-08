@@ -10,7 +10,6 @@ package runtimedb
 
 import (
 	"errors"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -187,93 +186,6 @@ func TestConcurrentDemotionOfTwoOwnersLeavesOne(t *testing.T) {
 	}
 	if owners != 1 {
 		t.Fatalf("active owners after concurrent demotion = %d, want 1", owners)
-	}
-}
-
-// A database written at the 0021 shape migrates to the split columns,
-// and the legacy profile maps as specified.
-func TestMigrationMapsLegacyProfiles(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "keystone.db")
-	old, err := openThrough(t, path, "migrations/0021_butler_identity.sql")
-	if err != nil {
-		t.Fatal(err)
-	}
-	// One row of each legacy profile, at the old schema.
-	if _, err := old.sql.Exec(
-		`INSERT INTO butler_members (member, profile, admitted, generation, created_at, guardian) VALUES
-		   ('mika', 'operator',  1, 3, '2026-01-01T00:00:00Z', ''),
-		   ('sam',   'household', 1, 1, '2026-01-02T00:00:00Z', ''),
-		   ('kid',   'child',     0, 1, '2026-01-03T00:00:00Z', 'mika')`); err != nil {
-		t.Fatalf("seeding legacy rows: %v", err)
-	}
-	// A link, so the migration has a foreign key to preserve.
-	if _, err := old.sql.Exec(
-		`INSERT INTO butler_identity_links (link_type, external_id, member, generation, created_at, created_by)
-		 VALUES ('api-principal', 'mika-api', 'mika', 3, '2026-01-01T00:00:00Z', 'root-admin')`); err != nil {
-		t.Fatalf("seeding a link: %v", err)
-	}
-	old.Close()
-
-	db, err := Open(path) // applies 0022..0039
-	if err != nil {
-		t.Fatalf("Open (applies 0039): %v", err)
-	}
-	defer db.Close()
-
-	want := map[string]struct{ role, profile string }{
-		"mika": {RoleOwner, ""},
-		"sam":   {RoleMember, ""},
-		"kid":   {RoleMember, ProfileChild},
-	}
-	seen := map[string]bool{}
-	for member, expect := range want {
-		m, err := db.GetButlerMember(member)
-		if err != nil {
-			t.Fatalf("GetButlerMember(%s): %v", member, err)
-		}
-		if m.Role != expect.role || m.Profile != expect.profile {
-			t.Errorf("%s: role=%q profile=%q, want role=%q profile=%q",
-				member, m.Role, m.Profile, expect.role, expect.profile)
-		}
-		if m.PersonID == "" {
-			t.Errorf("%s: person_id was not populated", member)
-		}
-		if seen[m.PersonID] {
-			t.Errorf("%s: person_id %q is not distinct", member, m.PersonID)
-		}
-		seen[m.PersonID] = true
-	}
-	// Everything else about the rows survived the rebuild.
-	mika, err := db.GetButlerMember("mika")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if mika.Generation != 3 || !mika.Admitted {
-		t.Errorf("mika lost state in the rebuild: %+v", mika)
-	}
-	kid, err := db.GetButlerMember("kid")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if kid.Guardian != "mika" || kid.Active() {
-		t.Errorf("kid lost state in the rebuild: %+v", kid)
-	}
-	// The foreign key still points somewhere real.
-	resolved, err := db.ResolveSurfaceIdentity(LinkAPIPrincipal, "mika-api")
-	if err != nil {
-		t.Fatalf("a link written before the migration stopped resolving: %v", err)
-	}
-	if resolved.Member != "mika" {
-		t.Errorf("link resolved to %q, want mika", resolved.Member)
-	}
-	// And the migration left no orphans behind.
-	orphans, err := db.sql.Query(`PRAGMA foreign_key_check`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer orphans.Close()
-	if orphans.Next() {
-		t.Error("the migration left orphaned foreign key rows")
 	}
 }
 
