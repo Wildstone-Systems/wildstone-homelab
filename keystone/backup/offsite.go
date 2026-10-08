@@ -235,12 +235,17 @@ func (e *Engine) runOffsite(ctx context.Context, r resource.Resource, desired []
 			}
 
 			send, pass := e.offsiteSpec(spec, t, name, backupCommand(spec), sources(spec), false), "off-site backup pass"
+			readsSources := true
 			if local && !direct {
 				// Only snapshots made under the current sources and
 				// excludes: an older one may hold what is now excluded.
 				send, pass = e.offsiteSpec(spec, t, name, []string{"copy", "--tag", configTag(spec)}, nil, true), "off-site copy pass"
+				readsSources = false
 			}
 			if err := e.Run.RunContainer(ctx, node, "offsite-"+name, send); err != nil {
+				if readsSources {
+					return describeSourcePass(pass, err, sources(spec))
+				}
 				return describe(pass, err)
 			}
 

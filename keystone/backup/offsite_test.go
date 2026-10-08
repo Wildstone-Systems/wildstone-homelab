@@ -204,6 +204,29 @@ func TestAppendOnlyTargetNeverDeletes(t *testing.T) {
 	}
 }
 
+// TestOffsiteOnlyIncompleteSnapshotNamesPermission: a direct off-site
+// backup reads the plan sources, so restic exit 3 gets the same
+// storage-permission diagnosis as the local backup pass.
+func TestOffsiteOnlyIncompleteSnapshotNamesPermission(t *testing.T) {
+	run := &fakeRunner{exit: map[string]int32{"offsite-movies": 3}}
+	e, db, state := newEngine(t, run)
+	e.Now = func() time.Time { return time.Unix(0, 0) }
+	seedAll(t, state, targetResource(false), offsitePlan("movies", resource.BackupRouteOffsiteOnly))
+
+	if err := e.RunNow(context.Background(), "movies"); err == nil {
+		t.Fatal("exit 3 must fail the off-site run")
+	}
+	last, err := db.LastBackupRun("movies", runtimedb.BackupRunOffsite, runtimedb.BackupRunFailed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(last.Detail, "off-site backup pass: restic exited 3") ||
+		!strings.Contains(last.Detail, "storage-permission failure") ||
+		!strings.Contains(last.Detail, "immich-db") {
+		t.Fatalf("ledger detail = %q", last.Detail)
+	}
+}
+
 func containsArg(args []string, want string) bool {
 	for _, arg := range args {
 		if arg == want {

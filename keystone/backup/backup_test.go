@@ -481,6 +481,9 @@ func TestNonZeroBackupExitFails(t *testing.T) {
 	if !strings.Contains(last.Detail, "backup pass: restic exited 3") || !strings.Contains(last.Detail, "incomplete") {
 		t.Fatalf("ledger detail = %q", last.Detail)
 	}
+	if !strings.Contains(last.Detail, "storage-permission failure") {
+		t.Fatalf("ledger detail = %q, want the permission diagnosis", last.Detail)
+	}
 	if _, err := db.LastBackupRun("photos", runtimedb.BackupRunBackup, runtimedb.BackupRunSucceeded); err == nil {
 		t.Fatal("a non-zero exit left a succeeded ledger row")
 	}
