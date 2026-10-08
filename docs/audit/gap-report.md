@@ -122,3 +122,8 @@ These should be verified or remediated before implementation work relies on the 
 ## Historical note
 
 This register was originally framed as an audit against the 10 September 2026 architecture baseline. That baseline remains the source that generated these findings, but it is no longer the current normative design where it conflicts with final ADR-W033. Do not rewrite historical findings merely because the target architecture evolved; instead, remediation should explain whether a finding is still applicable, superseded by the new design, or requires a differently shaped fix.
+
+
+## Supplementary IaC assessment
+
+[Infrastructure as Code architecture assessment](findings/566-iac-architecture.md), tracked by [#566](https://github.com/chickenrat17/wildstone_homelab-control-plane/issues/566), preserves the October 7, 2026 implementation snapshot at `494f5b8d14038552bd26f78b2803b098f9e695b5`. Its discussion and current-code revalidation remain in progress. The assessment uses document-local G/A identifiers and does not change the 121 historical finding IDs or disposition counts above. Its tool assignments and roadmap are recommendations pending review, not accepted architecture decisions.
