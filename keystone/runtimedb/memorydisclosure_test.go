@@ -224,6 +224,7 @@ func TestStandaloneIndexedDocumentCannotBypassDisclosure(t *testing.T) {
 }
 
 func TestMemoryDisclosureMigrationCapturesLegacyOrigins(t *testing.T) {
+	replaysMigrations(t)
 	path := filepath.Join(t.TempDir(), "before.db")
 	old, err := openUnmigrated(path)
 	if err != nil {

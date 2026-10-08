@@ -293,6 +293,7 @@ func TestResearchDoesNotResumeUnrelatedWait(t *testing.T) {
 }
 
 func TestResearchMigrationRetainsExistingLedger(t *testing.T) {
+	replaysMigrations(t)
 	// Upgrade the genuine pre-privacy/pre-budget schema. Current task writers
 	// require origin_conversation, which S03 adds after this historical boundary.
 	db, err := openUnmigrated(filepath.Join(t.TempDir(), "upgrade.db"))

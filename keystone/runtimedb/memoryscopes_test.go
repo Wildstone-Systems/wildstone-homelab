@@ -328,6 +328,7 @@ func TestAgentMemoryRestrictionOnlyNarrows(t *testing.T) {
 }
 
 func TestMemoryScopeMigrationRetroactivelyAppliesDefaults(t *testing.T) {
+	replaysMigrations(t)
 	path := filepath.Join(t.TempDir(), "before.db")
 	old, err := openUnmigrated(path)
 	if err != nil {

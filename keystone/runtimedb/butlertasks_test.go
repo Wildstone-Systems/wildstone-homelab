@@ -231,7 +231,7 @@ func TestButlerTaskCompletionIsRefusedBySchemaWithoutEvidence(t *testing.T) {
 // before the state change. Reopening must find running work with its
 // evidence intact — recoverable — rather than a completed task.
 func TestButlerTaskInterruptedBetweenEvidenceAndCompletion(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "keystone.db")
+	path := migrated.Path(t)
 	db, err := Open(path)
 	if err != nil {
 		t.Fatal(err)
