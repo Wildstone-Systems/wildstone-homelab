@@ -13,10 +13,22 @@ import (
 	"github.com/chickenrat17/wildstone-homelab/keystone/adapter/mail/imapread/mimenorm"
 	"github.com/chickenrat17/wildstone-homelab/keystone/butler/provider"
 	"github.com/chickenrat17/wildstone-homelab/keystone/householdtz"
+	"github.com/chickenrat17/wildstone-homelab/keystone/internal/dbtemplate"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 )
 
 const corpus = "../../testing/fixtures/mail"
+
+// migrated is the schema, built once for this whole test binary rather
+// than replayed into every database these tests open (#231). Each test
+// still gets its own file.
+var migrated = dbtemplate.New(func(path string) error {
+	db, err := runtimedb.Open(path)
+	if err != nil {
+		return err
+	}
+	return db.Close()
+})
 
 // now is the week before the school-night scenario.
 var now = time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)
@@ -121,7 +133,7 @@ type env struct {
 // sam-mail. The household is in New York.
 func newEnv(t *testing.T, router ModelRouter, processing string) *env {
 	t.Helper()
-	db, err := runtimedb.Open(filepath.Join(t.TempDir(), "keystone.db"))
+	db, err := runtimedb.Open(migrated.Path(t))
 	if err != nil {
 		t.Fatal(err)
 	}
