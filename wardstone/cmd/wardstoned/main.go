@@ -31,7 +31,13 @@ func main() {
 	dataDir := flag.String("data-dir", "/var/lib/wildstone/wardstone", "directory for node identity and the secret store (must NOT be under a managed prefix)")
 	joinToken := flag.String("join-token", "", "one-time join token (first run only)")
 	caFingerprint := flag.String("ca-fingerprint", "", "hex sha256 of Keystone's CA certificate DER; pins the join against MITM (recommended in production; see `keystone` startup log). Empty falls back to trust-on-first-use.")
+	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Println("wardstoned", version)
+		return
+	}
 
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	cfg := agent.Config{

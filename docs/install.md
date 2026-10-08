@@ -103,6 +103,11 @@ sudo GH_TOKEN=<pat> bash ./install.sh --role node \
   --ca-fingerprint <hex>
 ```
 
+To upgrade a node that has already joined, run
+`sudo bash ./install.sh --role node [--version vX.Y.Z]` — no token is
+needed while the node's identity is on disk, and the node id, Keystone
+address and CA pin are reused from `/etc/wildstone/wardstoned.env`.
+
 `--node-id` is optional and defaults to the node's short hostname; pass
 `--node-id <name>` to choose it. If the command comes back with
 `<host:9440>` in it, Keystone has no routable address to advertise
