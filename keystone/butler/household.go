@@ -337,6 +337,76 @@ func (gw *HouseholdGateway) checkTool(tool string, entry householdEntry) ToolDec
 	return runAuthority(gw.Authorizer, q)
 }
 
+// perActionServices are the household services whose actions are granted
+// one at a time, on top of do_household_action (ADR-W033 B3-B5,
+// ADR-W034 A5). An action's service is the part of its name before the
+// first dot. A service not listed here keeps being governed by the
+// single do_household_action grant, so listing one is a deliberate
+// change of what an Agent holds, never an accident of naming.
+var perActionServices = map[string]bool{"calendar": true}
+
+// actionService returns the service an action belongs to when that
+// service is granted per action, and "" otherwise.
+func actionService(tool string) string {
+	svc, _, ok := strings.Cut(tool, ".")
+	if !ok || !perActionServices[svc] {
+		return ""
+	}
+	return svc
+}
+
+// PerActionCapabilityTools lists the per-action grants a manifest's actions
+// stand for, as assignable tools. An action granted per action is held by
+// name like any tool, so the seeding and assignment paths, which read the
+// tool inventory, must be able to see it.
+func PerActionCapabilityTools(m CapabilityManifest) []CapabilityTool {
+	var out []CapabilityTool
+	for _, a := range m.Actions {
+		svc := actionService(a.Tool)
+		if svc == "" {
+			continue
+		}
+		out = append(out, CapabilityTool{
+			Name:       a.Tool,
+			Summary:    "Household action " + a.Tool + ".",
+			Service:    svc,
+			AgentClass: AgentClassMember,
+			Available:  true,
+		})
+	}
+	return out
+}
+
+// checkAction asks the seam whether this Agent holds one action. It is
+// only a second gate: do_household_action must also allow, so it can
+// narrow what that tool reaches and never widen it. Actions whose service
+// is not granted per action pass.
+//
+// The class is Member and nothing is opt-in, so a bundle such as "all
+// calendar Member tools" covers future declared actions (W033 B4),
+// while an explicit assignment stays static.
+func (gw *HouseholdGateway) checkAction(a HouseholdAction) ToolDecision {
+	svc := actionService(a.Tool)
+	if svc == "" {
+		return ToolDecision{Allowed: true}
+	}
+	q := ToolAuthorityQuery{
+		Person:     gw.member,
+		Connection: gw.connection,
+		AgentClass: string(AgentClassMember),
+		Tool:       a.Tool,
+		Structural: true,
+		Service:    svc,
+		ToolClass:  string(AgentClassMember),
+		TaskID:     gw.SessionTask,
+	}
+	if gw.caller == CallerAdministrative {
+		return authorizeAdministrative(gw.Authorizer, q)
+	}
+	q.Caller = gw.caller
+	return runAuthority(gw.Authorizer, q)
+}
+
 // NewHouseholdGroupGateway builds a family gateway for a session whose
 // audience is a GROUP (ADR-W026 A7).
 //
@@ -556,7 +626,7 @@ func (gw *HouseholdGateway) Specs() []provider.Tool {
 // nothing on it while three events sat there. Putting the actions in
 // the description makes the calendar visible where the choice is made.
 func (gw *HouseholdGateway) withActions(spec provider.Tool) provider.Tool {
-	actions, err := gw.availableActions()
+	actions, err := gw.grantedActions()
 	if err != nil || len(actions) == 0 {
 		return spec
 	}
@@ -768,7 +838,7 @@ func handleHouseholdEvents(ctx context.Context, gw *HouseholdGateway, input map[
 }
 
 func handleListHouseholdActions(_ context.Context, gw *HouseholdGateway, _ map[string]any) (ToolOutcome, error) {
-	actions, err := gw.availableActions()
+	actions, err := gw.grantedActions()
 	if err != nil {
 		return ToolOutcome{}, err
 	}
@@ -786,6 +856,22 @@ func handleListHouseholdActions(_ context.Context, gw *HouseholdGateway, _ map[s
 		b.WriteString("\n")
 	}
 	return ToolOutcome{Content: b.String()}, nil
+}
+
+// grantedActions is availableActions minus the actions this Agent has not
+// been given, so the model is offered what dispatch would run.
+func (gw *HouseholdGateway) grantedActions() ([]HouseholdAction, error) {
+	all, err := gw.availableActions()
+	if err != nil {
+		return nil, err
+	}
+	out := all[:0:0]
+	for _, a := range all {
+		if gw.checkAction(a).Allowed {
+			out = append(out, a)
+		}
+	}
+	return out, nil
 }
 
 // availableActions is what this deployment wired AND this surface may
@@ -846,6 +932,13 @@ func handleDoHouseholdAction(ctx context.Context, gw *HouseholdGateway, input ma
 				"Call list_household_actions for what is available.", tool),
 			Rejected: true,
 		}, nil
+	}
+	if d := gw.checkAction(*chosen); !d.Allowed {
+		reason := d.Reason
+		if reason == "" {
+			reason = "this Agent has not been given it"
+		}
+		return ToolOutcome{Content: fmt.Sprintf("%s was not run: %s", chosen.Tool, reason), Rejected: true}, nil
 	}
 	params, perr := householdParams(input)
 	if perr != nil {

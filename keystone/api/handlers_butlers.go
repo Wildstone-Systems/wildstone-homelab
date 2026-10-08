@@ -265,7 +265,7 @@ func (s *Server) seedAgentTools(b runtimedb.Butler, by string) error {
 		inventory = s.availableToolDetails
 	}
 	for _, class := range classes {
-		for _, tool := range inventory(class, false) {
+		for _, tool := range s.assignableInventory(inventory, class) {
 			if !tool.Available || tool.OptIn {
 				continue
 			}
@@ -792,13 +792,26 @@ func (s *Server) assignableTool(b runtimedb.Butler, name string) (butler.Capabil
 		inventory = s.availableToolDetails
 	}
 	for _, class := range classes {
-		for _, t := range inventory(class, false) {
+		for _, t := range s.assignableInventory(inventory, class) {
 			if t.Name == name {
 				return t, true
 			}
 		}
 	}
 	return butler.CapabilityTool{}, false
+}
+
+// assignableInventory is a class's tools plus, for the Member class, the
+// household actions granted one at a time (ADR-W034 A5). Those are held by
+// name but live in the manifest's Actions, so without them a new Agent
+// would never be seeded with, or be able to be assigned, a calendar action.
+func (s *Server) assignableInventory(inventory func(string, bool) []butler.CapabilityTool, class string) []butler.CapabilityTool {
+	tools := inventory(class, false)
+	if class != runtimedb.AgentClassMember {
+		return tools
+	}
+	m := butler.NewHouseholdGateway("", s.ButlerHost.inventorySeams()).ForAdministration().Capabilities(false)
+	return append(tools[:len(tools):len(tools)], butler.PerActionCapabilityTools(m)...)
 }
 
 // restoreButler brings a retired Butler back.

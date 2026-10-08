@@ -73,3 +73,107 @@ func TestNoActionsLeavesTheDescriptionAlone(t *testing.T) {
 		}
 	}
 }
+
+// calendarGrantAuthorizer allows everything structural except the named
+// tools, and records which tools it was asked about.
+type calendarGrantAuthorizer struct {
+	permitAll
+	deny  map[string]bool
+	asked []ToolAuthorityQuery
+}
+
+func (a *calendarGrantAuthorizer) AuthorizeTool(q ToolAuthorityQuery) (ToolDecision, error) {
+	a.asked = append(a.asked, q)
+	if a.deny[q.Tool] {
+		return ToolDecision{Allowed: false, Reason: q.Tool + " has not been given"}, nil
+	}
+	return ToolDecision{Allowed: q.Structural}, nil
+}
+
+// ADR-W034 A5: an Owner can give an Agent read-only calendar access.
+// A calendar action it was not given is neither offered nor run, an
+// action it was given still runs, and non-calendar actions are not
+// subject to the per-action check.
+func TestCalendarActionsAreGrantedPerAction(t *testing.T) {
+	seams, dispatched := householdSeams(t)
+	seams.Vocabulary = func() (HouseholdVocabulary, error) {
+		return HouseholdVocabulary{Actions: []HouseholdAction{
+			{Tool: "calendar.get_agenda", Tier: "read"},
+			{Tool: "calendar.create_event", Tier: "domestic"},
+			{Tool: "calendar.delete_event", Tier: "confirm"},
+			{Tool: "notifications.notify", Tier: "domestic"},
+		}}, nil
+	}
+	auth := &calendarGrantAuthorizer{deny: map[string]bool{
+		"calendar.create_event": true, "calendar.delete_event": true,
+	}}
+	gw := newTestHouseholdGateway("mika", seams)
+	gw.SetAuthorizer(auth)
+	ctx := context.Background()
+
+	list, err := gw.Execute(ctx, "list_household_actions", map[string]any{}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"calendar.get_agenda", "notifications.notify"} {
+		if !strings.Contains(list.Content, want) {
+			t.Errorf("%s was not offered:\n%s", want, list.Content)
+		}
+	}
+	for _, not := range []string{"calendar.create_event", "calendar.delete_event"} {
+		if strings.Contains(list.Content, not) {
+			t.Errorf("%s was offered to an Agent that was not given it:\n%s", not, list.Content)
+		}
+	}
+
+	before := len(*dispatched)
+	out, err := gw.Execute(ctx, "do_household_action", map[string]any{"tool": "calendar.delete_event"}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !out.Rejected || !strings.Contains(out.Content, "was not run") || len(*dispatched) != before {
+		t.Fatalf("an ungranted calendar action ran: %+v (dispatched %d)", out, len(*dispatched)-before)
+	}
+
+	for _, tool := range []string{"calendar.get_agenda", "notifications.notify"} {
+		out, err := gw.Execute(ctx, "do_household_action", map[string]any{"tool": tool}, false)
+		if err != nil || out.Rejected {
+			t.Fatalf("%s should run: %+v %v", tool, out, err)
+		}
+	}
+	for _, q := range auth.asked {
+		if q.Tool == "notifications.notify" {
+			t.Error("a non-calendar action was put through the per-action check")
+		}
+		if strings.HasPrefix(q.Tool, "calendar.") && (q.Service != "calendar" || q.ToolClass != string(AgentClassMember) || q.OptIn || !q.Structural) {
+			t.Errorf("calendar query mis-shaped: %+v", q)
+		}
+	}
+}
+
+func TestManifestAdvertisesOnlyGrantedCalendarActions(t *testing.T) {
+	seams, _ := householdSeams(t)
+	seams.Vocabulary = func() (HouseholdVocabulary, error) {
+		return HouseholdVocabulary{Actions: []HouseholdAction{
+			{Tool: "calendar.get_agenda", Tier: "read"},
+			{Tool: "calendar.create_event", Tier: "domestic"},
+			{Tool: "notifications.notify", Tier: "domestic"},
+		}}, nil
+	}
+	gw := newTestHouseholdGateway("mika", seams)
+	gw.SetAuthorizer(&calendarGrantAuthorizer{deny: map[string]bool{"calendar.create_event": true}})
+	m := gw.Capabilities(false)
+	got := map[string]bool{}
+	for _, a := range m.Actions {
+		got[a.Tool] = true
+	}
+	if !got["calendar.get_agenda"] || !got["notifications.notify"] || got["calendar.create_event"] {
+		t.Fatalf("manifest actions disagree with dispatch: %v", got)
+	}
+	tools := PerActionCapabilityTools(CapabilityManifest{Actions: []CapabilityAction{
+		{Tool: "calendar.get_agenda"}, {Tool: "notifications.notify"},
+	}})
+	if len(tools) != 1 || tools[0].Name != "calendar.get_agenda" || tools[0].Service != "calendar" {
+		t.Fatalf("per-action inventory wrong: %+v", tools)
+	}
+}

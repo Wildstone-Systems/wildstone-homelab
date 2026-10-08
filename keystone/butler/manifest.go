@@ -375,6 +375,11 @@ func (gw *HouseholdGateway) Capabilities(readOnly bool) CapabilityManifest {
 				if !householdActionTiers(a.Tier) {
 					continue
 				}
+				// The same grant check dispatch makes, so the manifest never
+				// advertises an action the Agent would be refused.
+				if !gw.checkAction(a).Allowed {
+					continue
+				}
 				m.Actions = append(m.Actions, CapabilityAction{Tool: a.Tool, Tier: a.Tier})
 			}
 			sort.Slice(m.Actions, func(i, j int) bool { return m.Actions[i].Tool < m.Actions[j].Tool })
