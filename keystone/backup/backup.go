@@ -136,6 +136,25 @@ func describe(pass string, err error) error {
 	return fmt.Errorf("%s: %w", pass, err)
 }
 
+// resticExitIncomplete is restic's "snapshot saved but some source files
+// could not be read" code. On a backup pass that is almost always a
+// storage-permission problem (for example an NFS identity change that left
+// source files owned by a different UID).
+const resticExitIncomplete = 3
+
+// describeBackupPass is describe for the backup pass. For an incomplete
+// snapshot it adds that this is a storage-permission failure and names the
+// plan's sources, where the unreadable files are. The engine does not read
+// restic's output, so the individual file is not named here; restic's own
+// container log lists it.
+func describeBackupPass(err error, srcs []string) error {
+	base := describe("backup pass", err)
+	if code, ok := exitCode(err); ok && code == resticExitIncomplete {
+		return fmt.Errorf("%w; storage-permission failure: check that the storage identity can read every file under %s", base, strings.Join(srcs, ", "))
+	}
+	return base
+}
+
 // scheduleIntervals maps BackupPlanSpec.Schedule to a due interval.
 var scheduleIntervals = map[string]time.Duration{
 	"daily":   24 * time.Hour,
@@ -333,7 +352,7 @@ func (e *Engine) runBackup(ctx context.Context, r resource.Resource, desired []r
 				if errors.As(err, &low) {
 					return err
 				}
-				return describe("backup pass", err)
+				return describeBackupPass(err, sources(spec))
 			}
 			forgetArgs := retentionArgs(spec.Retention)
 			if forgetArgs == nil {
