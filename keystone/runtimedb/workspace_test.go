@@ -10,6 +10,7 @@ import (
 )
 
 func TestWorkspaceMigrationPreservesExistingToolAuthority(t *testing.T) {
+	replaysMigrations(t)
 	path := filepath.Join(t.TempDir(), "upgrade.db")
 	db, err := openUnmigrated(path)
 	if err != nil {

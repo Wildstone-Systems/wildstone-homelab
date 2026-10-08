@@ -13,12 +13,24 @@ import (
 	"github.com/chickenrat17/wildstone-homelab/keystone/adapter/caldav"
 	"github.com/chickenrat17/wildstone-homelab/keystone/adapter/caldav/caldavfake"
 	"github.com/chickenrat17/wildstone-homelab/keystone/domestic"
+	"github.com/chickenrat17/wildstone-homelab/keystone/internal/dbtemplate"
 	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
 )
 
 // now is a week before the school-night scenario (Thursday 15 October
 // 2026, 18:00–19:30 in New York).
 var now = time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)
+
+// migrated is the schema, built once for this whole test binary rather
+// than replayed into every database these tests open (#231). Each test
+// still gets its own file.
+var migrated = dbtemplate.New(func(path string) error {
+	db, err := runtimedb.Open(path)
+	if err != nil {
+		return err
+	}
+	return db.Close()
+})
 
 func newYork() *time.Location {
 	l, err := time.LoadLocation("America/New_York")
@@ -81,7 +93,7 @@ type env struct {
 
 func newEnv(t *testing.T) *env {
 	t.Helper()
-	db, err := runtimedb.Open(filepath.Join(t.TempDir(), "keystone.db"))
+	db, err := runtimedb.Open(migrated.Path(t))
 	if err != nil {
 		t.Fatal(err)
 	}

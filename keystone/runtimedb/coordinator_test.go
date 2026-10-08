@@ -5,7 +5,6 @@ package runtimedb
 
 import (
 	"errors"
-	"path/filepath"
 	"testing"
 )
 
@@ -69,7 +68,7 @@ func TestCoordinatorLeaseIsSingleAndFenced(t *testing.T) {
 // The lease survives a restart, which is what makes "the same
 // coordinator came back" distinguishable from "a second one started".
 func TestCoordinatorLeaseSurvivesRestart(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "keystone.db")
+	path := migrated.Path(t)
 	db, err := Open(path)
 	if err != nil {
 		t.Fatal(err)
@@ -97,7 +96,7 @@ func TestCoordinatorLeaseSurvivesRestart(t *testing.T) {
 }
 
 func TestTwoLiveProcessesCannotReacquireTheSameHolder(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "keystone.db")
+	path := migrated.Path(t)
 	first, err := Open(path)
 	if err != nil {
 		t.Fatal(err)

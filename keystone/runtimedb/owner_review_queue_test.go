@@ -429,6 +429,7 @@ func TestCaseCollidingProposersDoNotBreakQueueOrUpgrade(t *testing.T) {
 			var db *DB
 			var err error
 			if upgrade {
+				replaysMigrations(t)
 				db, err = openUnmigrated(filepath.Join(t.TempDir(), "runtime.db"))
 				if err != nil {
 					t.Fatal(err)

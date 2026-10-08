@@ -11,6 +11,7 @@ func TestMigrationChainAppliesFromEmpty(t *testing.T) {
 }
 
 func TestMigrationChainAppliesFromPreEpicSnapshot(t *testing.T) {
+	replaysMigrations(t)
 	old, err := openUnmigrated(filepath.Join(t.TempDir(), "pre-epic.db"))
 	if err != nil {
 		t.Fatal(err)

@@ -6,7 +6,6 @@ package runtimedb
 
 import (
 	"errors"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -193,7 +192,7 @@ func TestUnassignedNoticeRoutesToTheAdmin(t *testing.T) {
 
 // Quiet hours, deduplication and delivery state survive a restart.
 func TestNoticeStateSurvivesRestart(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "keystone.db")
+	path := migrated.Path(t)
 	db, err := Open(path)
 	if err != nil {
 		t.Fatal(err)

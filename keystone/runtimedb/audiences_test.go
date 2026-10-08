@@ -407,6 +407,7 @@ func TestACorrectionCannotWidenAnAudience(t *testing.T) {
 // than retyped, which is the other half of the same lesson — but a
 // generator can be wrong too, and this is what would notice.
 func TestTheAudienceMigrationIsCleanOnARealisticSnapshot(t *testing.T) {
+	replaysMigrations(t)
 	const before = "migrations/0051_person_groups.sql"
 
 	path := filepath.Join(t.TempDir(), "keystone.db")

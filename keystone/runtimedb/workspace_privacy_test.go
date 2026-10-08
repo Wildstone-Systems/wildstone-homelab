@@ -166,6 +166,7 @@ func TestWorkspacePrivacyMissingContextAndFailuresLeaveNoRevision(t *testing.T) 
 }
 
 func TestWorkspacePrivacyMigrationAndRunnerGaps(t *testing.T) {
+	replaysMigrations(t)
 	db, err := openUnmigrated(filepath.Join(t.TempDir(), "upgrade.db"))
 	if err != nil {
 		t.Fatal(err)

@@ -193,6 +193,7 @@ func TestAClaimCodeNamesAPersonOnRecord(t *testing.T) {
 // intact, so the account can claim again against the Owner it belongs
 // to.
 func TestMigrationRefusesAConnectionAdmittingAPrincipal(t *testing.T) {
+	replaysMigrations(t)
 	path := filepath.Join(t.TempDir(), "keystone.db")
 	old, err := openThrough(t, path, "migrations/0043_person_id_references.sql")
 	if err != nil {
