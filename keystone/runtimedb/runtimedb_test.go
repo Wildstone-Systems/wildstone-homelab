@@ -34,6 +34,23 @@ var migrated = dbtemplate.New(func(path string) error {
 // migration, built once per test binary. See openThrough.
 var throughTemplates sync.Map // last migration path -> *dbtemplate.Template
 
+// replaysMigrations marks a test whose cost is replaying the real
+// migration history. Under -race that replay is the slowest thing in the
+// suite (#231), and it buys nothing there: a migration is one goroutine
+// running SQL, which is not what the race detector looks at. So such a
+// test skips under -race, and CI runs this package a second time without
+// -race, where every one of them runs. Nothing is skipped overall.
+//
+// openThrough calls this itself. A migration test that opens an old
+// schema some other way (openUnmigrated, or Open on an empty file) calls
+// it first.
+func replaysMigrations(t *testing.T) {
+	t.Helper()
+	if raceEnabled {
+		t.Skip("replays the migration history; CI runs it in the non-race runtimedb step")
+	}
+}
+
 // openThrough is the migration tests' counterpart of open: an unmigrated
 // handle at path on a private copy of the schema as it stood after the
 // named migration ("migrations/NNNN_x.sql"), the same state that
@@ -46,6 +63,7 @@ var throughTemplates sync.Map // last migration path -> *dbtemplate.Template
 // migrations at or before last must keep using openUnmigrated.
 func openThrough(t *testing.T, path, last string) (*DB, error) {
 	t.Helper()
+	replaysMigrations(t)
 	v, _ := throughTemplates.LoadOrStore(last, dbtemplate.New(func(p string) error {
 		db, err := openUnmigrated(p)
 		if err != nil {
@@ -99,6 +117,7 @@ func record(t *testing.T, db *DB, handles ...string) {
 }
 
 func TestMigrationsApplyOnceAndAreIdempotent(t *testing.T) {
+	replaysMigrations(t)
 	path := filepath.Join(t.TempDir(), "keystone.db")
 	db, err := Open(path)
 	if err != nil {

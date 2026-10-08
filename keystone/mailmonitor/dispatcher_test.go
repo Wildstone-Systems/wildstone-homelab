@@ -38,7 +38,7 @@ type pipeline struct {
 // target calendar sam-family.
 func newPipeline(t *testing.T) *pipeline {
 	t.Helper()
-	db, err := runtimedb.Open(filepath.Join(t.TempDir(), "keystone.db"))
+	db, err := runtimedb.Open(migrated.Path(t))
 	if err != nil {
 		t.Fatal(err)
 	}

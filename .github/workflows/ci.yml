@@ -292,10 +292,20 @@ jobs:
         # and butlerstore alone went from 133s to 12s. The ceiling stays
         # because it keeps the failure honest — a timeout should mean
         # something hung, not that the runner was busy.
+        #
+        # runtimedb's migration tests skip here: they replay the real
+        # migration history, which -race makes the slowest thing in the
+        # suite while checking nothing it can see (one goroutine running
+        # SQL). The next step runs them. See replaysMigrations.
         env:
           CGO_ENABLED: "1"
         run: |
           for m in proto wardstone keystone cli testing/e2e; do (cd "$m" && go test -race -timeout 30m ./...); done
+      - name: runtimedb migration tests (no -race)
+        if: matrix.goarch == 'amd64'
+        # The whole package, so every test that skipped under -race above
+        # runs here. Without -race it takes about a minute.
+        run: cd keystone && go test -timeout 30m ./runtimedb
       - uses: actions/setup-python@v5
         if: matrix.goarch == 'amd64'
         with:

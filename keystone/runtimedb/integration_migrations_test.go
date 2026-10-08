@@ -44,6 +44,7 @@ func integrationBaseline(t *testing.T, name string) fstest.MapFS {
 }
 
 func TestCurrentSegmentMigrationCompatibility(t *testing.T) {
+	replaysMigrations(t)
 	for _, baseline := range []string{"fresh", "main-mailbox", "feature-workspace"} {
 		t.Run(baseline, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "integration.db")
