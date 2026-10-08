@@ -338,6 +338,7 @@ func TestCurrentTaskWritesRecheckedBeforeProcessingAndDelivery(t *testing.T) {
 }
 
 func TestPrivacyMigrationProtectsUntrackedHistoricalRecall(t *testing.T) {
+	replaysMigrations(t)
 	path := filepath.Join(t.TempDir(), "old.db")
 	db, err := openUnmigrated(path)
 	if err != nil {
@@ -450,6 +451,7 @@ func TestPrivacyMigrationProtectsUntrackedHistoricalRecall(t *testing.T) {
 // so a deployment with real history exercises this in a way a fixture
 // built only through the current schema does not.
 func TestPrivacyMigrationLinksPlanSessionSourcesFromExistingTurns(t *testing.T) {
+	replaysMigrations(t)
 	path := filepath.Join(t.TempDir(), "old.db")
 	db, err := openUnmigrated(path)
 	if err != nil {

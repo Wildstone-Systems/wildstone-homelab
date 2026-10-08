@@ -282,6 +282,7 @@ func TestWorkspaceNamespaceConcurrentDestinationHasOneWinner(t *testing.T) {
 	}
 }
 func TestWorkspaceNamespacePopulatedUpgradeAndRestart(t *testing.T) {
+	replaysMigrations(t)
 	// Recreate a pre-0103 schema with existing nested, immutable file history.
 	pathName := filepath.Join(t.TempDir(), "upgrade.db")
 	old, err := openUnmigrated(pathName)
