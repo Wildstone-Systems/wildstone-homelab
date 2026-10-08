@@ -136,6 +136,17 @@ func (s *Server) filedropCapabilities(_ http.ResponseWriter, r *http.Request, me
 		body["reason"] = "no storage root is configured for this household's files"
 	} else if !store.Available() {
 		body["reason"] = "the required storage mount is unavailable"
+	} else if findings, err := store.DiagnoseStorage(); err != nil || len(findings) > 0 {
+		// A writable root does not make the namespaces below it writable
+		// (#551): not ready. Members get no host paths, identities or raw
+		// errors (ADR-W037); the exact findings go to the operator's log.
+		body["ready"] = false
+		body["reason"] = "the household's file storage is not accepting changes right now; ask whoever looks after the machine to check its permissions"
+		if err != nil {
+			s.Log.Error("filedrop storage diagnosis failed", "err", err)
+		} else {
+			s.Log.Error("filedrop storage permission problem", "problem", portal.StorageProblem(findings), "findings", findings)
+		}
 	}
 	return body, http.StatusOK, nil
 }

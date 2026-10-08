@@ -9,3 +9,5 @@ import "os"
 func openChildRoot(*os.Root, string) (*os.Root, error)                       { return nil, os.ErrInvalid }
 func openRegular(*os.Root, string) (*os.File, error)                         { return nil, os.ErrInvalid }
 func renameNoReplace(*os.Root, string, *os.Root, string, func() error) error { return os.ErrInvalid }
+
+func ownerString(info os.FileInfo) string { return info.Mode().Perm().String() }
