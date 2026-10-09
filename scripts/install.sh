@@ -198,13 +198,14 @@ command -v sha256sum >/dev/null || fail "sha256sum is required"
 case "$ROLE" in
   keystone) ;;
   node)
-    # An already-joined node (identity on disk) upgrades without a token; the
-    # agent only needs one when it has no identity yet. Reuse the existing env
+    # An already-joined node (cert, key and CA on disk, as agent.hasIdentity
+    # requires) upgrades without a token; the agent only needs one when it has
+    # no identity yet. Reuse the existing env
     # file for anything not given, so the node keeps the id its cert was
     # issued for (a hostname fallback could silently rename it).
     if [ -z "$JOIN_TOKEN" ]; then
       for d in /var/lib/wildstone/wardstone /etc/wildstone/wardstone; do
-        if [ -f "$d/node.crt" ] && [ -f "$d/node.key" ]; then NODE_JOINED=1; break; fi
+        if [ -f "$d/node.crt" ] && [ -f "$d/node.key" ] && [ -f "$d/keystone-ca.crt" ]; then NODE_JOINED=1; break; fi
       done
       if [ "$NODE_JOINED" = 1 ] && [ -r /etc/wildstone/wardstoned.env ]; then
         while IFS='=' read -r k v; do
