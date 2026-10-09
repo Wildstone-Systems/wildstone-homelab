@@ -54,6 +54,8 @@ func main() {
 		os.Exit(runMeter(os.Args[2:]))
 	case "butler":
 		os.Exit(runButler(os.Args[2:]))
+	case "report":
+		os.Exit(runReport(os.Args[2:]))
 	case "chat":
 		os.Exit(runChat(os.Args[2:]))
 	default:
@@ -82,6 +84,7 @@ func usage() {
   wild household events|emit|publisher ...   (see wild household)
   wild automation list|replay ...            (see wild automation)
   wild meter read|list|history ...           (see wild meter)
+  wild report morning [-json]                (see wild report)
   wild version`)
 }
 
