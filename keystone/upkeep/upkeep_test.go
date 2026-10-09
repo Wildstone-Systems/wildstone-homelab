@@ -35,7 +35,7 @@ type fixture struct {
 
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
-	db, err := runtimedb.Open(filepath.Join(t.TempDir(), "runtime.db"))
+	db, err := runtimedb.Open(migrated.Into(t, filepath.Join(t.TempDir(), "runtime.db")))
 	if err != nil {
 		t.Fatalf("runtimedb.Open: %v", err)
 	}

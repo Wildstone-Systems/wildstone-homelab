@@ -20,7 +20,7 @@ import (
 // Personal evaluator, refuses mail.changes until its consumer registers,
 // and holds itself without the coordinator lease.
 func TestScheduledSubscriptionsWiring(t *testing.T) {
-	db, err := runtimedb.Open(filepath.Join(t.TempDir(), "keystone.db"))
+	db, err := runtimedb.Open(migrated.Into(t, filepath.Join(t.TempDir(), "keystone.db")))
 	if err != nil {
 		t.Fatal(err)
 	}

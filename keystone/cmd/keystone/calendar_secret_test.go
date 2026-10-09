@@ -11,7 +11,7 @@ import (
 )
 
 func TestCalendarCallUsesRoutinePrincipalWithoutBorrowingPerson(t *testing.T) {
-	db, err := runtimedb.Open(filepath.Join(t.TempDir(), "keystone.db"))
+	db, err := runtimedb.Open(migrated.Into(t, filepath.Join(t.TempDir(), "keystone.db")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +121,7 @@ func TestCalendarCallUsesRoutinePrincipalWithoutBorrowingPerson(t *testing.T) {
 // derives one itself, gateway-side, from operation.Identity's TaskID
 // alone, by reading the task's own admission back.
 func TestCalendarCallResolvesPersonSecretFromTheTaskIdentity(t *testing.T) {
-	db, err := runtimedb.Open(filepath.Join(t.TempDir(), "keystone.db"))
+	db, err := runtimedb.Open(migrated.Into(t, filepath.Join(t.TempDir(), "keystone.db")))
 	if err != nil {
 		t.Fatal(err)
 	}

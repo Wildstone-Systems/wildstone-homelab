@@ -136,7 +136,7 @@ func conformanceClock() string { return "" }
 // own database.
 func newAgentEnv(t *testing.T) (*runtimedb.DB, *butlerstore.Ledger, runtimedb.Butler) {
 	t.Helper()
-	db, err := runtimedb.Open(filepath.Join(t.TempDir(), "keystone.db"))
+	db, err := runtimedb.Open(migrated.Into(t, filepath.Join(t.TempDir(), "keystone.db")))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}

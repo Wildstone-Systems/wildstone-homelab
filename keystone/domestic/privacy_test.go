@@ -12,7 +12,7 @@ import (
 )
 
 func TestProtectedContextCannotLeaveThroughAnAction(t *testing.T) {
-	db, err := runtimedb.Open(filepath.Join(t.TempDir(), "state.db"))
+	db, err := runtimedb.Open(migrated.Into(t, filepath.Join(t.TempDir(), "state.db")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +62,7 @@ func TestProtectedContextCannotLeaveThroughAnAction(t *testing.T) {
 
 func changingPrivacy(t *testing.T) (context.Context, func() error) {
 	t.Helper()
-	db, err := runtimedb.Open(filepath.Join(t.TempDir(), "privacy.db"))
+	db, err := runtimedb.Open(migrated.Into(t, filepath.Join(t.TempDir(), "privacy.db")))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -23,7 +23,7 @@ func (a *recoveryAPIAgent) Apply(_ context.Context, _ string, op *wsv1.Operation
 }
 
 func TestImportNodeRecoveryPassesOnlySealedMaterialToWardstone(t *testing.T) {
-	db, err := runtimedb.Open(filepath.Join(t.TempDir(), "runtime.db"))
+	db, err := runtimedb.Open(migrated.Into(t, filepath.Join(t.TempDir(), "runtime.db")))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -28,7 +28,7 @@ func (p *fixedProvider) Chat(context.Context, provider.ChatRequest) (*provider.C
 
 func escalatorFixture(t *testing.T) (*runtimedb.DB, runtimedb.Butler) {
 	t.Helper()
-	db, err := runtimedb.Open(filepath.Join(t.TempDir(), "keystone.db"))
+	db, err := runtimedb.Open(migrated.Into(t, filepath.Join(t.TempDir(), "keystone.db")))
 	if err != nil {
 		t.Fatal(err)
 	}

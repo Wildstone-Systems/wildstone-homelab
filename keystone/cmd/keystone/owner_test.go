@@ -34,7 +34,7 @@ func asRoot(t *testing.T, fn func()) {
 func ownerTestDB(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	db, err := runtimedb.Open(filepath.Join(dir, "keystone.db"))
+	db, err := runtimedb.Open(migrated.Into(t, filepath.Join(dir, "keystone.db")))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
