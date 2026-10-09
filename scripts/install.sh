@@ -12,6 +12,8 @@
 #     sudo ./install.sh --role node --keystone <host:9440> \
 #          --join-token <tok> [--ca-fingerprint <hex>] \
 #          [--node-id <id>] [--skip-docker] [--version vX.Y.Z]
+#   Upgrade an already-joined node (no token; reuses wardstoned.env):
+#     sudo ./install.sh --role node [--version vX.Y.Z]
 #   --wallpaper-dir overrides the pictures the themes ship with, the
 #   same way --console-dir overrides the Console.
 #   --agent-runtime <native|legacy> picks the loop Butler conversations
@@ -77,6 +79,8 @@ KEYSTONE_ADDR=""
 JOIN_TOKEN=""
 CA_FINGERPRINT=""
 NODE_ID="$(hostname -s 2>/dev/null || echo node)"
+NODE_ID_SET=0
+NODE_JOINED=0
 TAILSCALE_AUTHKEY="${TAILSCALE_AUTHKEY:-}"
 TAILSCALE_HOSTNAME=""
 SKIP_DOCKER=0
@@ -146,7 +150,7 @@ while [ $# -gt 0 ]; do
     --keystone)       KEYSTONE_ADDR="$2"; shift 2 ;;
     --join-token)     JOIN_TOKEN="$2"; shift 2 ;;
     --ca-fingerprint) CA_FINGERPRINT="$2"; shift 2 ;;
-    --node-id)        NODE_ID="$2"; shift 2 ;;
+    --node-id)        NODE_ID="$2"; NODE_ID_SET=1; shift 2 ;;
     --version)        VERSION="$2"; shift 2 ;;
     --artifact-dir)   ARTIFACT_DIR="$2"; shift 2 ;;
     --console-dir)    CONSOLE_DIR="$2"; shift 2 ;;
@@ -194,8 +198,27 @@ command -v sha256sum >/dev/null || fail "sha256sum is required"
 case "$ROLE" in
   keystone) ;;
   node)
+    # An already-joined node (cert, key and CA on disk, as agent.hasIdentity
+    # requires) upgrades without a token; the agent only needs one when it has
+    # no identity yet. Reuse the existing env
+    # file for anything not given, so the node keeps the id its cert was
+    # issued for (a hostname fallback could silently rename it).
+    if [ -z "$JOIN_TOKEN" ]; then
+      for d in /var/lib/wildstone/wardstone /etc/wildstone/wardstone; do
+        if [ -f "$d/node.crt" ] && [ -f "$d/node.key" ] && [ -f "$d/keystone-ca.crt" ]; then NODE_JOINED=1; break; fi
+      done
+      if [ "$NODE_JOINED" = 1 ] && [ -r /etc/wildstone/wardstoned.env ]; then
+        while IFS='=' read -r k v; do
+          case "$k" in
+            NODE_ID)        [ "$NODE_ID_SET" = 1 ]        || NODE_ID="$v" ;;
+            KEYSTONE_ADDR)  [ -n "$KEYSTONE_ADDR" ]       || KEYSTONE_ADDR="$v" ;;
+            CA_FINGERPRINT) [ -n "$CA_FINGERPRINT" ]      || CA_FINGERPRINT="$v" ;;
+          esac
+        done < /etc/wildstone/wardstoned.env
+      fi
+    fi
+    [ -n "$JOIN_TOKEN" ] || [ "$NODE_JOINED" = 1 ] || fail "--join-token is required for --role node (mint one: wild node mint-join)"
     [ -n "$KEYSTONE_ADDR" ] || fail "--keystone <host:port> is required for --role node"
-    [ -n "$JOIN_TOKEN" ]    || fail "--join-token is required for --role node (mint one: wild node mint-join)"
     [ -n "$CA_FINGERPRINT" ] || log "WARNING: no --ca-fingerprint — the join falls back to trust-on-first-use (ADR-W003 W3 recommends pinning)"
     ;;
   *) fail "--role must be keystone or node" ;;
@@ -1959,5 +1982,6 @@ UMask=0077
 WantedBy=multi-user.target
 UNIT
 
-log "Node '$NODE_ID' joined toward $KEYSTONE_ADDR. Verify:"
+if [ -n "$JOIN_TOKEN" ]; then NODE_VERB=joined; else NODE_VERB=upgraded; fi
+log "Node '$NODE_ID' $NODE_VERB toward $KEYSTONE_ADDR. Verify:"
 log "  journalctl -u wardstoned -f"
