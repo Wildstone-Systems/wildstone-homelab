@@ -3,11 +3,10 @@
 // is loaded/validated here; expanding it into resource.Resource values is
 // keystone/capability's job.
 //
-// Packages are data, not code. Lifecycle hooks and agentTools are parsed
-// and schema-checked by Validate but are NEVER executed by this package —
-// execution is a later phase (ADR-W005 A1). A malformed hook or agentTool
-// block is rejected at Validate; nothing here ever shells out, execs a
-// container, or otherwise runs a hook/tool.
+// Packages are data, not code. Lifecycle hooks are parsed but rejected by
+// Validate because nothing executes them (use Jobs/SeedFiles). agentTools are
+// parsed and schema-checked but NEVER executed by this package. Nothing here
+// ever shells out, execs a container, or otherwise runs a hook/tool.
 package pkgspec
 
 import (
@@ -291,7 +290,12 @@ type Mount struct {
 	ReadOnly bool   `yaml:"readOnly,omitempty"`
 }
 
-// Lifecycle groups a package's pre/post-install hooks.
+// errHookUnsupported is the validation message for any declared lifecycle hook.
+const errHookUnsupported = "lifecycle hooks are not supported: they are not executed, so the package would " +
+	"install with the hook silently skipped. Use Jobs for setup/migration actions and SeedFiles for create-once files"
+
+// Lifecycle groups a package's pre/post-install hooks. Parsed so a declared
+// hook is reported precisely; Validate rejects any non-empty list.
 type Lifecycle struct {
 	PreInstall  []HookSpec `yaml:"preInstall,omitempty"`
 	PostInstall []HookSpec `yaml:"postInstall,omitempty"`
@@ -628,17 +632,14 @@ func (p *Package) Validate() error {
 		}
 	}
 
-	// Lifecycle hooks: parsed + schema-checked only. Never executed here or
-	// anywhere else in this package.
-	for i, h := range p.Lifecycle.PreInstall {
-		if err := validateHook(h, fmt.Sprintf("lifecycle.preInstall[%d]", i)); err != nil {
-			return err
-		}
+	// Lifecycle hooks have no execution contract: nothing in install or
+	// reconcile runs them, so a package declaring one would appear installed
+	// with the hook silently skipped. Reject until a bounded contract exists.
+	if len(p.Lifecycle.PreInstall) > 0 {
+		return &ValidationError{Field: "lifecycle.preInstall", Msg: errHookUnsupported}
 	}
-	for i, h := range p.Lifecycle.PostInstall {
-		if err := validateHook(h, fmt.Sprintf("lifecycle.postInstall[%d]", i)); err != nil {
-			return err
-		}
+	if len(p.Lifecycle.PostInstall) > 0 {
+		return &ValidationError{Field: "lifecycle.postInstall", Msg: errHookUnsupported}
 	}
 
 	// AgentTools: parsed + schema-checked only. Never executed here.
@@ -704,12 +705,11 @@ func (p *Package) Validate() error {
 		}
 	}
 
-	// A package that declares no templates, no lifecycle hooks, no
+	// A package that declares no templates, no
 	// agentTools, and no provides is producing nothing — reject it as
 	// malformed rather than silently accepting a no-op package.
-	if len(p.Templates) == 0 && len(p.Lifecycle.PreInstall) == 0 && len(p.Lifecycle.PostInstall) == 0 &&
-		len(p.AgentTools) == 0 && len(p.Provides) == 0 {
-		return &ValidationError{Field: "templates", Msg: "must not be empty: package declares no templates, hooks, agentTools, or provides"}
+	if len(p.Templates) == 0 && len(p.AgentTools) == 0 && len(p.Provides) == 0 {
+		return &ValidationError{Field: "templates", Msg: "must not be empty: package declares no templates, agentTools, or provides"}
 	}
 
 	return nil
@@ -841,21 +841,6 @@ func validateExports(p *Package, prov Provide, field string) error {
 					"references .Params.%s, which this package does not declare — an export renders over "+
 						"the PROVIDER's own params, so it can only offer what this package asks for", m[1])}
 			}
-		}
-	}
-	return nil
-}
-
-func validateHook(h HookSpec, field string) error {
-	if h.Image == "" {
-		return &ValidationError{Field: field + ".image", Msg: "must not be empty"}
-	}
-	for i, m := range h.Mounts {
-		if m.Source == "" {
-			return &ValidationError{Field: fmt.Sprintf("%s.mounts[%d].source", field, i), Msg: "must not be empty"}
-		}
-		if m.Target == "" {
-			return &ValidationError{Field: fmt.Sprintf("%s.mounts[%d].target", field, i), Msg: "must not be empty"}
 		}
 	}
 	return nil

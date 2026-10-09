@@ -1,6 +1,7 @@
 package pkgspec
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -30,10 +31,6 @@ templates:
     metadata: { name: immich-server, owner: capability/photos }
     spec: { image: "ghcr.io/immich-app/immich-server@sha256:1111111111111111111111111111111111111111111111111111111111111111" }
 lifecycle:
-  preInstall:
-    - image: "ghcr.io/example/hook@sha256:1111111111111111111111111111111111111111111111111111111111111111"
-      mounts:
-        - { source: /data, target: /data }
   postInstall: []
 agentTools:
   - { name: search_photos, risk: domestic }
@@ -59,8 +56,8 @@ func TestLoadAndParseWellFormed(t *testing.T) {
 	if len(pkg.Templates) != 1 {
 		t.Fatalf("Templates = %d, want 1", len(pkg.Templates))
 	}
-	if len(pkg.Lifecycle.PreInstall) != 1 {
-		t.Fatalf("PreInstall = %d, want 1", len(pkg.Lifecycle.PreInstall))
+	if len(pkg.Lifecycle.PreInstall) != 0 {
+		t.Fatalf("PreInstall = %d, want 0", len(pkg.Lifecycle.PreInstall))
 	}
 	if len(pkg.AgentTools) != 1 {
 		t.Fatalf("AgentTools = %d, want 1", len(pkg.AgentTools))
@@ -118,39 +115,40 @@ func TestValidateRejectsMissingCapability(t *testing.T) {
 	}
 }
 
-func TestValidateRejectsMalformedLifecycleHook(t *testing.T) {
-	const bad = `
+func TestValidateRejectsLifecycleHooks(t *testing.T) {
+	const tmpl = `
 apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
-  name: bad-hook
+  name: hooked
   version: 1.0.0
-  capability: bad
+  capability: hooked
 templates:
   - |
     apiVersion: wildstone.dev/v1
     kind: Volume
-    metadata: { name: v, owner: capability/bad }
+    metadata: { name: v, owner: capability/hooked }
     spec: { name: v }
 lifecycle:
-  preInstall:
-    - mounts:
-        - { source: /data, target: /data }
+  %s:
+    - image: "ghcr.io/example/hook@sha256:1111111111111111111111111111111111111111111111111111111111111111"
 `
-	pkg, err := Parse([]byte(bad))
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = pkg.Validate()
-	if err == nil {
-		t.Fatal("expected validation error for hook missing image")
-	}
-	ve, ok := err.(*ValidationError)
-	if !ok {
-		t.Fatalf("got %T, want *ValidationError", err)
-	}
-	if !strings.Contains(ve.Field, "preInstall") || !strings.Contains(ve.Field, "image") {
-		t.Errorf("Field = %q, want to mention preInstall and image", ve.Field)
+	for _, field := range []string{"preInstall", "postInstall"} {
+		pkg, err := Parse([]byte(fmt.Sprintf(tmpl, field)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = pkg.Validate()
+		ve, ok := err.(*ValidationError)
+		if !ok {
+			t.Fatalf("%s: got %v (%T), want *ValidationError", field, err, err)
+		}
+		if ve.Field != "lifecycle."+field {
+			t.Errorf("Field = %q, want lifecycle.%s", ve.Field, field)
+		}
+		if !strings.Contains(ve.Msg, "Jobs") {
+			t.Errorf("Msg = %q, want it to name Jobs as the supported mechanism", ve.Msg)
+		}
 	}
 }
 
@@ -188,13 +186,12 @@ agentTools:
 	}
 }
 
-// TestValidateNeverExecutesLifecycleOrAgentTools documents (trivially, by
+// TestValidateNeverExecutesAgentTools documents (trivially, by
 // construction — Validate contains no exec/os.StartProcess/http calls) that
-// Validate is pure data validation. The hook below points at a non-existent
-// image reference and an unresolvable host path; if Validate ever executed
-// it, this test would hang, fail, or error on missing binaries/paths rather
-// than returning a clean nil.
-func TestValidateNeverExecutesLifecycleOrAgentTools(t *testing.T) {
+// Validate is pure data validation. The tool below names a non-existent
+// tool; if Validate ever executed it, this test would hang, fail, or error
+// rather than returning a clean nil.
+func TestValidateNeverExecutesAgentTools(t *testing.T) {
 	const pkgYAML = `
 apiVersion: wildstone.dev/v1
 kind: Package
@@ -208,11 +205,6 @@ templates:
     kind: Volume
     metadata: { name: v, owner: capability/no-exec }
     spec: { name: v }
-lifecycle:
-  preInstall:
-    - image: "this-image-does-not-exist-anywhere@sha256:1111111111111111111111111111111111111111111111111111111111111111"
-      mounts:
-        - { source: /this/path/does/not/exist, target: /data }
 agentTools:
   - { name: definitely_not_a_real_tool, risk: high }
 `

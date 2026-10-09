@@ -74,7 +74,7 @@ templates:                    # parameterized resource.Resource docs (Go text/te
     metadata: { name: immich-server, owner: capability/photos, node: "{{ .Params.node }}" }
     spec: { image: "ghcr.io/immich-app/immich-server@sha256:...", ... }
 lifecycle:                    # hooks run AS CONTAINERS with declared mounts — never host
-  preInstall: []              # scripts. Spike: parsed + validated, not executed.
+  preInstall: []              # scripts. Parsed but REJECTED if non-empty (#193): no executor yet; use Jobs/SeedFiles.
   postInstall: []
 agentTools:                   # ADR-W001 concierge block. Spike: parsed + validated only.
   - { name: search_photos, risk: domestic, ... }
