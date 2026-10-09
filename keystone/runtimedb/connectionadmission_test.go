@@ -332,3 +332,25 @@ func TestWorkspaceDeliveryBindingRechecksConnectionAdmission(t *testing.T) {
 		})
 	}
 }
+
+// Removing a bot revokes its address, not its bindings. The live
+// listing must not present such a binding as a way to reach the Agent;
+// the audit listing still shows it.
+func TestARemovedBotsBindingsLeaveTheLiveListing(t *testing.T) {
+	db := butlerFixture(t)
+	alfred := connect(t, db, "alfred", "telegram", ButlerSurfaceAdmin)
+	bind(t, db, alfred, "mika", "12345")
+
+	if got, err := db.ListChatBindings(false); err != nil || len(got) != 1 {
+		t.Fatalf("live bindings = %+v (err %v), want one", got, err)
+	}
+	if err := db.RevokeButlerAddress("telegram", alfred.ExternalID, "root-admin"); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := db.ListChatBindings(false); err != nil || len(got) != 0 {
+		t.Fatalf("live bindings after removal = %+v (err %v), want none", got, err)
+	}
+	if got, err := db.ListChatBindings(true); err != nil || len(got) != 1 {
+		t.Fatalf("audit bindings after removal = %+v (err %v), want one", got, err)
+	}
+}

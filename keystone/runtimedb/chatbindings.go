@@ -317,7 +317,10 @@ func (db *DB) LookupChatBinding(at Connection, account string) (ChatBinding, err
 func (db *DB) ListChatBindings(withRevoked bool) ([]ChatBinding, error) {
 	where := ""
 	if !withRevoked {
-		where = " WHERE b.revoked_at = ''"
+		// A binding on a removed bot no longer resolves (removing the
+		// bot revokes its address, not its bindings), so it is not a
+		// way anybody can reach the Agent.
+		where = " WHERE b.revoked_at = '' AND conn.revoked_at = ''"
 	}
 	rows, err := db.sql.Query(bindingColumns + where + ` ORDER BY b.id DESC`)
 	if err != nil {

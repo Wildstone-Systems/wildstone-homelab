@@ -5,6 +5,7 @@ import {
   AUDIENCE_OWNER,
   audienceIsHousehold,
   type ButlerAddress,
+  type ChatBinding,
   type ButlerRow,
   type ButlerScope,
   type ButlerSurface,
@@ -37,6 +38,22 @@ export function withheldFrom(surface: ButlerSurface, c: IntegrationConnection): 
   return "";
 }
 
+// The chat accounts a person reaches one Agent through, as
+// "<transport> · <name>" strings.
+//
+// The link is the chat binding (person, Agent, transport, account), not
+// an address label, which is free text and never meant to be matched.
+// One person can reach one Agent through several bots, so this returns a
+// list. A revoked binding is skipped even though the default listing
+// already leaves it out, so the helper stays right for a list that
+// includes them.
+export function reachFor(member: string, butler: string, bindings: ChatBinding[]): string[] {
+  return bindings
+    .filter((x) => x.butler === butler && x.identity === member && !x.revokedAt)
+    .map((x) => `${x.transport} · ${x.displayName || x.account}`)
+    .sort();
+}
+
 // Who may talk to it, and what it may read.
 //
 // The two halves are the same decision seen from two sides, which is
@@ -58,12 +75,12 @@ export function TabReach({
   const b = row.butler;
   const members = useLoad(() => api.butlerMembers());
   const integrations = useLoad(() => api.integrations());
+  const bindings = useLoad(() => api.chatBindings());
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const people = scope?.people ?? [];
   const granted = scope?.scope.connections ?? [];
-  const addresses = scope?.addresses ?? [];
   const admitted = (members.data?.members ?? [])
     .filter((m) => m.active)
     .map((m) => m.member.member);
@@ -87,6 +104,7 @@ export function TabReach({
     <div className="tab-stack">
       <ErrorLine error={error} />
       <ErrorLine error={members.error} />
+      <ErrorLine error={bindings.error} />
 
       <div>
         <div className="eyebrow">WHO MAY TALK TO IT</div>
@@ -99,7 +117,8 @@ export function TabReach({
         <div className="check-list">
           {everyone.map((m) => {
             const on = people.includes(m);
-            const address = addresses.find((a) => a.label === m);
+            // Until the list has arrived, absence is not known.
+            const reach = bindings.data ? reachFor(m, b.name, bindings.data) : null;
             return (
               <button
                 key={m}
@@ -121,7 +140,13 @@ export function TabReach({
                 </span>
                 <span>{m}</span>
                 <span className="muted tnum check-note">
-                  {address ? `${address.transport} · ${address.externalId}` : "no address linked"}
+                  {reach === null
+                    ? bindings.loading
+                      ? "checking chat accounts…"
+                      : "chat accounts unavailable"
+                    : reach.length > 0
+                      ? reach.join(", ")
+                      : "no chat account linked"}
                 </span>
               </button>
             );

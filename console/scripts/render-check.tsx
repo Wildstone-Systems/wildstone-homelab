@@ -72,7 +72,7 @@ import { AttentionBanner, Butlers, NoButlers, NoMatches, RosterRow, RuntimesStri
 import { HouseholdActions, Tool } from "../src/views/butlers/TabTools";
 import { ButlerPicker, matches, openingFor, preferred } from "../src/views/butler/picker";
 import { BlockedStrip } from "../src/views/Butler";
-import { withheldFrom } from "../src/views/butlers/TabReach";
+import { reachFor, withheldFrom } from "../src/views/butlers/TabReach";
 import { retireLines } from "../src/views/butlers/ButlerDrawer";
 import { TabRuntime } from "../src/views/butlers/TabRuntime";
 import { NewButlerDialog } from "../src/views/butlers/NewButlerDialog";
@@ -1751,6 +1751,24 @@ check("a household connection is offered to both", withheldFrom("family", { ...p
 // offered. The old two-word check could not have caught this.
 check("an audience the Console does not know is withheld, not offered",
   withheldFrom("family", { ...priv, audience: "aud_9f1c" }).includes("part of the household"));
+
+// Reach: a person's chat accounts come from bindings, never from labels.
+const bnd = {
+  role: "manage", id: 1, connection: 1, butler: "alfie", transport: "telegram", account: "@alfie_bot",
+  identity: "tom", displayName: "Tom T", createdAt: "", createdBy: "tom",
+};
+check("a label equal to a member name is no longer a link", reachFor("tom", "alfie", []).length === 0);
+check("a binding for this person on this Agent is listed",
+  reachFor("tom", "alfie", [bnd]).join() === "telegram · Tom T");
+check("without a display name the account is shown",
+  reachFor("tom", "alfie", [{ ...bnd, displayName: undefined }]).join() === "telegram · @alfie_bot");
+check("a binding on a different Agent is not listed", reachFor("tom", "sandy", [bnd]).length === 0);
+check("a binding for another person is not listed", reachFor("ann", "alfie", [bnd]).length === 0);
+check("a revoked binding is not listed",
+  reachFor("tom", "alfie", [{ ...bnd, revokedAt: "2026-01-01T00:00:00Z" }]).length === 0);
+check("two transports both show up",
+  reachFor("tom", "alfie", [bnd, { ...bnd, id: 2, transport: "matrix", account: "@a:hs", displayName: undefined }]).join() ===
+    "matrix · @a:hs,telegram · Tom T");
 
 // WHAT BREAKS: counted, and every zero omitted.
 const lines = retireLines({
