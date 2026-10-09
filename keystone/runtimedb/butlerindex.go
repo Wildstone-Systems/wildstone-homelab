@@ -27,6 +27,7 @@ package runtimedb
 //   leaves a searchable ghost has not revoked anything.
 
 import (
+	"database/sql"
 	"encoding/binary"
 	"fmt"
 	"math"
@@ -170,6 +171,11 @@ func cosine(a, b []float32) float64 {
 	return dot / (math.Sqrt(na) * math.Sqrt(nb))
 }
 
+// minSemanticSimilarity is the cosine floor for a candidate found by
+// similarity alone. Keyword candidates are not held to it: they already
+// matched a term.
+const minSemanticSimilarity = 0.5
+
 // IndexQuery is a retrieval. Reader is mandatory and is applied in SQL:
 // there is no way to ask this index a question that is not on someone's
 // behalf.
@@ -245,10 +251,6 @@ func (db *DB) SearchIndex(q IndexQuery) ([]IndexHit, error) {
 	if err != nil {
 		return nil, err
 	}
-	memClause, memArgs, err := db.memoryReadClause("r", reader, q.Butler, ftsQuery(q.Text), q.ReadContext)
-	if err != nil {
-		return nil, err
-	}
 	boundary, boundaryArgs := memoryBoundaryClause(reader, q.Butler, q.ReadContext)
 	// Documents have no captured memory provenance. They are eligible only
 	// on a trusted built-in destination until their own provenance is bound.
@@ -256,8 +258,88 @@ func (db *DB) SearchIndex(q IndexQuery) ([]IndexHit, error) {
 	if q.ReadContext != nil && (!q.ReadContext.destination.BuiltIn || q.ReadContext.destination.ConnectionRef != 0) {
 		documentDisclosure = " AND 0"
 	}
+	// permission is the one authorization predicate. The keyword and the
+	// vector candidate queries both take it from here, so the two paths
+	// cannot drift apart. indexedQuery only decides how a promoted copy is
+	// de-duplicated against its source in SQL; "" skips that de-duplication
+	// (the vector path de-duplicates in Go once it knows what matched).
+	permission := func(indexedQuery string) (string, []any, error) {
+		var memClause string
+		var memArgs []any
+		var err error
+		if indexedQuery == "" {
+			memClause, memArgs, err = db.memoryReadClauseUndeduped("r", reader, q.Butler, q.ReadContext)
+		} else {
+			memClause, memArgs, err = db.memoryReadClause("r", reader, q.Butler, indexedQuery, q.ReadContext)
+		}
+		if err != nil {
+			return "", nil, err
+		}
+		args := append([]any{}, audArgs...)
+		args = append(args, scopeArgs...)
+		args = append(args, boundaryArgs...)
+		args = append(args, memArgs...)
+		return `(
+      (i.memory IS NULL AND ` + audClause + scope + boundary + documentDisclosure + `)
+      OR (r.seq IS NOT NULL AND ` + memClause + `))`, args, nil
+	}
 
-	query := `SELECT i.seq, i.source_kind, i.source_id, COALESCE(i.memory, 0),
+	nowT := time.Now()
+	// collect reads candidate rows. score returns the hit's rank and whether
+	// to keep it; MaxAge applies to every candidate.
+	collect := func(query string, args []any, score func(bm25 float64, embedding []byte) (float64, bool)) ([]IndexHit, error) {
+		rows, err := db.sql.Query(query, args...)
+		if err != nil {
+			return nil, fmt.Errorf("runtimedb: searching index: %w", err)
+		}
+		defer rows.Close()
+		var out []IndexHit
+		for rows.Next() {
+			var h IndexHit
+			var audience, observed, indexed string
+			var volatile int
+			var embedding []byte
+			var bm25 float64
+			if err := rows.Scan(&h.Seq, &h.SourceKind, &h.SourceID, &h.MemorySeq, &h.Owner,
+				&audience, &h.PermissionLabel, &h.Content, &observed, &indexed, &volatile,
+				&embedding, &h.Tokens, &bm25); err != nil {
+				return nil, err
+			}
+			h.Audience = ButlerTaskAudience(audience)
+			h.Volatile = volatile != 0
+			h.MustVerifyLive = h.Volatile
+			for _, f := range []struct {
+				text string
+				into *time.Time
+			}{{observed, &h.ObservedAt}, {indexed, &h.IndexedAt}} {
+				if f.text == "" {
+					continue
+				}
+				parsed, err := time.Parse(time.RFC3339Nano, f.text)
+				if err != nil {
+					return nil, fmt.Errorf("runtimedb: bad index timestamp %q: %w", f.text, err)
+				}
+				*f.into = parsed
+			}
+			if !h.ObservedAt.IsZero() {
+				h.Age = nowT.Sub(h.ObservedAt)
+				if q.MaxAge > 0 && h.Age > q.MaxAge {
+					continue
+				}
+			}
+			var keep bool
+			if h.Score, keep = score(bm25, embedding); keep {
+				out = append(out, h)
+			}
+		}
+		return out, rows.Err()
+	}
+
+	keywordPerm, keywordArgs, err := permission(ftsQuery(q.Text))
+	if err != nil {
+		return nil, err
+	}
+	hits, err := collect(`SELECT i.seq, i.source_kind, i.source_id, COALESCE(i.memory, 0),
           COALESCE(io.member, 'household'), i.audience,
           i.permission_label, i.content, i.observed_at, i.indexed_at, i.volatile,
           i.embedding, i.tokens, bm25(butler_index_fts)
@@ -265,76 +347,94 @@ func (db *DB) SearchIndex(q IndexQuery) ([]IndexHit, error) {
    JOIN butler_index i ON i.seq = butler_index_fts.rowid
    LEFT JOIN butler_members io ON io.person_id = i.owner_person_id
    LEFT JOIN butler_memory r ON r.seq = i.memory
-   WHERE butler_index_fts MATCH ? AND (
-      (i.memory IS NULL AND ` + audClause + scope + boundary + documentDisclosure + `)
-      OR (r.seq IS NOT NULL AND ` + memClause + `))
-   ORDER BY bm25(butler_index_fts) LIMIT ?`
-	args := append([]any{ftsQuery(q.Text)}, audArgs...)
-	args = append(args, scopeArgs...)
-	args = append(args, boundaryArgs...)
-	args = append(args, memArgs...)
-	args = append(args, fetch)
-	rows, err := db.sql.Query(query, args...)
+   WHERE butler_index_fts MATCH ? AND `+keywordPerm+`
+   ORDER BY bm25(butler_index_fts) LIMIT ?`,
+		append(append([]any{ftsQuery(q.Text)}, keywordArgs...), fetch),
+		func(bm25 float64, embedding []byte) (float64, bool) {
+			// bm25 returns lower-is-better; invert so every score in this
+			// package reads the same way.
+			score := -bm25
+			if len(q.Embedding) > 0 {
+				// Hybrid: similarity reorders the keyword candidates.
+				// Blending rather than replacing is what stops a
+				// confident-but-wrong embedding burying an exact term
+				// match.
+				score += 2 * cosine(q.Embedding, decodeEmbedding(embedding))
+			}
+			return score, true
+		})
 	if err != nil {
-		return nil, fmt.Errorf("runtimedb: searching index: %w", err)
-	}
-	defer rows.Close()
-
-	var hits []IndexHit
-	nowT := time.Now()
-	for rows.Next() {
-		var h IndexHit
-		var audience, observed, indexed string
-		var volatile int
-		var embedding []byte
-		var bm25 float64
-		if err := rows.Scan(&h.Seq, &h.SourceKind, &h.SourceID, &h.MemorySeq, &h.Owner,
-			&audience, &h.PermissionLabel, &h.Content, &observed, &indexed, &volatile,
-			&embedding, &h.Tokens, &bm25); err != nil {
-			return nil, err
-		}
-		h.Audience = ButlerTaskAudience(audience)
-		h.Volatile = volatile != 0
-		h.MustVerifyLive = h.Volatile
-		for _, f := range []struct {
-			text string
-			into *time.Time
-		}{{observed, &h.ObservedAt}, {indexed, &h.IndexedAt}} {
-			if f.text == "" {
-				continue
-			}
-			parsed, err := time.Parse(time.RFC3339Nano, f.text)
-			if err != nil {
-				return nil, fmt.Errorf("runtimedb: bad index timestamp %q: %w", f.text, err)
-			}
-			*f.into = parsed
-		}
-		if !h.ObservedAt.IsZero() {
-			h.Age = nowT.Sub(h.ObservedAt)
-			if q.MaxAge > 0 && h.Age > q.MaxAge {
-				continue
-			}
-		}
-		// bm25 returns lower-is-better; invert so every score in this
-		// package reads the same way.
-		h.Score = -bm25
-		if len(q.Embedding) > 0 {
-			// Hybrid: keep the keyword rank as the candidate filter and
-			// let similarity reorder within it. Blending rather than
-			// replacing is what stops a confident-but-wrong embedding
-			// burying an exact term match.
-			h.Score += 2 * cosine(q.Embedding, decodeEmbedding(embedding))
-		}
-		hits = append(hits, h)
-	}
-	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+
+	var semanticOnly []IndexHit
+	if len(q.Embedding) > 0 {
+		// Semantic candidates: rows the keyword match never returned, found
+		// by similarity alone, under the same permission predicate.
+		vectorPerm, vectorArgs, err := permission("")
+		if err != nil {
+			return nil, err
+		}
+		semantic, err := collect(`SELECT i.seq, i.source_kind, i.source_id, COALESCE(i.memory, 0),
+          COALESCE(io.member, 'household'), i.audience,
+          i.permission_label, i.content, i.observed_at, i.indexed_at, i.volatile,
+          i.embedding, i.tokens, 0
+   FROM butler_index i
+   LEFT JOIN butler_members io ON io.person_id = i.owner_person_id
+   LEFT JOIN butler_memory r ON r.seq = i.memory
+   WHERE i.embedding IS NOT NULL AND `+vectorPerm,
+			vectorArgs,
+			func(_ float64, embedding []byte) (float64, bool) {
+				cos := cosine(q.Embedding, decodeEmbedding(embedding))
+				return 2 * cos, cos >= minSemanticSimilarity
+			})
+		if err != nil {
+			return nil, err
+		}
+		sort.SliceStable(semantic, func(i, j int) bool { return semantic[i].Score > semantic[j].Score })
+		if len(semantic) > fetch {
+			semantic = semantic[:fetch]
+		}
+		seen := make(map[int64]bool, len(hits))
+		memories := make(map[int64]bool, len(hits))
+		for _, h := range hits {
+			seen[h.Seq] = true
+			if h.MemorySeq != 0 {
+				memories[h.MemorySeq] = true
+			}
+		}
+		// Prefer a Personal source over its identical Household promotion,
+		// but only when the source is itself a candidate that cleared the
+		// floor; otherwise the promoted copy is the only viable answer.
+		for _, h := range semantic {
+			if h.MemorySeq != 0 {
+				memories[h.MemorySeq] = true
+			}
+		}
+		promoted, err := db.promotionSources(semantic)
+		if err != nil {
+			return nil, err
+		}
+		for _, h := range semantic {
+			// A row both paths found keeps its blended keyword score.
+			if seen[h.Seq] {
+				continue
+			}
+			if src, ok := promoted[h.MemorySeq]; ok && h.MemorySeq != 0 && memories[src] {
+				continue
+			}
+			semanticOnly = append(semanticOnly, h)
+		}
+	}
+
+	// Lexical priority: raw cosine and BM25 scores are not comparable, so a
+	// vocabulary-mismatched semantic-only row must not outrank a keyword
+	// match. Semantic-only rows fill the remaining slots by similarity.
 	sort.SliceStable(hits, func(i, j int) bool { return hits[i].Score > hits[j].Score })
+	hits = append(hits, semanticOnly...)
 	if len(hits) > q.Limit {
 		hits = hits[:q.Limit]
 	}
-	rows.Close()
 	for _, h := range hits {
 		if h.MemorySeq != 0 {
 			if err := db.checkReadPrivacy(h.MemorySeq, q.ReadContext); err != nil {
@@ -577,4 +677,32 @@ func (db *DB) FinishIndexJob(seq int64, failure string) error {
 		return fmt.Errorf("runtimedb: finishing index job: %w", err)
 	}
 	return nil
+}
+
+// promotionSources maps each promoted Household memory among hits to the
+// Personal memory it was promoted from.
+func (db *DB) promotionSources(hits []IndexHit) (map[int64]int64, error) {
+	out := map[int64]int64{}
+	stmt, err := db.sql.Prepare(`SELECT source_memory FROM memory_scope_events WHERE memory=? AND kind='promotion'`)
+	if err != nil {
+		return nil, fmt.Errorf("runtimedb: reading promotion sources: %w", err)
+	}
+	defer stmt.Close()
+	for _, h := range hits {
+		if h.MemorySeq == 0 {
+			continue
+		}
+		if _, done := out[h.MemorySeq]; done {
+			continue
+		}
+		var src sql.NullInt64
+		switch err := stmt.QueryRow(h.MemorySeq).Scan(&src); {
+		case err == sql.ErrNoRows:
+		case err != nil:
+			return nil, fmt.Errorf("runtimedb: reading promotion sources: %w", err)
+		case src.Valid:
+			out[h.MemorySeq] = src.Int64
+		}
+	}
+	return out, nil
 }

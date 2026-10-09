@@ -157,7 +157,11 @@ and a person waiting on an answer should not wait on it.
 
 ### 4. Embeddings — the one genuine gap
 
-There is no embedding client. `IndexDocument.Embedding` is optional and
+There is no embedding client. The store side is ready: with a query
+embedding, `SearchIndex` also retrieves rows by cosine similarity alone
+(floor `minSemanticSimilarity`) under the same permission predicate as the
+keyword path. Nothing yet produces or passes embeddings.
+`IndexDocument.Embedding` is optional and
 its comment is explicit that nil "is a working configuration and not a
 degraded one", so **bm25 alone works on day one** and A3's "hybrid
 meaning/keyword" is reachable afterwards.

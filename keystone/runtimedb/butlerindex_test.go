@@ -276,9 +276,19 @@ func TestRetrievalQualityIsMeasuredAndRecorded(t *testing.T) {
 			}
 		}
 	}
+	// The fixture embedder maps synonyms onto the same dimension, as a real
+	// model would, so a query can be close to its target without sharing a
+	// word with it.
+	synonyms := map[string]string{
+		"rubbish": "bin", "pickup": "day",
+		"backup": "spare", "latchkey": "key", "hidden": "under",
+	}
 	embed := func(text string) []float32 {
 		v := make([]float32, len(vocab))
 		for _, w := range fields(text) {
+			if s, ok := synonyms[w]; ok {
+				w = s
+			}
 			if i, ok := vocab[w]; ok {
 				v[i] = 1
 			}
@@ -302,7 +312,11 @@ func TestRetrievalQualityIsMeasuredAndRecorded(t *testing.T) {
 		{"what time is dinner", corpus[3]},
 		{"boiler pressure", corpus[4]},
 		{"where are the photos", corpus[5]},
+		// No word in common with the target: only similarity finds these.
+		{"rubbish pickup", corpus[0]},
+		{"backup latchkey hidden", corpus[1]},
 	}
+	recalls := map[string]int{}
 
 	for _, strategy := range []string{StrategyKeyword, StrategyHybrid} {
 		hits, correct := 0, 0
@@ -326,6 +340,7 @@ func TestRetrievalQualityIsMeasuredAndRecorded(t *testing.T) {
 		sort.Slice(latencies, func(i, j int) bool { return latencies[i] < latencies[j] })
 		p95 := latencies[len(latencies)*95/100]
 		recall := correct * 100 / len(queries)
+		recalls[strategy] = recall
 
 		if err := db.RecordIndexMeasurement(IndexMeasurement{
 			Fixture: "household-6doc", Strategy: strategy, Queries: len(queries),
@@ -338,9 +353,20 @@ func TestRetrievalQualityIsMeasuredAndRecorded(t *testing.T) {
 		// deliberately a floor rather than a target: a change that drops
 		// below it should fail here rather than be discovered by someone
 		// asking where the spare key is.
-		if recall < 80 {
-			t.Fatalf("%s top-1 recall = %d%%, below the 80%% floor this fixture holds", strategy, recall)
+		floor := 80
+		if strategy == StrategyKeyword {
+			// Two of the eight queries share no word with their target.
+			floor = 70
 		}
+		if recall < floor {
+			t.Fatalf("%s top-1 recall = %d%%, below the %d%% floor this fixture holds", strategy, recall, floor)
+		}
+	}
+
+	// The fixture must be able to tell the strategies apart: a lexical-only
+	// candidate set cannot pass it.
+	if recalls[StrategyHybrid] <= recalls[StrategyKeyword] {
+		t.Fatalf("hybrid recall %d%% is not above keyword recall %d%%", recalls[StrategyHybrid], recalls[StrategyKeyword])
 	}
 
 	measurements, err := db.ListIndexMeasurements()
@@ -390,4 +416,188 @@ func fields(s string) []string {
 	}
 	flush()
 	return out
+}
+
+// semDoc indexes one embedded chunk and fails the test on error.
+func semDoc(t *testing.T, db *DB, d IndexDocument) int64 {
+	t.Helper()
+	if d.SourceKind == "" {
+		d.SourceKind = "fixture"
+	}
+	if d.SourceID == "" {
+		d.SourceID = fmt.Sprintf("sem-%d", time.Now().UnixNano())
+	}
+	d.PermissionLabel = d.Owner
+	d.ObservedAt = time.Now()
+	seq, err := db.IndexDocumentInto(d)
+	if err != nil {
+		t.Fatalf("IndexDocumentInto: %v", err)
+	}
+	return seq
+}
+
+func searchSeqs(t *testing.T, db *DB, q IndexQuery) map[int64]bool {
+	t.Helper()
+	hits, err := db.SearchIndex(q)
+	if err != nil {
+		t.Fatalf("SearchIndex: %v", err)
+	}
+	out := map[int64]bool{}
+	for _, h := range hits {
+		out[h.Seq] = true
+	}
+	return out
+}
+
+// A row whose embedding matches the query but which shares no word with it
+// must be found by similarity alone, and only above the floor.
+func TestSemanticCandidatesNeedNoSharedWord(t *testing.T) {
+	db := openWith(t, "mika")
+	vec := []float32{1, 0, 0}
+	seq := semDoc(t, db, IndexDocument{Content: "collection of rubbish happens midweek",
+		Owner: "household", Audience: ButlerAudienceShared, Embedding: vec})
+
+	q := IndexQuery{Reader: "mika", Text: "trash schedule", Embedding: vec}
+	if !searchSeqs(t, db, q)[seq] {
+		t.Fatal("an identical embedding with no shared word was not returned")
+	}
+	q.Embedding = nil
+	if searchSeqs(t, db, q)[seq] {
+		t.Fatal("a keyword-only query returned a row sharing no word")
+	}
+	q.Embedding = []float32{0, 1, 0} // orthogonal: below the floor
+	if searchSeqs(t, db, q)[seq] {
+		t.Fatal("a dissimilar embedding was returned")
+	}
+	// A different dimension (mixed index after a model change) helps nothing.
+	q.Embedding = []float32{1, 0}
+	if searchSeqs(t, db, q)[seq] {
+		t.Fatal("a mismatched-dimension embedding was returned")
+	}
+}
+
+// A keyword match must outrank a semantic-only row: raw cosine and BM25
+// scores are not comparable, so similarity may only fill remaining slots.
+func TestSemanticOnlyRowsNeverOutrankKeywordMatch(t *testing.T) {
+	db := openWith(t, "mika")
+	exact := semDoc(t, db, IndexDocument{Content: "trash collection is on thursday",
+		Owner: "household", Audience: ButlerAudienceShared, Embedding: []float32{0, 1, 0}})
+	semantic := semDoc(t, db, IndexDocument{Content: "rubbish pickup happens midweek",
+		Owner: "household", Audience: ButlerAudienceShared, Embedding: []float32{1, 0, 0}})
+
+	hits, err := db.SearchIndex(IndexQuery{Reader: "mika", Text: "trash", Embedding: []float32{1, 0, 0}, Limit: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hits) != 1 || hits[0].Seq != exact {
+		t.Fatalf("Limit 1 returned %+v, want the exact keyword row %d (not semantic-only %d)", hits, exact, semantic)
+	}
+	hits, err = db.SearchIndex(IndexQuery{Reader: "mika", Text: "trash", Embedding: []float32{1, 0, 0}, Limit: 5})
+	if err != nil || len(hits) != 2 || hits[0].Seq != exact || hits[1].Seq != semantic {
+		t.Fatalf("hits=%+v err=%v, want keyword row then semantic row", hits, err)
+	}
+}
+
+// Semantic hits are candidates under the same authorization, not a bypass.
+func TestSemanticCandidatesCannotBypassAuthorization(t *testing.T) {
+	db := openWith(t, "sam")
+	vec := []float32{1, 0, 0}
+	q := func(reader string) IndexQuery {
+		return IndexQuery{Reader: reader, Text: "zzzz", Embedding: vec, Limit: 50}
+	}
+
+	private := semDoc(t, db, IndexDocument{Content: "sam private note", Owner: "sam",
+		Audience: ButlerAudiencePrivate, Embedding: vec})
+	scoped := semDoc(t, db, IndexDocument{Content: "scoped to another butler", Owner: "household",
+		Audience: ButlerAudienceShared, Butler: "other-butler", Embedding: vec})
+	shared := semDoc(t, db, IndexDocument{Content: "shared note", Owner: "household",
+		Audience: ButlerAudienceShared, Embedding: vec})
+
+	mika := searchSeqs(t, db, q("mika"))
+	if mika[private] {
+		t.Fatal("sam's private chunk was returned to mika by similarity")
+	}
+	if mika[scoped] {
+		t.Fatal("another Butler's scoped chunk was returned by similarity")
+	}
+	if !mika[shared] {
+		t.Fatal("the shared chunk was not returned")
+	}
+	if !searchSeqs(t, db, q("sam"))[private] {
+		t.Fatal("sam cannot see their own chunk by similarity")
+	}
+
+	// A document is excluded under a non-built-in destination.
+	read := db.BindMemoryRead("sam", "", MemoryDestination{BuiltIn: false})
+	rq := q("sam")
+	rq.ReadContext = read
+	if got := searchSeqs(t, db, rq); got[shared] || got[private] {
+		t.Fatalf("documents were returned to a non-built-in destination: %v", got)
+	}
+}
+
+// Forgetting and correcting a record keep its chunk out of semantic
+// results, including a stray chunk put back by another writer.
+func TestSemanticCandidatesHonourForgetAndCorrect(t *testing.T) {
+	db := openWith(t, "mika")
+	vec := []float32{0, 1, 0}
+	record := func(content string) (int64, int64) {
+		seq, err := db.RecordMemory(MemoryRecord{
+			Kind: MemoryFact, Content: content, Subject: "household",
+			Audience: ButlerAudienceShared, PermissionLabel: "household", Owner: "household",
+			Author: "mika", SourceKind: "conversation", SourceID: "bs-sem",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		chunk := semDoc(t, db, IndexDocument{SourceKind: "memory", SourceID: fmt.Sprintf("%d", seq),
+			MemorySeq: seq, Content: content, Owner: "household",
+			Audience: ButlerAudienceShared, Embedding: vec})
+		return seq, chunk
+	}
+	q := IndexQuery{Reader: "household", Text: "zzzz", Embedding: vec, Limit: 50}
+
+	forgotten, forgottenChunk := record("the gate code is one two three")
+	if !searchSeqs(t, db, q)[forgottenChunk] {
+		t.Fatal("a live memory chunk was not returned by similarity")
+	}
+	if err := db.ForgetMemory(forgotten, "mika"); err != nil {
+		t.Fatal(err)
+	}
+	if searchSeqs(t, db, q)[forgottenChunk] {
+		t.Fatal("a forgotten record's chunk was returned")
+	}
+
+	old, oldChunk := record("the spare key is under the mat")
+	if _, err := db.CorrectMemory(old, MemoryRecord{
+		Kind: MemoryFact, Content: "the spare key is with the neighbour", Subject: "household",
+		Audience: ButlerAudienceShared, PermissionLabel: "household", Owner: "household",
+		Author: "mika", SourceKind: "conversation", SourceID: "bs-sem",
+	}, "mika"); err != nil {
+		t.Fatal(err)
+	}
+	if searchSeqs(t, db, q)[oldChunk] {
+		t.Fatal("a superseded record's chunk was returned")
+	}
+
+	// Backstop: a stray embedded chunk for a forgotten record is filtered.
+	blob := encodeEmbedding(vec)
+	if _, err := db.ExecForTest(
+		`INSERT INTO butler_index (source_kind, source_id, memory, owner_person_id, audience,
+		     permission_label, content, embedding, observed_at, indexed_at, volatile, tokens)
+		 VALUES ('memory', 'stray', ?, NULL, 'aud_household', 'household',
+		     'the gate code is one two three', ?, '', ?, 0, 7)`,
+		forgotten, blob, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		t.Fatal(err)
+	}
+	if hits, _ := db.SearchIndex(q); len(hits) != 0 && func() bool {
+		for _, h := range hits {
+			if h.Content == "the gate code is one two three" {
+				return true
+			}
+		}
+		return false
+	}() {
+		t.Fatalf("a stray chunk for a forgotten record was returned: %+v", hits)
+	}
 }

@@ -506,3 +506,43 @@ func TestPromotionDedupPreservesScopeFallbacks(t *testing.T) {
 	}
 	check(source, source)
 }
+
+// The vector path de-duplicates a promoted copy in Go: the Personal source
+// wins only when it is itself a viable semantic candidate; otherwise the
+// promoted copy is the answer.
+func TestSemanticPromotionDedupFallsBackToPromotedCopy(t *testing.T) {
+	db := butlerFixture(t)
+	newButler(t, db, "health", "kitchen-box")
+	m := scopedFact(t, MemoryScopePersonal, "health", "sam")
+	m.Content = "jasmine preference"
+	source, err := db.RecordMemory(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	promoted, err := db.PromotePersonalMemory(source, "sam")
+	if err != nil {
+		t.Fatal(err)
+	}
+	vec := []float32{1, 0, 0}
+	index := func(id string, mem int64, owner string, aud ButlerTaskAudience, emb []float32) {
+		t.Helper()
+		if _, err := db.IndexDocumentInto(IndexDocument{SourceKind: "memory", SourceID: id, MemorySeq: mem,
+			Owner: owner, Audience: aud, PermissionLabel: "health", Butler: "health",
+			Content: m.Content, Embedding: emb, ObservedAt: time.Now()}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Source is indexed with an incompatible embedding; the promoted copy matches.
+	index("src", source, "sam", ButlerAudiencePrivate, []float32{0, 1, 0})
+	index("promo", promoted, "household", ButlerAudienceShared, vec)
+	hits, err := db.SearchIndex(IndexQuery{Reader: "sam", Butler: "health", Text: "tea", Embedding: vec, Limit: 5})
+	if err != nil || len(hits) != 1 || hits[0].MemorySeq != promoted {
+		t.Fatalf("hits=%+v err=%v, want only the promoted copy %d", hits, err, promoted)
+	}
+	// Once the source also matches, it replaces the copy.
+	index("src", source, "sam", ButlerAudiencePrivate, vec)
+	hits, err = db.SearchIndex(IndexQuery{Reader: "sam", Butler: "health", Text: "tea", Embedding: vec, Limit: 5})
+	if err != nil || len(hits) != 1 || hits[0].MemorySeq != source {
+		t.Fatalf("hits=%+v err=%v, want only the source %d", hits, err, source)
+	}
+}

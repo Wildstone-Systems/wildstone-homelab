@@ -59,6 +59,19 @@ func (db *DB) memoryReadClause(alias, person, agent, indexedQuery string, read *
 	return clause + " AND " + alias + ".superseded_by IS NULL" + promotion, append(args, promotionArgs...), nil
 }
 
+// memoryReadClauseUndeduped is memoryReadClause without promotion
+// de-duplication, for a caller that cannot decide in SQL whether the
+// Personal source would itself match (similarity is computed in Go). It
+// fails open: a promoted copy and its source may both be returned, and the
+// caller drops the copy once it knows the source is among its results.
+func (db *DB) memoryReadClauseUndeduped(alias, person, agent string, read *MemoryReadContext) (string, []any, error) {
+	clause, args, err := db.memoryContentAuthorityClause(alias, person, agent, read)
+	if err != nil {
+		return "", nil, err
+	}
+	return clause + " AND " + alias + ".superseded_by IS NULL", args, nil
+}
+
 // memoryContentAuthorityClause is shared by recall and retained derivatives.
 // Candidate selection (supersession and promotion deduplication) belongs only
 // to recall: historical sources still carry their live authority constraints.
