@@ -65,7 +65,9 @@ survey; the shape of the answer is:
   unfinished.** Subsonic needs a password the server can recover
   (`music-navidrome`), ntfy has its own tokens, Roundcube needs the
   mailbox password rather than an identity, Plex authenticates against
-  plex.tv, and `podcasts-podgrab` has no user model at all.
+  plex.tv, `podcasts-podgrab` has no user model at all, and
+  `files-filebrowser` waits on path-aware Routes. Each reason is under
+  "Household sign-in for these packages" in *Not shipped, and why*.
 
 The gate on several of the remaining packages is not their app: it is
 that Wildstone has no way for a package to set up an app's auth inside a
@@ -311,6 +313,29 @@ Recorded here rather than left in someone's head (ADR-W018 A4).
   but CUDA in a container also needs the NVIDIA container runtime's
   library injection, which is a runtime hook rather than a device.
   Intel and AMD render nodes work for transcoding today.
+- **Household sign-in for these packages** — they sign in separately
+  from the household directory because the directory cannot serve them
+  (#149):
+  - `media-plex` — apps authenticate against plex.tv accounts. Plex is
+    closed source, so this is from how Plex works, not from source.
+  - `mail-roundcube` (the Roundcube surface) — the header plugin needs
+    `PHP_AUTH_PW`, the real mailbox password
+    (`plugins/http_authentication/http_authentication.php:44`). Authelia
+    asserts a username, not a password.
+  - `notifications` (ntfy) — ntfy has its own user/token scheme, and
+    `ProxyForwardedHeader` is the client IP for rate limiting, not
+    authentication. The shipped package does not configure that scheme
+    yet: it sets no auth database or deny-by-default policy and its Route
+    is `auth: none`, so upstream's open read/write default applies and
+    reachability (`family_private`) is the only gate.
+  - `podcasts-podgrab` — HTTP Basic only, with no user model. It ships
+    this way on purpose; see the package header.
+  - `music-navidrome` — Subsonic clients send `md5(password + salt)`, so
+    the server must hold a recoverable password (`server/auth.go:93`).
+    It has no LDAP support.
+  - `files-filebrowser` — its only external auth is a proxy header, and
+    forward-auth would break public share links (`http/http.go:94`). It
+    stays blocked until Routes can match paths.
 - **UniFi Network Application** — wants host networking for device
   adoption and a MongoDB with an init script; deferred until a household
   asks for it.
