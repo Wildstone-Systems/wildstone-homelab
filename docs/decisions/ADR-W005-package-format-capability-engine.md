@@ -74,7 +74,7 @@ templates:                    # parameterized resource.Resource docs (Go text/te
     metadata: { name: immich-server, owner: capability/photos, node: "{{ .Params.node }}" }
     spec: { image: "ghcr.io/immich-app/immich-server@sha256:...", ... }
 lifecycle:                    # hooks run AS CONTAINERS with declared mounts — never host
-  preInstall: []              # scripts. Spike: parsed + validated, not executed.
+  preInstall: []              # scripts. Parsed but REJECTED if non-empty (#193): no executor yet; use Jobs/SeedFiles.
   postInstall: []
 agentTools:                   # ADR-W001 concierge block. Spike: parsed + validated only.
   - { name: search_photos, risk: domestic, ... }
@@ -82,9 +82,11 @@ agentTools:                   # ADR-W001 concierge block. Spike: parsed + valida
 
 Rules:
 - **Packages are data.** Templates are `text/template` over params + resolved
-  dependency outputs. No embedded scripts. Lifecycle hooks and agentTools are
+  dependency outputs. No embedded scripts. agentTools are
   **parsed and validated at MVP, executed in a later phase** — S3 must reject
-  a malformed hook/agentTools block but must not execute them.
+  a malformed agentTools block but must not execute it. Lifecycle hooks have no
+  executor: every non-empty `preInstall`/`postInstall` list is rejected (#193)
+  until one exists; use Jobs/SeedFiles.
 - Packages are the catalog content; they live in `packages/<name>/package.yaml`
   in this repo (the curated registry; signing is D2's concern, not S3's).
 - Every expanded resource carries `owner: capability/<capability>` — the
@@ -150,7 +152,7 @@ the go/no-go signal.
 | `keystone/resource` | extend the closed registry with OidcClient + LdapGroup kinds (specs + validation). |
 | `keystone/reconcile` | OidcClient applier (Authelia fragment render + WriteManagedFile + batched reload seam); LdapGroup declared/best-effort applier; observe/health-gate for both. |
 | `keystone/capability` | the Engine: Expand(pkg, params), trait resolution, template rendering, `.Resolved` injection. |
-| `keystone/pkgspec` (or `keystone/capability/pkg`) | Package struct + YAML load + validation (params, lifecycle-parsed-not-run, agentTools-parsed-not-run). |
+| `keystone/pkgspec` (or `keystone/capability/pkg`) | Package struct + YAML load + validation (params, lifecycle-hooks-rejected, agentTools-parsed-not-run). |
 | `packages/identity/package.yaml`, `packages/photos-immich/package.yaml` | the two hand-written packages. |
 
 Reuse S2's reconcile/apply path and the S1/E1 real-gateway+fake-docker test
@@ -205,16 +207,16 @@ report decisions/deviations, stop-and-report on proto/dep changes).
 ### S3b — Package format + capability engine
 
 - `keystone/pkgspec`: Package struct, YAML load, validation (params required/
-  defaulted; lifecycle + agentTools parsed and schema-checked but NOT
-  executed; reject malformed).
+  defaulted; non-empty lifecycle hooks rejected (#193); agentTools parsed and
+  schema-checked but NOT executed; reject malformed).
 - `keystone/capability`: `Engine.Expand(pkg, params) ([]resource.Resource,
   error)` — param validation, trait resolution against a provided catalog,
   `text/template` rendering, parse+validate each resource, inject `.Resolved`
   (issuer URL, secret refs) from resolved deps. Unsatisfied required trait →
   typed error.
 - Tests: a small inline package expands correctly; missing required param →
-  error; unsatisfied `requires` trait → error; lifecycle/agentTools malformed
-  → validation error but never executed; owner chain stamped on every output.
+  error; unsatisfied `requires` trait → error; non-empty lifecycle hooks
+  → validation error; agentTools malformed → validation error but never executed; owner chain stamped on every output.
 
 ### S3c — The two packages + the go/no-go end-to-end test
 
