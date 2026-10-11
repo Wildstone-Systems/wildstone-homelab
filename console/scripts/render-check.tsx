@@ -54,6 +54,8 @@ import { FillBar, Metric } from "../src/ui/Metric";
 import { ProblemCard } from "../src/ui/ProblemCard";
 import { ServiceTile } from "../src/ui/ServiceTile";
 import { Rail } from "../src/ui/Rail";
+import { MorningReportView, stateOf as reportStateOf } from "../src/views/MorningReport";
+import { ApiError as ReportApiError } from "../src/api";
 
 // Screens read sessionStorage (the step-up a sign-in interrupted, the
 // last sign-in round trip) while they render, and node has none. A two-line shim is cheaper than
@@ -3903,6 +3905,30 @@ check("the installed email detail carries the entry",
   text(renderToString(h(InstalledDetail, { pkg: mailPkg as never, onReconfigure: () => {}, onWatchMailbox: () => {} })))
     .includes("stays off until that person turns it on"));
 
+
+// ---------------------------------------------------- Morning report
+const REPORT = {
+  generatedAt: "2026-01-02T06:00:00Z",
+  unhealthy: [{ kind: "container", name: "jellyfin", node: "n1", healthy: false, detail: "exited", updatedAt: "2026-01-02T05:59:00Z" }],
+  pendingPlans: [{ seq: 7, id: "plan-7", createdAt: "2026-01-02T01:00:00Z", principal: "butler", summary: "Expose grafana", risk: "medium", state: "proposed" }],
+  eventCounts24h: { "plan.proposed": 1, "reconcile.applied": 3 },
+  eventTotal24h: 4,
+  backups: [{ planName: "photos", status: "failed", runKind: "backup", at: "2026-01-02T03:00:00Z", detail: "repo locked" }],
+  backupsOk: false,
+  backupAlerts: [{ planName: "photos", kind: "offsite_stale", detail: "off-site copy is 9 days old" }],
+  summary: "1 unhealthy, 1 plan waiting.",
+};
+const rep = text(renderToString(h(MorningReportView, { state: { phase: "loaded", report: REPORT } as never })));
+check("the morning report shows the summary", rep.includes("1 unhealthy, 1 plan waiting."), rep);
+check("the morning report lists unhealthy resources", rep.includes("container/jellyfin") && rep.includes("exited"), rep);
+check("pending plans are named with their id", rep.includes("plan-7") && rep.includes("Expose grafana"), rep);
+check("backup verdicts and alerts are shown", rep.includes("repo locked") && rep.includes("off-site copy is 9 days old") && rep.includes("backups need attention"), rep);
+check("event counts are shown", rep.includes("4 events") && rep.includes("reconcile.applied: 3"), rep);
+const quietRep = text(renderToString(h(MorningReportView, { state: { phase: "loaded", report: { generatedAt: "2026-01-02T06:00:00Z", unhealthy: null, pendingPlans: null, eventCounts24h: null, eventTotal24h: 0, backups: null, backupsOk: true, summary: "" } } as never })));
+check("an empty report says nothing needs attention", quietRep.includes("Nothing needs attention"), quietRep);
+check("a 503 is a graceful unavailable state", text(renderToString(h(MorningReportView, { state: reportStateOf(new ReportApiError(503, "off")) }))).includes("not available right now"));
+check("a 403 is a clear denied state", text(renderToString(h(MorningReportView, { state: reportStateOf(new ReportApiError(403, "forbidden")) }))).includes("not allowed to read"));
+check("any other failure shows its message", renderToString(h(MorningReportView, { state: reportStateOf(new Error("boom")) })).includes("boom"));
 
 console.log(failures === 0 ? "\nALL CHECKS PASSED" : `\n${failures} CHECK(S) FAILED`);
 process.exit(failures === 0 ? 0 : 1);

@@ -152,6 +152,36 @@ export interface BackupsResponse {
   runs: BackupRun[];
 }
 
+// GET /api/v1/reports/morning (ADR-W017 A5): the deterministic report,
+// built fresh per request from runtime-DB reads.
+export interface MorningBackupVerdict {
+  planName: string;
+  status: string;
+  runKind: string;
+  at: string;
+  detail?: string;
+}
+
+export interface MorningBackupAlert {
+  planName: string;
+  kind: string;
+  runKind?: string;
+  at?: string;
+  detail: string;
+}
+
+export interface MorningReport {
+  generatedAt: string;
+  unhealthy: Observed[] | null;
+  pendingPlans: PlanRecord[] | null;
+  eventCounts24h: Record<string, number> | null;
+  eventTotal24h: number;
+  backups: MorningBackupVerdict[] | null;
+  backupsOk: boolean;
+  backupAlerts?: MorningBackupAlert[];
+  summary: string;
+}
+
 export interface SecretInfo {
   name: string;
   version: number;
@@ -2757,6 +2787,7 @@ export const api = {
     m: { displayName?: string; email?: string; groups: string[] },
   ) => call<PlanRecord>("PUT", `/api/v1/household/members/${encodeURIComponent(username)}`, m),
   backups: () => call<BackupsResponse>("GET", "/api/v1/backups"),
+  morningReport: () => call<MorningReport>("GET", "/api/v1/reports/morning"),
   proposeBackupTarget: (target: { name: string; node: string; spec: BackupTargetSpec }) =>
     call<PlanRecord>("POST", "/api/v1/backups/targets", target),
   testBackupTarget: (target: string) =>
