@@ -17,6 +17,7 @@ import {
   SealCheck,
   ShieldCheck,
   Sparkle,
+  Sun,
   SquaresFour,
   UsersThree,
 } from "@phosphor-icons/react";
@@ -49,6 +50,7 @@ import { Integrations } from "./views/Integrations";
 import { MailWatch } from "./views/MailWatch";
 import { IdentityView } from "./views/Identity";
 import { Memory } from "./views/Memory";
+import { MorningReport } from "./views/MorningReport";
 import { Nodes } from "./views/Nodes";
 import { Plans } from "./views/Plans";
 import { Butlers } from "./views/Butlers";
@@ -75,6 +77,7 @@ type View =
   | "household"
   | "plans"
   | "activity"
+  | "report"
   | "backups"
   | "nodes"
   | "secrets"
@@ -104,6 +107,7 @@ const TITLES: Record<View, [string, string]> = {
   household: ["People", "Household"],
   plans: ["Approvals", "Plans"],
   activity: ["Stream", "Activity"],
+  report: ["Daily", "Morning report"],
   backups: ["Standing duty", "Backups"],
   nodes: ["Fleet", "Nodes"],
   secrets: ["Write-only", "Secrets"],
@@ -196,6 +200,7 @@ export function Shell() {
       { id: "household", label: "Household", icon: <UsersThree size={ICON} /> },
       { id: "plans", label: "Plans", icon: <SealCheck size={ICON} />, pip: plansPip },
       { id: "activity", label: "Activity", icon: <Pulse size={ICON} /> },
+      { id: "report", label: "Morning report", icon: <Sun size={ICON} /> },
       { id: "backups", label: "Backups", icon: <Archive size={ICON} /> },
       { id: "nodes", label: "Nodes", icon: <Cpu size={ICON} />, pip: nodesPip },
       { id: "secrets", label: "Secrets", icon: <Key size={ICON} />, dividerBefore: true },
@@ -283,6 +288,7 @@ export function Shell() {
               }}
             />
           )}
+          {view === "report" && <MorningReport onNavigate={setView} />}
           {view === "backups" && <Backups />}
           {view === "nodes" && <Nodes />}
           {view === "secrets" && <Secrets />}
