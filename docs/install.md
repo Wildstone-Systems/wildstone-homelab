@@ -318,7 +318,12 @@ the steps you redo by hand.
   the `notifications.notify` action publishes to; leaving it empty
   registers no executor, and a rule naming one is refused with a reason
   on the household stream. The ntfy access token comes only from
-  `NTFY_TOKEN`, never a flag. `-household-reply-url` is the household
+  `NTFY_TOKEN`, never a flag. `-ntfy-topic` (with `-ntfy-url`) turns on
+  the outbound event forwarder: the daily morning report and
+  `backup.failed` (backup and drill failures, high priority) are
+  published to that topic; empty leaves it off. Delivery is at-most-once
+  and starts from process start, with no replay after a restart.
+  `-household-reply-url` is the household
   event intake address a notification's reply buttons post to **as a
   phone can reach it** — not Keystone's loopback address, so this needs
   a Route or a tailnet address in front of the API. Leaving it empty

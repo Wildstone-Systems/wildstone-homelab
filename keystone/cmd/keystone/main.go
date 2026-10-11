@@ -119,6 +119,7 @@ func main() {
 	nativeAgentDir := flag.String("native-agent-dir", native.DefaultInstallDir, "where the native agent runtime is installed (bin/node and main.mjs, from the release's native-agent_linux_<arch>.tar.gz)")
 	householdTZ := flag.String("household-timezone", "Local", "IANA time zone the household's rules keep (timeOfDay/weekday conditions), e.g. Europe/London")
 	ntfyURL := flag.String("ntfy-url", "", "ntfy base URL the notifications.notify household action publishes to (ADR-W024 H4); empty leaves that action unregistered. The access token comes ONLY from NTFY_TOKEN, never a flag")
+	ntfyTopic := flag.String("ntfy-topic", "", "ntfy topic the event forwarder publishes the morning report and backup/drill failures to; needs -ntfy-url, empty leaves the forwarder off")
 	replyURL := flag.String("household-reply-url", "", "household event intake URL a notification's reply buttons post to, as a PHONE can reach it (not Keystone's loopback address); empty means notifications carry no reply buttons and a rule that asks for them fails loudly")
 	replyTTL := flag.Duration("household-reply-ttl", 12*time.Hour, "how long a notification's reply token stays valid")
 	// ADR-W033 A4.1: how old a Console sign-in may be to stay in the
@@ -176,7 +177,7 @@ func main() {
 	}
 	householdCfg := householdConfig{
 		Interval: *automationEvery, Timezone: *householdTZ,
-		NtfyURL: *ntfyURL, ReplyURL: *replyURL, ReplyTTL: *replyTTL,
+		NtfyURL: *ntfyURL, NtfyTopic: *ntfyTopic, ReplyURL: *replyURL, ReplyTTL: *replyTTL,
 		CalendarURL: *calendarURL, CalendarUser: *calendarUser,
 		PantryURL:          *pantryURL,
 		Ingress:            splitNonEmpty(*householdIngress),
@@ -314,6 +315,9 @@ type householdConfig struct {
 	// NtfyURL is where the notifications.notify action publishes; empty
 	// leaves that executor unregistered.
 	NtfyURL string
+	// NtfyTopic is the topic the event forwarder publishes to; empty
+	// leaves the forwarder off.
+	NtfyTopic string
 	// ReplyURL is the intake address a notification's reply buttons
 	// post to, as a household device can reach it.
 	ReplyURL string
@@ -1113,6 +1117,16 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 			ReplyURL:  householdCfg.ReplyURL,
 			MintReply: mintReply,
 		})
+		// Outbound-only event forwarder: morning report and backup/drill
+		// failures to one topic. Coordinator-only, so a second process
+		// never double-publishes.
+		if fwd := (&domestic.EventForwarder{
+			Source: db, Topic: householdCfg.NtfyTopic, Log: log,
+			Notifier: &domestic.Notifier{Authority: db, BaseURL: householdCfg.NtfyURL, Token: os.Getenv("NTFY_TOKEN")},
+		}); coordinating && fwd.Enabled() {
+			go fwd.Run(context.Background())
+			log.Info("ntfy event forwarder started", "events", "report.morning, backup.failed")
+		}
 		log.Info("household actions wired", "tools", actions.Tools(), "replies", householdCfg.ReplyURL != "")
 	}
 

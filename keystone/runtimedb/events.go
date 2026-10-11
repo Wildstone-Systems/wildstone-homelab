@@ -110,3 +110,14 @@ func (db *DB) EventsSince(since time.Time, limit int) ([]Event, error) {
 	}
 	return out, rows.Err()
 }
+
+// LatestEventSeq returns the highest event sequence number, or 0 on an
+// empty stream. A consumer that must not replay history starts its
+// EventsAfter cursor here.
+func (db *DB) LatestEventSeq() (int64, error) {
+	var seq int64
+	if err := db.sql.QueryRow(`SELECT COALESCE(MAX(seq), 0) FROM events`).Scan(&seq); err != nil {
+		return 0, fmt.Errorf("runtimedb: latest event seq: %w", err)
+	}
+	return seq, nil
+}
