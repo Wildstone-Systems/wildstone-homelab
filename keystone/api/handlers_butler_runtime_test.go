@@ -270,11 +270,12 @@ func rotate(t *testing.T, h *harness, name string, body any) runtimeCredentialRe
 	return out
 }
 
-// authenticates reports whether a bearer secret is accepted at all: a
-// read the butler role holds, which is what a runtime principal is.
+// authenticates requires the route gate's exact denial after successful
+// authentication. Unauthorized, rate-limited, or server-error responses do not
+// prove that a runtime credential authenticated.
 func authenticates(h *harness, secret string) bool {
 	res := h.doToken(secret, http.MethodGet, "/api/v1/whoami", nil, nil)
-	return res.StatusCode == http.StatusOK
+	return res.StatusCode == http.StatusForbidden
 }
 
 // Rotation is minting a successor and disabling the predecessor (§4.1):

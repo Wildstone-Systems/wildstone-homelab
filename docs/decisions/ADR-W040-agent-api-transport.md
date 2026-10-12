@@ -26,6 +26,14 @@ Wildstone exposes the `agentapi` contract as an ordinary part of its existing HT
 
 **Authentication** is the runtime principal's bearer token, minted by `POST /api/v1/butlers/{name}/runtime/credential`, checked like every other Keystone credential: `Authorization: Bearer wst_<64 hex>`, resolved by `Principals.Authenticate`, refused if disabled or revoked, on every request. No session, no credential that outlives a request — revocation lands on the runtime's very next call, the property ADR-W039 §3.7 asks for, which a stateful transport would make harder, not easier.
 
+The bearer is also **route-confined**. After authentication, Keystone resolves
+the credential through the immutable `runtime_principals` binding and permits
+only the exact method/path pairs in §3. This check runs before request-body
+decoding. General resource, raw-event, Plan, approval and management routes are
+denied even though the underlying `butler` role has `read` or `propose`; a
+runtime uses assigned tools and the task-bound `/agent/propose` operation
+instead. Principals without a runtime binding retain their existing RBAC path.
+
 **Bodies are the `agentapi` Go types, 1:1, with no second schema.** `Manifest`, `InvokeRequest`, `InvokeResult`, `RecallRequest`, `MemoryHit`, `RememberRequest`, `Checkpoint`, `CheckpointReceipt`, `WorkStart`, `WorkWait`, `WorkComplete`, `WorkFail`, `Delivery`, `Heartbeat`, `ProposeRequest`, `ProposalRef`, `NotifyRequest` marshal via `encoding/json` using their existing tags. The `POST /api/v1/agent/invoke` handler decodes an `agentapi.InvokeRequest` directly and hands it to the same `agentgateway.Gateway.Invoke` the in-process client calls — no wire-specific type to translate. This is ADR-W006 A3's discipline ("tools mirror the API 1:1") one layer out: `keystone/agentapi` is the one place a family's shape is decided.
 
 **MCP is a second transport, not an alternative design.** It is a translation layer in the `agent-bridge` sidecar (§6) in front of the same `/api/v1/agent/...` handlers — `tools/list` becomes `Manifest`, `tools/call` becomes `Invoke` — with no authority the REST transport does not already grant. A runtime speaking MCP and one speaking REST directly are indistinguishable to the gateway.
@@ -57,7 +65,7 @@ runtime ──MCP──▶ agent-bridge MCP server (sidecar)
 
 ## 3. Endpoint map (conceptual, not exhaustive)
 
-All routes live under `/api/v1/agent/`, authenticated as every Keystone route is (`handle()`: authn → RBAC → audit → rate limit), with the runtime principal resolved by `RuntimePrincipalButler(id.Name)` and the task/delivery's own Butler checked against it first.
+All routes live under `/api/v1/agent/`, authenticated as every Keystone route is (`handle()`: authn → audited runtime-route gate → RBAC → rate limit), with the runtime principal resolved by `RuntimePrincipalButler(id.Name)` and the task/delivery's own Butler checked against it first. The classifier is closed: wrong methods, sibling prefixes, extra segments and newly registered routes are denied until deliberately added. The delivery acknowledgment wildcard accepts exactly one ID segment.
 
 | Endpoint (conceptual) | Family | Verb | Consequential? | Handle authorises | Credential authorises |
 |---|---|---|---|---|---|
