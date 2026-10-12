@@ -204,8 +204,9 @@ func (db *DB) ListUnackedAgentDeliveries(butlerSeq, after int64, limit int) ([]A
 // delivery selection under one immediate SQLite transaction. That transaction
 // is the disclosure linearization point: a completed disable/revoke/rotation
 // wins before it; a selection that commits first has already admitted those
-// rows for disclosure and cannot recall bytes from the caller.
-func (db *DB) PollRuntimeDeliveries(cred RuntimeDeliveryCredential, after int64, limit int, asOf time.Time) ([]AgentDelivery, error) {
+// rows for disclosure and cannot recall bytes from the caller. The clock is
+// evaluated after transaction admission, never before a potentially blocked Begin.
+func (db *DB) PollRuntimeDeliveries(cred RuntimeDeliveryCredential, after int64, limit int, clock func() time.Time) ([]AgentDelivery, error) {
 	if limit <= 0 {
 		limit = 50
 	}
@@ -217,6 +218,9 @@ func (db *DB) PollRuntimeDeliveries(cred RuntimeDeliveryCredential, after int64,
 	if err := gateTx(tx, GateDelivery); err != nil {
 		return nil, err
 	}
+	// Sample only after Begin has acquired the immediate transaction lock.
+	// A credential may expire while waiting for a connection or writer.
+	asOf := clock()
 	butler, err := authorizeRuntimeDeliveryTx(tx, cred, asOf)
 	if err != nil {
 		return nil, err
@@ -288,7 +292,7 @@ func (db *DB) AckAgentDelivery(butlerSeq, id int64) error {
 // this acknowledgment or a concurrent disable/revoke the first committed
 // writer; the second observes the first. Repeated authorized acknowledgment
 // remains idempotent because the update only fills an empty acked_at.
-func (db *DB) AckRuntimeDelivery(cred RuntimeDeliveryCredential, id int64, asOf time.Time) error {
+func (db *DB) AckRuntimeDelivery(cred RuntimeDeliveryCredential, id int64, clock func() time.Time) error {
 	tx, err := db.sql.Begin()
 	if err != nil {
 		return fmt.Errorf("runtimedb: beginning runtime delivery acknowledgment: %w", err)
@@ -297,6 +301,9 @@ func (db *DB) AckRuntimeDelivery(cred RuntimeDeliveryCredential, id int64, asOf 
 	if err := gateTx(tx, GateDelivery); err != nil {
 		return err
 	}
+	// Sample only after Begin has acquired the immediate transaction lock.
+	// A credential may expire while waiting for a connection or writer.
+	asOf := clock()
 	butler, err := authorizeRuntimeDeliveryTx(tx, cred, asOf)
 	if err != nil {
 		return err
@@ -348,17 +355,24 @@ func authorizeRuntimeDeliveryTx(tx *sql.Tx, cred RuntimeDeliveryCredential, asOf
 		return 0, fmt.Errorf("runtimedb: checking runtime delivery authority: %w", err)
 	}
 	if cred.TokenHash != "" {
-		var live int
+		var expiry string
 		err = tx.QueryRow(`
-			SELECT 1 FROM tokens
-			 WHERE hash = ? AND principal = ? AND revoked_at = ''
-			   AND (expires_at = '' OR expires_at > ?)`,
-			cred.TokenHash, cred.Principal, asOf.UTC().Format(time.RFC3339Nano)).Scan(&live)
+			SELECT expires_at FROM tokens
+			 WHERE hash = ? AND principal = ? AND revoked_at = ''`,
+			cred.TokenHash, cred.Principal).Scan(&expiry)
 		if errors.Is(err, sql.ErrNoRows) {
 			return 0, ErrRuntimeDeliveryDenied
 		}
 		if err != nil {
 			return 0, fmt.Errorf("runtimedb: checking runtime delivery credential: %w", err)
+		}
+		if expiry != "" {
+			// RFC3339Nano omits trailing fractional zeros, so TEXT ordering
+			// is not chronological ordering (a whole-second Z sorts after .).
+			expiresAt, err := time.Parse(time.RFC3339Nano, expiry)
+			if err != nil || !expiresAt.After(asOf) {
+				return 0, ErrRuntimeDeliveryDenied
+			}
 		}
 	}
 	return butler, nil

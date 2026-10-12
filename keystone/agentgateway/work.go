@@ -253,7 +253,7 @@ func (g *Gateway) Deliveries(ctx context.Context, after string, wait time.Durati
 	}
 	deadline := g.now().Add(wait)
 	for {
-		rows, err := g.DB.PollRuntimeDeliveries(runtimedb.RuntimeDeliveryCredential{Principal: principal}, afterID, 50, g.now())
+		rows, err := g.DB.PollRuntimeDeliveries(runtimedb.RuntimeDeliveryCredential{Principal: principal}, afterID, 50, g.now)
 		if errors.Is(err, runtimedb.ErrRuntimeDeliveryDenied) {
 			return nil, fmt.Errorf("%w: runtime delivery authority is no longer active", ErrRefused)
 		}
@@ -310,7 +310,7 @@ func (g *Gateway) Ack(ctx context.Context, id string) error {
 	if _, err := fmt.Sscanf(id, "%d", &deliveryID); err != nil {
 		return fmt.Errorf("%w: delivery id must be a number", ErrRefused)
 	}
-	if err := g.DB.AckRuntimeDelivery(runtimedb.RuntimeDeliveryCredential{Principal: principal}, deliveryID, g.now()); err != nil {
+	if err := g.DB.AckRuntimeDelivery(runtimedb.RuntimeDeliveryCredential{Principal: principal}, deliveryID, g.now); err != nil {
 		if errors.Is(err, runtimedb.ErrRuntimeDeliveryDenied) {
 			return fmt.Errorf("%w: runtime delivery authority is no longer active", ErrRefused)
 		}

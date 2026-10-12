@@ -584,7 +584,7 @@ func (s *Server) agentDeliveries(r *http.Request, id principal.Identity) (any, i
 	}
 	deadline := time.Now().Add(wait)
 	for {
-		rows, err := s.DB.PollRuntimeDeliveries(cred, after, 50, time.Now())
+		rows, err := s.DB.PollRuntimeDeliveries(cred, after, 50, time.Now)
 		if errors.Is(err, runtimedb.ErrRuntimeDeliveryDenied) {
 			return nil, http.StatusUnauthorized, principal.ErrUnauthenticated
 		}
@@ -654,7 +654,7 @@ func (s *Server) agentAckDelivery(r *http.Request, id principal.Identity) (any, 
 	if err != nil {
 		return nil, http.StatusUnauthorized, principal.ErrUnauthenticated
 	}
-	if err := s.DB.AckRuntimeDelivery(cred, deliveryID, time.Now()); err != nil {
+	if err := s.DB.AckRuntimeDelivery(cred, deliveryID, time.Now); err != nil {
 		if errors.Is(err, runtimedb.ErrRuntimeDeliveryDenied) {
 			return nil, http.StatusUnauthorized, principal.ErrUnauthenticated
 		}

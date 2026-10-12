@@ -6,6 +6,8 @@ package runtimedb
 
 import (
 	"errors"
+	"runtime"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -101,7 +103,7 @@ func TestRuntimeDeliveryAuthorityIsLiveAndCurrent(t *testing.T) {
 		if err := db.SetPrincipalDisabled(cred.Principal, true); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := db.PollRuntimeDeliveries(cred, 0, 10, time.Now()); !errors.Is(err, ErrRuntimeDeliveryDenied) {
+		if _, err := db.PollRuntimeDeliveries(cred, 0, 10, time.Now); !errors.Is(err, ErrRuntimeDeliveryDenied) {
 			t.Fatalf("poll with a disabled principal = %v, want ErrRuntimeDeliveryDenied", err)
 		}
 	})
@@ -115,14 +117,14 @@ func TestRuntimeDeliveryAuthorityIsLiveAndCurrent(t *testing.T) {
 		if err := db.RevokeToken(cred.TokenHash); err != nil {
 			t.Fatal(err)
 		}
-		if err := db.AckRuntimeDelivery(cred, id, time.Now()); !errors.Is(err, ErrRuntimeDeliveryDenied) {
+		if err := db.AckRuntimeDelivery(cred, id, time.Now); !errors.Is(err, ErrRuntimeDeliveryDenied) {
 			t.Fatalf("ack with a revoked token = %v, want ErrRuntimeDeliveryDenied", err)
 		}
 		expired := RuntimeDeliveryCredential{Principal: cred.Principal, TokenHash: "expired-token"}
 		if err := db.InsertToken(expired.TokenHash, expired.Principal, "", time.Now().Add(-time.Minute)); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := db.PollRuntimeDeliveries(expired, 0, 10, time.Now()); !errors.Is(err, ErrRuntimeDeliveryDenied) {
+		if _, err := db.PollRuntimeDeliveries(expired, 0, 10, time.Now); !errors.Is(err, ErrRuntimeDeliveryDenied) {
 			t.Fatalf("poll with an expired token = %v, want ErrRuntimeDeliveryDenied", err)
 		}
 	})
@@ -138,11 +140,11 @@ func TestRuntimeDeliveryAuthorityIsLiveAndCurrent(t *testing.T) {
 		if err := db.InsertToken("hash-rotated-2", "runtime-rotated-2", "", time.Time{}); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := db.PollRuntimeDeliveries(old, 0, 10, time.Now()); !errors.Is(err, ErrRuntimeDeliveryDenied) {
+		if _, err := db.PollRuntimeDeliveries(old, 0, 10, time.Now); !errors.Is(err, ErrRuntimeDeliveryDenied) {
 			t.Fatalf("predecessor poll = %v, want ErrRuntimeDeliveryDenied", err)
 		}
 		current := RuntimeDeliveryCredential{Principal: "runtime-rotated-2", TokenHash: "hash-rotated-2"}
-		if _, err := db.PollRuntimeDeliveries(current, 0, 10, time.Now()); err != nil {
+		if _, err := db.PollRuntimeDeliveries(current, 0, 10, time.Now); err != nil {
 			t.Fatalf("successor poll = %v", err)
 		}
 	})
@@ -152,7 +154,7 @@ func TestRuntimeDeliveryAuthorityIsLiveAndCurrent(t *testing.T) {
 		if err := db.SetRuntimeHealth(seq, agentapi.HealthRevoked); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := db.PollRuntimeDeliveries(cred, 0, 10, time.Now()); !errors.Is(err, ErrRuntimeDeliveryDenied) {
+		if _, err := db.PollRuntimeDeliveries(cred, 0, 10, time.Now); !errors.Is(err, ErrRuntimeDeliveryDenied) {
 			t.Fatalf("revoked runtime poll = %v, want ErrRuntimeDeliveryDenied", err)
 		}
 		if err := db.SetRuntimeHealth(seq, agentapi.HealthConnected); err != nil {
@@ -161,7 +163,7 @@ func TestRuntimeDeliveryAuthorityIsLiveAndCurrent(t *testing.T) {
 		if err := db.RetireButler("lifecycle", "root-admin"); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := db.PollRuntimeDeliveries(cred, 0, 10, time.Now()); !errors.Is(err, ErrRuntimeDeliveryDenied) {
+		if _, err := db.PollRuntimeDeliveries(cred, 0, 10, time.Now); !errors.Is(err, ErrRuntimeDeliveryDenied) {
 			t.Fatalf("retired Agent poll = %v, want ErrRuntimeDeliveryDenied", err)
 		}
 	})
@@ -173,7 +175,7 @@ func TestRuntimeDeliveryGatesRestoreAndHouseholdStop(t *testing.T) {
 		if err := db.EnterRestoreQuarantine("test restore", time.Now()); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := db.PollRuntimeDeliveries(cred, 0, 10, time.Now()); !errors.Is(err, ErrQuarantined) {
+		if _, err := db.PollRuntimeDeliveries(cred, 0, 10, time.Now); !errors.Is(err, ErrQuarantined) {
 			t.Fatalf("poll in quarantine = %v, want ErrQuarantined", err)
 		}
 	})
@@ -187,7 +189,7 @@ func TestRuntimeDeliveryGatesRestoreAndHouseholdStop(t *testing.T) {
 		if err := db.StopHouseholdExecution("mika", "test stop"); err != nil {
 			t.Fatal(err)
 		}
-		if err := db.AckRuntimeDelivery(cred, id, time.Now()); !errors.Is(err, ErrHouseholdStopped) {
+		if err := db.AckRuntimeDelivery(cred, id, time.Now); !errors.Is(err, ErrHouseholdStopped) {
 			t.Fatalf("ack during household stop = %v, want ErrHouseholdStopped", err)
 		}
 	})
@@ -206,7 +208,7 @@ func TestAckRuntimeDeliveryLinearizesWithRevocationAndIsIdempotent(t *testing.T)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := db.AckRuntimeDelivery(cred, id, time.Now()); !errors.Is(err, ErrNotFound) {
+		if err := db.AckRuntimeDelivery(cred, id, time.Now); !errors.Is(err, ErrNotFound) {
 			t.Fatalf("cross-Agent ack = %v, want ErrNotFound", err)
 		}
 		rows, err := db.ListAgentDeliveries(other, 10)
@@ -224,11 +226,11 @@ func TestAckRuntimeDeliveryLinearizesWithRevocationAndIsIdempotent(t *testing.T)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := db.AckRuntimeDelivery(cred, id, time.Now()); err != nil {
+		if err := db.AckRuntimeDelivery(cred, id, time.Now); err != nil {
 			t.Fatal(err)
 		}
 		first, _ := db.ListAgentDeliveries(seq, 10)
-		if err := db.AckRuntimeDelivery(cred, id, time.Now()); err != nil {
+		if err := db.AckRuntimeDelivery(cred, id, time.Now); err != nil {
 			t.Fatal(err)
 		}
 		second, _ := db.ListAgentDeliveries(seq, 10)
@@ -260,7 +262,7 @@ func TestAckRuntimeDeliveryLinearizesWithRevocationAndIsIdempotent(t *testing.T)
 		done := make(chan error, 1)
 		go func() {
 			close(started)
-			done <- db.AckRuntimeDelivery(cred, id, time.Now())
+			done <- db.AckRuntimeDelivery(cred, id, time.Now)
 		}()
 		<-started
 		if err := tx.Commit(); err != nil {
@@ -273,4 +275,132 @@ func TestAckRuntimeDeliveryLinearizesWithRevocationAndIsIdempotent(t *testing.T)
 			t.Fatalf("revoked ack changed row at %s", got[0].AckedAt)
 		}
 	})
+}
+
+// Exercise both consumers: expired authority must disclose nothing and change
+// no acknowledgment, regardless of how its timestamp was serialized.
+func TestRuntimeDeliveryTokenExpiryUsesTimeOrdering(t *testing.T) {
+	at := time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)
+	for _, operation := range []string{"poll", "ack"} {
+		for _, tc := range []struct {
+			name   string
+			expiry string
+			check  time.Time
+			denied bool
+		}{
+			{"whole second expired", at.Format(time.RFC3339Nano), at.Add(500 * time.Millisecond), true},
+			{"whole second still live", at.Add(time.Second).Format(time.RFC3339Nano), at.Add(500 * time.Millisecond), false},
+			{"fraction still live at whole second", at.Add(500 * time.Millisecond).Format(time.RFC3339Nano), at, false},
+			{"fraction expired", at.Add(100 * time.Millisecond).Format(time.RFC3339Nano), at.Add(500 * time.Millisecond), true},
+			{"exact expiry denied", at.Format(time.RFC3339Nano), at, true},
+			{"no expiry", "", at, false},
+			{"malformed expiry fails closed", "not-a-time", at, true},
+		} {
+			t.Run(operation+"/"+tc.name, func(t *testing.T) {
+				db, seq, cred := runtimeDeliveryFixture(t, "expiry-order")
+				if _, err := db.sql.Exec(`UPDATE tokens SET expires_at = ? WHERE hash = ?`, tc.expiry, cred.TokenHash); err != nil {
+					t.Fatal(err)
+				}
+				id, err := db.RecordAgentDelivery(seq, agentapi.DeliveryTurn, `{}`)
+				if err != nil {
+					t.Fatal(err)
+				}
+				// Keep delivery retention separate from the token's injected clock.
+				if _, err := db.sql.Exec(`UPDATE agent_deliveries SET expires_at = '' WHERE id = ?`, id); err != nil {
+					t.Fatal(err)
+				}
+				clock := func() time.Time { return tc.check }
+				var rows []AgentDelivery
+				if operation == "poll" {
+					rows, err = db.PollRuntimeDeliveries(cred, 0, 10, clock)
+				} else {
+					err = db.AckRuntimeDelivery(cred, id, clock)
+				}
+				if tc.denied {
+					if !errors.Is(err, ErrRuntimeDeliveryDenied) || len(rows) != 0 {
+						t.Fatalf("expired/malformed authority = rows %+v, error %v", rows, err)
+					}
+				} else if err != nil || (operation == "poll" && len(rows) != 1) {
+					t.Fatalf("live authority = rows %+v, error %v", rows, err)
+				}
+				stored, err := db.ListAgentDeliveries(seq, 10)
+				if err != nil || len(stored) != 1 {
+					t.Fatalf("stored delivery = %+v, %v", stored, err)
+				}
+				wantAcked := operation == "ack" && !tc.denied
+				if stored[0].AckedAt.IsZero() == wantAcked {
+					t.Fatalf("acked_at = %s, want acknowledged=%v", stored[0].AckedAt, wantAcked)
+				}
+			})
+		}
+	}
+}
+
+func TestRuntimeDeliverySamplesClockAfterTransactionWait(t *testing.T) {
+	for _, operation := range []string{"poll", "ack"} {
+		t.Run(operation, func(t *testing.T) {
+			db, seq, cred := runtimeDeliveryFixture(t, "expiry-wait")
+			at := time.Now().UTC().Truncate(time.Second)
+			if _, err := db.sql.Exec(`UPDATE tokens SET expires_at = ? WHERE hash = ?`, at.Add(time.Second).Format(time.RFC3339Nano), cred.TokenHash); err != nil {
+				t.Fatal(err)
+			}
+			id, err := db.RecordAgentDelivery(seq, agentapi.DeliveryTurn, `{}`)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Hold the sole connection with an immediate transaction. WaitCount
+			// is the barrier proving the delivery operation has reached Begin
+			// and is blocked; no sleeps or wall-clock expiry races are needed.
+			db.sql.SetMaxOpenConns(1)
+			holder, err := db.sql.Begin()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = holder.Rollback() }()
+			waits := db.sql.Stats().WaitCount
+			var expired atomic.Bool
+			clock := func() time.Time {
+				if expired.Load() {
+					return at.Add(2 * time.Second)
+				}
+				return at
+			}
+			done := make(chan error, 1)
+			go func() {
+				if operation == "poll" {
+					rows, err := db.PollRuntimeDeliveries(cred, 0, 10, clock)
+					if len(rows) != 0 {
+						done <- errors.New("expired poll disclosed a delivery")
+						return
+					}
+					done <- err
+				} else {
+					done <- db.AckRuntimeDelivery(cred, id, clock)
+				}
+			}()
+			deadline := time.Now().Add(5 * time.Second)
+			for db.sql.Stats().WaitCount == waits {
+				if time.Now().After(deadline) {
+					t.Fatal("delivery operation never waited for its transaction")
+				}
+				runtime.Gosched()
+			}
+			expired.Store(true)
+			if err := holder.Commit(); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case err := <-done:
+				if !errors.Is(err, ErrRuntimeDeliveryDenied) {
+					t.Fatalf("authority expired during transaction wait: %v", err)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("delivery operation did not finish after releasing transaction")
+			}
+			stored, err := db.ListAgentDeliveries(seq, 10)
+			if err != nil || len(stored) != 1 || !stored[0].AckedAt.IsZero() {
+				t.Fatalf("expired operation changed acknowledgment: %+v, %v", stored, err)
+			}
+		})
+	}
 }
