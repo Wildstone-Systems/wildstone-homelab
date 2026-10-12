@@ -56,6 +56,14 @@ and delivery acknowledgment. This is the reusable public contract; ordinary
 Keystone resource, Plan, approval, secret, event, and management routes are not
 part of it.
 
+The current `agent_deliveries` row is addressed only to an Agent and carries an
+opaque payload. The HTTP mapper extracts a task handle on a best-effort basis;
+`proposal_outcome` has no task handle, and other producers such as escalation
+can also lack enough persisted Person/Connection provenance for a later
+registration-scoped disclosure check. Agent equality is therefore not
+sufficient for an OAuth client when one Agent may serve more than one Person or
+Connection.
+
 The current `agent-bridge` translates MCP `tools/list` to `Manifest`/`Tools`
 and `tools/call` to `Invoke`, using the same HTTP Agent API client. It declares
 MCP revision `2025-06-18`, but authenticates Hermes with a shared secret. It
@@ -220,14 +228,14 @@ negative tests are deliberately updated.
 
 | Family | Allowed methods and paths | Task required | Notes |
 |---|---|---:|---|
-| MCP tools | `POST /mcp`; `GET /mcp` may return 405 | Calls yes; idle list no | Tools only; shared gateway and registry; OAuth metadata is served separately |
+| MCP tools | `POST /mcp` at Keystone's authenticated resource boundary; `GET /mcp` may return 405 | Calls yes; idle list no | Tools only; shared gateway and registry; OAuth metadata is served separately; the current sidecar endpoint is not the OAuth endpoint |
 | Discovery | `GET /api/v1/agent/tools`, `POST /api/v1/agent/manifest` | Manifest yes; tools no | Idle discovery is filtered to the bound Agent; execution still rechecks |
 | Task admission | `POST /api/v1/agent/tasks` | Creates one | OAuth profile only; no caller-selected identity or audience |
 | Capability and memory | `POST /api/v1/agent/invoke`, `/recall`, `/remember` | Yes | Same gateway, disclosure, processing-class, budget, and audit checks |
 | Work lifecycle | `POST /api/v1/agent/checkpoint`, `/start`, `/wait`, `/complete`, `/fail` | Yes | Attempt and coordinator fences remain mandatory |
 | Proposal and notification | `POST /api/v1/agent/propose`, `/notify` | Yes | May propose or report only; never approve or apply |
 | Runtime health | `POST /api/v1/agent/heartbeat` | No | Applies only to the registration's bound runtime principal |
-| Delivery | `GET /api/v1/agent/deliveries`, `POST /api/v1/agent/deliveries/{id}/ack` | Delivery supplies task | Final authority recheck is part of #582 |
+| Delivery | `GET /api/v1/agent/deliveries`, `POST /api/v1/agent/deliveries/{id}/ack` | Persisted authority provenance required; task may be absent | Final authority recheck is part of #582; legacy Agent-only rows are excluded from OAuth poll and ack |
 
 Explicitly denied examples include `/api/v1/plans`, approval/apply routes,
 ordinary Person/Agent/Connection management, raw events, secrets, general
@@ -252,6 +260,7 @@ The proposed first target is intentionally narrow:
 | Item | Proposed target |
 |---|---|
 | MCP revision | `2025-06-18`, tools-only Streamable HTTP request/response |
+| MCP termination | Keystone's authenticated HTTP resource boundary; the existing sidecar/shared-secret endpoint remains a non-OAuth packaged-runtime path until ADR-W040 is amended and implementation migrates it |
 | Authorization server | The deployment's Authelia issuer |
 | Client | Pre-registered public Hermes client, one registration per bound Person/Agent/Connection |
 | Grant | Authorization Code with PKCE S256; exact registered loopback or HTTPS callback |
@@ -308,12 +317,39 @@ RecheckRuntimeAuthority(freshIdentity, operation, taskOrDeliveryID)
 ```
 
 #581 owns the closed route classifier and integration with the existing
-authentication wrapper. Resolution must occur before a request body is decoded,
-then the existing gateway remains responsible for task and resource authority.
-No OAuth-specific branch may dispatch a tool directly.
+authentication wrapper. For the OAuth profile, `/mcp` must terminate behind
+that Keystone wrapper so the original bearer is resolved before JSON-RPC body
+decoding and the resulting Person/client/registration identity remains present
+through route classification and gateway dispatch. The current
+`cli/cmd/agent-bridge` MCP server terminates the request itself, authenticates
+`MCP_SHARED_SECRET`, and forwards through a static
+`WILDSTONE_RUNTIME_TOKEN`; it is therefore not an OAuth resource endpoint and
+must not be advertised as one. The companion ADR amendment must replace
+ADR-W040 section 6 for this profile by moving the existing hand-rolled
+tools-only translation to Keystone's authenticated HTTP boundary (without a
+second registry or MCP business implementation). The sidecar may remain for
+the separately configured packaged/static-credential profile, but it cannot
+accept or proxy OAuth requests. Resolution must occur before a request body is
+decoded, then the existing gateway remains responsible for task and resource
+authority. No OAuth-specific branch may dispatch a tool directly.
 
-#582 owns the final recheck immediately before a delivery payload is returned
-and at the acknowledgment transaction boundary. The resource boundary retains
+Every delivery visible to an OAuth registration must carry immutable authority
+provenance in typed columns rather than relying on fields parsed from its opaque
+payload. The minimum record is the target registration ID, Person ID,
+Connection ID, Agent ID, and the originating task/audience reference when one
+exists. A `proposal_outcome` records the provenance captured when the proposal
+was filed even though its wire payload has no task handle. An escalation or any
+future taskless kind must identify one exact registration, Person, Connection,
+and audience when enqueued; if its producer cannot do so, it is ineligible for
+the OAuth queue. Existing Agent-only rows are not backfilled by guessing and
+must be invisible and unacknowledgeable through an OAuth registration.
+
+#582 owns that delivery provenance and the final recheck immediately before a
+delivery payload is returned and at the acknowledgment transaction boundary.
+Poll selection requires the row's registration, Person, Connection, Agent, and
+task/audience provenance to match the freshly resolved identity before payload
+decoding or disclosure. Acknowledgment selects and fences by the same tuple,
+not by Agent and delivery ID alone. The resource boundary retains
 the presented bearer only in the in-memory request context for the lifetime of
 the request; it must never log, serialize, persist, audit, or pass that bearer to
 the gateway, store, Wardstone, tools, or upstream services.
@@ -353,13 +389,17 @@ Agents, clients, Connections, tasks, and a fake issuer:
 6. Token expiry or revocation during a waiting poll prevents payload disclosure;
    token or registration revocation before acknowledgment changes no delivery
    row.
-7. Wrong issuer, subject, client, audience/resource, scope, token type, expiry,
+7. Two active registrations for one Agent cannot poll or acknowledge each
+   other's deliveries. A taskless proposal outcome retains its originating
+   registration, Person, Connection, and audience provenance; a legacy or new
+   row without exact provenance is never visible to an OAuth registration.
+8. Wrong issuer, subject, client, audience/resource, scope, token type, expiry,
    and credential epoch fail. An ID token fails.
-8. An Authelia outage fails closed; no legacy `wst_` credential or native Butler
+9. An Authelia outage fails closed; no legacy `wst_` credential or native Butler
    is substituted.
-9. `propose` can only file the existing human-reviewed Plan and cannot approve
+10. `propose` can only file the existing human-reviewed Plan and cannot approve
    or apply it.
-10. REST and MCP produce the same manifest/invoke outcomes and audit identity
+11. REST and MCP produce the same manifest/invoke outcomes and audit identity
     after translation.
 
 Live evidence on an explicitly selected disposable target must separately record
@@ -387,12 +427,18 @@ Reviewers are asked to accept or amend these bounded choices before code:
    S256, exact resource audience, and introspection on every request;
 7. issuer outage fails closed, with no JWT/static-token/native fallback;
 8. independent Hermes task initiation is omitted from the first PoC if the
-   pinned release cannot carry exact per-task correlation.
+   pinned release cannot carry exact per-task correlation;
+9. every OAuth-visible delivery is durably addressed to one exact registration,
+   Person, Connection, Agent, and audience; unproven legacy/taskless rows are
+   excluded rather than inferred;
+10. the OAuth `/mcp` endpoint terminates at Keystone's authenticated resource
+    boundary; the current sidecar shared-secret endpoint is not an OAuth proxy.
 
 Accepting this proposal should produce a companion ADR amendment before or with
 implementation because ADR-W039 currently describes only runtime-principal
 credentials and task handles, not Person-bound OAuth client registrations or
-client-initiated task admission.
+client-initiated task admission, and ADR-W040 currently fixes MCP termination in
+the sidecar rather than Keystone.
 
 ## 10. References
 
