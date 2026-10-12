@@ -245,7 +245,7 @@ matters most.
 ### F-155-07 — offboarding leaves the person's API tokens live
 
 - **Current status:** implemented
-- **Current evidence:** `keystone/runtimedb/offboarding.go` collects the person's live `api-principal` links before the denial and calls `RevokeTokensFor` for each afterwards (reported as the `api-tokens` store); tokens of unlinked principals and of links revoked earlier are left alone. `TestOffboardingRevokesLinkedAPITokens`, `TestOffboardingRevokesLinkedPrincipalToken`.
+- **Current evidence:** Merged in `494f5b8d14038552bd26f78b2803b098f9e695b5` (#556). `keystone/runtimedb/offboarding.go` collects the person's live `api-principal` links before the denial and calls `RevokeTokensFor` for each afterwards (reported as the `api-tokens` store); tokens of unlinked principals and of links revoked earlier are left alone. `TestOffboardingRevokesLinkedAPITokens`, `TestOffboardingRevokesLinkedPrincipalToken`.
 - **Current owner:** chickenrat17
 - **Tracking:** #316
 - **Audit status:** partial
