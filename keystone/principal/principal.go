@@ -116,6 +116,18 @@ func (s *Store) Authenticate(secret string) (Identity, error) {
 	return Identity{Name: p.Name, Role: p.Role, ActingFor: acting}, nil
 }
 
+// TokenHash returns the database fingerprint for a syntactically valid
+// Wildstone bearer. It exists for store-level authorization fences that must
+// prove the exact request token is still live in the same transaction as a
+// consequential read or write. Callers must authenticate first; this function
+// does not establish identity and never persists or logs the bearer.
+func TokenHash(secret string) (string, error) {
+	if !strings.HasPrefix(secret, tokenPrefix) {
+		return "", ErrUnauthenticated
+	}
+	return hashSecret(secret), nil
+}
+
 // Revoke revokes a token by its secret. Admin flows that only hold the
 // hash can call runtimedb.RevokeToken directly.
 func (s *Store) Revoke(secret string) error {

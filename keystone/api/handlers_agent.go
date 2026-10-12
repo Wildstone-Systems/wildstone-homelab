@@ -39,6 +39,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/agentapi"
@@ -524,20 +525,27 @@ func (d deliveriesResponse) redacted() ([]byte, error) {
 	return json.Marshal(out)
 }
 
-// runtimeButlerSeq resolves id to the Agent it is bound to, the same
-// check agentContext already ran to build ctx — repeated here because
-// the deliveries and ack routes need the seq itself, not only a marked
-// context, and agentContext deliberately returns nothing else (every
-// other route only ever needs the marked ctx).
-func (s *Server) runtimeButlerSeq(id principal.Identity) (int64, error) {
-	seq, ok, err := s.DB.RuntimePrincipalButler(id.Name)
+// runtimeRequestCredential reauthenticates the exact bearer that entered an
+// HTTP delivery request and reduces it to the principal plus stored token
+// fingerprint used by the final transactional authority fence. The secret
+// remains request-local and is never persisted, audited or passed to gateway
+// business logic.
+func (s *Server) runtimeRequestCredential(r *http.Request, expected principal.Identity) (runtimedb.RuntimeDeliveryCredential, error) {
+	const scheme = "Bearer "
+	auth := r.Header.Get("Authorization")
+	if !strings.HasPrefix(auth, scheme) {
+		return runtimedb.RuntimeDeliveryCredential{}, principal.ErrUnauthenticated
+	}
+	secret := strings.TrimSpace(strings.TrimPrefix(auth, scheme))
+	id, err := s.Principals.Authenticate(secret)
+	if err != nil || id.Name != expected.Name || id.Role != expected.Role || id.ActingFor != expected.ActingFor {
+		return runtimedb.RuntimeDeliveryCredential{}, principal.ErrUnauthenticated
+	}
+	hash, err := principal.TokenHash(secret)
 	if err != nil {
-		return 0, err
+		return runtimedb.RuntimeDeliveryCredential{}, err
 	}
-	if !ok {
-		return 0, errNotRuntimePrincipal
-	}
-	return seq, nil
+	return runtimedb.RuntimeDeliveryCredential{Principal: expected.Name, TokenHash: hash}, nil
 }
 
 // agentDeliveries is GET /api/v1/agent/deliveries?wait=<duration>&after=<id>
@@ -549,10 +557,6 @@ func (s *Server) runtimeButlerSeq(id principal.Identity) (int64, error) {
 func (s *Server) agentDeliveries(r *http.Request, id principal.Identity) (any, int, error) {
 	if _, code, err := s.agentContext(r, id); err != nil {
 		return nil, code, err
-	}
-	seq, err := s.runtimeButlerSeq(id)
-	if err != nil {
-		return nil, http.StatusForbidden, err
 	}
 	var after int64
 	if v := r.URL.Query().Get("after"); v != "" {
@@ -574,12 +578,16 @@ func (s *Server) agentDeliveries(r *http.Request, id principal.Identity) (any, i
 	if wait < 0 {
 		wait = 0
 	}
+	cred, err := s.runtimeRequestCredential(r, id)
+	if err != nil {
+		return nil, http.StatusUnauthorized, principal.ErrUnauthenticated
+	}
 	deadline := time.Now().Add(wait)
 	for {
-		if _, err := s.DB.MarkExpiredAgentDeliveries(seq, time.Now()); err != nil {
-			return nil, http.StatusInternalServerError, err
+		rows, err := s.DB.PollRuntimeDeliveries(cred, after, 50, time.Now)
+		if errors.Is(err, runtimedb.ErrRuntimeDeliveryDenied) {
+			return nil, http.StatusUnauthorized, principal.ErrUnauthenticated
 		}
-		rows, err := s.DB.ListUnackedAgentDeliveries(seq, after, 50)
 		if err != nil {
 			return nil, http.StatusInternalServerError, err
 		}
@@ -588,6 +596,9 @@ func (s *Server) agentDeliveries(r *http.Request, id principal.Identity) (any, i
 		}
 		if time.Now().After(deadline) || r.Context().Err() != nil {
 			return deliveriesResponse{Deliveries: []agentapi.Delivery{}}, http.StatusOK, nil
+		}
+		if s.deliveryPollWaiting != nil {
+			s.deliveryPollWaiting()
 		}
 		select {
 		case <-r.Context().Done():
@@ -635,15 +646,18 @@ func (s *Server) agentAckDelivery(r *http.Request, id principal.Identity) (any, 
 	if _, code, err := s.agentContext(r, id); err != nil {
 		return nil, code, err
 	}
-	seq, err := s.runtimeButlerSeq(id)
-	if err != nil {
-		return nil, http.StatusForbidden, err
-	}
 	var deliveryID int64
 	if _, err := fmt.Sscanf(r.PathValue("id"), "%d", &deliveryID); err != nil {
 		return nil, http.StatusBadRequest, fmt.Errorf("delivery id must be a number")
 	}
-	if err := s.DB.AckAgentDelivery(seq, deliveryID); err != nil {
+	cred, err := s.runtimeRequestCredential(r, id)
+	if err != nil {
+		return nil, http.StatusUnauthorized, principal.ErrUnauthenticated
+	}
+	if err := s.DB.AckRuntimeDelivery(cred, deliveryID, time.Now); err != nil {
+		if errors.Is(err, runtimedb.ErrRuntimeDeliveryDenied) {
+			return nil, http.StatusUnauthorized, principal.ErrUnauthenticated
+		}
 		if errors.Is(err, runtimedb.ErrNotFound) {
 			return nil, http.StatusNotFound, fmt.Errorf("no such delivery for this agent")
 		}

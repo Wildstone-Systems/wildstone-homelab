@@ -73,12 +73,15 @@ func (db *DB) EnterRestoreQuarantine(reason string, snapshotAt time.Time) error 
 	return nil
 }
 
-// GetRestoreState returns where reconciliation has got to.
-func (db *DB) GetRestoreState() (RestoreState, error) {
+type queryRower interface {
+	QueryRow(query string, args ...any) *sql.Row
+}
+
+func getRestoreState(q queryRower) (RestoreState, error) {
 	var s RestoreState
 	var quarantined, journalCurrent int
 	var entered, snapshot, replayed, released string
-	err := db.sql.QueryRow(
+	err := q.QueryRow(
 		`SELECT quarantined, entered_at, reason, snapshot_at, journal_current,
 		        journal_asserted_by, replayed_at, replayed_count, released_at, released_by
 		 FROM restore_state WHERE id = 1`).
@@ -107,6 +110,11 @@ func (db *DB) GetRestoreState() (RestoreState, error) {
 		*f.into = parsed
 	}
 	return s, nil
+}
+
+// GetRestoreState returns where reconciliation has got to.
+func (db *DB) GetRestoreState() (RestoreState, error) {
+	return getRestoreState(db.sql)
 }
 
 // CheckQuarantine is what every Butler-facing path calls before doing
@@ -150,7 +158,17 @@ const (
 // cached answer is exactly how a quarantined database ends up
 // dispatching anyway.
 func (db *DB) gate(what string) error {
-	s, err := db.GetRestoreState()
+	return gateQuery(db.sql, what)
+}
+
+// gateTx gives operations whose authority and effect are one transaction the
+// same fail-closed restore and household-stop checks inside that transaction.
+func gateTx(tx *sql.Tx, what string) error {
+	return gateQuery(tx, what)
+}
+
+func gateQuery(q queryRower, what string) error {
+	s, err := getRestoreState(q)
 	if err != nil {
 		// A store that cannot say whether it is quarantined has not said
 		// no. Fail closed: this is the one place where being unable to
@@ -159,7 +177,7 @@ func (db *DB) gate(what string) error {
 	}
 	if !s.Quarantined {
 		if what == GateDispatch || what == GateDelivery {
-			return db.checkHouseholdStop(what)
+			return checkHouseholdStop(q, what)
 		}
 		return nil
 	}

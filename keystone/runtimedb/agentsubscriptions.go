@@ -343,6 +343,60 @@ func (db *DB) SetAgentSubscriptionEnabled(id int64, enabled bool, by string) err
 	return tx.Commit()
 }
 
+// DisableAgentSubscriptionsForRuntime withdraws every enabled subscription
+// belonging to one Agent when its runtime is explicitly revoked. It preserves
+// the rows, approved versions, cursors, schedules and history; only dispatch
+// authority is removed, and every running subscription checkpoint is fenced in
+// the same transaction. This is intentionally not restore-gated: withdrawing
+// authority must remain possible while a restored database is quarantined.
+func (db *DB) DisableAgentSubscriptionsForRuntime(butler int64, reason string) (int, error) {
+	if butler == 0 {
+		return 0, fmt.Errorf("runtimedb: disabling runtime subscriptions needs an agent")
+	}
+	if reason == "" {
+		reason = "runtime revoked"
+	}
+	tx, err := db.sql.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	rows, err := tx.Query(`SELECT id FROM agent_subscriptions WHERE butler = ? AND enabled = 1`, butler)
+	if err != nil {
+		return 0, fmt.Errorf("runtimedb: listing runtime subscriptions for agent %d: %w", butler, err)
+	}
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return 0, err
+	}
+	if err := rows.Close(); err != nil {
+		return 0, err
+	}
+	if _, err := tx.Exec(
+		`UPDATE agent_subscriptions SET enabled = 0, updated_at = ? WHERE butler = ? AND enabled = 1`,
+		now(), butler); err != nil {
+		return 0, fmt.Errorf("runtimedb: disabling runtime subscriptions for agent %d: %w", butler, err)
+	}
+	for _, id := range ids {
+		if err := fenceRunningSubscriptionRuns(tx, id, reason); err != nil {
+			return 0, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return len(ids), nil
+}
+
 // AgentSubscriptionRevision is an edit to a subscription. A nil field
 // keeps its current value. Every edit is material: it bumps Version, so
 // the row stops dispatching until an Owner approves the new version, and

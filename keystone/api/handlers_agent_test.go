@@ -10,10 +10,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -697,6 +699,134 @@ func newTestHTTPServer(t *testing.T, s *Server) string {
 	return srv.URL
 }
 
+func TestWaitingDeliveryPollReauthenticatesTheSameBearer(t *testing.T) {
+	tests := []struct {
+		name   string
+		revoke func(*testing.T, *harness, runtimeCredentialResponse)
+	}{
+		{
+			name: "token-only revocation",
+			revoke: func(t *testing.T, h *harness, cred runtimeCredentialResponse) {
+				if err := h.s.Principals.Revoke(cred.Secret); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "credential rotation",
+			revoke: func(t *testing.T, h *harness, _ runtimeCredentialResponse) {
+				_ = rotate(t, h, "alfred", nil)
+			},
+		},
+		{
+			name: "runtime revocation",
+			revoke: func(t *testing.T, h *harness, _ runtimeCredentialResponse) {
+				if res := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/butlers/alfred/runtime/revoke", nil, nil); res.StatusCode != http.StatusOK {
+					t.Fatalf("runtime revoke = %d", res.StatusCode)
+				}
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			h, _ := agentEnvHarness(t)
+			createAgent(t, h, "alfred")
+			cred := rotate(t, h, "alfred", nil)
+			b, err := h.s.DB.GetButler("alfred")
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			waiting := make(chan struct{})
+			var once sync.Once
+			h.s.deliveryPollWaiting = func() { once.Do(func() { close(waiting) }) }
+			type result struct {
+				status int
+				body   string
+			}
+			done := make(chan result, 1)
+			go func() {
+				req, _ := http.NewRequest(http.MethodGet, h.srv.URL+"/api/v1/agent/deliveries?wait=5s", nil)
+				req.Header.Set("Authorization", "Bearer "+cred.Secret)
+				resp, err := http.DefaultClient.Do(req)
+				if err != nil {
+					done <- result{body: err.Error()}
+					return
+				}
+				defer resp.Body.Close()
+				body, _ := io.ReadAll(resp.Body)
+				done <- result{status: resp.StatusCode, body: string(body)}
+			}()
+
+			<-waiting // successful entry and an empty, authorized first selection
+			tc.revoke(t, h, cred)
+			const private = `{"handle":"bt-private.secret","text":"private payload"}`
+			if _, err := h.s.DB.RecordAgentDelivery(b.Seq, agentapi.DeliveryTurn, private); err != nil {
+				t.Fatal(err)
+			}
+			got := <-done
+			if got.status != http.StatusUnauthorized {
+				t.Fatalf("waiting poll after authority withdrawal = %d body=%q, want 401", got.status, got.body)
+			}
+			if strings.Contains(got.body, "private payload") || strings.Contains(got.body, "bt-private") {
+				t.Fatalf("withdrawn poll disclosed protected delivery: %q", got.body)
+			}
+		})
+	}
+}
+
+func TestWaitingDeliveryPollAuthenticatesBearerOnlyOnce(t *testing.T) {
+	h, _ := agentEnvHarness(t)
+	createAgent(t, h, "alfred")
+	cred := rotate(t, h, "alfred", nil)
+	hash, err := principal.TokenHash(cred.Secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	type observation struct {
+		lastUsed time.Time
+		err      error
+	}
+	observed := make(chan observation, 2)
+	var mu sync.Mutex
+	observations := 0
+	h.s.deliveryPollWaiting = func() {
+		mu.Lock()
+		defer mu.Unlock()
+		if observations >= cap(observed) {
+			return
+		}
+		tok, err := h.s.DB.GetToken(hash)
+		observed <- observation{lastUsed: tok.LastUsed, err: err}
+		observations++
+	}
+
+	done := make(chan int, 1)
+	go func() {
+		req, _ := http.NewRequest(http.MethodGet, h.srv.URL+"/api/v1/agent/deliveries?wait=600ms", nil)
+		req.Header.Set("Authorization", "Bearer "+cred.Secret)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			done <- 0
+			return
+		}
+		defer resp.Body.Close()
+		done <- resp.StatusCode
+	}()
+
+	first, second := <-observed, <-observed
+	if first.err != nil || second.err != nil {
+		t.Fatalf("reading token after poll retries: first=%v second=%v", first.err, second.err)
+	}
+	if !first.lastUsed.Equal(second.lastUsed) {
+		t.Fatalf("idle poll rewrote token last_used: first=%s second=%s", first.lastUsed, second.lastUsed)
+	}
+	if status := <-done; status != http.StatusOK {
+		t.Fatalf("idle poll status = %d, want 200", status)
+	}
+}
+
 // agentEnvHarness is one Agent, on the native runtime, wired for the
 // Agent API's HTTP routes — the shared setup for every test in this
 // file that is not the byte-identical comparison above (that one needs
@@ -1213,12 +1343,12 @@ func conformanceRunTarget(h *harness, ledger *butlerstore.Ledger, b runtimedb.Bu
 // in-process agentapi.Client — proof that the suite itself, not only
 // the hand-picked byte-identical script above, holds for it.
 func TestInProcessGatewayIsConformant(t *testing.T) {
-	h, ledger, b, _ := conformanceRunHarness(t)
+	h, ledger, b, cred := conformanceRunHarness(t)
 	target := conformanceRunTarget(h, ledger, b)
 	target.Client = h.s.AgentGateway
 	target.Deliveries = h.s.AgentGateway.(agentapi.DeliveryClient)
 	target.Context = func() context.Context {
-		return agentgateway.WithPrincipal(context.Background(), "runtime-alfred-1")
+		return agentgateway.WithPrincipal(context.Background(), cred.CredentialRef)
 	}
 	conformance.Run(t, target)
 }

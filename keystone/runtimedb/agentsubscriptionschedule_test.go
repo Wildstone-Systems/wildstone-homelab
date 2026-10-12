@@ -60,6 +60,63 @@ func claimFor(t *testing.T, db *DB, sub AgentSubscription, at time.Time) (Subscr
 	})
 }
 
+func TestRuntimeRevocationDisablesOnlyItsSubscriptionsAndFencesRuns(t *testing.T) {
+	db, sub := scheduledFixture(t)
+	if err := db.SetAgentSubscriptionCursor(sub.ID, 41); err != nil {
+		t.Fatal(err)
+	}
+	run, beforeCheckpoint, err := claimFor(t, db, sub, s0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := db.CreateButler(Butler{
+		Name: "beatrice", Surface: ButlerSurfaceFamily, AgentClass: AgentClassMember, Model: "kitchen-box",
+	}, "root-admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherID, err := db.InsertAgentSubscription(other, "event_type", `{}`, "", []string{"peek"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.ApproveAgentSubscription(otherID, "mika"); err != nil {
+		t.Fatal(err)
+	}
+
+	n, err := db.DisableAgentSubscriptionsForRuntime(sub.Butler, "Agent runtime revoked")
+	if err != nil || n != 1 {
+		t.Fatalf("DisableAgentSubscriptionsForRuntime = %d, %v; want 1, nil", n, err)
+	}
+	after, err := db.GetAgentSubscription(sub.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Enabled || after.Cursor != 41 || after.ApprovedVersion != sub.ApprovedVersion || after.Version != sub.Version {
+		t.Fatalf("revoked subscription = %+v; wanted disabled with cursor/version/approval retained", after)
+	}
+	gotRun, err := db.GetSubscriptionRun(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotRun.State != SubscriptionRunFenced {
+		t.Fatalf("in-flight run state = %s, want fenced", gotRun.State)
+	}
+	afterCheckpoint, err := db.GetSubscriptionCheckpoint(sub.ID, sub.SourceConnection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if afterCheckpoint.Version != beforeCheckpoint.Version || string(afterCheckpoint.Cursor) != string(beforeCheckpoint.Cursor) {
+		t.Fatalf("checkpoint changed on runtime revoke: before=%+v after=%+v", beforeCheckpoint, afterCheckpoint)
+	}
+	otherSub, err := db.GetAgentSubscription(otherID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !otherSub.Enabled {
+		t.Fatal("revoking one Agent's runtime disabled another Agent's subscription")
+	}
+}
+
 func TestScheduledSubscriptionProposalBoundsAndPersonBinding(t *testing.T) {
 	db, sub := scheduledFixture(t)
 	if sub.TriggerKind != SubscriptionTriggerSchedule || sub.Cadence != DefaultSubscriptionCadence {

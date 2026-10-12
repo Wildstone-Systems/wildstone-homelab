@@ -909,8 +909,9 @@ func (s *Server) rotateRuntimeCredential(r *http.Request, id principal.Identity)
 // §3.7's immediate revocation, from the Console. Every credential the
 // Agent's runtime ever held stops working from the next request and the
 // runtime is marked revoked; the Agent itself — people, tools,
-// Connections, routines, memory — is untouched, and a rotation issues
-// it a new credential when the Owner is ready.
+// Connections, routines and memory are untouched. Its subscriptions are
+// disabled and their in-flight runs fenced; a rotation issues a new credential
+// when the Owner is ready but does not silently re-enable those subscriptions.
 //
 // CONSEQUENTIAL (A4.1): it withdraws authority, and nothing that ran as
 // the runtime can act again until somebody decides it may.
@@ -921,6 +922,9 @@ func (s *Server) revokeButlerRuntime(r *http.Request, id principal.Identity) (an
 		return nil, code, err
 	}
 	if err := s.revokeAgentRuntime(b); err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	if _, err := s.DB.DisableAgentSubscriptionsForRuntime(b.Seq, "Agent runtime revoked"); err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
 	s.event("butler.runtime", "", id, fmt.Sprintf("runtime of %s revoked; every runtime credential disabled", b.Name))

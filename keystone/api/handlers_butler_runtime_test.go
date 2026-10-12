@@ -270,6 +270,46 @@ func rotate(t *testing.T, h *harness, name string, body any) runtimeCredentialRe
 	return out
 }
 
+func TestOnlyExplicitRuntimeRevokeWithdrawsSubscriptions(t *testing.T) {
+	h := butlerConsole(t)
+	createAgent(t, h, "health")
+	b, err := h.s.DB.GetButler("health")
+	if err != nil {
+		t.Fatal(err)
+	}
+	subID, err := h.s.DB.InsertAgentSubscription(b.Seq, "event_type", `{}`, "", []string{"get_health"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.s.DB.ApproveAgentSubscription(subID, "mika"); err != nil {
+		t.Fatal(err)
+	}
+	_ = rotate(t, h, "health", nil)
+	if sub, _ := h.s.DB.GetAgentSubscription(subID); !sub.Enabled {
+		t.Fatal("credential rotation disabled the Agent's subscription")
+	}
+	var rec agentapi.RuntimeRecord
+	if res := h.do(runtimedb.RoleAdmin, http.MethodPut, "/api/v1/butlers/health/runtime", map[string]any{
+		"type": "hermes", "endpoint": "https://hermes-health.internal/",
+		"negotiated": map[string]any{"delivery": "pull", "processingClass": "local_only"},
+	}, &rec); res.StatusCode != http.StatusOK {
+		t.Fatalf("runtime type change = %d", res.StatusCode)
+	}
+	if sub, _ := h.s.DB.GetAgentSubscription(subID); !sub.Enabled {
+		t.Fatal("runtime type change disabled the Agent's subscription")
+	}
+	if res := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/butlers/health/runtime/revoke", nil, nil); res.StatusCode != http.StatusOK {
+		t.Fatalf("runtime revoke = %d", res.StatusCode)
+	}
+	if sub, _ := h.s.DB.GetAgentSubscription(subID); sub.Enabled {
+		t.Fatal("explicit runtime revoke left the Agent's subscription enabled")
+	}
+	_ = rotate(t, h, "health", nil)
+	if sub, _ := h.s.DB.GetAgentSubscription(subID); sub.Enabled {
+		t.Fatal("credential rotation silently re-enabled a subscription withdrawn by runtime revoke")
+	}
+}
+
 // authenticates requires the route gate's exact denial after successful
 // authentication. Unauthorized, rate-limited, or server-error responses do not
 // prove that a runtime credential authenticated.

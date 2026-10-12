@@ -23,6 +23,23 @@ import (
 // stops meaning "will never be answered".
 const DefaultAgentDeliveryTTL = 7 * 24 * time.Hour
 
+// ErrRuntimeDeliveryDenied means the principal or credential no longer
+// carries the live runtime authority required to receive or acknowledge an
+// Agent delivery. Keep the reason opaque to callers: whether a principal was
+// disabled, superseded, retired or revoked is administrative state, not
+// information a stale runtime credential may enumerate.
+var ErrRuntimeDeliveryDenied = errors.New("runtimedb: runtime delivery authority denied")
+
+// RuntimeDeliveryCredential is the request-local proof used at the final
+// delivery boundary. TokenHash is set by HTTP callers after authenticating the
+// exact presented bearer; in-process callers leave it empty and are still
+// checked against the live principal, current runtime and Agent lifecycle.
+// The bearer itself never crosses into the store.
+type RuntimeDeliveryCredential struct {
+	Principal string
+	TokenHash string
+}
+
 // AgentDelivery is one row of agent_deliveries, as read back.
 type AgentDelivery struct {
 	ID        int64
@@ -183,6 +200,68 @@ func (db *DB) ListUnackedAgentDeliveries(butlerSeq, after int64, limit int) ([]A
 	return out, rows.Err()
 }
 
+// PollRuntimeDeliveries performs expiry, final runtime-authority admission and
+// delivery selection under one immediate SQLite transaction. That transaction
+// is the disclosure linearization point: a completed disable/revoke/rotation
+// wins before it; a selection that commits first has already admitted those
+// rows for disclosure and cannot recall bytes from the caller. The clock is
+// evaluated after transaction admission, never before a potentially blocked Begin.
+func (db *DB) PollRuntimeDeliveries(cred RuntimeDeliveryCredential, after int64, limit int, clock func() time.Time) ([]AgentDelivery, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	tx, err := db.sql.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("runtimedb: beginning runtime delivery poll: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := gateTx(tx, GateDelivery); err != nil {
+		return nil, err
+	}
+	// Sample only after Begin has acquired the immediate transaction lock.
+	// A credential may expire while waiting for a connection or writer.
+	asOf := clock()
+	butler, err := authorizeRuntimeDeliveryTx(tx, cred, asOf)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := tx.Exec(
+		`UPDATE agent_deliveries SET expired_at = ?
+		  WHERE butler = ? AND acked_at = '' AND expired_at = ''
+		    AND expires_at <> '' AND expires_at < ?`,
+		now(), butler, asOf.UTC().Format(time.RFC3339Nano)); err != nil {
+		return nil, fmt.Errorf("runtimedb: marking expired deliveries for butler %d: %w", butler, err)
+	}
+	rows, err := tx.Query(
+		agentDeliveryColumns+`
+		 WHERE butler = ? AND id > ? AND acked_at = '' AND expired_at = ''
+		 ORDER BY id ASC LIMIT ?`,
+		butler, after, limit)
+	if err != nil {
+		return nil, err
+	}
+	var out []AgentDelivery
+	for rows.Next() {
+		d, err := scanAgentDelivery(rows)
+		if err != nil {
+			rows.Close()
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("runtimedb: committing runtime delivery poll: %w", err)
+	}
+	return out, nil
+}
+
 // AckAgentDelivery sets acked_at for one of an Agent's own deliveries.
 // Idempotent: acking an already-acked delivery a second time succeeds
 // without changing its timestamp (§4 item 6, "tolerates redelivery of
@@ -206,4 +285,95 @@ func (db *DB) AckAgentDelivery(butlerSeq, id int64) error {
 		return fmt.Errorf("runtimedb: acking delivery %d: %w", id, err)
 	}
 	return nil
+}
+
+// AckRuntimeDelivery is AckAgentDelivery with the runtime's live authority
+// checked and fenced with the write. The immediate transaction makes either
+// this acknowledgment or a concurrent disable/revoke the first committed
+// writer; the second observes the first. Repeated authorized acknowledgment
+// remains idempotent because the update only fills an empty acked_at.
+func (db *DB) AckRuntimeDelivery(cred RuntimeDeliveryCredential, id int64, clock func() time.Time) error {
+	tx, err := db.sql.Begin()
+	if err != nil {
+		return fmt.Errorf("runtimedb: beginning runtime delivery acknowledgment: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := gateTx(tx, GateDelivery); err != nil {
+		return err
+	}
+	// Sample only after Begin has acquired the immediate transaction lock.
+	// A credential may expire while waiting for a connection or writer.
+	asOf := clock()
+	butler, err := authorizeRuntimeDeliveryTx(tx, cred, asOf)
+	if err != nil {
+		return err
+	}
+	var exists int64
+	err = tx.QueryRow(`SELECT 1 FROM agent_deliveries WHERE id = ? AND butler = ?`, id, butler).Scan(&exists)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("runtimedb: acking delivery %d: %w", id, err)
+	}
+	if _, err := tx.Exec(
+		`UPDATE agent_deliveries SET acked_at = ? WHERE id = ? AND butler = ? AND acked_at = ''`,
+		now(), id, butler); err != nil {
+		return fmt.Errorf("runtimedb: acking delivery %d: %w", id, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("runtimedb: committing runtime delivery acknowledgment: %w", err)
+	}
+	return nil
+}
+
+// authorizeRuntimeDeliveryTx is the shared HTTP/in-process final authority
+// check. The immutable binding is necessary but not sufficient: the principal
+// must still be enabled and current, the runtime must not be revoked, and the
+// Agent must remain live. HTTP callers additionally prove that the exact token
+// which entered the request is still live and unexpired.
+func authorizeRuntimeDeliveryTx(tx *sql.Tx, cred RuntimeDeliveryCredential, asOf time.Time) (int64, error) {
+	if cred.Principal == "" {
+		return 0, ErrRuntimeDeliveryDenied
+	}
+	var butler int64
+	err := tx.QueryRow(`
+		SELECT rp.butler
+		  FROM runtime_principals rp
+		  JOIN principals p ON p.name = rp.principal
+		  JOIN butler_runtimes rt ON rt.butler = rp.butler
+		  JOIN butlers b ON b.seq = rp.butler
+		 WHERE rp.principal = ?
+		   AND p.role = ? AND p.disabled = 0
+		   AND rt.principal = rp.principal AND rt.health <> ?
+		   AND b.enabled = 1 AND b.retired_at = ''`,
+		cred.Principal, string(RoleButler), string(agentapi.HealthRevoked)).Scan(&butler)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, ErrRuntimeDeliveryDenied
+	}
+	if err != nil {
+		return 0, fmt.Errorf("runtimedb: checking runtime delivery authority: %w", err)
+	}
+	if cred.TokenHash != "" {
+		var expiry string
+		err = tx.QueryRow(`
+			SELECT expires_at FROM tokens
+			 WHERE hash = ? AND principal = ? AND revoked_at = ''`,
+			cred.TokenHash, cred.Principal).Scan(&expiry)
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, ErrRuntimeDeliveryDenied
+		}
+		if err != nil {
+			return 0, fmt.Errorf("runtimedb: checking runtime delivery credential: %w", err)
+		}
+		if expiry != "" {
+			// RFC3339Nano omits trailing fractional zeros, so TEXT ordering
+			// is not chronological ordering (a whole-second Z sorts after .).
+			expiresAt, err := time.Parse(time.RFC3339Nano, expiry)
+			if err != nil || !expiresAt.After(asOf) {
+				return 0, ErrRuntimeDeliveryDenied
+			}
+		}
+	}
+	return butler, nil
 }
