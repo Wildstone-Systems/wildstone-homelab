@@ -270,7 +270,7 @@ func rotate(t *testing.T, h *harness, name string, body any) runtimeCredentialRe
 	return out
 }
 
-func TestRuntimeRevokeWithdrawsSubscriptionsButRotationDoesNotReenableThem(t *testing.T) {
+func TestOnlyExplicitRuntimeRevokeWithdrawsSubscriptions(t *testing.T) {
 	h := butlerConsole(t)
 	createAgent(t, h, "health")
 	b, err := h.s.DB.GetButler("health")
@@ -287,6 +287,16 @@ func TestRuntimeRevokeWithdrawsSubscriptionsButRotationDoesNotReenableThem(t *te
 	_ = rotate(t, h, "health", nil)
 	if sub, _ := h.s.DB.GetAgentSubscription(subID); !sub.Enabled {
 		t.Fatal("credential rotation disabled the Agent's subscription")
+	}
+	var rec agentapi.RuntimeRecord
+	if res := h.do(runtimedb.RoleAdmin, http.MethodPut, "/api/v1/butlers/health/runtime", map[string]any{
+		"type": "hermes", "endpoint": "https://hermes-health.internal/",
+		"negotiated": map[string]any{"delivery": "pull", "processingClass": "local_only"},
+	}, &rec); res.StatusCode != http.StatusOK {
+		t.Fatalf("runtime type change = %d", res.StatusCode)
+	}
+	if sub, _ := h.s.DB.GetAgentSubscription(subID); !sub.Enabled {
+		t.Fatal("runtime type change disabled the Agent's subscription")
 	}
 	if res := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/butlers/health/runtime/revoke", nil, nil); res.StatusCode != http.StatusOK {
 		t.Fatalf("runtime revoke = %d", res.StatusCode)
