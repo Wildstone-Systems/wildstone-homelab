@@ -104,10 +104,10 @@ func TestRuntimeCredentialIsDeniedBeforeBodyOrHandler(t *testing.T) {
 func TestRouteGateDoesNotClassifyByRole(t *testing.T) {
 	h := newHarness(t)
 	tests := []struct {
-		name  string
-		role  runtimedb.Role
-		verb  principal.Verb
-		path  string
+		name string
+		role runtimedb.Role
+		verb principal.Verb
+		path string
 	}{
 		{"human admin", runtimedb.RoleAdmin, principal.VerbRead, "/api/v1/synthetic-admin-read"},
 		{"node operator", runtimedb.RoleOperator, principal.VerbPropose, "/api/v1/synthetic-node-propose"},
