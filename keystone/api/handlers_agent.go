@@ -578,12 +578,12 @@ func (s *Server) agentDeliveries(r *http.Request, id principal.Identity) (any, i
 	if wait < 0 {
 		wait = 0
 	}
+	cred, err := s.runtimeRequestCredential(r, id)
+	if err != nil {
+		return nil, http.StatusUnauthorized, principal.ErrUnauthenticated
+	}
 	deadline := time.Now().Add(wait)
 	for {
-		cred, err := s.runtimeRequestCredential(r, id)
-		if err != nil {
-			return nil, http.StatusUnauthorized, principal.ErrUnauthenticated
-		}
 		rows, err := s.DB.PollRuntimeDeliveries(cred, after, 50, time.Now())
 		if errors.Is(err, runtimedb.ErrRuntimeDeliveryDenied) {
 			return nil, http.StatusUnauthorized, principal.ErrUnauthenticated

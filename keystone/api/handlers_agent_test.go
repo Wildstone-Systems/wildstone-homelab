@@ -775,6 +775,58 @@ func TestWaitingDeliveryPollReauthenticatesTheSameBearer(t *testing.T) {
 	}
 }
 
+func TestWaitingDeliveryPollAuthenticatesBearerOnlyOnce(t *testing.T) {
+	h, _ := agentEnvHarness(t)
+	createAgent(t, h, "alfred")
+	cred := rotate(t, h, "alfred", nil)
+	hash, err := principal.TokenHash(cred.Secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	type observation struct {
+		lastUsed time.Time
+		err      error
+	}
+	observed := make(chan observation, 2)
+	var mu sync.Mutex
+	observations := 0
+	h.s.deliveryPollWaiting = func() {
+		mu.Lock()
+		defer mu.Unlock()
+		if observations >= cap(observed) {
+			return
+		}
+		tok, err := h.s.DB.GetToken(hash)
+		observed <- observation{lastUsed: tok.LastUsed, err: err}
+		observations++
+	}
+
+	done := make(chan int, 1)
+	go func() {
+		req, _ := http.NewRequest(http.MethodGet, h.srv.URL+"/api/v1/agent/deliveries?wait=600ms", nil)
+		req.Header.Set("Authorization", "Bearer "+cred.Secret)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			done <- 0
+			return
+		}
+		defer resp.Body.Close()
+		done <- resp.StatusCode
+	}()
+
+	first, second := <-observed, <-observed
+	if first.err != nil || second.err != nil {
+		t.Fatalf("reading token after poll retries: first=%v second=%v", first.err, second.err)
+	}
+	if !first.lastUsed.Equal(second.lastUsed) {
+		t.Fatalf("idle poll rewrote token last_used: first=%s second=%s", first.lastUsed, second.lastUsed)
+	}
+	if status := <-done; status != http.StatusOK {
+		t.Fatalf("idle poll status = %d, want 200", status)
+	}
+}
+
 // agentEnvHarness is one Agent, on the native runtime, wired for the
 // Agent API's HTTP routes — the shared setup for every test in this
 // file that is not the byte-identical comparison above (that one needs
