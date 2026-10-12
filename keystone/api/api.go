@@ -1156,6 +1156,23 @@ func (s *Server) handleResponse(verb principal.Verb, h responseHandlerFunc) http
 				s.Log.Error("audit append failed", "err", err)
 			}
 		}()
+		// A runtime principal is a credential for one Agent API client,
+		// not a general butler-role credential for Keystone. Resolve the
+		// durable binding rather than inferring it from the role or name,
+		// and fail closed before RBAC, rate limiting, or a handler can read
+		// the body. The audit defer above deliberately includes denials.
+		_, runtimeBound, err := s.DB.RuntimePrincipalButler(id.Name)
+		if err != nil {
+			status = http.StatusInternalServerError
+			s.Log.Error("runtime principal route check failed", "err", err)
+			s.writeError(w, status, "internal")
+			return
+		}
+		if runtimeBound && !runtimeRouteAllowed(r.Method, r.URL.Path) {
+			status = http.StatusForbidden
+			s.writeError(w, status, "runtime credential may only use the Agent API")
+			return
+		}
 		if !principal.Allowed(id.Role, verb) {
 			status = http.StatusForbidden
 			s.writeError(w, status, fmt.Sprintf("role %s may not %s", id.Role, verb))
@@ -1181,6 +1198,42 @@ func (s *Server) handleResponse(verb principal.Verb, h responseHandlerFunc) http
 		}
 		s.writeJSON(w, st, body)
 	})
+}
+
+// runtimeRouteAllowed is the closed public-plane surface of an existing
+// static runtime credential. Adding a route to Server.Handler does not make it
+// reachable: the route must also be deliberately classified here. Task and
+// resource authority remain the Agent Gateway's responsibility.
+func runtimeRouteAllowed(method, path string) bool {
+	switch method + " " + path {
+	case "GET /api/v1/agent/tools",
+		"POST /api/v1/agent/manifest",
+		"POST /api/v1/agent/invoke",
+		"POST /api/v1/agent/recall",
+		"POST /api/v1/agent/remember",
+		"POST /api/v1/agent/checkpoint",
+		"POST /api/v1/agent/start",
+		"POST /api/v1/agent/wait",
+		"POST /api/v1/agent/complete",
+		"POST /api/v1/agent/fail",
+		"POST /api/v1/agent/propose",
+		"POST /api/v1/agent/notify",
+		"POST /api/v1/agent/heartbeat",
+		"GET /api/v1/agent/deliveries":
+		return true
+	}
+	if method != http.MethodPost {
+		return false
+	}
+	const ackPrefix = "/api/v1/agent/deliveries/"
+	if !strings.HasPrefix(path, ackPrefix) {
+		return false
+	}
+	idAndAck := strings.TrimPrefix(path, ackPrefix)
+	const ackSuffix = "/ack"
+	return strings.HasSuffix(idAndAck, ackSuffix) &&
+		len(idAndAck) > len(ackSuffix) &&
+		!strings.Contains(strings.TrimSuffix(idAndAck, ackSuffix), "/")
 }
 
 func (s *Server) authenticate(r *http.Request) (principal.Identity, bool) {
