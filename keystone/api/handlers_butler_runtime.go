@@ -221,6 +221,9 @@ func (s *Server) revokeAgentRuntime(b runtimedb.Butler) error {
 			return err
 		}
 	}
+	if _, err := s.DB.DisableAgentSubscriptionsForRuntime(b.Seq, "Agent runtime revoked"); err != nil {
+		return err
+	}
 	if err := s.fenceRuntimeTasks(b); err != nil {
 		return err
 	}

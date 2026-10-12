@@ -20,9 +20,13 @@ type HouseholdExecutionStop struct {
 }
 
 func (db *DB) GetHouseholdExecutionStop() (HouseholdExecutionStop, error) {
+	return getHouseholdExecutionStop(db.sql)
+}
+
+func getHouseholdExecutionStop(q queryRower) (HouseholdExecutionStop, error) {
 	var s HouseholdExecutionStop
 	var active int
-	err := db.sql.QueryRow(`SELECT active,generation,entered_at,entered_by,reason,released_at,released_by
+	err := q.QueryRow(`SELECT active,generation,entered_at,entered_by,reason,released_at,released_by
  FROM household_execution_stop WHERE singleton=1`).Scan(&active, &s.Generation,
 		&s.EnteredAt, &s.EnteredBy, &s.Reason, &s.ReleasedAt, &s.ReleasedBy)
 	s.Active = active != 0
@@ -99,7 +103,11 @@ func (db *DB) ResumeHouseholdExecution(actor string) error {
 }
 
 func (db *DB) checkHouseholdStop(what string) error {
-	stop, err := db.GetHouseholdExecutionStop()
+	return checkHouseholdStop(db.sql, what)
+}
+
+func checkHouseholdStop(q queryRower, what string) error {
+	stop, err := getHouseholdExecutionStop(q)
 	if err != nil {
 		return fmt.Errorf("%w: cannot check before %s: %v", ErrHouseholdStopped, what, err)
 	}

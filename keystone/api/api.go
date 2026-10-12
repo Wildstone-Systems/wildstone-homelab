@@ -46,6 +46,9 @@ type Server struct {
 	artifactCursors  map[string]artifactCursor
 	// Test seam only; production reloads settings and verifies confined bytes.
 	artifactReadBytes func(context.Context, runtimedb.Workspace, runtimedb.WorkspaceRevision) ([]byte, error)
+	// Test seam only; signals that an authenticated delivery poll reached
+	// its empty wait after the final store authority check.
+	deliveryPollWaiting func()
 	// ResearchTest tests stored, validated configuration using a bounded context.
 	// The adapter must resolve service/secret references and check their current
 	// revisions. Nil is deliberately unavailable. Production wiring also requires a verified

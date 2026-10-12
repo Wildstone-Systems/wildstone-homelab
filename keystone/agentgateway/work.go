@@ -242,13 +242,6 @@ func (g *Gateway) Deliveries(ctx context.Context, after string, wait time.Durati
 	if !ok {
 		return nil, fmt.Errorf("%w: deliveries needs the runtime principal it is from", ErrRefused)
 	}
-	seq, bound, err := g.DB.RuntimePrincipalButler(principal)
-	if err != nil {
-		return nil, err
-	}
-	if !bound {
-		return nil, fmt.Errorf("%w: %s is not a runtime principal", ErrRefused, principal)
-	}
 	var afterID int64
 	if after != "" {
 		if _, err := fmt.Sscanf(after, "%d", &afterID); err != nil {
@@ -260,10 +253,10 @@ func (g *Gateway) Deliveries(ctx context.Context, after string, wait time.Durati
 	}
 	deadline := g.now().Add(wait)
 	for {
-		if _, err := g.DB.MarkExpiredAgentDeliveries(seq, g.now()); err != nil {
-			return nil, err
+		rows, err := g.DB.PollRuntimeDeliveries(runtimedb.RuntimeDeliveryCredential{Principal: principal}, afterID, 50, g.now())
+		if errors.Is(err, runtimedb.ErrRuntimeDeliveryDenied) {
+			return nil, fmt.Errorf("%w: runtime delivery authority is no longer active", ErrRefused)
 		}
-		rows, err := g.DB.ListUnackedAgentDeliveries(seq, afterID, 50)
 		if err != nil {
 			return nil, err
 		}
@@ -313,18 +306,14 @@ func (g *Gateway) Ack(ctx context.Context, id string) error {
 	if !ok {
 		return fmt.Errorf("%w: ack needs the runtime principal it is from", ErrRefused)
 	}
-	seq, bound, err := g.DB.RuntimePrincipalButler(principal)
-	if err != nil {
-		return err
-	}
-	if !bound {
-		return fmt.Errorf("%w: %s is not a runtime principal", ErrRefused, principal)
-	}
 	var deliveryID int64
 	if _, err := fmt.Sscanf(id, "%d", &deliveryID); err != nil {
 		return fmt.Errorf("%w: delivery id must be a number", ErrRefused)
 	}
-	if err := g.DB.AckAgentDelivery(seq, deliveryID); err != nil {
+	if err := g.DB.AckRuntimeDelivery(runtimedb.RuntimeDeliveryCredential{Principal: principal}, deliveryID, g.now()); err != nil {
+		if errors.Is(err, runtimedb.ErrRuntimeDeliveryDenied) {
+			return fmt.Errorf("%w: runtime delivery authority is no longer active", ErrRefused)
+		}
 		if errors.Is(err, runtimedb.ErrNotFound) {
 			return fmt.Errorf("%w: no such delivery for this agent", ErrRefused)
 		}
