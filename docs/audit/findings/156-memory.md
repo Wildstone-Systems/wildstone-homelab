@@ -215,8 +215,8 @@ it is the only outcome.
 
 ### F-156-04 — Semantic recall cannot retrieve: candidates come only from the FTS match
 
-- **Current status:** partial
-- **Current evidence:** `SearchIndex` in `keystone/runtimedb/butlerindex.go` now unions a vector candidate query (same permission predicate, cosine floor `minSemanticSimilarity`) with the FTS candidates, so a vocabulary-mismatched chunk is retrieved when its embedding is close; covered by `TestSemanticCandidates*`. Still open: no embedder produces embeddings (F-156-05), and the `recall` callers pass none.
+- **Current status:** open
+- **Current evidence:** Partially delivered in `9537d63be6fd995eee821170a00f2e01ab143fc4` (#575); retained as open until the remaining semantic integration is verified. `SearchIndex` in `keystone/runtimedb/butlerindex.go` now unions a vector candidate query (same permission predicate, cosine floor `minSemanticSimilarity`) with the FTS candidates, so a vocabulary-mismatched chunk is retrieved when its embedding is close; covered by `TestSemanticCandidates*`. Still open: no embedder produces embeddings (F-156-05), and the `recall` callers pass none.
 - **Current owner:** chickenrat17
 - **Tracking:** #311
 
@@ -419,8 +419,8 @@ administrator posts to the compact endpoint".
 
 ### F-156-11 — The retrieval-quality fixture cannot detect the defect it is meant to measure
 
-- **Current status:** partial
-- **Current evidence:** `TestRetrievalQualityIsMeasuredAndRecorded` in `keystone/runtimedb/butlerindex_test.go` now includes queries sharing no word with their target and asserts hybrid recall is strictly above keyword recall. The memory-level fixture under `keystone/butler/memory_test.go` still has no semantic case, pending the embedder (F-156-05).
+- **Current status:** open
+- **Current evidence:** Partially delivered in `9537d63be6fd995eee821170a00f2e01ab143fc4` (#575); retained as open until the remaining semantic integration is verified. `TestRetrievalQualityIsMeasuredAndRecorded` in `keystone/runtimedb/butlerindex_test.go` now includes queries sharing no word with their target and asserts hybrid recall is strictly above keyword recall. The memory-level fixture under `keystone/butler/memory_test.go` still has no semantic case, pending the embedder (F-156-05).
 - **Current owner:** chickenrat17
 - **Tracking:** #311
 

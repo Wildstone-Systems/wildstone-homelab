@@ -65,8 +65,8 @@ September 10 audit snapshot, not a current pass/fail report.
 
 | Current state | Count | Meaning |
 |---|---:|---|
-| implemented | 59 | A cited shipped path and named regression test address the finding. |
-| open | 55 | The row names a current owner and follow-up issue; partial work is not counted as complete. |
+| implemented | 60 | A cited shipped path and named regression test address the finding. |
+| open | 54 | The row names a current owner and follow-up issue; partial work is not counted as complete. |
 | superseded | 7 | The accepted design changed the contract; the row points to its governing section. |
 | **total** | **121** | Every original ID has exactly one current disposition. |
 
