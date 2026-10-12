@@ -100,7 +100,7 @@ or creator field substitutes for another row.
 |---|---|---|---|---|
 | Person | Keystone Person ID | Existing Wildstone enrolment | Interactive subject, privacy owner, admissions, disclosure audience | Agent identity, runtime credential, approval merely because they authenticated |
 | Agent | Keystone Agent/Butler ID | Existing Owner administration | Tool assignments, controls, memory class, runtime selection | Person identity or a transferable bearer |
-| External client registration | New opaque Wildstone registration ID plus exact `(issuer, client_id)` | Owner registers the client and the bound Person consents; both facts are durable | The allowed Person, Agent, Connection, and runtime-principal binding for this client | Grants, tool visibility, task authority, or ownership inferred from a name |
+| External client registration | New opaque Wildstone registration ID plus exact `(issuer, subject, client_id)` | Owner registers the client and the bound Person consents through an issuer-authenticated flow; both facts are durable | The allowed Person, Agent, Connection, and runtime-principal binding for this client | Grants, tool visibility, task authority, or ownership inferred from a name |
 | Runtime principal | Existing Keystone principal name and immutable `runtime_principals` Agent binding | Consequential-fresh Owner action | Internal audit actor and the existing Agent API authentication context | A Person, approval authority, or access to general Keystone routes |
 | OAuth access token | Issuer token identifier plus validated claims | Authelia after the Person completes Code + PKCE | Proof for one request that the issuer authenticated the subject for the registered client and resource | A Wildstone task, Agent assignment, Connection, audience, or transferable upstream credential |
 | Task/session | Wildstone task ID and secret handle | Existing delivery path or the bounded admission operation below | Exact Person/Agent/Connection/audience/budget and derived authority for one unit of work | A durable grant, a different session, or authority after revocation |
@@ -112,6 +112,7 @@ fields:
 ExternalClientRegistration
   id
   issuer
+  oauth_subject
   oauth_client_id
   person_id
   agent_id
@@ -122,13 +123,20 @@ ExternalClientRegistration
   created_at / disabled_at / revoked_at
 ```
 
-Changing the issuer, OAuth client ID, Person, Agent, Connection, or runtime
-principal creates a new registration and revokes the old one. Rotation changes
-the credential epoch; it never rebinds an existing registration. An Owner may
-disable or revoke a registration but cannot use that administrative power to
-read the bound Person's private content. Offboarding the Person, disabling the
-Agent or Connection, revoking the runtime principal, or entering restore
-quarantine makes the registration unusable at the next boundary.
+Changing the issuer, OAuth subject, OAuth client ID, Person, Agent, Connection,
+or runtime principal creates a new registration and revokes the old one.
+`oauth_subject` is captured from a validated issuer response during the bound
+Person's consent; an Owner cannot type, copy, or infer it from a username,
+email, display name, or existing Console session. Keystone must reject a second
+active binding of the same `(issuer, subject, client_id)` to another Person.
+This registration is the new durable issuer-subject-to-Person binding; the
+current Console OIDC username lookup is not such a binding and is not reused.
+Rotation changes the credential epoch; it never rebinds an existing
+registration. An Owner may disable or revoke a registration but cannot use that
+administrative power to read the bound Person's private content. Offboarding
+the Person, disabling the Agent or Connection, revoking the runtime principal,
+or entering restore quarantine makes the registration unusable at the next
+boundary.
 
 ### 3.1 Token-to-Wildstone resolution
 
@@ -137,15 +145,17 @@ For every protected request, the resource server must:
 1. introspect the access token with the configured Authelia issuer;
 2. require `active`, the exact issuer, the canonical MCP resource audience,
    the registered `client_id`, and scope `wildstone.agent`;
-3. resolve the stable subject to an already admitted Person through the
-   existing authenticated identity binding, never through a name or email;
-4. load the exact active external-client registration for
-   `(issuer, client_id, Person ID)`;
+3. load the exact active external-client registration by
+   `(issuer, subject, client_id)` and obtain its immutable Person ID, never
+   resolving the subject through a name, email, or the current Console OIDC
+   username lookup;
+4. require that the bound Person remains admitted and that no other active
+   registration maps that exact issuer/subject/client tuple to another Person;
 5. recheck its Agent, Connection, runtime principal, processing class, and
    current lifecycle state;
 6. construct the existing internal runtime-principal context, without passing
-   the Authelia token to Keystone, Wardstone, a tool adapter, or an upstream
-   service.
+   the Authelia token beyond Keystone's authentication/resource boundary to the
+   gateway, store, Wardstone, a tool adapter, or an upstream service.
 
 An ID token is not an access token and is never accepted at the Agent API or
 MCP resource. Claims supplied in a request body are ignored for identity.
@@ -252,7 +262,7 @@ The proposed first target is intentionally narrow:
 | Token validation | Authelia introspection on every protected request; require active token, issuer, subject, client, resource audience, and scope |
 | Refresh | Refresh token remains with Hermes; rotated/revoked according to Authelia; every refreshed access token is revalidated and re-resolved |
 | Issuer outage | Fail closed for new and in-flight boundary checks; no cached grant and no automatic static-token fallback |
-| Downstream token | A separate internal runtime-principal context; never token passthrough |
+| Downstream token | A separate internal runtime-principal context; the bearer remains only in the resource boundary's request-local recheck context and is never passed to business code |
 
 Pre-registration is compatible with MCP's allowance for authorization servers
 that do not offer dynamic registration and with Hermes's current documented
@@ -281,13 +291,19 @@ creating a second authorization engine:
 
 ```text
 ResolveExternalRuntime(accessToken, method, canonicalResource)
-  -> {registrationID, personID, agentID, connectionID,
-      runtimePrincipal, clientID, credentialEpoch}
+  -> ExternalRuntimeAuthContext {
+       registrationID, personID, agentID, connectionID,
+       runtimePrincipal, clientID, credentialEpoch,
+       recheckCredential // opaque, request-memory only
+     }
 
 ClassifyRuntimeRoute(method, path)
   -> {family, taskRequired} | deny
 
-RecheckRuntimeAuthority(identity, operation, taskOrDeliveryID)
+RecheckExternalRuntime(authContext, operation, taskOrDeliveryID)
+  -> freshly resolved identity | deny
+
+RecheckRuntimeAuthority(freshIdentity, operation, taskOrDeliveryID)
   -> allow | deny
 ```
 
@@ -297,12 +313,23 @@ then the existing gateway remains responsible for task and resource authority.
 No OAuth-specific branch may dispatch a tool directly.
 
 #582 owns the final recheck immediately before a delivery payload is returned
-and inside the acknowledgment transaction. That recheck includes token/client
-epoch, registration, Person admission, Agent, Connection, runtime principal,
-restore quarantine, task audience/privacy, and processing class. A revoked poll
-wakes or times out without content. A denied/replayed/cross-Agent acknowledgment
-changes no row. Disabling a registration may preserve queued work; it must not
-silently hand that work to the native fallback.
+and at the acknowledgment transaction boundary. The resource boundary retains
+the presented bearer only in the in-memory request context for the lifetime of
+the request; it must never log, serialize, persist, audit, or pass that bearer to
+the gateway, store, Wardstone, tools, or upstream services.
+`RecheckExternalRuntime` re-introspects that same bearer and repeats issuer,
+subject, client, resource, scope, activity, expiry, registration, and credential
+epoch resolution. Only its freshly resolved identity reaches
+`RecheckRuntimeAuthority`, which then checks Person admission, Agent,
+Connection, runtime principal, restore quarantine, task audience/privacy, and
+processing class. A waiting poll re-introspects after wake and immediately
+before returning content, so a token that expires or is revoked while waiting
+cannot disclose the payload. An acknowledgment re-introspects immediately
+before opening its write transaction, then rechecks the local registration
+state and credential epoch inside that transaction together with the existing
+delivery fences. A denied/replayed/cross-Agent acknowledgment changes no row.
+Disabling a registration may preserve queued work; it must not silently hand
+that work to the native fallback.
 
 ## 8. Testable acceptance for later implementation
 
@@ -311,7 +338,9 @@ choices above. Focused implementation must then prove with synthetic Persons,
 Agents, clients, Connections, tasks, and a fake issuer:
 
 1. A token for Person A/client A cannot discover, invoke, poll, or acknowledge
-   Person B, Agent B, another Connection, or another task.
+   Person B, Agent B, another Connection, or another task. A changed subject or
+   a duplicate issuer/subject/client binding fails rather than falling back to
+   username or email matching.
 2. A valid token on every general Keystone route is denied before body decoding;
    adding an unclassified route leaves it denied.
 3. Idle discovery returns only the bound Agent's currently assigned tools, and
@@ -321,8 +350,9 @@ Agents, clients, Connections, tasks, and a fake issuer:
    quarantined restore.
 5. Two concurrent client sessions cannot borrow one pending run's handle. An
    absent, expired, replayed, or mismatched task correlation fails closed.
-6. Revocation during a waiting poll prevents payload disclosure; revocation
-   before acknowledgment changes no delivery row.
+6. Token expiry or revocation during a waiting poll prevents payload disclosure;
+   token or registration revocation before acknowledgment changes no delivery
+   row.
 7. Wrong issuer, subject, client, audience/resource, scope, token type, expiry,
    and credential epoch fail. An ID token fails.
 8. An Authelia outage fails closed; no legacy `wst_` credential or native Butler
@@ -342,8 +372,9 @@ Fixture tests do not satisfy that gate.
 
 Reviewers are asked to accept or amend these bounded choices before code:
 
-1. one immutable external-client registration binds exact issuer/client,
-   Person, Agent, Connection, and runtime principal;
+1. one immutable external-client registration binds exact issuer/subject/client,
+   Person, Agent, Connection, and runtime principal, with the subject captured
+   only from the bound Person's validated issuer-authenticated consent;
 2. both Owner registration and bound-Person consent are required, while Owner
    administration never grants private disclosure;
 3. `POST /api/v1/agent/tasks` is the sole client-initiated task admission seam
