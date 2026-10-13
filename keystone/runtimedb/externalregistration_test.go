@@ -482,9 +482,16 @@ func TestExternalRegistrationMigrationPreservesPopulatedPre0105Database(t *testi
 			audit[0].Path != "/synthetic-migration-fixture" || audit[0].Status != 200 {
 			t.Fatalf("%s: audit history = %+v, %v", stage, audit, err)
 		}
-		var registrations int
-		if err := db.sql.QueryRow(`SELECT COUNT(*) FROM external_client_registrations`).Scan(&registrations); err != nil || registrations != 0 {
-			t.Fatalf("%s: migration inferred %d external registrations: %v", stage, registrations, err)
+		if migrated {
+			var registrations int
+			if err := db.sql.QueryRow(`SELECT COUNT(*) FROM external_client_registrations`).Scan(&registrations); err != nil || registrations != 0 {
+				t.Fatalf("%s: migration inferred %d external registrations: %v", stage, registrations, err)
+			}
+		} else {
+			var table int
+			if err := db.sql.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='external_client_registrations'`).Scan(&table); err != nil || table != 0 {
+				t.Fatalf("%s: registration table exists before 0105: count=%d err=%v", stage, table, err)
+			}
 		}
 	}
 
