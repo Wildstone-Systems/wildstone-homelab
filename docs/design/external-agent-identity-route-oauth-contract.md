@@ -143,6 +143,14 @@ exact `(issuer, subject, client_id)` tuple may resolve to only one active
 registration across every Person, Agent, and Connection. Owner configuration
 creates an inert `pending_consent` record; pending records confer no runtime
 authority.
+
+The dedicated Agent must also have exactly one effectively admitted Person in
+the existing `butler_access` and live-Connection model: the bound Person.
+Activation fails if another Person can converse through Homepage or any chat
+Connection, and later access or Connection-policy mutations must not admit a
+second Person while the registration is active. Owner administration remains
+separate and grants no conversation disclosure by itself.
+
 Changing the issuer, OAuth subject, OAuth client ID, Person, Agent, Connection,
 or runtime principal creates a new registration and revokes the old one.
 `oauth_subject` is captured from a validated issuer response during the bound
@@ -177,7 +185,8 @@ For every protected request, the resource server must:
    username lookup;
 4. require that the bound Person remains admitted and that no other active
    registration maps that exact issuer/subject/client tuple;
-5. recheck its Agent, Connection, runtime principal, processing class, and
+5. recheck its Agent, exclusive effective Person admission, Connection,
+   runtime principal, OAuth authentication profile, processing class, and
    current lifecycle state;
 6. construct the existing internal runtime-principal context, without passing
    the Authelia token beyond Keystone's authentication/resource boundary to the
@@ -215,8 +224,11 @@ and current Wildstone records. Admission requires the Person, registration,
 Agent, Connection, and runtime principal all to be active; checks restore
 quarantine and current privacy/processing policy; bounds the objective and body;
 and creates a normal task and ledger. `(registration ID, clientSessionId,
-idempotencyKey)` is unique so a retry returns the same task rather than creating
-parallel authority.
+idempotencyKey)` identifies a retry, and the admission row stores a digest of
+the canonical normalized request payload. A retry returns the same task only
+when that digest matches. Reusing the same session/key for another objective or
+other authority-relevant input returns a conflict and creates no task, rather
+than attaching new work to stale context.
 
 The returned handle must accompany every task-scoped REST operation. For MCP,
 the client must bind each `tools/call` to that exact handle through one of these
@@ -271,6 +283,14 @@ Existing separately provisioned runtime-principal credentials remain available
 only to their explicitly configured native, packaged, or recovery paths. They
 are not accepted as a fallback after an OAuth failure and do not acquire access
 to routes outside this table.
+
+An Agent has one active authentication profile. OAuth activation atomically
+retires any usable static Agent-API bearer for that Agent, and the Keystone
+authentication wrapper rejects every bound `wst_` bearer while its OAuth
+registration is active. OAuth tasks and deliveries carry profile and
+registration provenance and are invisible to static poll/ack and task-handle
+paths. Returning to the static profile requires OAuth revocation plus an
+explicit successor credential; issuer outage never causes that transition.
 
 ## 6. OAuth and MCP compatibility target
 
@@ -402,14 +422,17 @@ Agents, clients, Connections, tasks, and a fake issuer:
    a duplicate issuer/subject/client binding fails rather than falling back to
    username or email matching. A valid issuer login for Person B cannot
    activate Person A's pending registration through a copied enrollment link or
-   callback.
+   callback. Activation and later access/Connection updates also refuse any
+   other Person who is effectively admitted to that dedicated Agent.
 2. A valid token on every general Keystone route is denied before body decoding;
    adding an unclassified route leaves it denied.
 3. Idle discovery returns only the bound Agent's currently assigned tools, and
    dispatch independently refuses a removed or ungranted tool.
-4. Task admission ignores caller-supplied identity fields, is idempotent, and
-   refuses an inactive Person, client, Agent, Connection, runtime principal, or
-   quarantined restore.
+4. Task admission ignores caller-supplied identity fields and refuses an
+   inactive Person, client, Agent, Connection, runtime principal, or
+   quarantined restore. An exact retry with the same normalized-payload digest
+   returns the existing task; reuse of its session/key for another objective
+   returns a conflict without a write.
 5. Two concurrent client sessions cannot borrow one pending run's handle. An
    absent, expired, replayed, or mismatched task correlation fails closed.
 6. Token expiry or revocation during a waiting poll prevents payload disclosure;
@@ -424,7 +447,8 @@ Agents, clients, Connections, tasks, and a fake issuer:
 8. Wrong issuer, subject, client, audience/resource, scope, token type, expiry,
    and credential epoch fail. An ID token fails.
 9. An Authelia outage fails closed; no legacy `wst_` credential or native Butler
-   is substituted.
+   is substituted. Static runtime bearers cannot authenticate as an Agent while
+   its OAuth profile is active or reach OAuth-addressed tasks/deliveries.
 10. `propose` can only file the existing human-reviewed Plan and cannot approve
    or apply it.
 11. REST and MCP produce the same manifest/invoke outcomes and audit identity
@@ -448,11 +472,14 @@ before code. In particular:
 
 1. one immutable external-client registration binds exact issuer/subject/client,
    Person, Agent, Connection, and runtime principal, with the subject captured
-   only from the bound Person's validated issuer-authenticated consent;
+   only from the bound Person's validated issuer-authenticated consent; that
+   Agent admits no other Person and cannot also expose static Agent-API bearer
+   authentication while the OAuth profile is active;
 2. both Owner registration and bound-Person consent are required, while Owner
    administration never grants private disclosure;
-3. `POST /api/v1/agent/tasks` is the sole client-initiated task admission seam
-   and derives every authority field server-side;
+3. `POST /api/v1/agent/tasks` is the sole client-initiated task admission seam,
+   derives every authority field server-side, and binds idempotency to a digest
+   of the canonical normalized request;
 4. task correlation must be explicit per request or cryptographically
    task-bound per MCP session; `solePending()` is prohibited in the OAuth
    profile;

@@ -58,6 +58,16 @@ This is a first-profile constraint, not a claim that every future runtime must
 be single-user. Supporting multiple clients or Persons behind one Agent needs
 a later accepted contract and cannot relax this profile in place.
 
+“Dedicated” also constrains the existing access model, not only the new
+registration table. Activation requires the bound Person to be the Agent's
+only effectively admitted Person across `butler_access` and every live chat
+Connection. While the registration is active, adding or admitting another
+Person must fail transactionally, including through an ordinary Agent access
+or Connection-policy update. Owner administration may configure or revoke the
+Agent but does not automatically grant the Owner conversation access or
+disclosure. A transition back to a shared/static profile requires revoking the
+OAuth registration first; it cannot weaken this invariant in place.
+
 ### 2.2 Pending Owner configuration is not Person consent
 
 Owner configuration and bound-Person consent are separate durable facts. The
@@ -96,10 +106,12 @@ static/native/packaged credentials and historical deliveries retain their
 explicit profiles and do not become OAuth-visible.
 
 Every use rechecks the live Person admission, Agent access/class and lifecycle,
-Connection admission/disclosure, exact runtime binding, processing class,
-credential epoch, and restore/household-stop fences. Disabling or revoking a
-registration closes subsequent boundaries but does not disclose its Person's
-private content to an Owner or silently transfer work to the native fallback.
+the absence of any other effectively admitted Person, Connection
+admission/disclosure, exact runtime binding, authentication profile, processing
+class, credential epoch, and restore/household-stop fences. Disabling or
+revoking a registration closes subsequent boundaries but does not disclose its
+Person's private content to an Owner or silently transfer work to the native
+fallback.
 
 ### 2.3 Direct Hermes task admission is mandatory
 
@@ -111,9 +123,12 @@ derives Person, Agent, Connection, audience, processing class, grants, and
 budget from the freshly resolved registration and current records; the client
 cannot name or override them.
 
-Admission is retry-idempotent on
-`(registration_id, client_session_id, idempotency_key)` and returns the same
-task for the same retry. Every subsequent task-scoped REST or MCP operation is
+Admission stores a digest of the canonical normalized admission payload and is
+retry-idempotent on
+`(registration_id, client_session_id, idempotency_key, payload_digest)`. Reuse
+of the session/key tuple returns the existing task only when the payload digest
+matches; a different objective or other authority-relevant input is a conflict
+and creates no task. Every subsequent task-scoped REST or MCP operation is
 bound to that exact task. `solePending()` is not proof of correlation for this
 profile. Acceptable correlation is either an explicit request-bound task grant
 verified on every call or a cryptographically unguessable MCP session issued
@@ -141,6 +156,16 @@ not an OAuth proxy and cannot accept or forward the Person/client bearer. A
 failed OAuth request never falls back to that token, another Agent, or the
 native Butler.
 
+Authentication profiles are mutually exclusive per Agent. Activating an OAuth
+registration atomically selects the OAuth profile and retires any usable
+static Agent-API bearer for that Agent; while the registration is active, the
+authentication wrapper rejects every `wst_` runtime bearer bound to it before
+route dispatch. OAuth-addressed tasks and deliveries also carry their profile
+and registration provenance and are inaccessible through static poll, ack, or
+task-handle paths. Returning the Agent to the static profile requires revoking
+the OAuth registration and provisioning an explicit successor credential; a
+static credential is never an outage or revocation bypass.
+
 The proposed OAuth target remains a pre-registered public client using
 Authorization Code with PKCE S256, an exact Keystone resource audience,
 `wildstone.agent` scope, and issuer introspection at every protected and final
@@ -155,11 +180,13 @@ live evidence.
 | --- | --- | --- |
 | Runtime credential identifies one Agent | `keystone/runtimedb/butlerruntime.go`; ADR-W039 §3.3 | Preserve the one-current-principal model; registration adds Person/client facts without multiplying current principals. |
 | Person identity is canonical and not name-derived | `keystone/runtimedb/personid.go`; ADR-W033 A0 | Bind the stable Person ID; activation requires that Person's independently authenticated, registration-bound one-time proof as well as issuer consent. |
+| A dedicated Agent admits only its bound Person | `butlers`, `butler_access`, `keystone/runtimedb/connection.go`; ADR-W033 B-series | Activation and later access/Connection changes enforce one effective Person; administrative ownership alone grants no conversation disclosure. |
 | Chat Connection is the disclosure/admission boundary | `keystone/runtimedb/connection.go`; `butler_addresses` | Store one exact chat Connection sequence; never substitute `integration_connections` or a label. |
 | Runtime routes are closed before body decoding | `keystone/api/api.go`; ADR-W040 §§2–3; #584 | Preserve the delivered static gate and extend deliberate classification only for accepted OAuth routes. |
 | Task authority comes from the ledger and handle | `keystone/agentgateway`; ADR-W039 §§3.1, 3.4 | Add model-invisible admission; derive every authority field server-side and bind exact correlation. |
 | Static delivery/ack authority is transactionally fenced | `keystone/runtimedb/agentdeliveries.go`; ADR-W040 §4; #585 | Preserve static semantics. OAuth-visible rows later require immutable registration/Person/Connection/Agent/audience provenance and the same final fence. |
 | MCP is only a translation of the canonical gateway | `cli/cmd/agent-bridge/mcp.go`; ADR-W040 §6 | Static profile stays in the sidecar; OAuth MCP translation moves to Keystone's authenticated resource boundary. |
+| Static and OAuth authentication cannot overlap | `keystone/api/api.go`; `runtime_principals`; ADR-W040 §2 | An active OAuth registration rejects bound `wst_` bearers, and OAuth-tagged tasks/deliveries are unreachable through static routes. |
 | Human approval remains authoritative | ADR-W033 E-series; ADR-W039 §§3.2, 3.4 | Direct task admission grants no approval/apply authority; infrastructure mutation still files a Plan. |
 | Native fallback is separate | ADR-W039 §§3.7, 4; ADR-W041 | No automatic work transfer, identity substitution, or processing-class downgrade. |
 
@@ -170,8 +197,9 @@ On acceptance, this ADR makes these scoped amendments:
 1. **ADR-W039 §3.3 and §4 identity/authentication.** The static/native profile
    remains principal-to-Agent. The external OAuth profile additionally requires
    an active immutable Person/client/Connection registration and live
-   registration checks. The external profile's Agent is dedicated to its bound
-   Person.
+   registration checks. The external profile's Agent is dedicated exclusively
+   to its bound Person, and its OAuth/static authentication profiles cannot be
+   active together.
 2. **ADR-W039 §3.4 and §4.1 task origin.** A Wildstone-issued handle remains
    mandatory. Direct Hermes work gains one model-invisible admission seam so a
    handle can be issued before the first capability call; no runtime claim
@@ -215,8 +243,9 @@ ResolveExternalRuntime(accessToken, method, canonicalResource)
      runtimePrincipal, clientID, credentialEpoch, requestLocalRecheckProof
 
 AdmitExternalTask(resolvedRegistration, clientSessionID, idempotencyKey,
-                  boundedObjective)
+                  canonicalPayload, payloadDigest)
   -> exact taskID, handle, expiry
+  | conflict when the session/key exists with another digest
 
 BindMCPTask(resolvedRegistration, handle, requestOrSessionProof)
   -> exact current task context | deny
@@ -241,11 +270,14 @@ clients, Connections, tasks, and a fake issuer and prove:
    link or callback;
 2. one active registration per Person, one per Agent, and one per exact
    issuer/subject/client tuple are enforced under concurrent activation and
-   re-enable races;
+   re-enable races; activation and later Agent-access/Connection changes also
+   refuse any second effectively admitted Person under concurrency;
 3. no name, email, creator, access-list, Connection label, or legacy row is
    used as identity or backfill evidence;
-4. direct task admission derives all authority, is retry-idempotent, and fails
-   closed for every stale Person/Agent/Connection/runtime/restore fence;
+4. direct task admission derives all authority, returns the same task only for
+   a matching canonical payload digest, rejects session/key reuse with a
+   different objective, and fails closed for every stale
+   Person/Agent/Connection/runtime/restore fence;
 5. absent, mismatched, expired, replayed, or cross-session task correlation is
    denied, including when only one run is pending;
 6. OAuth route denial occurs before body decoding, while REST/native/MCP share
@@ -253,7 +285,10 @@ clients, Connections, tasks, and a fake issuer and prove:
 7. token, registration, Person, Agent, Connection, or runtime revocation during
    poll/ack prevents disclosure or mutation without changing static retry
    semantics; and
-8. no rejected OAuth call falls back to a static credential or native Agent.
+8. an OAuth-profile Agent rejects its old and newly presented static runtime
+   bearers; static poll/ack and task-handle paths cannot reach OAuth-addressed
+   work; and no rejected OAuth call falls back to a static credential or native
+   Agent.
 
 #356 must separately verify the installed Hermes and Authelia versions,
 metadata, callback, PKCE, resource/audience/scopes, refresh and revocation,
