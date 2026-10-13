@@ -262,6 +262,16 @@ does not implement activation, token resolution, task admission, MCP, delivery
 provenance, or deployment. Those remain separate, explicitly scheduled slices
 after their prerequisites are accepted.
 
+Implementation note: the #586 slice stores only immutable pending configuration
+and terminal revocation history in the runtime database. Creation validates the
+current Person, Agent access/lifecycle, exact live chat Connection and binding,
+disclosure policy, dedicated-Person constraint, current runtime principal, and
+restore/execution fences in one transaction. The trusted Owner service remains
+responsible for authenticating the configuring actor. Activation, subject and
+consent capture, active-profile uniqueness and mutual exclusion, proof
+consumption, request idempotency, OAuth resolution, and delivery provenance
+remain follow-up gates; no pending row is consulted by an authority path.
+
 ## 6. Required proof before implementation is complete
 
 Repository tests for later slices must use synthetic Persons, dedicated Agents,

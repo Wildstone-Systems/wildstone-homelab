@@ -66,6 +66,10 @@ func TestAFinishedDatabaseAdoptsTheBaselineUntouched(t *testing.T) {
 	db.Close()
 	asIfMigratedTheLongWay(t, path, len(squashedMigrations))
 
+	current, err := migrationFS.ReadDir("migrations")
+	if err != nil {
+		t.Fatal(err)
+	}
 	for i := 0; i < 2; i++ { // adopting is once; reopening changes nothing
 		db, err = Open(path)
 		if err != nil {
@@ -78,7 +82,11 @@ func TestAFinishedDatabaseAdoptsTheBaselineUntouched(t *testing.T) {
 		if !slices.Contains(applied, baselineMigration) {
 			t.Fatalf("open %d: the baseline was not adopted: %v", i+1, applied)
 		}
-		if got, want := len(applied), len(squashedMigrations)+1; got != want {
+		// The finished old chain is adopted as the baseline, then every
+		// post-baseline migration is retained/applied. Counting only the
+		// baseline made the first new migration after the squash fail this
+		// test even though the database was correctly upgraded.
+		if got, want := len(applied), len(squashedMigrations)+len(current); got != want {
 			t.Fatalf("open %d: %d migrations recorded, want %d", i+1, got, want)
 		}
 		if _, err := db.GetButlerMember("sam"); err != nil {
