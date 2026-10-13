@@ -341,18 +341,41 @@ func TestExternalRegistrationCreatedBeforeAuthorityWithdrawalRemainsInert(t *tes
 	for _, name := range []string{"Person offboarding", "runtime principal disablement", "Agent access withdrawal"} {
 		t.Run(name, func(t *testing.T) {
 			db, in := externalRegistrationFixture(t)
-			r, err := db.CreatePendingExternalRegistration(in)
-			if err != nil {
-				t.Fatalf("valid creation should commit first: %v", err)
+			validated := make(chan struct{})
+			allowCommit := make(chan struct{})
+			db.externalRegistrationBeforeCommitForTest = func() {
+				close(validated)
+				<-allowCommit
 			}
-			withdrawn := make(chan error, 1)
+			type createResult struct {
+				registration ExternalClientRegistration
+				err          error
+			}
+			created := make(chan createResult, 1)
 			go func() {
+				r, err := db.CreatePendingExternalRegistration(in)
+				created <- createResult{registration: r, err: err}
+			}()
+			<-validated // the creation transaction holds the immediate write lock
+
+			withdrawn := make(chan error, 1)
+			mutationStarted := make(chan struct{})
+			go func() {
+				close(mutationStarted)
 				withdrawn <- mutateExternalRegistrationAuthority(db.sql, in, name)
 			}()
+			<-mutationStarted // withdrawal is queued behind the uncommitted create
+			close(allowCommit)
+
+			result := <-created
+			db.externalRegistrationBeforeCommitForTest = nil
+			if result.err != nil {
+				t.Fatalf("valid creation should commit first: %v", result.err)
+			}
 			if err := <-withdrawn; err != nil {
 				t.Fatalf("subsequent %s: %v", name, err)
 			}
-			got, err := db.ExternalClientRegistration(r.ID)
+			got, err := db.ExternalClientRegistration(result.registration.ID)
 			if err != nil || got.State != ExternalRegistrationPendingConsent ||
 				got.PersonID != in.PersonID || got.Butler != in.Butler ||
 				got.Connection != in.Connection || got.RuntimePrincipal != in.RuntimePrincipal {
