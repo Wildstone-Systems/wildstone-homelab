@@ -213,9 +213,8 @@ func (db *DB) RevokeExternalClientRegistration(id, by string) (ExternalClientReg
 		return ExternalClientRegistration{}, err
 	}
 	defer tx.Rollback()
-	if err := gateTx(tx, GateDispatch); err != nil {
-		return ExternalClientRegistration{}, err
-	}
+	// Revocation only removes future authority, so it remains available
+	// while execution is stopped or a restored database is quarantined.
 	r, err := scanExternalRegistration(tx.QueryRow(externalRegistrationColumns+` WHERE id=?`, id))
 	if err != nil {
 		return ExternalClientRegistration{}, err

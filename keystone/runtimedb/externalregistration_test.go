@@ -4,6 +4,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/chickenrat17/wildstone-homelab/keystone/agentapi"
 )
@@ -111,6 +112,35 @@ func TestConcurrentExternalRegistrationRevokeIsTerminalAndIdempotent(t *testing.
 	got, err := db.ExternalClientRegistration(r.ID)
 	if err != nil || got.State != ExternalRegistrationRevoked || got.RevokedBy == "" || got.RevokedAt.IsZero() {
 		t.Fatalf("terminal registration = %+v, %v", got, err)
+	}
+}
+
+func TestExternalRegistrationRevocationRemainsAvailableUnderExecutionFences(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		fence func(*DB) error
+	}{
+		{"household execution stop", func(db *DB) error {
+			return db.StopHouseholdExecution("mika", "test stop")
+		}},
+		{"restore quarantine", func(db *DB) error {
+			return db.EnterRestoreQuarantine("test restore", time.Now())
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db, in := externalRegistrationFixture(t)
+			r, err := db.CreatePendingExternalRegistration(in)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := tc.fence(db); err != nil {
+				t.Fatal(err)
+			}
+			revoked, err := db.RevokeExternalClientRegistration(r.ID, "root-admin")
+			if err != nil || revoked.State != ExternalRegistrationRevoked || revoked.RevokedAt.IsZero() {
+				t.Fatalf("revoke under fence = %+v, %v", revoked, err)
+			}
+		})
 	}
 }
 
