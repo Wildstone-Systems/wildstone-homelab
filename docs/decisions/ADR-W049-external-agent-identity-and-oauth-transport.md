@@ -47,7 +47,8 @@ authority subject.
 The first-profile registration cardinality is closed:
 
 - one active external-client registration per dedicated Agent;
-- one dedicated external Agent per bound Person for this profile;
+- one active external-client registration, and therefore one dedicated
+  external Agent, per bound Person for this profile;
 - one exact `(issuer, subject, client_id)` tuple resolves to at most one active
   registration across all Persons, Agents, and Connections; and
 - one registration names one canonical Person ID, Agent ID, chat Connection
@@ -76,10 +77,17 @@ discovery, invocation, task, delivery, acknowledgment, or token-resolution
 authority.
 
 Only an issuer-authenticated consent flow completed by that exact bound Person
-may capture `subject` and activate a pending record. An Owner-entered subject,
-`consent=true` flag, display name, email, Console username, creator identity,
-access-list membership, existing bearer, or matching label is never proof of
-identity or consent.
+may capture `subject` and activate a pending record. The flow must also carry
+an independently authenticated, single-use Person-consent proof issued by
+Keystone for the exact pending registration ID and its configured Person ID.
+Keystone validates and consumes that proof atomically with issuer state/nonce,
+subject capture, the one-Agent-per-Person constraints, and activation. A valid
+issuer login by a different Person cannot activate the record, even if that
+Person obtains its registration link or callback. The concrete user-facing
+enrollment surface remains a later reviewed interface; it may not be replaced
+by an Owner-entered subject, `consent=true` flag, display name, email, Console
+username, creator identity, access-list membership, existing bearer, or
+matching label.
 
 The identity-bearing fields are immutable. Changing Person, Agent, Connection,
 issuer, subject, client ID, or runtime principal creates a successor and
@@ -146,7 +154,7 @@ live evidence.
 | Requirement | Current source or governing ADR | Amendment or preserved boundary |
 | --- | --- | --- |
 | Runtime credential identifies one Agent | `keystone/runtimedb/butlerruntime.go`; ADR-W039 §3.3 | Preserve the one-current-principal model; registration adds Person/client facts without multiplying current principals. |
-| Person identity is canonical and not name-derived | `keystone/runtimedb/personid.go`; ADR-W033 A0 | Bind the stable Person ID; issuer subject is captured only by that Person's authenticated consent. |
+| Person identity is canonical and not name-derived | `keystone/runtimedb/personid.go`; ADR-W033 A0 | Bind the stable Person ID; activation requires that Person's independently authenticated, registration-bound one-time proof as well as issuer consent. |
 | Chat Connection is the disclosure/admission boundary | `keystone/runtimedb/connection.go`; `butler_addresses` | Store one exact chat Connection sequence; never substitute `integration_connections` or a label. |
 | Runtime routes are closed before body decoding | `keystone/api/api.go`; ADR-W040 §§2–3; #584 | Preserve the delivered static gate and extend deliberate classification only for accepted OAuth routes. |
 | Task authority comes from the ledger and handle | `keystone/agentgateway`; ADR-W039 §§3.1, 3.4 | Add model-invisible admission; derive every authority field server-side and bind exact correlation. |
@@ -198,7 +206,8 @@ CreatePendingExternalRegistration(owner, personID, agentID, connectionSeq,
                                   issuer, clientID, runtimePrincipal)
   -> inert registrationID
 
-ActivateExternalRegistration(registrationID, validatedIssuerConsent)
+ActivateExternalRegistration(registrationID, validatedIssuerConsent,
+                             personBoundOneTimeProof)
   -> immutable active registration | deny
 
 ResolveExternalRuntime(accessToken, method, canonicalResource)
@@ -227,9 +236,12 @@ Repository tests for later slices must use synthetic Persons, dedicated Agents,
 clients, Connections, tasks, and a fake issuer and prove:
 
 1. pending configuration grants no Agent API or MCP authority and cannot be
-   activated with Owner-supplied identity data;
-2. one active registration per Agent and one active exact
-   issuer/subject/client tuple are enforced under concurrency;
+   activated with Owner-supplied identity data; a valid issuer login for a
+   different Person cannot activate it, including with a copied enrollment
+   link or callback;
+2. one active registration per Person, one per Agent, and one per exact
+   issuer/subject/client tuple are enforced under concurrent activation and
+   re-enable races;
 3. no name, email, creator, access-list, Connection label, or legacy row is
    used as identity or backfill evidence;
 4. direct task admission derives all authority, is retry-idempotent, and fails

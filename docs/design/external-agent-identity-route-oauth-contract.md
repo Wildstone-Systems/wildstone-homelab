@@ -138,17 +138,23 @@ ExternalClientRegistration
 ```
 
 For the first profile, the Agent is dedicated to the bound Person. Only one
-active registration may bind that Agent, and an exact
-`(issuer, subject, client_id)` tuple may resolve to only one active registration
-across every Person, Agent, and Connection. Owner configuration creates an
-inert `pending_consent` record; pending records confer no runtime authority.
+active registration may bind that Person, only one may bind that Agent, and an
+exact `(issuer, subject, client_id)` tuple may resolve to only one active
+registration across every Person, Agent, and Connection. Owner configuration
+creates an inert `pending_consent` record; pending records confer no runtime
+authority.
 Changing the issuer, OAuth subject, OAuth client ID, Person, Agent, Connection,
 or runtime principal creates a new registration and revokes the old one.
 `oauth_subject` is captured from a validated issuer response during the bound
-Person's consent; an Owner cannot type, copy, or infer it from a username,
+Person's consent. Activation also requires a single-use proof independently
+issued by Keystone for the exact pending registration and configured Person;
+that proof is consumed atomically with issuer state/nonce and activation. A
+different valid issuer user cannot activate a copied enrollment link or
+callback. An Owner cannot type, copy, or infer the subject from a username,
 email, display name, or existing Console session. Keystone must reject a second
-active binding of the same `(issuer, subject, client_id)`, even when both would
-name the same Person.
+active registration for the same Person or Agent, and a second active binding
+of the same `(issuer, subject, client_id)`, even when both would name the same
+Person.
 This registration is the new durable issuer-subject-to-Person binding; the
 current Console OIDC username lookup is not such a binding and is not reused.
 Rotation changes the credential epoch; it never rebinds an existing
@@ -394,7 +400,9 @@ Agents, clients, Connections, tasks, and a fake issuer:
 1. A token for Person A/client A cannot discover, invoke, poll, or acknowledge
    Person B, Agent B, another Connection, or another task. A changed subject or
    a duplicate issuer/subject/client binding fails rather than falling back to
-   username or email matching.
+   username or email matching. A valid issuer login for Person B cannot
+   activate Person A's pending registration through a copied enrollment link or
+   callback.
 2. A valid token on every general Keystone route is denied before body decoding;
    adding an unclassified route leaves it denied.
 3. Idle discovery returns only the bound Agent's currently assigned tools, and
@@ -407,11 +415,12 @@ Agents, clients, Connections, tasks, and a fake issuer:
 6. Token expiry or revocation during a waiting poll prevents payload disclosure;
    token or registration revocation before acknowledgment changes no delivery
    row.
-7. A second active registration for one Agent is refused. One registration
-   cannot poll or acknowledge another registration's deliveries. A taskless
-   proposal outcome retains its originating registration, Person, Connection,
-   and audience provenance; a legacy or new row without exact provenance is
-   never visible to an OAuth registration.
+7. A second active registration for one Person or Agent is refused, including
+   under concurrent activation or re-enable. One registration cannot poll or
+   acknowledge another registration's deliveries. A taskless proposal outcome
+   retains its originating registration, Person, Connection, and audience
+   provenance; a legacy or new row without exact provenance is never visible
+   to an OAuth registration.
 8. Wrong issuer, subject, client, audience/resource, scope, token type, expiry,
    and credential epoch fail. An ID token fails.
 9. An Authelia outage fails closed; no legacy `wst_` credential or native Butler
