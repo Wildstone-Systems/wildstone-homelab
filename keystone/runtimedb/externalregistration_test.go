@@ -424,7 +424,7 @@ func TestExternalRegistrationMigrationPreservesPopulatedPre0105Database(t *testi
 		t.Fatal(err)
 	}
 
-	verifyPreserved := func(stage string, db *DB) {
+	verifyPreserved := func(stage string, db *DB, migrated bool) {
 		t.Helper()
 		var gotPerson, gotAgent, gotConnection, gotPrincipal string
 		var gotRuntimeAgent int64
@@ -465,11 +465,11 @@ func TestExternalRegistrationMigrationPreservesPopulatedPre0105Database(t *testi
 		}
 	}
 
-	verifyPreserved("before migration", db)
+	verifyPreserved("before migration", db, false)
 	if err := db.migrateThrough("migrations/0105_external_client_registrations.sql"); err != nil {
 		t.Fatalf("apply 0105: %v", err)
 	}
-	verifyPreserved("after 0105", db)
+	verifyPreserved("after 0105", db, true)
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -481,7 +481,7 @@ func TestExternalRegistrationMigrationPreservesPopulatedPre0105Database(t *testi
 		t.Fatalf("reopen: %v", err)
 	}
 	defer db.Close()
-	verifyPreserved("after reopen", db)
+	verifyPreserved("after reopen", db, true)
 	applied, err := db.AppliedMigrations()
 	if err != nil {
 		t.Fatal(err)
