@@ -165,6 +165,9 @@ func (db *DB) CreatePendingExternalRegistration(in CreatePendingExternalRegistra
 	if err != nil {
 		return ExternalClientRegistration{}, fmt.Errorf("runtimedb: creating pending external registration: %w", err)
 	}
+	if db.externalRegistrationBeforeCommitForTest != nil {
+		db.externalRegistrationBeforeCommitForTest()
+	}
 	if err := tx.Commit(); err != nil {
 		return ExternalClientRegistration{}, fmt.Errorf("runtimedb: committing pending external registration: %w", err)
 	}
