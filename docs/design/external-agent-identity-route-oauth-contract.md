@@ -1,9 +1,15 @@
 # External Agent Identity, Route, and OAuth Contract
 
-Status: **proposed for review**, not accepted and not implemented. This is the
-bounded contract deliverable for [#541](https://github.com/chickenrat17/wildstone_homelab-control-plane/issues/541)
-under milestone tracker [#580](https://github.com/chickenrat17/wildstone_homelab-control-plane/issues/580).
-It is grounded in `main` at `461272024aeae3b155fb67a25e84999da708d067`.
+Status: **partly selected, otherwise proposed**, and not implemented. The
+maintainer selected a dedicated external-profile Agent per Person and direct
+Hermes-initiated conversations for the first live proof. The companion
+[ADR-W049](../decisions/ADR-W049-external-agent-identity-and-oauth-transport.md)
+records the proposed amendment needed to make those choices normative. All
+other OAuth, registration, transport, and compatibility details below remain
+proposed until that ADR is accepted. This is the bounded contract deliverable
+for [#541](https://github.com/chickenrat17/wildstone_homelab-control-plane/issues/541)
+under milestone tracker [#580](https://github.com/chickenrat17/wildstone_homelab-control-plane/issues/580),
+reconciled with `main` at `1b916833aac4187e0aa9270d05a990bddc2c9355`.
 
 This proposal does not amend an accepted ADR by itself. ADR-W033, ADR-W039,
 ADR-W040, and ADR-W041 continue to govern until a reviewer accepts the choices
@@ -120,23 +126,29 @@ fields:
 ExternalClientRegistration
   id
   issuer
-  oauth_subject
+  oauth_subject // absent until issuer-authenticated Person consent
   oauth_client_id
   person_id
   agent_id
   connection_id
   runtime_principal
-  state: active | disabled | revoked
+  state: pending_consent | active | disabled | revoked
   credential_epoch
-  created_at / disabled_at / revoked_at
+  configured_by / configured_at / consented_at / disabled_at / revoked_at
 ```
 
+For the first profile, the Agent is dedicated to the bound Person. Only one
+active registration may bind that Agent, and an exact
+`(issuer, subject, client_id)` tuple may resolve to only one active registration
+across every Person, Agent, and Connection. Owner configuration creates an
+inert `pending_consent` record; pending records confer no runtime authority.
 Changing the issuer, OAuth subject, OAuth client ID, Person, Agent, Connection,
 or runtime principal creates a new registration and revokes the old one.
 `oauth_subject` is captured from a validated issuer response during the bound
 Person's consent; an Owner cannot type, copy, or infer it from a username,
 email, display name, or existing Console session. Keystone must reject a second
-active binding of the same `(issuer, subject, client_id)` to another Person.
+active binding of the same `(issuer, subject, client_id)`, even when both would
+name the same Person.
 This registration is the new durable issuer-subject-to-Person binding; the
 current Console OIDC username lookup is not such a binding and is not reused.
 Rotation changes the credential epoch; it never rebinds an existing
@@ -158,7 +170,7 @@ For every protected request, the resource server must:
    resolving the subject through a name, email, or the current Console OIDC
    username lookup;
 4. require that the bound Person remains admitted and that no other active
-   registration maps that exact issuer/subject/client tuple to another Person;
+   registration maps that exact issuer/subject/client tuple;
 5. recheck its Agent, Connection, runtime principal, processing class, and
    current lifecycle state;
 6. construct the existing internal runtime-principal context, without passing
@@ -213,11 +225,12 @@ reviewed mechanisms:
 the OAuth profile. An `X-Hermes-Run-Id` is acceptable only after the pinned
 Hermes release is shown to put that exact value on every outbound MCP request
 and the bridge has an atomic, one-to-one, expiry-bounded run-to-handle mapping.
-If the pinned client supports none of these mechanisms, independently initiated
-Hermes tasks are excluded from the first PoC. Delivery-initiated work may still
-proceed because the bridge receives its handle from Wildstone before starting
-the run, but live conformance must still prove that no other session can borrow
-it.
+If the pinned client supports neither mechanism, the required independently
+initiated Hermes acceptance case is blocked and needs a bounded adapter or
+client compatibility solution. Delivery-initiated work may still proceed as an
+intermediate test because the bridge receives its handle from Wildstone before
+starting the run, but it is not milestone completion and live conformance must
+still prove that no other session can borrow that handle.
 
 ## 5. Route contract
 
@@ -316,8 +329,10 @@ RecheckRuntimeAuthority(freshIdentity, operation, taskOrDeliveryID)
   -> allow | deny
 ```
 
-#581 owns the closed route classifier and integration with the existing
-authentication wrapper. For the OAuth profile, `/mcp` must terminate behind
+The completed #581 slice owns the existing closed static-runtime route
+classifier and integration with the authentication wrapper. A later OAuth
+slice may extend that classifier only after this amendment is accepted. For the
+OAuth profile, `/mcp` must terminate behind
 that Keystone wrapper so the original bearer is resolved before JSON-RPC body
 decoding and the resulting Person/client/registration identity remains present
 through route classification and gateway dispatch. The current
@@ -344,8 +359,11 @@ and audience when enqueued; if its producer cannot do so, it is ineligible for
 the OAuth queue. Existing Agent-only rows are not backfilled by guessing and
 must be invisible and unacknowledgeable through an OAuth registration.
 
-#582 owns that delivery provenance and the final recheck immediately before a
-delivery payload is returned and at the acknowledgment transaction boundary.
+The completed #582 slice supplied static-runtime delivery and acknowledgment
+revocation fences, but it did not add OAuth registration provenance. A later
+OAuth delivery slice must add that provenance and preserve the final recheck
+immediately before a delivery payload is returned and at the acknowledgment
+transaction boundary.
 Poll selection requires the row's registration, Person, Connection, Agent, and
 task/audience provenance to match the freshly resolved identity before payload
 decoding or disclosure. Acknowledgment selects and fences by the same tuple,
@@ -389,10 +407,11 @@ Agents, clients, Connections, tasks, and a fake issuer:
 6. Token expiry or revocation during a waiting poll prevents payload disclosure;
    token or registration revocation before acknowledgment changes no delivery
    row.
-7. Two active registrations for one Agent cannot poll or acknowledge each
-   other's deliveries. A taskless proposal outcome retains its originating
-   registration, Person, Connection, and audience provenance; a legacy or new
-   row without exact provenance is never visible to an OAuth registration.
+7. A second active registration for one Agent is refused. One registration
+   cannot poll or acknowledge another registration's deliveries. A taskless
+   proposal outcome retains its originating registration, Person, Connection,
+   and audience provenance; a legacy or new row without exact provenance is
+   never visible to an OAuth registration.
 8. Wrong issuer, subject, client, audience/resource, scope, token type, expiry,
    and credential epoch fail. An ID token fails.
 9. An Authelia outage fails closed; no legacy `wst_` credential or native Butler
@@ -408,9 +427,15 @@ PKCE S256, resource/audience/scopes, refresh rotation, client and Person
 revocation, issuer outage, concurrent-session correlation, and limitations.
 Fixture tests do not satisfy that gate.
 
-## 9. Review decisions
+## 9. Decision status
 
-Reviewers are asked to accept or amend these bounded choices before code:
+The maintainer has selected the first two product requirements:
+
+- one dedicated external-profile Agent per bound Person; and
+- direct Hermes-initiated conversations in the first live proof.
+
+ADR-W049 asks reviewers to accept or amend the remaining normative contract
+before code. In particular:
 
 1. one immutable external-client registration binds exact issuer/subject/client,
    Person, Agent, Connection, and runtime principal, with the subject captured
@@ -426,19 +451,20 @@ Reviewers are asked to accept or amend these bounded choices before code:
 6. the first OAuth target is a pre-registered public client using Code + PKCE
    S256, exact resource audience, and introspection on every request;
 7. issuer outage fails closed, with no JWT/static-token/native fallback;
-8. independent Hermes task initiation is omitted from the first PoC if the
-   pinned release cannot carry exact per-task correlation;
+8. independent Hermes task initiation is mandatory for the first proof; if the
+   pinned release cannot carry exact per-task correlation, acceptance is
+   blocked pending a bounded compatibility solution;
 9. every OAuth-visible delivery is durably addressed to one exact registration,
    Person, Connection, Agent, and audience; unproven legacy/taskless rows are
    excluded rather than inferred;
 10. the OAuth `/mcp` endpoint terminates at Keystone's authenticated resource
     boundary; the current sidecar shared-secret endpoint is not an OAuth proxy.
 
-Accepting this proposal should produce a companion ADR amendment before or with
-implementation because ADR-W039 currently describes only runtime-principal
-credentials and task handles, not Person-bound OAuth client registrations or
-client-initiated task admission, and ADR-W040 currently fixes MCP termination in
-the sidecar rather than Keystone.
+The proposed companion ADR is
+[ADR-W049](../decisions/ADR-W049-external-agent-identity-and-oauth-transport.md).
+ADR-W039 continues to describe only runtime-principal credentials and existing
+task handles, while ADR-W040 fixes MCP termination in the sidecar, until that
+amendment is explicitly accepted.
 
 ## 10. References
 
@@ -446,6 +472,7 @@ the sidecar rather than Keystone.
 - [ADR-W039](../decisions/ADR-W039-canonical-agent-api-and-pluggable-runtimes.md)
 - [ADR-W040](../decisions/ADR-W040-agent-api-transport.md)
 - [ADR-W041](../decisions/ADR-W041-agent-runtime-contract.md)
+- [ADR-W049](../decisions/ADR-W049-external-agent-identity-and-oauth-transport.md)
 - [`runtime_principals` implementation](../../keystone/runtimedb/butlerruntime.go)
 - [Agent HTTP handlers](../../keystone/api/handlers_agent.go)
 - [MCP bridge](../../cli/cmd/agent-bridge/mcp.go)
