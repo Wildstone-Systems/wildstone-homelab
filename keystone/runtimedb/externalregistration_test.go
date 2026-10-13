@@ -278,15 +278,15 @@ type externalRegistrationExecer interface {
 func mutateExternalRegistrationAuthority(exec externalRegistrationExecer, in CreatePendingExternalRegistration, name string) error {
 	switch name {
 	case "Person offboarding":
-		_, err := exec.Exec(\`UPDATE butler_members
-			SET offboarded_at=?, offboarded_by='root-admin', admitted=0 WHERE person_id=?\`, now(), in.PersonID)
+		_, err := exec.Exec(`UPDATE butler_members
+			SET offboarded_at=?, offboarded_by='root-admin', admitted=0 WHERE person_id=?`, now(), in.PersonID)
 		return err
 	case "runtime principal disablement":
-		_, err := exec.Exec(\`UPDATE principals SET disabled=1 WHERE name=?\`, in.RuntimePrincipal)
+		_, err := exec.Exec(`UPDATE principals SET disabled=1 WHERE name=?`, in.RuntimePrincipal)
 		return err
 	case "Agent access withdrawal":
-		_, err := exec.Exec(\`UPDATE butler_access SET revoked_at=?, revoked_by='root-admin'
-			WHERE butler=? AND person_id=? AND revoked_at=''\`, now(), in.Butler, in.PersonID)
+		_, err := exec.Exec(`UPDATE butler_access SET revoked_at=?, revoked_by='root-admin'
+			WHERE butler=? AND person_id=? AND revoked_at=''`, now(), in.Butler, in.PersonID)
 		return err
 	default:
 		return errors.New("unknown authority mutation")
@@ -296,7 +296,7 @@ func mutateExternalRegistrationAuthority(exec externalRegistrationExecer, in Cre
 func assertNoExternalRegistrations(t *testing.T, db *DB) {
 	t.Helper()
 	var n int
-	if err := db.sql.QueryRow(\`SELECT COUNT(*) FROM external_client_registrations\`).Scan(&n); err != nil || n != 0 {
+	if err := db.sql.QueryRow(`SELECT COUNT(*) FROM external_client_registrations`).Scan(&n); err != nil || n != 0 {
 		t.Fatalf("refused create wrote %d registrations: %v", n, err)
 	}
 }
@@ -422,9 +422,9 @@ func TestExternalRegistrationMigrationPreservesPopulatedPre0105Database(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.sql.Exec(\`INSERT INTO chat_bindings
+	if _, err := db.sql.Exec(`INSERT INTO chat_bindings
 		(connection,account,person_id,display_name,created_at,created_by)
-		VALUES(?,?,?,?,?,?)\`, connection, "migration-fixture-account", person.PersonID, "Sam", now(), "root-admin"); err != nil {
+		VALUES(?,?,?,?,?,?)`, connection, "migration-fixture-account", person.PersonID, "Sam", now(), "root-admin"); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.SetButlerRuntime(agent, ButlerRuntime{Type: agentapi.RuntimeHermes,
@@ -451,21 +451,21 @@ func TestExternalRegistrationMigrationPreservesPopulatedPre0105Database(t *testi
 		t.Helper()
 		var gotPerson, gotAgent, gotConnection, gotPrincipal string
 		var gotRuntimeAgent int64
-		if err := db.sql.QueryRow(\`SELECT person_id FROM butler_members WHERE person_id=?\`, person.PersonID).Scan(&gotPerson); err != nil {
+		if err := db.sql.QueryRow(`SELECT person_id FROM butler_members WHERE person_id=?`, person.PersonID).Scan(&gotPerson); err != nil {
 			t.Fatalf("%s: Person: %v", stage, err)
 		}
-		if err := db.sql.QueryRow(\`SELECT name FROM butlers WHERE seq=?\`, agent).Scan(&gotAgent); err != nil {
+		if err := db.sql.QueryRow(`SELECT name FROM butlers WHERE seq=?`, agent).Scan(&gotAgent); err != nil {
 			t.Fatalf("%s: Agent: %v", stage, err)
 		}
-		if err := db.sql.QueryRow(\`SELECT account FROM chat_bindings WHERE connection=? AND person_id=? AND revoked_at=''\`,
+		if err := db.sql.QueryRow(`SELECT account FROM chat_bindings WHERE connection=? AND person_id=? AND revoked_at=''`,
 			connection, person.PersonID).Scan(&gotConnection); err != nil {
 			t.Fatalf("%s: chat binding: %v", stage, err)
 		}
-		if err := db.sql.QueryRow(\`SELECT principal FROM runtime_principals WHERE principal=? AND butler=?\`,
+		if err := db.sql.QueryRow(`SELECT principal FROM runtime_principals WHERE principal=? AND butler=?`,
 			principal, agent).Scan(&gotPrincipal); err != nil {
 			t.Fatalf("%s: runtime principal binding: %v", stage, err)
 		}
-		if err := db.sql.QueryRow(\`SELECT butler FROM runtime_principals WHERE principal=?\`, principal).Scan(&gotRuntimeAgent); err != nil {
+		if err := db.sql.QueryRow(`SELECT butler FROM runtime_principals WHERE principal=?`, principal).Scan(&gotRuntimeAgent); err != nil {
 			t.Fatalf("%s: runtime relationship: %v", stage, err)
 		}
 		if gotPerson != person.PersonID || gotAgent != "migration-fixture-agent" ||
@@ -483,7 +483,7 @@ func TestExternalRegistrationMigrationPreservesPopulatedPre0105Database(t *testi
 			t.Fatalf("%s: audit history = %+v, %v", stage, audit, err)
 		}
 		var registrations int
-		if err := db.sql.QueryRow(\`SELECT COUNT(*) FROM external_client_registrations\`).Scan(&registrations); err != nil || registrations != 0 {
+		if err := db.sql.QueryRow(`SELECT COUNT(*) FROM external_client_registrations`).Scan(&registrations); err != nil || registrations != 0 {
 			t.Fatalf("%s: migration inferred %d external registrations: %v", stage, registrations, err)
 		}
 	}
