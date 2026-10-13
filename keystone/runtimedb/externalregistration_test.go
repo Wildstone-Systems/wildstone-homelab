@@ -138,12 +138,45 @@ func TestPendingExternalRegistrationRequiresExactDedicatedLiveBinding(t *testing
 				t.Fatal(err)
 			}
 		}},
+		{"inaccessible Person", func(t *testing.T, db *DB, in *CreatePendingExternalRegistration) {
+			if _, err := db.sql.Exec(`UPDATE butler_access SET revoked_at=?,revoked_by='root-admin'
+				WHERE butler=? AND person_id=? AND revoked_at=''`, now(), in.Butler, in.PersonID); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"cross-Person binding", func(t *testing.T, db *DB, in *CreatePendingExternalRegistration) {
+			other, err := db.GetButlerMember("mika")
+			if err != nil {
+				t.Fatal(err)
+			}
+			in.PersonID = other.PersonID
+		}},
+		{"disabled Agent", func(t *testing.T, db *DB, in *CreatePendingExternalRegistration) {
+			if _, err := db.sql.Exec(`UPDATE butlers SET enabled=0 WHERE seq=?`, in.Butler); err != nil {
+				t.Fatal(err)
+			}
+		}},
 		{"retired Agent", func(t *testing.T, db *DB, in *CreatePendingExternalRegistration) {
 			if _, err := db.sql.Exec(`UPDATE butlers SET retired_at=?,retired_by='root-admin' WHERE seq=?`, now(), in.Butler); err != nil {
 				t.Fatal(err)
 			}
 		}},
 		{"wrong Connection", func(_ *testing.T, _ *DB, in *CreatePendingExternalRegistration) { in.Connection++ }},
+		{"cross-Agent Connection", func(t *testing.T, db *DB, in *CreatePendingExternalRegistration) {
+			other, err := db.CreateButler(Butler{Name: "other-external", Surface: ButlerSurfaceFamily,
+				AgentClass: AgentClassMember, Model: "kitchen-box"}, "root-admin")
+			if err != nil {
+				t.Fatal(err)
+			}
+			connection, err := db.AddButlerAddress("other-external", "matrix", "other-agent", "direct", "root-admin")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if other == in.Butler {
+				t.Fatal("fixture did not create a second Agent")
+			}
+			in.Connection = connection
+		}},
 		{"disabled principal", func(t *testing.T, db *DB, in *CreatePendingExternalRegistration) {
 			if err := db.SetPrincipalDisabled(in.RuntimePrincipal, true); err != nil {
 				t.Fatal(err)
