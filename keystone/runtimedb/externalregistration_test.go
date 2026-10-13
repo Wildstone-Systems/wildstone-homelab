@@ -268,7 +268,6 @@ func TestExternalRegistrationMigrationCreatesNoRows(t *testing.T) {
 	}
 }
 
-
 // sqlExecer is the common surface shared by *sql.Tx and *sql.DB for the
 // authority mutations exercised around registration creation.
 type externalRegistrationExecer interface {
