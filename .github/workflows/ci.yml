@@ -255,6 +255,7 @@ jobs:
       - name: gofmt
         run: |
           gofmt -l ./proto ./wardstone ./keystone ./cli ./testing/e2e
+          gofmt -d ./keystone/runtimedb/externalregistration_test.go
           test -z "$(gofmt -l ./proto ./wardstone ./keystone ./cli ./testing/e2e)"
       - name: vet
         run: |
