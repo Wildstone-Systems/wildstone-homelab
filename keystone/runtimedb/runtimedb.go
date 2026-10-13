@@ -35,10 +35,10 @@ type DB struct {
 	// own handle with foreign keys off. See applyRebuildMigration.
 	path string
 
-	// externalRegistrationBeforeCommitForTest is nil in production. Tests use
+	// registrationTestHook is nil in production. Tests use
 	// it to hold a validated, uncommitted registration while an authority
 	// withdrawal queues on SQLite's immediate write lock.
-	externalRegistrationBeforeCommitForTest func()
+	registrationTestHook func()
 }
 
 // Open opens (creating if needed) the runtime database at path and applies

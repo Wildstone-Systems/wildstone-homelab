@@ -343,7 +343,7 @@ func TestExternalRegistrationCreatedBeforeAuthorityWithdrawalRemainsInert(t *tes
 			db, in := externalRegistrationFixture(t)
 			validated := make(chan struct{})
 			allowCommit := make(chan struct{})
-			db.externalRegistrationBeforeCommitForTest = func() {
+			db.registrationTestHook = func() {
 				close(validated)
 				<-allowCommit
 			}
@@ -368,7 +368,7 @@ func TestExternalRegistrationCreatedBeforeAuthorityWithdrawalRemainsInert(t *tes
 			close(allowCommit)
 
 			result := <-created
-			db.externalRegistrationBeforeCommitForTest = nil
+			db.registrationTestHook = nil
 			if result.err != nil {
 				t.Fatalf("valid creation should commit first: %v", result.err)
 			}
