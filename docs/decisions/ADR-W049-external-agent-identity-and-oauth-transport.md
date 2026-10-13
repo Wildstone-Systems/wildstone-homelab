@@ -61,12 +61,15 @@ a later accepted contract and cannot relax this profile in place.
 “Dedicated” also constrains the existing access model, not only the new
 registration table. Activation requires the bound Person to be the Agent's
 only effectively admitted Person across `butler_access` and every live chat
-Connection. While the registration is active, adding or admitting another
-Person must fail transactionally, including through an ordinary Agent access
-or Connection-policy update. Owner administration may configure or revoke the
-Agent but does not automatically grant the Owner conversation access or
-disclosure. A transition back to a shared/static profile requires revoking the
-OAuth registration first; it cannot weaken this invariant in place.
+Connection. While the registration is active, every mutation that could make
+another Person effectively admitted must fail transactionally. This includes
+Person admission or re-admission and role changes, Agent-access grant or
+restoration, Connection admission or disclosure-policy changes, and
+chat-binding creation or restoration; it is not limited to direct Agent or
+Connection updates. Owner administration may configure or revoke the Agent but
+does not automatically grant the Owner conversation access or disclosure. A
+transition back to a shared/static profile requires revoking the OAuth
+registration first; it cannot weaken this invariant in place.
 
 ### 2.2 Pending Owner configuration is not Person consent
 
@@ -180,7 +183,7 @@ live evidence.
 | --- | --- | --- |
 | Runtime credential identifies one Agent | `keystone/runtimedb/butlerruntime.go`; ADR-W039 §3.3 | Preserve the one-current-principal model; registration adds Person/client facts without multiplying current principals. |
 | Person identity is canonical and not name-derived | `keystone/runtimedb/personid.go`; ADR-W033 A0 | Bind the stable Person ID; activation requires that Person's independently authenticated, registration-bound one-time proof as well as issuer consent. |
-| A dedicated Agent admits only its bound Person | `butlers`, `butler_access`, `keystone/runtimedb/connection.go`; ADR-W033 B-series | Activation and later access/Connection changes enforce one effective Person; administrative ownership alone grants no conversation disclosure. |
+| A dedicated Agent admits only its bound Person | `people`, `butlers`, `butler_access`, `butler_addresses`, `chat_bindings`, `keystone/runtimedb/connection.go`; ADR-W033 B-series | Activation and every later Person, role, access, Connection, or chat-binding mutation that could restore effective admission enforce one Person transactionally; administrative ownership alone grants no conversation disclosure. |
 | Chat Connection is the disclosure/admission boundary | `keystone/runtimedb/connection.go`; `butler_addresses` | Store one exact chat Connection sequence; never substitute `integration_connections` or a label. |
 | Runtime routes are closed before body decoding | `keystone/api/api.go`; ADR-W040 §§2–3; #584 | Preserve the delivered static gate and extend deliberate classification only for accepted OAuth routes. |
 | Task authority comes from the ledger and handle | `keystone/agentgateway`; ADR-W039 §§3.1, 3.4 | Add model-invisible admission; derive every authority field server-side and bind exact correlation. |
@@ -270,8 +273,11 @@ clients, Connections, tasks, and a fake issuer and prove:
    link or callback;
 2. one active registration per Person, one per Agent, and one per exact
    issuer/subject/client tuple are enforced under concurrent activation and
-   re-enable races; activation and later Agent-access/Connection changes also
-   refuse any second effectively admitted Person under concurrency;
+   re-enable races; activation and every later Person admission/re-admission,
+   role, Agent-access, Connection admission/disclosure, and chat-binding
+   creation/restoration path also refuse any second effectively admitted Person
+   under concurrency, including a previously disabled Person whose access row
+   remained live;
 3. no name, email, creator, access-list, Connection label, or legacy row is
    used as identity or backfill evidence;
 4. direct task admission derives all authority, returns the same task only for

@@ -147,9 +147,12 @@ authority.
 The dedicated Agent must also have exactly one effectively admitted Person in
 the existing `butler_access` and live-Connection model: the bound Person.
 Activation fails if another Person can converse through Homepage or any chat
-Connection, and later access or Connection-policy mutations must not admit a
-second Person while the registration is active. Owner administration remains
-separate and grants no conversation disclosure by itself.
+Connection. While the registration is active, every mutation that could make a
+second Person effectively admitted must fail transactionally, including Person
+admission or re-admission and role changes, Agent-access grant or restoration,
+Connection admission or disclosure-policy changes, and chat-binding creation
+or restoration. Owner administration remains separate and grants no
+conversation disclosure by itself.
 
 Changing the issuer, OAuth subject, OAuth client ID, Person, Agent, Connection,
 or runtime principal creates a new registration and revokes the old one.
@@ -422,8 +425,11 @@ Agents, clients, Connections, tasks, and a fake issuer:
    a duplicate issuer/subject/client binding fails rather than falling back to
    username or email matching. A valid issuer login for Person B cannot
    activate Person A's pending registration through a copied enrollment link or
-   callback. Activation and later access/Connection updates also refuse any
-   other Person who is effectively admitted to that dedicated Agent.
+   callback. Activation and every later Person admission/re-admission, role,
+   Agent-access, Connection admission/disclosure, and chat-binding
+   creation/restoration path also refuse any other Person who would become
+   effectively admitted to that dedicated Agent, including a previously
+   disabled Person whose access row remained live.
 2. A valid token on every general Keystone route is denied before body decoding;
    adding an unclassified route leaves it denied.
 3. Idle discovery returns only the bound Agent's currently assigned tools, and
