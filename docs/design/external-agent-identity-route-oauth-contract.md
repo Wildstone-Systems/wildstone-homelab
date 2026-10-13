@@ -1,21 +1,20 @@
 # External Agent Identity, Route, and OAuth Contract
 
-Status: **partly selected, otherwise proposed**, and not implemented. The
-maintainer selected a dedicated external-profile Agent per Person and direct
-Hermes-initiated conversations for the first live proof. The companion
-[ADR-W049](../decisions/ADR-W049-external-agent-identity-and-oauth-transport.md)
-records the proposed amendment needed to make those choices normative. All
-other OAuth, registration, transport, and compatibility details below remain
-proposed until that ADR is accepted. This is the bounded contract deliverable
-for [#541](https://github.com/chickenrat17/wildstone_homelab-control-plane/issues/541)
-under milestone tracker [#580](https://github.com/chickenrat17/wildstone_homelab-control-plane/issues/580),
-reconciled with `main` at `1b916833aac4187e0aa9270d05a990bddc2c9355`.
+Status: **design contract accepted through ADR-W049 on 2026-10-13**; OAuth
+implementation and installed compatibility are not established by this document.
+The maintainer selected a dedicated external-profile Agent per Person and direct
+Hermes-initiated conversations for the first live proof, then accepted the
+reviewed companion [ADR-W049](../decisions/ADR-W049-external-agent-identity-and-oauth-transport.md)
+published by PR #588 (merge `961d426a651b80fabd21a1ed2ee7dfa344e5bf0a`).
+ADR-W049 governs the scoped amendments to W039/W040. Concrete interface shapes
+below remain design sketches where the ADR does not fix them; resolve any
+conflict in favor of the accepted ADR.
 
-This proposal does not amend an accepted ADR by itself. ADR-W033, ADR-W039,
-ADR-W040, and ADR-W041 continue to govern until a reviewer accepts the choices
-below and any necessary ADR amendment is merged. In particular, this document
-does not authorize a migration, OAuth deployment, runtime-route change, or live
-household test.
+This source-backed contract belongs to [#541](https://github.com/chickenrat17/wildstone_homelab-control-plane/issues/541)
+under [#580](https://github.com/chickenrat17/wildstone_homelab-control-plane/issues/580).
+Only explicitly readied implementation issues are authorized; #586 is limited
+to inert pending-registration storage. Acceptance does not authorize OAuth
+deployment, generic event activation, or live household testing.
 
 ## 1. Boundary and non-goals
 
@@ -119,7 +118,7 @@ or creator field substitutes for another row.
 | OAuth access token | Issuer token identifier plus validated claims | Authelia after the Person completes Code + PKCE | Proof for one request that the issuer authenticated the subject for the registered client and resource | A Wildstone task, Agent assignment, Connection, audience, or transferable upstream credential |
 | Task/session | Wildstone task ID and secret handle | Existing delivery path or the bounded admission operation below | Exact Person/Agent/Connection/audience/budget and derived authority for one unit of work | A durable grant, a different session, or authority after revocation |
 
-The proposed external-client registration is immutable in its identity-bearing
+The external-client registration is immutable in its identity-bearing
 fields:
 
 ```text
@@ -297,9 +296,9 @@ explicit successor credential; issuer outage never causes that transition.
 
 ## 6. OAuth and MCP compatibility target
 
-The proposed first target is intentionally narrow:
+The accepted first target is intentionally narrow; installed compatibility is pending:
 
-| Item | Proposed target |
+| Item | Accepted design target |
 |---|---|
 | MCP revision | `2025-06-18`, tools-only Streamable HTTP request/response |
 | MCP termination | Keystone's authenticated HTTP resource boundary; the existing sidecar/shared-secret endpoint remains a non-OAuth packaged-runtime path until ADR-W040 is amended and implementation migrates it |
@@ -360,7 +359,7 @@ RecheckRuntimeAuthority(freshIdentity, operation, taskOrDeliveryID)
 
 The completed #581 slice owns the existing closed static-runtime route
 classifier and integration with the authentication wrapper. A later OAuth
-slice may extend that classifier only after this amendment is accepted. For the
+slice may extend that classifier under a separately authorized implementation slice. For the
 OAuth profile, `/mcp` must terminate behind
 that Keystone wrapper so the original bearer is resolved before JSON-RPC body
 decoding and the resulting Person/client/registration identity remains present
@@ -416,8 +415,8 @@ that work to the native fallback.
 
 ## 8. Testable acceptance for later implementation
 
-The proposal is implementable only after review accepts the identity and outage
-choices above. Focused implementation must then prove with synthetic Persons,
+The identity and outage requirements are accepted through ADR-W049. Each
+separately authorized implementation slice must prove with synthetic Persons,
 Agents, clients, Connections, tasks, and a fake issuer:
 
 1. A token for Person A/client A cannot discover, invoke, poll, or acknowledge
@@ -473,8 +472,7 @@ The maintainer has selected the first two product requirements:
 - one dedicated external-profile Agent per bound Person; and
 - direct Hermes-initiated conversations in the first live proof.
 
-ADR-W049 asks reviewers to accept or amend the remaining normative contract
-before code. In particular:
+ADR-W049 is accepted; the normative contract includes:
 
 1. one immutable external-client registration binds exact issuer/subject/client,
    Person, Agent, Connection, and runtime principal, with the subject captured
@@ -502,11 +500,11 @@ before code. In particular:
 10. the OAuth `/mcp` endpoint terminates at Keystone's authenticated resource
     boundary; the current sidecar shared-secret endpoint is not an OAuth proxy.
 
-The proposed companion ADR is
+The accepted companion ADR is
 [ADR-W049](../decisions/ADR-W049-external-agent-identity-and-oauth-transport.md).
-ADR-W039 continues to describe only runtime-principal credentials and existing
-task handles, while ADR-W040 fixes MCP termination in the sidecar, until that
-amendment is explicitly accepted.
+ADR-W039/W040 retain their static/native profile; ADR-W049 supplies the scoped
+Person-bound OAuth identity, admission and Keystone MCP amendments. Neither
+this design nor ADR acceptance establishes implementation or live compatibility.
 
 ## 10. References
 
