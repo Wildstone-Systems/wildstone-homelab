@@ -1,17 +1,18 @@
 # ADR-W049: External Agent identity and OAuth transport profile
 
-- **Status:** proposed for maintainer acceptance; design only; not implemented by this document.
+- **Status:** accepted by the maintainer on 2026-10-13; design contract, not yet implemented.
+- **Acceptance evidence:** maintainer acceptance of the reviewed amendment from PR #588 and authorization to make #586 implementation-ready; proposal merged at `961d426a651b80fabd21a1ed2ee7dfa344e5bf0a`.
 - **Proposed by:** #541 under milestone #1, coordinated by #580.
 - **Product inputs already selected:** the first external profile uses a dedicated Agent for each bound Person, and the first live proof must support conversations started directly in Hermes.
-- **Amends on acceptance:** ADR-W039 §§3.3–3.4, 4–5 for the Person-bound external profile; ADR-W040 §§2–3 and §6 for its OAuth resource and MCP termination.
+- **Amends:** ADR-W039 §§3.3–3.4, 4–5 for the Person-bound external profile; ADR-W040 §§2–3 and §6 for its OAuth resource and MCP termination.
 - **Keeps:** ADR-W033 authority/privacy rules, ADR-W039's canonical Agent API and gateway, ADR-W040's REST/long-poll baseline and static sidecar profile, ADR-W041's native runtime contract, the human-approved Plan path, and the separately configured native fallback.
 
 This ADR is the bounded companion to the source-backed
 [external-Agent contract](../design/external-agent-identity-route-oauth-contract.md).
-Its proposed status is deliberate: issue readiness authorizes review of this
-amendment, not runtime work or automatic acceptance. A maintainer must accept
-the amendment before #586 or another OAuth-profile implementation slice can
-consume it.
+The maintainer has accepted this reviewed amendment. Implementation remains
+scheduled one bounded issue at a time: #586 may consume the pending-registration
+contract, but acceptance does not authorize every OAuth interface, deployment,
+or live test. Installed client/issuer compatibility remains unverified.
 
 ## 1. Context
 
@@ -169,13 +170,12 @@ task-handle paths. Returning the Agent to the static profile requires revoking
 the OAuth registration and provisioning an explicit successor credential; a
 static credential is never an outage or revocation bypass.
 
-The proposed OAuth target remains a pre-registered public client using
+The accepted OAuth target is a pre-registered public client using
 Authorization Code with PKCE S256, an exact Keystone resource audience,
 `wildstone.agent` scope, and issuer introspection at every protected and final
 poll/ack boundary. Issuer failure is fail-closed for this profile. These
-transport details remain proposed until this ADR is accepted, and installed
-Authelia/Hermes compatibility remains unverified until #356 records pinned,
-live evidence.
+transport requirements are accepted design; installed Authelia/Hermes
+compatibility remains unverified until #356 records pinned, live evidence.
 
 ## 3. Requirements mapped to current sources
 
@@ -195,7 +195,7 @@ live evidence.
 
 ## 4. Exact amendments and conflicts
 
-On acceptance, this ADR makes these scoped amendments:
+This accepted ADR makes these scoped amendments:
 
 1. **ADR-W039 §3.3 and §4 identity/authentication.** The static/native profile
    remains principal-to-Agent. The external OAuth profile additionally requires
@@ -215,9 +215,9 @@ On acceptance, this ADR makes these scoped amendments:
    access token to resolve the immutable registration, then constructs the same
    internal runtime-principal context. The external bearer stays request-local
    and never reaches gateway business code or an upstream service.
-5. **ADR-W040 §3 endpoint map.** A future accepted implementation may add the
+5. **ADR-W040 §3 endpoint map.** A separately authorized implementation slice may add the
    model-invisible task-admission endpoint and the OAuth `/mcp` endpoint to the
-   closed classifier. Their presence in this proposed ADR does not register or
+   closed classifier. Their presence in this accepted design does not register or
    authorize them.
 6. **ADR-W040 §6 MCP location and correlation.** The sidecar remains the
    static/shared-secret profile. The OAuth profile terminates in Keystone and

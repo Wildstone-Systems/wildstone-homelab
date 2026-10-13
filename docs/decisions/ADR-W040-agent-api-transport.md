@@ -1,4 +1,5 @@
 # ADR-W040: Agent API transport — REST and long-poll first, MCP second
+- **Scoped external-profile amendment:** [ADR-W049](ADR-W049-external-agent-identity-and-oauth-transport.md), accepted 2026-10-13, governs the dedicated Person-bound OAuth profile. The static/native profile below remains; OAuth implementation and installed compatibility are pending.
 
 - **Status:** accepted (#342); implemented
 - **Governed by:** ADR-W033 where they overlap.
