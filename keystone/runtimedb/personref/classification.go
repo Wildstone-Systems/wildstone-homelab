@@ -233,6 +233,17 @@ var LegacyColumns = []Column{
 }
 
 var Columns = []Column{
+	// 0105 (ADR-W049 Phase 1): inert external-client registration
+	// configuration. The row is bound to a canonical Person and a machine
+	// runtime principal, but does not establish a new identity or credential.
+	{"external_client_registrations", "id", NotAPerson, "0105: opaque registration identifier (xreg_…), never a Person selector"},
+	{"external_client_registrations", "person_id", PersonID, "0105: canonical Person whose explicit Agent access, chat binding, admission and disclosure were verified transactionally"},
+	{"external_client_registrations", "issuer", NotAPerson, "0105: OAuth issuer identifier for the configured external client, not a Person identity"},
+	{"external_client_registrations", "client_id", NotAPerson, "0105: OAuth public client identifier, not a Person identity or secret"},
+	{"external_client_registrations", "runtime_principal", Actor, "0105: current machine principal bound to the configured Agent runtime; never a Person"},
+	{"external_client_registrations", "configured_by", Actor, "0105: authenticated Owner actor that recorded the inert pending configuration"},
+	{"external_client_registrations", "configured_at", NotAPerson, "0105: fixed-width UTC configuration timestamp"},
+	{"external_client_registrations", "revoked_by", Actor, "0105: authenticated Owner actor that terminally revoked the pending configuration"},
 	{"research_continuations", "actor_person_id", PersonID, "0101: ContinueResearch resolves the authorized continuation actor to an admitted live Person in the same transaction; foreign-keyed to butler_members(person_id)"},
 	{"research_checkpoints", "steps_json", NotAPerson, "0101: bounded array of verified same-task ledger step row IDs, never Person selectors"},
 	{"research_checkpoints", "next_action", NotAPerson, "0101: closed research action enum search/fetch/read/report, not an identity"},
