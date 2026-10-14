@@ -272,6 +272,16 @@ consent capture, active-profile uniqueness and mutual exclusion, proof
 consumption, request idempotency, OAuth resolution, and delivery provenance
 remain follow-up gates; no pending row is consulted by an authority path.
 
+Implementation note: the #598 slice adds only the internal, expiring
+Person/registration-bound enrollment challenge primitive. It stores a SHA-256
+digest rather than the opaque proof, rechecks the pending registration and all
+live bindings in the issuance/verification transaction, and makes consumption
+available only as a transaction-scoped operation for the future atomic
+activation flow. There is still no Person-facing endpoint, issuer callback,
+subject capture, activation setter, OAuth resolver, MCP authority, or usable
+credential. Registration revocation terminally invalidates outstanding proofs;
+denial-only invalidation remains available under execution and restore fences.
+
 ## 6. Required proof before implementation is complete
 
 Repository tests for later slices must use synthetic Persons, dedicated Agents,

@@ -52,6 +52,77 @@ type CreatePendingExternalRegistration struct {
 	ConfiguredBy     string
 }
 
+// validateExternalRegistrationAuthority re-reads the complete live binding for
+// an already persisted registration. Challenge issuance and consumption use
+// this instead of treating the pending row as cached authority.
+func validateExternalRegistrationAuthority(q queryRower, r ExternalClientRegistration) error {
+	var role, surface, agentClass, admits, subject, reach, encryption, retention, trust, runtimeType, health string
+	var fallback int
+	err := q.QueryRow(`
+		SELECT m.role, b.surface, b.agent_class, ca.admits, ca.subject_kind,
+		       cd.reach, cd.encryption, cd.retention, cd.surface, cd.accepts_fallback,
+		       rt.type, rt.health
+		  FROM butler_members m
+		  JOIN butler_access ba ON ba.person_id=m.person_id AND ba.butler=? AND ba.revoked_at=''
+		  JOIN butlers b ON b.seq=ba.butler AND b.enabled=1 AND b.retired_at=''
+		  JOIN butler_addresses a ON a.seq=? AND a.butler=b.seq AND a.revoked_at=''
+		  JOIN connection_admission ca ON ca.connection=a.seq
+		  JOIN connection_disclosure cd ON cd.connection=a.seq
+		  JOIN chat_bindings cb ON cb.connection=a.seq AND cb.person_id=m.person_id AND cb.revoked_at=''
+		  JOIN butler_runtimes rt ON rt.butler=b.seq AND rt.principal=? AND rt.health<>'revoked'
+		  JOIN runtime_principals rp ON rp.principal=rt.principal AND rp.butler=b.seq
+		  JOIN principals p ON p.name=rp.principal AND p.role='butler' AND p.disabled=0
+		 WHERE m.person_id=? AND m.admitted=1 AND m.disabled_at='' AND m.offboarded_at=''
+		 LIMIT 1`, r.Butler, r.Connection, r.RuntimePrincipal, r.PersonID).
+		Scan(&role, &surface, &agentClass, &admits, &subject, &reach, &encryption, &retention, &trust, &fallback, &runtimeType, &health)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("%w: external registration binding is not current and exact", ErrNotAdmitted)
+	}
+	if err != nil {
+		return fmt.Errorf("runtimedb: validating external registration binding: %w", err)
+	}
+	connection := Connection{Surface: ButlerSurface(surface), AgentClass: agentClass,
+		Admission: parseAdmission(admits), AdmissionSubject: parseAdmissionSubject(subject),
+		Disclosure: scanDisclosure(reach, encryption, retention, trust, int64(fallback))}
+	if ok, why := connection.Admits(role); !ok {
+		return fmt.Errorf("%w: connection refuses the bound Person: %s", ErrNotAdmitted, why)
+	}
+	if connection.Disclosure.Reach == ReachUnresolved || connection.Disclosure.Encryption == EncryptionUnresolved ||
+		connection.Disclosure.Retention == RetentionUnresolved || connection.Disclosure.Surface == TrustUnresolved {
+		return fmt.Errorf("%w: connection disclosure is unresolved", ErrNotAdmitted)
+	}
+	if runtimeType == "native" || health == "" {
+		return fmt.Errorf("%w: registration requires a live external runtime", ErrButlerUnreachable)
+	}
+
+	var others int
+	err = q.QueryRow(`
+		SELECT COUNT(DISTINCT person_id) FROM (
+		  SELECT m.person_id
+		    FROM butler_access ba JOIN butler_members m ON m.person_id=ba.person_id
+		   WHERE ba.butler=? AND ba.revoked_at='' AND m.admitted=1
+		     AND m.disabled_at='' AND m.offboarded_at='' AND m.person_id<>?
+		  UNION
+		  SELECT m.person_id
+		    FROM chat_bindings cb
+		    JOIN butler_addresses a ON a.seq=cb.connection AND a.butler=? AND a.revoked_at=''
+		    JOIN connection_admission ca ON ca.connection=a.seq AND ca.subject_kind='person'
+		    JOIN butlers b ON b.seq=a.butler
+		    JOIN butler_members m ON m.person_id=cb.person_id
+		   WHERE cb.revoked_at='' AND m.admitted=1 AND m.disabled_at='' AND m.offboarded_at=''
+		     AND m.person_id<>?
+		     AND ((b.agent_class='owner' AND m.role='owner' AND ca.admits='owners') OR
+		          (b.agent_class='member' AND (ca.admits='household' OR (ca.admits='owners' AND m.role='owner'))))
+		)`, r.Butler, r.PersonID, r.Butler, r.PersonID).Scan(&others)
+	if err != nil {
+		return fmt.Errorf("runtimedb: checking dedicated external agent: %w", err)
+	}
+	if others != 0 {
+		return fmt.Errorf("%w: external-profile agent admits another active Person", ErrNoButlerAccess)
+	}
+	return nil
+}
+
 func newExternalRegistrationID() (string, error) {
 	raw := make([]byte, 16)
 	if _, err := rand.Read(raw); err != nil {
@@ -87,74 +158,11 @@ func (db *DB) CreatePendingExternalRegistration(in CreatePendingExternalRegistra
 		return ExternalClientRegistration{}, err
 	}
 
-	// Resolve the complete binding as one snapshot. The live chat binding is
-	// intentional: an access-list row or matching name alone is not Person
-	// identity and cannot select a conversation Connection.
-	var role, surface, agentClass, admits, subject, reach, encryption, retention, trust, runtimeType, health string
-	var fallback int
-	err = tx.QueryRow(`
-		SELECT m.role, b.surface, b.agent_class, ca.admits, ca.subject_kind,
-		       cd.reach, cd.encryption, cd.retention, cd.surface, cd.accepts_fallback,
-		       rt.type, rt.health
-		  FROM butler_members m
-		  JOIN butler_access ba ON ba.person_id=m.person_id AND ba.butler=? AND ba.revoked_at=''
-		  JOIN butlers b ON b.seq=ba.butler AND b.enabled=1 AND b.retired_at=''
-		  JOIN butler_addresses a ON a.seq=? AND a.butler=b.seq AND a.revoked_at=''
-		  JOIN connection_admission ca ON ca.connection=a.seq
-		  JOIN connection_disclosure cd ON cd.connection=a.seq
-		  JOIN chat_bindings cb ON cb.connection=a.seq AND cb.person_id=m.person_id AND cb.revoked_at=''
-		  JOIN butler_runtimes rt ON rt.butler=b.seq AND rt.principal=? AND rt.health<>'revoked'
-		  JOIN runtime_principals rp ON rp.principal=rt.principal AND rp.butler=b.seq
-		  JOIN principals p ON p.name=rp.principal AND p.role='butler' AND p.disabled=0
-		 WHERE m.person_id=? AND m.admitted=1 AND m.disabled_at='' AND m.offboarded_at=''
-		 LIMIT 1`, in.Butler, in.Connection, in.RuntimePrincipal, in.PersonID).
-		Scan(&role, &surface, &agentClass, &admits, &subject, &reach, &encryption, &retention, &trust, &fallback, &runtimeType, &health)
-	if errors.Is(err, sql.ErrNoRows) {
-		return ExternalClientRegistration{}, fmt.Errorf("%w: external registration binding is not current and exact", ErrNotAdmitted)
-	}
-	if err != nil {
-		return ExternalClientRegistration{}, fmt.Errorf("runtimedb: validating external registration binding: %w", err)
-	}
-	connection := Connection{Surface: ButlerSurface(surface), AgentClass: agentClass,
-		Admission: parseAdmission(admits), AdmissionSubject: parseAdmissionSubject(subject),
-		Disclosure: scanDisclosure(reach, encryption, retention, trust, int64(fallback))}
-	if ok, why := connection.Admits(role); !ok {
-		return ExternalClientRegistration{}, fmt.Errorf("%w: connection refuses the bound Person: %s", ErrNotAdmitted, why)
-	}
-	if connection.Disclosure.Reach == ReachUnresolved || connection.Disclosure.Encryption == EncryptionUnresolved ||
-		connection.Disclosure.Retention == RetentionUnresolved || connection.Disclosure.Surface == TrustUnresolved {
-		return ExternalClientRegistration{}, fmt.Errorf("%w: connection disclosure is unresolved", ErrNotAdmitted)
-	}
-	if runtimeType == "native" || health == "" {
-		return ExternalClientRegistration{}, fmt.Errorf("%w: registration requires a live external runtime", ErrButlerUnreachable)
-	}
-
-	// Dedicated means no other active Person is effectively admitted by a
-	// live Agent access grant or by a live, currently admitting chat binding.
-	var others int
-	err = tx.QueryRow(`
-		SELECT COUNT(DISTINCT person_id) FROM (
-		  SELECT m.person_id
-		    FROM butler_access ba JOIN butler_members m ON m.person_id=ba.person_id
-		   WHERE ba.butler=? AND ba.revoked_at='' AND m.admitted=1
-		     AND m.disabled_at='' AND m.offboarded_at='' AND m.person_id<>?
-		  UNION
-		  SELECT m.person_id
-		    FROM chat_bindings cb
-		    JOIN butler_addresses a ON a.seq=cb.connection AND a.butler=? AND a.revoked_at=''
-		    JOIN connection_admission ca ON ca.connection=a.seq AND ca.subject_kind='person'
-		    JOIN butlers b ON b.seq=a.butler
-		    JOIN butler_members m ON m.person_id=cb.person_id
-		   WHERE cb.revoked_at='' AND m.admitted=1 AND m.disabled_at='' AND m.offboarded_at=''
-		     AND m.person_id<>?
-		     AND ((b.agent_class='owner' AND m.role='owner' AND ca.admits='owners') OR
-		          (b.agent_class='member' AND (ca.admits='household' OR (ca.admits='owners' AND m.role='owner'))))
-		)`, in.Butler, in.PersonID, in.Butler, in.PersonID).Scan(&others)
-	if err != nil {
-		return ExternalClientRegistration{}, fmt.Errorf("runtimedb: checking dedicated external agent: %w", err)
-	}
-	if others != 0 {
-		return ExternalClientRegistration{}, fmt.Errorf("%w: external-profile agent admits another active Person", ErrNoButlerAccess)
+	if err := validateExternalRegistrationAuthority(tx, ExternalClientRegistration{
+		PersonID: in.PersonID, Butler: in.Butler, Connection: in.Connection,
+		RuntimePrincipal: in.RuntimePrincipal,
+	}); err != nil {
+		return ExternalClientRegistration{}, err
 	}
 
 	stamp := now()
@@ -226,6 +234,9 @@ func (db *DB) RevokeExternalClientRegistration(id, by string) (ExternalClientReg
 		return r, nil
 	}
 	stamp := now()
+	if err := invalidateExternalEnrollmentChallengesTx(tx, id, by, "registration revoked", stamp); err != nil {
+		return ExternalClientRegistration{}, err
+	}
 	if _, err := tx.Exec(`UPDATE external_client_registrations
 		SET state='revoked',revoked_at=?,revoked_by=? WHERE id=? AND state='pending_consent'`, stamp, by, id); err != nil {
 		return ExternalClientRegistration{}, fmt.Errorf("runtimedb: revoking external registration: %w", err)

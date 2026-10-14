@@ -39,6 +39,9 @@ type DB struct {
 	// it to hold a validated, uncommitted registration while an authority
 	// withdrawal queues on SQLite's immediate write lock.
 	registrationTestHook func()
+	// challengeClock is nil in production. Challenge tests use it to prove
+	// expiry after transaction admission without changing the process clock.
+	challengeClock func() time.Time
 }
 
 // Open opens (creating if needed) the runtime database at path and applies
