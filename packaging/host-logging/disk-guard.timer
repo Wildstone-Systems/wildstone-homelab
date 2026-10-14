@@ -1,0 +1,11 @@
+[Unit]
+Description=Check host disk and mounts every fifteen minutes
+
+[Timer]
+OnCalendar=*:0/15
+RandomizedDelaySec=1m
+Persistent=true
+Unit=wildstone-disk-guard.service
+
+[Install]
+WantedBy=timers.target

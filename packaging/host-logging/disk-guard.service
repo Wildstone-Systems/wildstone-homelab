@@ -1,0 +1,9 @@
+[Unit]
+Description=Check host disk headroom and required mounts
+
+[Service]
+Type=oneshot
+Environment=MAX_USED_PERCENT=85
+Environment=MIN_FREE_BYTES=16106127360
+ExecStart=/usr/local/libexec/wildstone-disk-guard
+TimeoutStartSec=30s
