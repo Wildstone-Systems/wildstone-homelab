@@ -27,7 +27,10 @@ Wildstone reconciliation path to apply it to them.
 
 Install `scripts/disk-guard.sh` as
 `/usr/local/libexec/wildstone-disk-guard`, and the matching service and timer
-from `packaging/host-logging/` into `/etc/systemd/system/`. Enable the timer.
+from `packaging/host-logging/` into `/etc/systemd/system/`, retaining their
+`disk-guard.service` and `disk-guard.timer` filenames. Run `systemctl daemon-reload`
+and `systemctl enable --now disk-guard.timer`. The timer activates
+`disk-guard.service`; inspect it with `systemctl status disk-guard.service`.
 It fails at 85% root usage or below 15 GiB available. Its mount list is an
 optional root-owned file at `/etc/wildstone/disk-guard.mounts`, with one
 absolute NFS bind-mount target per line. For example:

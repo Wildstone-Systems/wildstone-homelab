@@ -63,4 +63,8 @@ printf '%s' 'relative/path' > "$MOUNT_LIST_FILE"
 expect 1 'relative path without final newline' bash "$script_dir/disk-guard.sh"
 printf '%s' '/fixture/backup' > "$MOUNT_LIST_FILE"
 expect 0 'mount path without final newline' bash "$script_dir/disk-guard.sh"
-echo 'disk-guard: 20 offline checks passed'
+
+unit_dir="$script_dir/../packaging/host-logging"
+target=$(sed -n 's/^Unit=//p' "$unit_dir/disk-guard.timer")
+expect 0 'timer target is a shipped service' test -f "$unit_dir/$target"
+echo 'disk-guard: 21 offline checks passed'
