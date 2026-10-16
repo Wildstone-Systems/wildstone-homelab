@@ -38,7 +38,15 @@ absolute NFS bind-mount target per line. For example:
 ```
 
 The check requires an actual NFS mount at each target. A local directory
-with the same path fails. Monitor the service result and the timer's last
+with the same path fails. An absent default mount-list file selects root-only
+checking. An explicitly set `MOUNT_LIST_FILE` must name a readable regular file;
+a missing or unreadable configured list is an error. Filesystem-read failures
+also fail the check. Threshold overrides accept decimal integers (0–100 for
+`MAX_USED_PERCENT`, at most 18 digits for `MIN_FREE_BYTES`).
+
+Run `bash scripts/test-disk-guard.sh` for offline threshold, command-failure,
+configuration and mount-fallback checks. These use fake commands and do not
+change host state. Monitor the service result and the timer's last
 successful run from outside the VM. Also monitor NAS capacity and backup age.
 
 ## Backup and restore evidence
