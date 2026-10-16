@@ -1,4 +1,5 @@
 # ADR-W039: Canonical Agent API and pluggable agent runtimes
+- **Scoped external-profile amendment:** [ADR-W049](ADR-W049-external-agent-identity-and-oauth-transport.md), accepted 2026-10-13, governs the dedicated Person-bound OAuth profile. The static/native profile below remains; OAuth implementation and installed compatibility are pending.
 
 - **Status:** accepted (#333); implemented except the items in §2. Amends ADR-W033 B6 for external runtimes (§9).
 - **Governed by:** ADR-W033 where they overlap, as amended by §9 of this ADR.

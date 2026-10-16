@@ -233,6 +233,31 @@ var LegacyColumns = []Column{
 }
 
 var Columns = []Column{
+	// 0105 (ADR-W049 Phase 1): inert external-client registration
+	// configuration. The row is bound to a canonical Person and a machine
+	// runtime principal, but does not establish a new identity or credential.
+	{"external_client_registrations", "id", NotAPerson, "0105: opaque registration identifier (xreg_…), never a Person selector"},
+	{"external_client_registrations", "person_id", PersonID, "0105: canonical Person whose explicit Agent access, chat binding, admission and disclosure were verified transactionally"},
+	{"external_client_registrations", "issuer", NotAPerson, "0105: OAuth issuer identifier for the configured external client, not a Person identity"},
+	{"external_client_registrations", "client_id", NotAPerson, "0105: OAuth public client identifier, not a Person identity or secret"},
+	{"external_client_registrations", "runtime_principal", Actor, "0105: current machine principal bound to the configured Agent runtime; never a Person"},
+	{"external_client_registrations", "configured_by", Actor, "0105: authenticated Owner actor that recorded the inert pending configuration"},
+	{"external_client_registrations", "configured_at", NotAPerson, "0105: fixed-width UTC configuration timestamp"},
+	{"external_client_registrations", "revoked_by", Actor, "0105: authenticated Owner actor that terminally revoked the pending configuration"},
+	// 0106 (#598): short-lived enrollment challenges bind the exact canonical
+	// Person and registration but store only the opaque proof's digest.
+	{"external_enrollment_challenges", "id", NotAPerson, "0106: opaque challenge history identifier, never a Person selector"},
+	{"external_enrollment_challenges", "registration_id", NotAPerson, "0106: exact pending external-client registration identifier"},
+	{"external_enrollment_challenges", "person_id", PersonID, "0106: canonical Person independently authenticated at the future issuance boundary"},
+	{"external_enrollment_challenges", "secret_hash", NotAPerson, "0106: SHA-256 digest of the one-time opaque proof; plaintext is never stored"},
+	{"external_enrollment_challenges", "issued_at", NotAPerson, "0106: fixed-width UTC proof issuance timestamp"},
+	{"external_enrollment_challenges", "expires_at", NotAPerson, "0106: fixed-width UTC proof expiry timestamp, parsed before comparison"},
+	{"external_enrollment_challenges", "issued_by", Actor, "0106: trusted independently authenticated Person-service actor"},
+	{"external_enrollment_challenges", "consumed_at", NotAPerson, "0106: fixed-width UTC terminal consumption timestamp"},
+	{"external_enrollment_challenges", "consumed_by", Actor, "0106: future activation transaction actor that terminally consumed the proof"},
+	{"external_enrollment_challenges", "invalidated_at", NotAPerson, "0106: fixed-width UTC terminal invalidation timestamp"},
+	{"external_enrollment_challenges", "invalidated_by", Actor, "0106: actor that terminally invalidated the proof without granting authority"},
+	{"external_enrollment_challenges", "invalidation_reason", NotAPerson, "0106: descriptive denial-only reason, never a Person selector"},
 	{"research_continuations", "actor_person_id", PersonID, "0101: ContinueResearch resolves the authorized continuation actor to an admitted live Person in the same transaction; foreign-keyed to butler_members(person_id)"},
 	{"research_checkpoints", "steps_json", NotAPerson, "0101: bounded array of verified same-task ledger step row IDs, never Person selectors"},
 	{"research_checkpoints", "next_action", NotAPerson, "0101: closed research action enum search/fetch/read/report, not an identity"},

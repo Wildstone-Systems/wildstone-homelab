@@ -34,6 +34,14 @@ type DB struct {
 	// path is kept so a table rebuild can reopen the same file on its
 	// own handle with foreign keys off. See applyRebuildMigration.
 	path string
+
+	// registrationTestHook is nil in production. Tests use
+	// it to hold a validated, uncommitted registration while an authority
+	// withdrawal queues on SQLite's immediate write lock.
+	registrationTestHook func()
+	// challengeClock is nil in production. Challenge tests use it to prove
+	// expiry after transaction admission without changing the process clock.
+	challengeClock func() time.Time
 }
 
 // Open opens (creating if needed) the runtime database at path and applies

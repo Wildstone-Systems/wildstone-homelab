@@ -2,7 +2,7 @@
 
 - **Issue:** [#521](https://github.com/chickenrat17/wildstone_homelab-control-plane/issues/521)
 - **Coordinator:** [#580](https://github.com/chickenrat17/wildstone_homelab-control-plane/issues/580)
-- **Evidence base:** `1b916833aac4187e0aa9270d05a990bddc2c9355` (`main`, 2026-10-12)
+- **Evidence base:** `e33a88036231e4c94ef95e6a2dbaffe985fcfdd4` (`main`, 2026-10-16)
 - **Status:** proposed for review; not an accepted ADR or implementation authority
 - **Would amend:** ADR-W007 A4/A6 and ADR-W008 A1/A2 if accepted
 
@@ -26,16 +26,23 @@ boundary is not explicit:
 2. `api.approvePlan` compares `State.Head()` with `BasedOnHead`, mutates the
    Statefile working tree with `Put`/`Delete`, commits Git, writes
    `statefile_head`, and only then transitions the Plan to `approved`.
-3. Those filesystem, Git and SQLite steps are not one transaction. A failure
+3. `api.applyAuthored` is a second intentional API writer for Meter and
+   Commitment tracker edits. It preserves their existing no-Owner,
+   non-host-executing semantics with an `AuditOnly` Plan, but performs a
+   separate `Put`/`Delete`, Git commit, `statefile_head`, and Plan transition
+   sequence.
+4. Those filesystem, Git and SQLite steps are not one transaction. A failure
    between them can leave a dirty tree, a Git commit without a matching DB
    marker, or accepted desired state whose Plan record is still `proposed`.
-4. `statefile.Load()` and the reconcile loop read mutable working files. A
+   The audit-only writer can likewise leave a committed tracker edit whose
+   record is still non-terminal.
+5. `statefile.Load()` and the reconcile loop read mutable working files. A
    valid but uncommitted edit can therefore affect a pass even though no
    immutable revision or approval names it.
-5. The out-of-band ingestor detects committed HEAD changes, but its first
+6. The out-of-band ingestor detects committed HEAD changes, but its first
    adoption validates schema only, not standing policy. It and the approval
-   handler are separate Statefile writers.
-6. `reconcile/loop.Tick` treats every `approved` or resumed `applying` Plan as
+   and audit-only handlers are separate Statefile writers.
+7. `reconcile/loop.Tick` treats every `approved` or resumed `applying` Plan as
    a single Boolean authorization for Medium/High work. It converges the
    current whole tree, then gives all queued Plans one uniform verdict.
 
@@ -78,16 +85,17 @@ used. This proposal does not move grants, household data or status into Git.
 
 ### D2. One coordinator serializes every desired-state publication
 
-API approval and accepted out-of-band commits use one
-`DesiredStatePublisher`. They do not call `State.Put`, `State.Delete`,
-`State.Commit`, `SetStatefileHead`, and `TransitionPlan` independently.
+API approval, the authorized household audit-only writer, and accepted
+out-of-band commits use one `DesiredStatePublisher`. They do not call
+`State.Put`, `State.Delete`, `State.Commit`, `SetStatefileHead`, and
+`TransitionPlan` independently.
 
 The coordinator accepts:
 
 ```text
 PublishRequest {
     publicationID
-    source              api-plan | out-of-band
+    source              api-plan | household-audit | out-of-band
     planID
     actor
     expectedRevision
@@ -107,6 +115,11 @@ serialization mechanism must work across HTTP handlers, ingestion ticks and
 process restart. An in-memory mutex alone is insufficient; the durable journal
 and SQLite transaction provide the cross-restart fence.
 
+`household-audit` retains the existing immediate Meter/Commitment editing
+contract and produces no host-execution authority. It shares publication
+serialization and recovery because it moves the same Git history, not because
+it has been converted into an infrastructure approval workflow.
+
 ### D3. Acceptance is a durable journal, not an assumed call sequence
 
 The publication journal has these states:
@@ -118,9 +131,13 @@ prepared -> accepted -> mirrored
 
 - `prepared`: the request, expected revision, candidate SHA/tree digest and
   approval-envelope digest are durable. It grants no execution authority.
-- `accepted`: one SQLite transaction compared the current accepted revision,
-  selected the candidate revision, persisted the approval envelope, and moved
-  the infrastructure Plan to `approved`. This is the authorization point.
+- `accepted`: one SQLite transaction compared the current accepted revision
+  and selected the candidate revision. For infrastructure publication it also
+  persisted the approval envelope and moved the Plan to `approved`; for an
+  authorized household audit-only publication it moved that record to
+  `applied` without creating host-execution authority. This is the publication
+  point and, only for the bounded infrastructure envelope, the authorization
+  point.
 - `mirrored`: the human-facing Statefile branch/worktree and deduplicated
   notification/event have caught up. Mirroring is repairable presentation,
   not a second acceptance point.
@@ -251,7 +268,11 @@ Research configuration, exact routine versions, household settings,
 subscriptions and `AuditOnly` tracker edits already have distinct owning
 stores and approval/apply paths. They do not gain infrastructure authority and
 must not create empty approval envelopes merely to pass through the reconcile
-loop. This contract does not force all household actions into a Statefile Plan.
+loop. An `AuditOnly` edit that intentionally publishes Meter or Commitment
+resources uses the shared publication coordinator only to serialize and recover
+the Git/SQLite revision change; it remains immediately applied and cannot
+authorize a host operation. This contract does not force all household actions
+into an infrastructure Plan.
 
 Self-driven backup and secrets records likewise keep their owning state
 machines. The reconcile loop continues to exclude them rather than treating
@@ -268,6 +289,7 @@ PR.
 | `runtimedb` | separate Plan transitions and `statefile_head` update | One transactional compare-and-swap that records accepted revision, journal state, envelope and Plan approval; idempotent lookup by publication ID. |
 | `plan.StoredProposal` | `BasedOnHead`, exact puts/deletes and review Plan | Rename/interpret base as accepted revision; persist canonical candidate/envelope identities derived server-side. |
 | `api.approvePlan` | direct filesystem, Git and DB sequence | Call the shared publisher; return an idempotent accepted/superseded/recovery result. |
+| `api.applyAuthored` | separate optimistic filesystem, Git and DB sequence for Meter/Commitment `AuditOnly` edits | Call the same publisher with non-authorizing `household-audit` provenance; retain immediate household semantics and a terminal audit record. |
 | `ingest.Ingestor` | separate HEAD marker and auto-approved Plan sequence | Observe committed candidates, then call the same publisher and conflict rules as API approval. |
 | `reconcile/loop` | mutable `Load`; tick-wide `allowMediumHigh`; uniform Plan verdict | Load the accepted SHA; match each Medium/High step to an envelope; attribute receipts and outcomes per Plan. |
 | restore | Git bundle and DB restored under quarantine | Verify accepted SHA/tree digest/envelope linkage before reconcile release. |
@@ -292,12 +314,15 @@ layering rewrite.
 - Two approvals based on the same revision race deterministically: exactly
   one compare-and-swap accepts, and the other is superseded without publishing
   any of its files or authority.
-- API approval and out-of-band ingestion racing from the same base have the
-  same property.
+- API approval, an authorized household audit-only publication, and
+  out-of-band ingestion racing from the same base have the same property.
 - Fault injection at every row in the recovery table restarts to either the
   old or candidate accepted revision, never a mixed tree or silent widening.
 - Repeating a request with the same publication ID returns the same result and
   does not create a second commit, Plan transition, event or delivery.
+- Meter and Commitment edits retain their authorized immediate behavior, but
+  interruption cannot leave an accepted revision with a non-terminal
+  `AuditOnly` record, and their publication grants no reconcile authority.
 
 ### Bounded approval
 
