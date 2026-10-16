@@ -77,6 +77,11 @@ An accepted revision must resolve locally, match its recorded tree digest, and
 pass schema and standing-policy validation. Failure of any check places
 infrastructure reconciliation in explicit quarantine; Keystone must not fall
 back to mutable files, a nearby branch head, or an older convenient commit.
+Every prepared or accepted candidate also has a durable internal Git ref under
+a reserved Keystone namespace. The human-facing branch is not the only
+reachability root for authoritative objects: internal refs keep candidates
+reachable through normal Git garbage collection and inclusion in
+`git bundle create --all`.
 
 Runtime-DB facts projected into a reconcile pass remain DB-owned. A mutation
 that can change projected host effects (including a service entitlement,
@@ -116,6 +121,14 @@ candidate files as live intent. Publication uses compare-and-swap semantics:
 transaction commits. A stale or concurrent request is superseded and must be
 reviewed again; it never rebases approval onto newer intent.
 
+Before a request can become durably `prepared`, the publisher creates its
+candidate object and compare-and-swap creates a per-publication internal ref
+pointing to that exact SHA. A candidate object created before its ref is not
+authority and may be rebuilt after a crash. The acceptance transaction verifies
+that the internal ref still resolves to the recorded SHA and digest. This makes
+the Git object reachable before SQLite can select it without pretending Git and
+SQLite share one transaction.
+
 Only one publication may be in the acceptance transition at a time. The
 serialization mechanism must work across HTTP handlers, ingestion ticks and
 process restart. An in-memory mutex alone is insufficient; the durable journal
@@ -136,7 +149,8 @@ prepared -> accepted -> mirrored
 ```
 
 - `prepared`: the request, expected revision, candidate SHA/tree digest and
-  approval-envelope digest are durable. It grants no execution authority.
+  approval-envelope digest are durable, and the candidate is reachable through
+  its per-publication internal Git ref. It grants no execution authority.
 - `accepted`: one SQLite transaction compared the current accepted revision
   and selected the candidate revision. For infrastructure publication it also
   persisted the approval envelope and moved the Plan to `approved`; for an
@@ -153,6 +167,16 @@ prepared -> accepted -> mirrored
 Creating a Git commit object may precede `accepted`; merely creating that
 object or moving a non-authoritative worktree does not authorize it. The
 acceptance transaction must not point at an absent or unverified commit.
+
+Internal refs are lifecycle records, not an alternate desired-state selector.
+The per-publication ref remains while its journal, Plan, approval/projection
+envelope, execution receipt or recovery retention can name the revision. An
+`abandoned` ref may be deleted only after the durable state proves that no
+accepted revision or live authority references it. Superseding an accepted
+revision does not immediately make its ref collectible: applying work, audit
+history and the configured recovery retention still fence deletion. Ref
+creation/deletion uses compare-and-swap and is reconciled idempotently at
+startup; it never moves an existing publication ID to a different SHA.
 
 `statefile_head` is replaced or redefined as the accepted revision record. It
 must not ambiguously mean both “branch HEAD last observed” and “revision safe
@@ -260,20 +284,23 @@ Startup recovery runs before infrastructure reconciliation or new publication.
 
 | Interruption point | Durable evidence | Required recovery |
 | --- | --- | --- |
-| Before a candidate commit exists | no accepted journal state | Leave current accepted revision unchanged; abandon or retry the prepared request idempotently. |
-| Candidate object exists, DB still `prepared` | candidate SHA/digest, no authority | Verify and resume the same publication ID or abandon it. Never reconcile it. |
+| Before a candidate commit/ref exists | no accepted journal state | Leave current accepted revision unchanged; abandon or retry the prepared request idempotently. |
+| Candidate ref exists, no journal row | orphan per-publication ref, no authority | Verify that no accepted revision or live record names it, then remove the orphan ref with compare-and-swap or recreate the same idempotent request. Never reconcile it. |
+| Candidate object/ref exists, DB still `prepared` | candidate SHA/digest and per-publication internal ref, no authority | Verify ref, object and digest; resume the same publication ID or abandon it. Never reconcile it. |
 | During the SQLite acceptance transaction | transaction either commits or rolls back | Re-read journal and accepted revision. There is no partially accepted DB state. |
 | DB is `accepted`, branch mirror is old | accepted SHA and envelope are authoritative | Verify the object, reconcile only from it, then repair the mirror with compare-and-swap. Do not overwrite a divergent human branch. |
 | Branch mirror moved, response/event missing | accepted journal plus branch state | Return the already accepted result and emit the event/delivery once using publication ID deduplication. |
 | Crash while Plan is `applying` | accepted revision, envelope and per-step receipts | Re-observe, recompute and resume only matching effects. Never replay stored steps blindly. |
 | Crash with projected effects pending | projection decision/generation, derived envelope and accepted revision | Revalidate all three selectors; resume only exact still-current effects, otherwise supersede and recompute. A revoked grant never regains authority from an older envelope. |
-| Accepted SHA/object or digest is missing after restore | inconsistent recovery set | Keep restore/infrastructure quarantine active and require operator recovery; no fallback revision. |
+| Accepted internal ref, SHA/object or digest is missing after restore | inconsistent recovery set | Keep restore/infrastructure quarantine active and require operator recovery; no fallback revision. |
 
 The whole-site recovery set must contain the Git objects for the recorded
-accepted revision and the SQLite record that selects it. Restore verification
-checks that pair before releasing reconcile quarantine. Capturing a coherent
-whole-site snapshot remains coordinated recovery work; this proposal only
-defines the consistency assertion it must satisfy.
+accepted revisions, their reserved internal refs and the SQLite record that
+selects them. The Git bundle explicitly includes the reserved ref namespace;
+restore verification checks ref-to-SHA-to-digest-to-DB linkage before releasing
+reconcile quarantine. Capturing a coherent whole-site snapshot remains
+coordinated recovery work; this proposal only defines the consistency assertion
+it must satisfy.
 
 ## 4. Out-of-band Git editing
 
@@ -319,7 +346,7 @@ PR.
 
 | Area | Current interface/evidence | Required contract seam |
 | --- | --- | --- |
-| `statefile` | `Put`, `Delete`, `Commit`, mutable `Load`, immutable `LoadAt` | Prepare/verify an immutable candidate from an expected revision; load accepted resources only by revision; mirror accepted history without making the worktree authoritative. |
+| `statefile` | `Put`, `Delete`, `Commit`, mutable `Load`, immutable `LoadAt`; recovery bundles refs through `--all` | Prepare/verify an immutable candidate from an expected revision; maintain compare-and-swap internal refs for prepared/accepted candidates; load accepted resources only by revision; mirror accepted history without making the worktree authoritative. |
 | `runtimedb` | separate Plan transitions and `statefile_head` update; DB-owned entitlement/calendar decisions are projected during reconcile | One transactional compare-and-swap that records accepted revision, journal state, envelope and Plan approval; idempotent lookup by publication ID. Separately, persist projection decisions/generation and exact derived projection envelopes without granting general Plan authority. |
 | `plan.StoredProposal` | `BasedOnHead`, exact puts/deletes and review Plan | Rename/interpret base as accepted revision; persist canonical candidate/envelope identities derived server-side. |
 | `api.approvePlan` | direct filesystem, Git and DB sequence | Call the shared publisher; return an idempotent accepted/superseded/recovery result. |
@@ -354,6 +381,10 @@ layering rewrite.
   old or candidate accepted revision, never a mixed tree or silent widening.
 - Repeating a request with the same publication ID returns the same result and
   does not create a second commit, Plan transition, event or delivery.
+- Running Git garbage collection after branch divergence cannot prune a
+  prepared or accepted candidate. A recovery bundle/restore preserves the
+  reserved internal ref and verifies the same SHA and tree digest selected by
+  SQLite.
 - Meter and Commitment edits retain their authorized immediate behavior, but
   interruption cannot leave an accepted revision with a non-terminal
   `AuditOnly` record, and their publication grants no reconcile authority.
