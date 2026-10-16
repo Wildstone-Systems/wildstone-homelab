@@ -78,10 +78,16 @@ pass schema and standing-policy validation. Failure of any check places
 infrastructure reconciliation in explicit quarantine; Keystone must not fall
 back to mutable files, a nearby branch head, or an older convenient commit.
 
-Runtime-DB facts projected into a reconcile pass remain DB-owned. The pass
-records the accepted revision and a projection generation/checkpoint in its
-result so an operator can tell which immutable intent and runtime facts were
-used. This proposal does not move grants, household data or status into Git.
+Runtime-DB facts projected into a reconcile pass remain DB-owned. A mutation
+that can change projected host effects (including a service entitlement,
+Person-group membership or calendar grant) records a durable projection
+decision and advances a projection generation in the same SQLite transaction.
+Before dispatch, Keystone resolves that decision against one accepted revision
+and one DB checkpoint into an immutable, server-derived projection envelope.
+The pass records both selectors in its result so an operator can tell which
+immutable intent and runtime facts were used. This proposal does not move
+grants, household data or status into Git or force those existing governed
+actions through an infrastructure Plan.
 
 ### D2. One coordinator serializes every desired-state publication
 
@@ -179,11 +185,13 @@ The envelope is derived from trusted parsed resources, not accepted from
 caller-authored digests. Its canonical digest is stored with the publication
 and approval record.
 
-At reconciliation, every Medium/High step must match one live approval entry
-for the accepted revision: same resource identity, action, desired digest and
-risk no greater than reviewed. A missing resource that turns a reviewed
-`update` into a `create`, a newly observed dependency effect, a changed target,
-or a higher risk is not silently covered. It becomes a fresh pending preview.
+At reconciliation, every Medium/High step must match one live infrastructure
+approval entry or one live projection-authority entry: same resource identity,
+action, desired digest and risk no greater than the governing decision. A
+missing resource that turns a reviewed `update` into a `create`, a newly
+observed dependency effect, a changed target, or a higher risk is not silently
+covered. It becomes a fresh pending preview unless the exact effect is derived
+from a current authorized projection decision as described in D5.
 
 Low-risk drift may retain ADR-W004's existing independently authorized repair
 policy, but its result is attributed to drift repair, not to an unrelated
@@ -200,12 +208,34 @@ imperative script. The change is the authorization predicate:
 ```text
 allowed(step) = lowRiskDriftPolicy(step)
              OR matchingLiveApproval(acceptedRevision, step)
+             OR matchingProjectionAuthority(acceptedRevision, dbCheckpoint, step)
 ```
 
 Several applying Plans may contribute entries to the same pass. Their union
 does not authorize any step outside those entries. Each executed or blocked
 step records the Plan entry that authorized it, and each Plan receives its own
 result. One failed target must not give every queued Plan the same verdict.
+
+DB-owned projections use the third predicate, not an infrastructure Plan. The
+existing public API authorization and step-up rules govern the household
+decision; entitlement seeding from an accepted package manifest is bound to
+that accepted revision instead. The SQLite transaction records the actor or
+seed provenance, decision kind, narrowly affected
+Person/group/capability/calendar identities and a monotonic projection
+generation. The reconciler deterministically resolves only the fields owned by
+that projector, then durably records exact resource/action/before-and-after
+digests and maximum risk as a `ProjectionAuthority` before any dispatch. That
+envelope is bound to the accepted revision and DB checkpoint used to derive it.
+
+A projection envelope cannot authorize a base Statefile field, another
+projector's field or unrelated drift. A changed accepted revision or projection
+generation fences dispatch and requires recomputation from the still-current
+governing decisions. Superseded grants authorize nothing; revocations and
+offboarding decisions produce their exact removal effects and remain eligible
+without a second Owner approval. Crash recovery may resume only an envelope
+whose accepted revision, checkpoint and source decisions are still current.
+Each projected effect records its projection decision/envelope instead of a
+Plan ID as the authority receipt.
 
 An applying Plan survives restart only with its persisted approval envelope
 and candidate accepted revision intact. A Plan tied to an older accepted
@@ -236,6 +266,7 @@ Startup recovery runs before infrastructure reconciliation or new publication.
 | DB is `accepted`, branch mirror is old | accepted SHA and envelope are authoritative | Verify the object, reconcile only from it, then repair the mirror with compare-and-swap. Do not overwrite a divergent human branch. |
 | Branch mirror moved, response/event missing | accepted journal plus branch state | Return the already accepted result and emit the event/delivery once using publication ID deduplication. |
 | Crash while Plan is `applying` | accepted revision, envelope and per-step receipts | Re-observe, recompute and resume only matching effects. Never replay stored steps blindly. |
+| Crash with projected effects pending | projection decision/generation, derived envelope and accepted revision | Revalidate all three selectors; resume only exact still-current effects, otherwise supersede and recompute. A revoked grant never regains authority from an older envelope. |
 | Accepted SHA/object or digest is missing after restore | inconsistent recovery set | Keep restore/infrastructure quarantine active and require operator recovery; no fallback revision. |
 
 The whole-site recovery set must contain the Git objects for the recorded
@@ -266,13 +297,16 @@ The Statefile remains user-editable, with these boundaries:
 
 Research configuration, exact routine versions, household settings,
 subscriptions and `AuditOnly` tracker edits already have distinct owning
-stores and approval/apply paths. They do not gain infrastructure authority and
-must not create empty approval envelopes merely to pass through the reconcile
-loop. An `AuditOnly` edit that intentionally publishes Meter or Commitment
-resources uses the shared publication coordinator only to serialize and recover
-the Git/SQLite revision change; it remains immediately applied and cannot
-authorize a host operation. This contract does not force all household actions
-into an infrastructure Plan.
+stores and approval/apply paths. Service entitlements, Person-group membership
+and calendar grants likewise retain their existing public API authorization;
+their narrowly derived projection authority is not an infrastructure approval.
+These paths do not gain blanket infrastructure authority and must not create
+empty approval envelopes merely to pass through the reconcile loop. An
+`AuditOnly` edit that intentionally publishes Meter or Commitment resources
+uses the shared publication coordinator only to serialize and recover the
+Git/SQLite revision change; it remains immediately applied and cannot authorize
+a host operation. This contract does not force all household actions into an
+infrastructure Plan.
 
 Self-driven backup and secrets records likewise keep their owning state
 machines. The reconcile loop continues to exclude them rather than treating
@@ -286,12 +320,12 @@ PR.
 | Area | Current interface/evidence | Required contract seam |
 | --- | --- | --- |
 | `statefile` | `Put`, `Delete`, `Commit`, mutable `Load`, immutable `LoadAt` | Prepare/verify an immutable candidate from an expected revision; load accepted resources only by revision; mirror accepted history without making the worktree authoritative. |
-| `runtimedb` | separate Plan transitions and `statefile_head` update | One transactional compare-and-swap that records accepted revision, journal state, envelope and Plan approval; idempotent lookup by publication ID. |
+| `runtimedb` | separate Plan transitions and `statefile_head` update; DB-owned entitlement/calendar decisions are projected during reconcile | One transactional compare-and-swap that records accepted revision, journal state, envelope and Plan approval; idempotent lookup by publication ID. Separately, persist projection decisions/generation and exact derived projection envelopes without granting general Plan authority. |
 | `plan.StoredProposal` | `BasedOnHead`, exact puts/deletes and review Plan | Rename/interpret base as accepted revision; persist canonical candidate/envelope identities derived server-side. |
 | `api.approvePlan` | direct filesystem, Git and DB sequence | Call the shared publisher; return an idempotent accepted/superseded/recovery result. |
 | `api.applyAuthored` | separate optimistic filesystem, Git and DB sequence for Meter/Commitment `AuditOnly` edits | Call the same publisher with non-authorizing `household-audit` provenance; retain immediate household semantics and a terminal audit record. |
 | `ingest.Ingestor` | separate HEAD marker and auto-approved Plan sequence | Observe committed candidates, then call the same publisher and conflict rules as API approval. |
-| `reconcile/loop` | mutable `Load`; tick-wide `allowMediumHigh`; uniform Plan verdict | Load the accepted SHA; match each Medium/High step to an envelope; attribute receipts and outcomes per Plan. |
+| `reconcile/loop` | mutable `Load`; DB-owned entitlement/calendar projection; tick-wide `allowMediumHigh`; uniform Plan verdict | Load the accepted SHA; resolve projection-owned fields at a recorded DB checkpoint; match each Medium/High step to an infrastructure or exact projection envelope; attribute receipts and outcomes to the governing Plan or projection decision. |
 | restore | Git bundle and DB restored under quarantine | Verify accepted SHA/tree digest/envelope linkage before reconcile release. |
 
 The first implementation should split at least into immutable reads,
@@ -332,6 +366,13 @@ layering rewrite.
   waits for a new preview; no host operation is dispatched.
 - Multiple approved Plans in one pass authorize only the union of their exact
   entries and receive independent outcomes.
+- An authorized entitlement or calendar grant/revocation produces an exact
+  projection envelope and can apply its Medium-risk directory/config effect
+  without an infrastructure Plan; the same envelope cannot authorize any
+  unprojected Statefile field or unrelated drift.
+- A projection generation/checkpoint change before dispatch fences the old
+  envelope. Restart resumes only exact effects whose source decisions are still
+  current, and an older grant cannot outrank a newer revocation or offboarding.
 - Restart during `applying` resumes only matching entries. Stale, superseded,
   revoked and quarantined authority dispatches nothing.
 - Low-risk drift that existing policy independently permits remains possible
