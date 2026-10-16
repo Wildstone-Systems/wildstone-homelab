@@ -58,6 +58,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: syntax
         run: for f in scripts/*.sh; do bash -n "$f"; done
+      - name: disk guard offline checks
+        run: bash scripts/test-disk-guard.sh
       # Pinned by checksum, like every other artifact this project runs
       # (ADR-W003 A4.2's reasoning, applied to CI). ubuntu-latest's
       # shellcheck is whatever GitHub last put in the runner image, and
