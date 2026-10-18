@@ -141,13 +141,16 @@ passes the browser-binding and CSRF checks.
 Cancellation or expiry changes no durable registration state and grants no
 authority.
 
-The confirmation handler re-reads the displayed registration facts and all
-live authority fences. A changed confirmation digest, Person, Agent,
-Connection, disclosure, processing profile, runtime binding, or restore fence
-requires a fresh ceremony; the handler must not activate facts different from
-the ones the Person confirmed. Only this handler calls the transaction-scoped
-activation operation with the verified issuer and exact subject, registration,
-canonical Person, and saved one-time proof.
+The confirmation handler first re-resolves the request's current
+trusted-ingress account and requires it to be the same canonical Person stored
+in the confirmation state and registration. It then re-reads the displayed
+registration facts and all live authority fences. An ingress-account switch,
+changed confirmation digest, Person, Agent, Connection, disclosure, processing
+profile, runtime binding, or restore fence requires a fresh ceremony; the
+handler must not activate facts different from the ones the same Person
+confirmed. Only this handler calls the transaction-scoped activation operation
+with the verified issuer and exact subject, registration, canonical Person,
+and saved one-time proof.
 
 ## 3. Atomic activation
 
@@ -249,8 +252,8 @@ tests proving:
    registration, proof, or tokens;
 3. the verified callback cannot activate directly; the confirmation page shows
    the exact registration-specific consequences, and missing, expired,
-   replayed, cross-browser, CSRF-invalid, cancelled, or stale confirmation
-   fails without changing registration, proof, or tokens;
+   replayed, cross-browser, CSRF-invalid, cancelled, stale, or changed-ingress-
+   account confirmation fails without changing registration, proof, or tokens;
 4. the proof secret and exact verified subject never appear in browser state,
    form values, logs, audit, or persisted plaintext outside the registration's
    subject column; the proof secret never appears in HTTP or JSON;
