@@ -51,14 +51,15 @@ type ExternalClientRegistration struct {
 // summary a verified Person confirms. It deliberately excludes the issuer
 // subject, enrollment proof, runtime principal, and every browser credential.
 type ExternalRegistrationConfirmation struct {
-	RegistrationID string `json:"registrationId"`
-	PersonID       string `json:"personId"`
-	Agent          string `json:"agent"`
-	Connection     string `json:"connection"`
-	ClientID       string `json:"clientId"`
-	Disclosure     string `json:"disclosure"`
-	Processing     string `json:"processingClass"`
-	Execution      string `json:"executionProfile"`
+	RegistrationID  string `json:"registrationId"`
+	PersonID        string `json:"personId"`
+	Agent           string `json:"agent"`
+	Connection      string `json:"connection"`
+	ClientID        string `json:"clientId"`
+	Disclosure      string `json:"disclosure"`
+	AcceptsFallback bool   `json:"acceptsFallback"`
+	Processing      string `json:"processingClass"`
+	Execution       string `json:"executionProfile"`
 }
 
 type ActivateExternalRegistration struct {
@@ -276,15 +277,16 @@ func (db *DB) ExternalRegistrationConfirmation(id, personID string) (ExternalReg
 	}
 	var out ExternalRegistrationConfirmation
 	var transport, externalID, reach, encryption, retention, surface string
+	var acceptsFallback int
 	err = tx.QueryRow(`
-		SELECT b.name,a.transport,a.external_id,cd.reach,cd.encryption,cd.retention,cd.surface,
+		SELECT b.name,a.transport,a.external_id,cd.reach,cd.encryption,cd.retention,cd.surface,cd.accepts_fallback,
 		       rt.processing_class,rt.execution_profile
 		  FROM butlers b
 		  JOIN butler_addresses a ON a.seq=? AND a.butler=b.seq AND a.revoked_at=''
 		  JOIN connection_disclosure cd ON cd.connection=a.seq
 		  JOIN butler_runtimes rt ON rt.butler=b.seq AND rt.principal=?
 		 WHERE b.seq=?`, r.Connection, r.RuntimePrincipal, r.Butler).
-		Scan(&out.Agent, &transport, &externalID, &reach, &encryption, &retention, &surface,
+		Scan(&out.Agent, &transport, &externalID, &reach, &encryption, &retention, &surface, &acceptsFallback,
 			&out.Processing, &out.Execution)
 	if err != nil {
 		return ExternalRegistrationConfirmation{}, fmt.Errorf("runtimedb: reading external registration consequences: %w", err)
@@ -292,6 +294,7 @@ func (db *DB) ExternalRegistrationConfirmation(id, personID string) (ExternalReg
 	out.RegistrationID, out.PersonID, out.ClientID = r.ID, r.PersonID, r.ClientID
 	out.Connection = transport + ":" + externalID
 	out.Disclosure = strings.Join([]string{reach, encryption, retention, surface}, "/")
+	out.AcceptsFallback = acceptsFallback != 0
 	return out, nil
 }
 
@@ -353,22 +356,6 @@ func (db *DB) ActivateExternalClientRegistration(in ActivateExternalRegistration
 		return ExternalClientRegistration{}, fmt.Errorf("runtimedb: committing external registration activation: %w", err)
 	}
 	return db.ExternalClientRegistration(r.ID)
-}
-
-// HasActiveExternalRegistrationForPrincipal is the static-token profile
-// fence. The runtime principal remains as the internal Agent binding, but an
-// active OAuth registration makes every bearer for it unusable.
-func (db *DB) HasActiveExternalRegistrationForPrincipal(principal string) (bool, error) {
-	var one int
-	err := db.sql.QueryRow(`SELECT 1 FROM external_client_registrations
-		WHERE runtime_principal=? AND state='active' LIMIT 1`, principal).Scan(&one)
-	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
-	}
-	if err != nil {
-		return false, fmt.Errorf("runtimedb: checking external authentication profile: %w", err)
-	}
-	return true, nil
 }
 
 // RevokeExternalClientRegistration is terminal and idempotent. It retains all

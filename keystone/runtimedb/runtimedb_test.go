@@ -273,12 +273,18 @@ func TestPrincipalsAndTokens(t *testing.T) {
 	if tok.LastUsed.IsZero() {
 		t.Fatal("TouchToken did not stamp last_used")
 	}
+	if err := db.TouchUsableStaticToken("hash1", "mika"); err != nil {
+		t.Fatalf("TouchUsableStaticToken: %v", err)
+	}
 	if err := db.RevokeToken("hash1"); err != nil {
 		t.Fatalf("RevokeToken: %v", err)
 	}
 	tok, _ = db.GetToken("hash1")
 	if tok.RevokedAt.IsZero() {
 		t.Fatal("RevokeToken did not stamp revoked_at")
+	}
+	if err := db.TouchUsableStaticToken("hash1", "mika"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("TouchUsableStaticToken(revoked) = %v, want ErrNotFound", err)
 	}
 	if err := db.RevokeToken("hash1"); err != nil {
 		t.Fatalf("re-revoking should be a no-op, got %v", err)

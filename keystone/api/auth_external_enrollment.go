@@ -368,16 +368,21 @@ func (s *Server) externalEnrollmentConfirmationPage(w http.ResponseWriter, token
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK)
+	fallback := "Disabled"
+	if summary.AcceptsFallback {
+		fallback = "Enabled"
+	}
 	fmt.Fprintf(w, `<!doctype html><meta charset="utf-8"><title>Confirm external Agent enrollment</title>`+
 		`<body><h1>Confirm external Agent enrollment</h1>`+
 		`<dl><dt>Agent</dt><dd>%s</dd><dt>Connection</dt><dd>%s</dd>`+
 		`<dt>External client</dt><dd>%s</dd><dt>Disclosure</dt><dd>%s</dd>`+
-		`<dt>Processing</dt><dd>%s / %s</dd></dl>`+
+		`<dt>Cross-connection fallback</dt><dd>%s</dd><dt>Processing</dt><dd>%s / %s</dd></dl>`+
 		`<p>Confirming retires every static runtime token for this Agent.</p>`+
 		`<form method="post" action="%s"><input type="hidden" name="confirmation" value="%s">`+
 		`<button type="submit">Confirm enrollment</button></form></body>`,
 		html.EscapeString(summary.Agent), html.EscapeString(summary.Connection),
 		html.EscapeString(summary.ClientID), html.EscapeString(summary.Disclosure),
+		fallback,
 		html.EscapeString(summary.Processing), html.EscapeString(summary.Execution),
 		externalEnrollmentConfirm, html.EscapeString(token))
 }

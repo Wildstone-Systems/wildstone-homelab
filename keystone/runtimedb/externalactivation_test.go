@@ -71,6 +71,24 @@ func TestExternalRegistrationActivationIsAtomicAndRetiresStaticTokens(t *testing
 	}
 }
 
+func TestActiveExternalRegistrationAtomicallyRefusesStaticTokenTouch(t *testing.T) {
+	db, in, registration := enrollmentFixture(t)
+	const tokenHash = "synthetic-profile-fence-token-hash"
+	if err := db.InsertToken(tokenHash, in.RuntimePrincipal, "", time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	issued := issueEnrollmentChallenge(t, db, registration)
+	if _, err := db.ActivateExternalClientRegistration(ActivateExternalRegistration{
+		RegistrationID: registration.ID, PersonID: registration.PersonID, Issuer: registration.Issuer,
+		Subject: "subject", Proof: issued.Secret, ActivatedBy: registration.PersonID,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.TouchUsableStaticToken(tokenHash, in.RuntimePrincipal); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("static token touch after activation = %v, want ErrNotFound", err)
+	}
+}
+
 func TestExternalRegistrationActivationRollbackPreservesProofAndToken(t *testing.T) {
 	db, in, registration := enrollmentFixture(t)
 	const tokenHash = "synthetic-rollback-token-hash"

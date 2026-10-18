@@ -262,6 +262,30 @@ func (db *DB) TouchToken(hash string) error {
 	return nil
 }
 
+// TouchUsableStaticToken atomically proves that a static bearer is still live
+// and that its runtime principal has not switched to an active external OAuth
+// profile. The conditional write serializes with activation's token retirement
+// and profile transition, closing the gap between two independent reads.
+func (db *DB) TouchUsableStaticToken(hash, principal string) error {
+	stamp := now()
+	res, err := db.sql.Exec(`UPDATE tokens SET last_used=?
+		WHERE hash=? AND principal=? AND revoked_at=''
+		  AND (expires_at='' OR expires_at>?)
+		  AND NOT EXISTS (
+		    SELECT 1 FROM external_client_registrations
+		     WHERE runtime_principal=? AND state='active'
+		  )`, stamp, hash, principal, stamp, principal)
+	if err != nil {
+		return fmt.Errorf("runtimedb: touching usable static token: %w", err)
+	}
+	if n, err := res.RowsAffected(); err != nil {
+		return fmt.Errorf("runtimedb: reading usable static token update: %w", err)
+	} else if n != 1 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // RevokeToken marks a token revoked. Revoking an already-revoked token is
 // a no-op, not an error (idempotent for the admin API).
 // LiveTokensFor counts the usable tokens a principal holds: not

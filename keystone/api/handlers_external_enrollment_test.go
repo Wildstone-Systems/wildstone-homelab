@@ -270,6 +270,30 @@ func TestExternalEnrollmentRefusesCrossBrowserAccountSwitchAndStaleFacts(t *test
 			t.Fatal("stale-authority confirmation changed registration")
 		}
 	})
+
+	t.Run("fallback disclosure changed after callback", func(t *testing.T) {
+		h, registration, _, idp := externalEnrollmentHarness(t)
+		start, browser := enrollmentStartRequest(t, h, registration.ID, "sandy")
+		callback := enrollmentCallbackRequest(t, h, idp, start, "sandy", browser)
+		body, _ := io.ReadAll(callback.Body)
+		callback.Body.Close()
+		if !strings.Contains(string(body), "Cross-connection fallback</dt><dd>Disabled") {
+			t.Fatalf("confirmation omitted fallback consequence: %s", body)
+		}
+		match := confirmationValue.FindSubmatch(body)
+		if _, err := h.s.DB.ExecForTest(`UPDATE connection_disclosure SET accepts_fallback=1 WHERE connection=?`, registration.Connection); err != nil {
+			t.Fatal(err)
+		}
+		response := enrollmentRequest(t, h, http.MethodPost, externalEnrollmentConfirm, "sandy",
+			url.Values{"confirmation": {string(match[1])}}, browser)
+		if response.StatusCode != http.StatusConflict {
+			t.Fatalf("stale-fallback confirmation = %d", response.StatusCode)
+		}
+		stored, _ := h.s.DB.ExternalClientRegistration(registration.ID)
+		if stored.State != runtimedb.ExternalRegistrationPendingConsent {
+			t.Fatal("stale-fallback confirmation changed registration")
+		}
+	})
 }
 
 func TestEnrollmentAndConsoleSelectDistinctPublicClients(t *testing.T) {
