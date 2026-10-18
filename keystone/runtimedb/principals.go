@@ -193,13 +193,35 @@ func (db *DB) InsertToken(hash, principal, actingFor string, expiresAt time.Time
 	if !expiresAt.IsZero() {
 		exp = expiresAt.UTC().Format(time.RFC3339Nano)
 	}
-	_, err := db.sql.Exec(
+	tx, err := db.sql.Begin()
+	if err != nil {
+		return fmt.Errorf("runtimedb: inserting token: %w", err)
+	}
+	defer tx.Rollback()
+	var registrationTable int
+	err = tx.QueryRow(`SELECT COUNT(*) FROM sqlite_master
+		WHERE type='table' AND name='external_client_registrations'`).Scan(&registrationTable)
+	if err != nil {
+		return fmt.Errorf("runtimedb: checking external authentication profile storage: %w", err)
+	}
+	if registrationTable != 0 {
+		var active int
+		err = tx.QueryRow(`SELECT COUNT(*) FROM external_client_registrations
+			WHERE runtime_principal=? AND state='active'`, principal).Scan(&active)
+		if err != nil {
+			return fmt.Errorf("runtimedb: checking external authentication profile: %w", err)
+		}
+		if active != 0 {
+			return fmt.Errorf("runtimedb: runtime principal uses an active external authentication profile")
+		}
+	}
+	_, err = tx.Exec(
 		`INSERT INTO tokens (hash, principal, acting_for, expires_at, created_at) VALUES (?, ?, ?, ?, ?)`,
 		hash, principal, actingFor, exp, now())
 	if err != nil {
 		return fmt.Errorf("runtimedb: inserting token: %w", err)
 	}
-	return nil
+	return tx.Commit()
 }
 
 // GetToken looks a token record up by secret hash.

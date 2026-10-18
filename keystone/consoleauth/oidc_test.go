@@ -30,7 +30,7 @@ func TestAGoodTokenVerifies(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.User != "mika" || c.AuthTime.Unix() != idp.AuthTime.Unix() {
+	if c.Subject != "0f5a-uuid" || c.User != "mika" || c.AuthTime.Unix() != idp.AuthTime.Unix() {
 		t.Errorf("claims = %+v", c)
 	}
 }
@@ -72,6 +72,7 @@ func TestEveryForgedTokenIsRefused(t *testing.T) {
 		{"another sign-in's nonce", func(i *fakeidp.IdP) string { return i.Mint("n1") }, "n2"},
 		{"no nonce expected", func(i *fakeidp.IdP) string { return i.Mint("") }, ""},
 		{"no auth_time", mutated(func(m map[string]any) { delete(m, "auth_time") }), "n1"},
+		{"no subject", mutated(func(m map[string]any) { delete(m, "sub") }), "n1"},
 		{"no username", mutated(func(m map[string]any) { m["preferred_username"] = " " }), "n1"},
 		{"tampered claims", func(i *fakeidp.IdP) string {
 			parts := strings.Split(i.Mint("n1"), ".")

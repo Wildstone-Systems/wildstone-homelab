@@ -70,6 +70,9 @@ type Server struct {
 
 	Principals *principal.Store
 	DB         *runtimedb.DB
+	// EnrollmentSignInHTTP is the test seam for the distinct external-
+	// enrollment relying party. Production uses the default client.
+	EnrollmentSignInHTTP *http.Client
 	// Catalog is what this control plane can install (ADR-W021 A3).
 	// nil leaves the package and capability endpoints answering 503;
 	// every other route is unaffected, the same posture Agents takes.
@@ -109,7 +112,8 @@ type Server struct {
 	// goroutines read this on every call, so a plain field written by
 	// the reconcile loop would be a data race on the house's trust
 	// boundary.
-	trustedIngress atomic.Pointer[[]string]
+	trustedIngress     atomic.Pointer[[]string]
+	externalEnrollment externalEnrollmentAuth
 
 	// ProbeModel asks one model whether it can actually operate a tool,
 	// and is how a model earns the authority to do things (ADR-W017 A4).
@@ -406,6 +410,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET "+consoleSigninPath, s.consoleSignin)
 	mux.HandleFunc("GET "+consoleCallbackPath, s.consoleCallback)
 	mux.HandleFunc("POST /api/v1/console/signout", s.consoleSignout)
+	mux.HandleFunc("GET /api/v1/external-enrollment/{registration}/start", s.externalEnrollmentStart)
+	mux.HandleFunc("GET /api/v1/external-enrollment/callback", s.externalEnrollmentCallback)
+	mux.HandleFunc("POST /api/v1/external-enrollment/confirm", s.externalEnrollmentConfirm)
 	mux.Handle("GET /api/v1/resources", s.handle(principal.VerbRead, s.listResources))
 	mux.Handle("GET /api/v1/resources/{kind}/{name}", s.handle(principal.VerbRead, s.getResource))
 	mux.Handle("GET /api/v1/observed", s.handle(principal.VerbRead, s.listObserved))

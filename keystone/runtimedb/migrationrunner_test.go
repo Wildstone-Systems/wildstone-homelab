@@ -351,7 +351,7 @@ func TestRealMigrationSetDeclaresTheDirectiveOnlyWhereIntended(t *testing.T) {
 	// The four that once did (0039, 0043, 0052, 0058) are inside the
 	// baseline now, which creates its tables directly and needs no
 	// rebuild.
-	var want []string
+	want := []string{"0107_external_registration_activation.sql"}
 	if len(declared) != len(want) {
 		t.Fatalf("migrations declaring foreign_keys=off = %v, want %v", declared, want)
 	}

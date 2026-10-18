@@ -106,6 +106,10 @@ func (s *Store) Authenticate(secret string) (Identity, error) {
 	if err != nil || p.Disabled {
 		return Identity{}, ErrUnauthenticated
 	}
+	activeExternal, err := s.DB.HasActiveExternalRegistrationForPrincipal(tok.Principal)
+	if err != nil || activeExternal {
+		return Identity{}, ErrUnauthenticated
+	}
 	if err := s.DB.TouchToken(tok.Hash); err != nil {
 		return Identity{}, fmt.Errorf("principal: touching token: %w", err)
 	}

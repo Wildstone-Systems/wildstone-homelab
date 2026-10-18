@@ -99,6 +99,25 @@ templates:
       idTokenClaims: [preferred_username]
       authPolicy: two_factor
       requireGroups: [console_users]
+  # The external-Agent enrollment ceremony is a separate public relying
+  # party. It authenticates an admitted household Person and returns only an
+  # ID token for consent; it is not the runtime's OAuth client, carries no
+  # Agent/API scope, and never reuses the Owner-only Console session.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: OidcClient
+    metadata: { name: wildstone-external-enrollment, node: "{{ or .Params.identity_node .Params.node }}" }
+    spec:
+      clientId: wildstone-external-enrollment
+      clientName: Wildstone external Agent enrollment
+      public: true
+      requirePkce: true
+      consentMode: explicit
+      redirectUris:
+        - "https://console.{{ .Params.admin_domain }}/api/v1/external-enrollment/callback"
+      scopes: [openid, profile]
+      idTokenClaims: [preferred_username]
+      authPolicy: two_factor
   # The route.
   #
   # auth: authelia_oidc is what makes the proxy emit forward_auth and

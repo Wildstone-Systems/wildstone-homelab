@@ -203,8 +203,12 @@ func (p *Provider) Exchange(ctx context.Context, code, verifier string) (string,
 	return out.IDToken, nil
 }
 
-// Claims is what the Console takes from a verified ID token.
+// Claims is the narrow identity shared by the Console and enrollment relying
+// parties after a verified ID token.
 type Claims struct {
+	// Subject is the issuer-stable identity. Enrollment stores it exactly as
+	// signed; it is never trimmed, case-folded, or replaced by User.
+	Subject string
 	// User is preferred_username: the directory account, which is what
 	// the trusted ingress forwards as Remote-User and what the session is
 	// bound to.
@@ -266,6 +270,7 @@ func (p *Provider) Verify(ctx context.Context, raw, nonce string) (Claims, error
 		Iat      *float64        `json:"iat"`
 		Nonce    string          `json:"nonce"`
 		AuthTime *float64        `json:"auth_time"`
+		Subject  string          `json:"sub"`
 		Username string          `json:"preferred_username"`
 	}
 	if err := decodeSegment(parts[1], &c); err != nil {
@@ -290,6 +295,8 @@ func (p *Provider) Verify(ctx context.Context, raw, nonce string) (Claims, error
 		// it is in the future plus the window. Refused outright rather
 		// than clamped: a clock that far out is not one to trust.
 		return Claims{}, fmt.Errorf("%w: auth_time is in the future", ErrToken)
+	case c.Subject == "":
+		return Claims{}, fmt.Errorf("%w: no subject", ErrToken)
 	case strings.TrimSpace(c.Username) == "":
 		return Claims{}, fmt.Errorf("%w: no preferred_username", ErrToken)
 	}
@@ -297,7 +304,7 @@ func (p *Provider) Verify(ctx context.Context, raw, nonce string) (Claims, error
 	if at.After(now) {
 		at = now // within Skew: clamped, so it can never extend a window
 	}
-	return Claims{User: strings.TrimSpace(c.Username), AuthTime: at}, nil
+	return Claims{Subject: c.Subject, User: strings.TrimSpace(c.Username), AuthTime: at}, nil
 }
 
 func unix(f float64) time.Time { return time.Unix(int64(f), 0) }

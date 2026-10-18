@@ -58,6 +58,7 @@ const (
 	// that declaration rather than keeping its own copy, so the two
 	// halves of the sign-in cannot name different clients.
 	consoleCapability = "capability/console"
+	consoleClientID   = "wildstone-console"
 
 	consoleSigninPath   = "/api/v1/console/signin"
 	consoleCallbackPath = "/api/v1/console/callback"
@@ -175,7 +176,7 @@ func consoleSignInConfig(desired []resource.Resource) (clientID, issuer, redirec
 		// Public only: the Console holds no secret, so a confidential
 		// client under this capability is not one it could use.
 		case res.Kind == resource.KindOidcClient && res.OidcClient != nil && res.OidcClient.Public &&
-			res.Metadata.Owner == consoleCapability:
+			res.Metadata.Owner == consoleCapability && res.OidcClient.ClientId == consoleClientID:
 			clientID = res.OidcClient.ClientId
 		case res.Kind == resource.KindRoute && res.Route != nil && res.Route.Auth == "portal" &&
 			res.Metadata.Owner == "capability/identity" && strings.HasPrefix(res.Route.Host, "auth."):
