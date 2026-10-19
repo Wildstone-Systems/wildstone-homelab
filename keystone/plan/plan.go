@@ -384,7 +384,7 @@ func specEqual(a, b resource.Resource) bool {
 	case resource.KindVolume:
 		return a.Volume != nil && b.Volume != nil && *a.Volume == *b.Volume
 	case resource.KindRoute:
-		return a.Route != nil && b.Route != nil && *a.Route == *b.Route
+		return a.Route != nil && b.Route != nil && reflect.DeepEqual(a.Route, b.Route)
 	case resource.KindDnsRecord:
 		return a.DnsRecord != nil && b.DnsRecord != nil && *a.DnsRecord == *b.DnsRecord
 	case resource.KindOidcClient:

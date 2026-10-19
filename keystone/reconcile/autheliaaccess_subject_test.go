@@ -27,6 +27,27 @@ func ldapGroup(name, capability, group string) resource.Resource {
 	}
 }
 
+func unrestrictedEnrollmentRoute(t *testing.T) resource.Resource {
+	t.Helper()
+	r, err := resource.Unmarshal([]byte(`apiVersion: wildstone.dev/v1
+kind: Route
+metadata: {name: enrollment, owner: capability/console, node: n1}
+spec:
+  host: enroll.example.com
+  upstream: container/x:80
+  auth: authelia_oidc
+  requireGroups: []
+  classification: admin_tailscale
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Route.RequireGroups == nil {
+		t.Fatal("explicit empty requireGroups was decoded as inherited capability groups")
+	}
+	return r
+}
+
 // THE central negative case (#209): a direct URL to an unauthorized
 // service is denied.
 //
@@ -183,6 +204,34 @@ func TestServicesSharingAHostnameAdmitTheUnion(t *testing.T) {
 	if len(got) != 2 || got[0] != "docs_users" || got[1] != "photos_users" {
 		t.Errorf("subjects = %v, want both groups sorted — each Route's capability "+
 			"admits its own people", got)
+	}
+}
+
+func TestRouteCanExplicitlyAdmitAnyAuthenticatedAccount(t *testing.T) {
+	console := route("console", "console", "console.example.com", "authelia_oidc")
+	enrollment := unrestrictedEnrollmentRoute(t)
+	desired := []resource.Resource{
+		ldapGroup("console-users", "console", "console_users"), console, enrollment,
+	}
+	got := AccessSubjects(desired)
+	if groups := got["console.example.com"]; len(groups) != 1 || groups[0] != "console_users" {
+		t.Fatalf("Console subjects = %v, want console_users", groups)
+	}
+	if _, restricted := got["enroll.example.com"]; restricted {
+		t.Fatalf("enrollment Route inherited the Owner-only Console subjects: %v", got["enroll.example.com"])
+	}
+}
+
+func TestUnrestrictedRouteWinsWhenPostureSharesAHostname(t *testing.T) {
+	console := route("console", "console", "console.example.com", "authelia_oidc")
+	enrollment := unrestrictedEnrollmentRoute(t)
+	desired := []resource.Resource{
+		ldapGroup("console-users", "console", "console_users"), console, enrollment,
+		{Kind: resource.KindIngress, Metadata: resource.Metadata{Name: "ingress", Owner: "capability/ingress"},
+			Ingress: &resource.IngressSpec{TLS: "tailscale", TailnetName: "node.example.ts.net"}},
+	}
+	if got := AccessSubjects(desired); len(got) != 0 {
+		t.Fatalf("shared tailnet hostname retained a subject that denies the enrollment port: %v", got)
 	}
 }
 

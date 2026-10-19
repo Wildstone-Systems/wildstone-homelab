@@ -89,6 +89,28 @@ func TestActiveExternalRegistrationAtomicallyRefusesStaticTokenTouch(t *testing.
 	}
 }
 
+func TestActiveExternalRegistrationFencesReplacementRuntimePrincipal(t *testing.T) {
+	db, in, _, _ := activateFixture(t, "subject")
+	const replacement = "runtime-external-successor"
+	if err := db.CreatePrincipal(replacement, RoleButler, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.BindRuntimePrincipal(replacement, in.Butler); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.InsertToken("synthetic-successor-token-hash", replacement, "", time.Time{}); err == nil {
+		t.Fatal("minted a static token through a replacement principal for an active external Agent")
+	}
+	const insertedHash = "synthetic-successor-bypass-hash"
+	if _, err := db.sql.Exec(`INSERT INTO tokens (hash, principal, acting_for, expires_at, created_at)
+		VALUES (?, ?, '', '', ?)`, insertedHash, replacement, now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.TouchUsableStaticToken(insertedHash, replacement); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("replacement principal token touch = %v, want ErrNotFound", err)
+	}
+}
+
 func TestExternalRegistrationActivationRollbackPreservesProofAndToken(t *testing.T) {
 	db, in, registration := enrollmentFixture(t)
 	const tokenHash = "synthetic-rollback-token-hash"

@@ -227,6 +227,11 @@ func AccessSubjects(desired []resource.Resource) map[string][]string {
 
 	posture := ingressorigin.Of(desired)
 	out := map[string][]string{}
+	// Authelia matches access rules by hostname, not port. If any Route on
+	// a served hostname explicitly admits every authenticated account, the
+	// hostname-level rule cannot carry a group subject without denying that
+	// Route. Upstream authorization remains responsible for its own path.
+	unrestricted := map[string]bool{}
 	for _, r := range desired {
 		if r.Kind != resource.KindRoute || r.Route == nil {
 			continue
@@ -239,6 +244,24 @@ func AccessSubjects(desired []resource.Resource) map[string][]string {
 		if r.Route.Auth != "authelia_oidc" {
 			continue
 		}
+		host := posture.SiteAddress(r.Route.Host)
+		if h, _, cut := strings.Cut(host, ":"); cut {
+			host = h
+		}
+		if r.Route.RequireGroups != nil {
+			if len(r.Route.RequireGroups) == 0 {
+				unrestricted[host] = true
+				delete(out, host)
+				continue
+			}
+			if !unrestricted[host] {
+				out[host] = append(out[host], r.Route.RequireGroups...)
+			}
+			continue
+		}
+		if unrestricted[host] {
+			continue
+		}
 		capability, ok := strings.CutPrefix(r.Metadata.Owner, "capability/")
 		if !ok {
 			continue
@@ -246,10 +269,6 @@ func AccessSubjects(desired []resource.Resource) map[string][]string {
 		groups := groupsByCapability[capability]
 		if len(groups) == 0 {
 			continue
-		}
-		host := posture.SiteAddress(r.Route.Host)
-		if h, _, cut := strings.Cut(host, ":"); cut {
-			host = h
 		}
 		out[host] = append(out[host], groups...)
 	}

@@ -206,8 +206,10 @@ func (db *DB) InsertToken(hash, principal, actingFor string, expiresAt time.Time
 	}
 	if registrationTable != 0 {
 		var active int
-		err = tx.QueryRow(`SELECT COUNT(*) FROM external_client_registrations
-			WHERE runtime_principal=? AND state='active'`, principal).Scan(&active)
+		err = tx.QueryRow(`SELECT COUNT(*)
+			FROM external_client_registrations ecr
+			JOIN runtime_principals rp ON rp.butler=ecr.butler
+			WHERE rp.principal=? AND ecr.state='active'`, principal).Scan(&active)
 		if err != nil {
 			return fmt.Errorf("runtimedb: checking external authentication profile: %w", err)
 		}
@@ -272,8 +274,10 @@ func (db *DB) TouchUsableStaticToken(hash, principal string) error {
 		WHERE hash=? AND principal=? AND revoked_at=''
 		  AND (expires_at='' OR expires_at>?)
 		  AND NOT EXISTS (
-		    SELECT 1 FROM external_client_registrations
-		     WHERE runtime_principal=? AND state='active'
+		    SELECT 1
+		      FROM external_client_registrations ecr
+		      JOIN runtime_principals rp ON rp.butler=ecr.butler
+		     WHERE rp.principal=? AND ecr.state='active'
 		  )`, stamp, hash, principal, stamp, principal)
 	if err != nil {
 		return fmt.Errorf("runtimedb: touching usable static token: %w", err)
