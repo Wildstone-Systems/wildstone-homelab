@@ -1042,11 +1042,13 @@ func packagesUnder(capName string, current []resource.Resource) []string {
 // a sibling rather than of the package being acted on.
 func packageIsInstalled(pkg *pkgspec.Package, current []resource.Resource) bool {
 	// An instanced package names its containers per instance, so there
-	// is no fixed name to look for; any resource it stamped is an
-	// instance of it.
+	// is no fixed name to look for; any Container it stamped is an
+	// instance of it. Volume and SeedFile resources are not counted: a
+	// removal deliberately retains them for recovery, and they would
+	// otherwise keep a removed instance in Installed for ever.
 	if pkg.Metadata.Instanced {
 		for _, r := range current {
-			if r.Metadata.Package == pkg.Metadata.Name {
+			if r.Kind == resource.KindContainer && r.Metadata.Package == pkg.Metadata.Name {
 				return true
 			}
 		}
