@@ -1,7 +1,7 @@
 # One entry, for one historical commit, and it is not a suppression of the
 # rule that produced it.
 #
-# f663f34 added a redaction test whose fixture was written as the literal
+# fcfd37e added a redaction test whose fixture was written as the literal
 # "AUTHELIA_SESSION_SECRET: <24 chars of high-entropy base64>". That is a
 # fabricated value — the test exists to prove the redactor eats exactly
 # that shape — but a keyed high-entropy pair in the source is precisely
@@ -12,10 +12,10 @@
 # and nowhere else. What remains is the commit, and a fingerprint is
 # pinned to one commit, one file, one rule and one line, so this entry
 # cannot mask any future finding anywhere.
-f663f34714f45f1cde50c73b37387960d5cf5ddb:keystone/redact/defectd_test.go:generic-api-key:78
+fcfd37e6c481b3cc5aafc357092134dcd6e2f3c5:keystone/redact/defectd_test.go:generic-api-key:78
 
 # Same class as the entry above, and the second in two days — which is the
-# signal that mattered. f663f34 wrote a fake API key; 9540e44 wrote a fake
+# signal that mattered. fcfd37e wrote a fake API key; 0d83a1d wrote a fake
 # PEM private key to exercise multi-line materialization. Both were
 # invented, both were exactly the shape the scanner exists to catch, and
 # it cannot tell an invented one from a real one. That is the scanner
@@ -27,7 +27,7 @@ f663f34714f45f1cde50c73b37387960d5cf5ddb:keystone/redact/defectd_test.go:generic
 # practice this records is "do not write key-shaped literals in tests" —
 # if a third entry is ever needed, that practice is not holding and the
 # answer is a shared helper, not another line in this file.
-9540e441bc6e301ccb932d7857f1c1f0415681f7:wardstone/internal/agent/materialize_test.go:private-key:279
+0d83a1d5990f146e801e6a17234c0b50c1e10566:wardstone/internal/agent/materialize_test.go:private-key:279
 
 # Same class again (#269). bdd481a's connection tests wrote fake Slack
 # tokens ("xoxb-" / "xapp-" plus digits) beside keys named botToken and
@@ -54,3 +54,21 @@ bdd481ab8ce3d768772ba881e1977ea9bb4cc903:keystone/api/handlers_connections_test.
 # value, never a usable key. The test now assembles the value from obvious
 # fragments, while this fingerprint suppresses only that historical line.
 674d4e6cb61012dab787a7165ca46c0708ca7d1c:keystone/api/handlers_recovery_test.go:generic-api-key:34
+
+# The history was rewritten to remove personal details before the
+# repository went public, which gave every commit a new id. The entries
+# above were re-pinned to their rewritten commits, and the rewrite also
+# surfaced the findings below: every one is an invented fixture (fake
+# Slack, GitHub and Wildstone tokens, a placeholder recovery key, a fake
+# PEM body), each in a commit whose working-tree successor no longer
+# carries it. Same pinning as above: one commit, file, rule and line.
+08ae04ed24c5dfeac797da96416addeba4ec3d84:keystone/redact/serial_byid_test.go:generic-api-key:66
+08ae04ed24c5dfeac797da96416addeba4ec3d84:keystone/api/serial_byid_redaction_test.go:generic-api-key:28
+765babbe9bf5996277b2f0122a50c9dbf86f35d5:keystone/api/handlers_recovery_test.go:generic-api-key:34
+f52e8d9d89a57543b3f3386a4ff21a0a76eacb16:console/scripts/render-check.tsx:generic-api-key:246
+4136ec83a6e7a3921c2a1df65191ae248021cfc8:keystone/api/handlers_connections_test.go:generic-api-key:208
+4136ec83a6e7a3921c2a1df65191ae248021cfc8:keystone/api/handlers_connections_test.go:generic-api-key:210
+4136ec83a6e7a3921c2a1df65191ae248021cfc8:keystone/api/handlers_connections_test.go:generic-api-key:235
+0d83a1d5990f146e801e6a17234c0b50c1e10566:wardstone/internal/agent/materialize_test.go:private-key:290
+2b0791c0c8304fbc1f08f4a096dce401b4fd1192:keystone/redact/f27_test.go:github-pat:53
+d9e06bee8f76ae45f5a7e1efbcca341383d5a06d:keystone/butler/fixtures_test.go:generic-api-key:18
