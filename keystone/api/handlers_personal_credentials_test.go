@@ -124,7 +124,7 @@ type credentialHarness struct {
 	*harness
 	nodes *credentialNodes
 	logs  *bytes.Buffer
-	mika string // Owner Console token acting for mika
+	mika  string // Owner Console token acting for mika
 	olive string // Owner Console token acting for olive
 	agent int64
 }

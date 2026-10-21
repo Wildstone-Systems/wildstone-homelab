@@ -255,8 +255,8 @@ func newMailE2E(t *testing.T, people ...string) *mailE2E {
 		model:    &recordingModel{replies: map[string]string{}},
 		adapters: map[string]*e2eAdapter{}, subs: map[string]int64{},
 		access: map[string]map[string]string{
-			"sam":   {"sam-family": "rw", "household": "rw"},
-			"bo":    {"bo-club": "rw", "household": "rw", "bo-private": "rw"},
+			"sam":  {"sam-family": "rw", "household": "rw"},
+			"bo":   {"bo-club": "rw", "household": "rw", "bo-private": "rw"},
 			"mika": {"household": "rw"},
 		}}
 	vault, err := db.OpenMailExcerptVault(t.TempDir() + "/mail-excerpts.key")

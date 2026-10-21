@@ -10,7 +10,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: dashboard
-  version: 1.0.1
+  version: 1.0.2
   capability: dashboard
   profile: homepage
   exclusive: true

@@ -201,7 +201,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: calendar-radicale
-  version: 2.2.1
+  version: 2.2.2
   capability: calendar
   profile: radicale
 requires:

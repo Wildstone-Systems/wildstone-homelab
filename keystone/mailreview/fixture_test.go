@@ -159,8 +159,8 @@ func newEnv(t *testing.T) *env {
 
 	e := &env{db: db, vault: vault, dav: newFakeDAV(t), clock: &clock{t: now}, sub: sub, agent: agent, binding: binding,
 		access: map[string]map[string]string{
-			"sam":   {"sam-family": "rw", "household": "r"},
-			"bo":    {"household": "rw", "bo-private": "rw"},
+			"sam":  {"sam-family": "rw", "household": "r"},
+			"bo":   {"household": "rw", "bo-private": "rw"},
 			"mika": {"household": "rw"},
 		}}
 	e.cal = &domestic.Calendar{Authority: allowExecution{}, Location: newYork(), Now: e.clock.Now,

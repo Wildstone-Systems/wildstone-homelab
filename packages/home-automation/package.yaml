@@ -46,7 +46,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: home-automation-hass
-  version: 1.0.3
+  version: 1.0.4
   capability: home-automation
   profile: home-assistant
 params:
