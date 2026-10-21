@@ -19,23 +19,8 @@ jobs:
   secrets-scan:
     name: secret scan (gitleaks)
     # This is the check that keeps a credential out of public history,
-    # so it must run on EVERY pull request, including one from a fork,
-    # and it is deliberately not guarded: a skipped required check
-    # counts as passing, which would make a guard worse than useless.
-    #
-    # Where it runs follows the repository's visibility, automatically:
-    #   private  -> the self-hosted runner. Hosted minutes are metered on
-    #               a private repository (the reason CI moved to
-    #               self-hosted in the first place), and nobody outside
-    #               the repository can open a fork PR against it, so
-    #               running unguarded here is safe.
-    #   public   -> a GitHub-hosted runner, free for public repositories.
-    #               It needs nothing from the maintainer's network and
-    #               holds nothing worth protecting, so a fork's code
-    #               running there is fine.
-    # Nothing has to be edited on flip day; the expression re-evaluates
-    # on every run.
-    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted", "dev-services"]') || 'ubuntu-latest' }}
+    # so it runs on every pull request, including one from a fork.
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
@@ -46,14 +31,7 @@ jobs:
 
   installer:
     name: shell scripts (ADR-W014/W018)
-    runs-on: [self-hosted, dev-services]
-    # These jobs run on a self-hosted runner inside the maintainer's own
-    # network (deploy/ci-runner/ is how it is meant to be run: one job
-    # per container, then discarded). On a public repository a pull
-    # request from a fork would otherwise execute its workflow changes on
-    # that machine. So a fork's PR is skipped here; push the branch into
-    # this repository to run CI on it.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: syntax
@@ -68,12 +46,6 @@ jobs:
       # where 0.11 does not. A shell change can therefore be clean
       # locally and fail here, or — worse — stop being checked at all
       # the day GitHub bumps the runner.
-      #
-      # This used to be `docker run koalaman/shellcheck@sha256:...`. It
-      # is a verified release tarball now so that the self-hosted runner
-      # needs no Docker socket at all: a job that can reach the host's
-      # Docker daemon can reach everything on that host, which is the
-      # one thing deploy/ci-runner/ exists to prevent.
       #
       # Run the identical check before pushing:
       #   docker run --rm -v "$PWD:/mnt" koalaman/shellcheck:v0.9.0 scripts/*.sh
@@ -129,14 +101,7 @@ jobs:
 
   console:
     name: console (typecheck + build + checks, ADR-W016/W027)
-    runs-on: [self-hosted, dev-services]
-    # These jobs run on a self-hosted runner inside the maintainer's own
-    # network (deploy/ci-runner/ is how it is meant to be run: one job
-    # per container, then discarded). On a public repository a pull
-    # request from a fork would otherwise execute its workflow changes on
-    # that machine. So a fork's PR is skipped here; push the branch into
-    # this repository to run CI on it.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
     # `playwright` is a devDependency for scripts/ui-check.mjs, which is an
     # operator's check against their own control plane and never runs here.
     # Without this, every install in this job downloads a browser nothing
@@ -165,9 +130,7 @@ jobs:
 
   ddgs-worker:
     name: bounded DDGS worker (ADR-W047, S18)
-    runs-on: [self-hosted, dev-services]
-    # Keep the same fork guard as every job on the household runner.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -185,14 +148,7 @@ jobs:
 
   native-agent:
     name: native agent runtime (OpenAI Agents SDK sidecar, #357)
-    runs-on: [self-hosted, dev-services]
-    # These jobs run on a self-hosted runner inside the maintainer's own
-    # network (deploy/ci-runner/ is how it is meant to be run: one job
-    # per container, then discarded). On a public repository a pull
-    # request from a fork would otherwise execute its workflow changes on
-    # that machine. So a fork's PR is skipped here; push the branch into
-    # this repository to run CI on it.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -238,14 +194,7 @@ jobs:
 
   go:
     name: go (${{ matrix.goarch }})
-    runs-on: [self-hosted, dev-services]
-    # These jobs run on a self-hosted runner inside the maintainer's own
-    # network (deploy/ci-runner/ is how it is meant to be run: one job
-    # per container, then discarded). On a public repository a pull
-    # request from a fork would otherwise execute its workflow changes on
-    # that machine. So a fork's PR is skipped here; push the branch into
-    # this repository to run CI on it.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
     strategy:
       matrix:
         goarch: [amd64, arm64]

@@ -60,16 +60,11 @@ a PR that fails one is closed or sent back regardless of its merits.
    and every pinned red-team or structural test. A PR that skips,
    disables, or loosens one of these to make something work is
    rejected regardless of what it enables.
-3. **Workflow changes are minimal and keep the runner safe.** CI runs
-   on a self-hosted runner inside the maintainer's network. Jobs on it
-   skip pull requests from forks, and a fork's workflow only ever runs
-   after the maintainer approves it, having read the `.github/` diff
-   first. The secret scan is the exception: it runs for every pull
-   request, forks included, on a GitHub-hosted runner once the
-   repository is public, because it is the check that keeps a
-   credential out of public history. A PR that touches `.github/workflows/` is reviewed for
-   exactly that diff and nothing more; a change that removes the fork
-   guard or references a new secret needs an issue first.
+3. **Workflow changes are minimal.** CI runs on GitHub-hosted runners,
+   for every pull request, forks included. A PR that touches
+   `.github/workflows/` is reviewed for exactly that diff and nothing
+   more; a change that adds a self-hosted runner or references a new
+   secret needs an issue first.
 4. **One concern, verified.** The change does one thing, says which
    ADR it touches, and the author ran the same checks CI runs.
 5. **Fits the code around it.** Style, comment discipline, and the
@@ -81,8 +76,6 @@ a PR that fails one is closed or sent back regardless of its merits.
 - Read the diff of `.github/workflows/` before pressing "Approve and
   run". Approval runs the PR's version of the workflow, not `main`'s.
 - Never approve a run for a PR that adds or renames a workflow secret.
-- To test a contribution on the runner without approving the fork,
-  push the branch into this repository.
 
 ## Optional: the Graft code graph for AI agents
 
