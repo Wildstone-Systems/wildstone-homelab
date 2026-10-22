@@ -14,6 +14,28 @@
 
 ---
 
+## Current planning guidance (reviewed 2026-10-22)
+
+The E0–E13 tables and focused-week estimates below preserve the original
+implementation plan; they are not an up-to-date backlog, release checklist
+or statement that every acceptance gate has passed. This repository is now
+the public product repository, `Wildstone-Systems/wildstone-homelab`; references
+below to creating a new repository or to “this repo” as the reference
+deployment describe historical context.
+
+Current accepted ADRs, especially W033 and its runtime/transport amendments,
+govern over older phasing. Voice transcription/replies have implementation
+ADRs W042/W043; the older “voice remains post-v1” text is not their status.
+For current implementation planning use issues, source and revision-specific
+validation evidence. Do not reinterpret old PR numbers as public-repo issues.
+
+Proposed [ADR-W050](decisions/ADR-W050-proxmox-first-deployment-and-recovery.md),
+[management contract 0.1](design/application-management-contract-v0.1.md),
+[package comparison](design/application-management-contract-v0.1-comparison.md)
+and [migration review](design/proxmox-deployment-migration-review.md) capture
+the next architectural evaluation. They authorize no migration, descope,
+new automatic remediation or change to the existing approval rules.
+
 ## Purpose
 
 The architecture proposal says *what* to build and *why*. This document says
@@ -67,7 +89,7 @@ wildstone/
 ├── console/          # web UI (TypeScript/React)
 ├── cli/              # `wild` (Go, shares client lib with butler)
 ├── packages/         # capability packages (data) + package toolchain
-├── installer/        # get.wildstone.dev bootstrap + preflight
+├── installer/        # installer notes; executable bootstrap is scripts/install.sh
 ├── testing/          # e2e harness, fixture VMs, restore-drill runner
 └── docs/
 ```
@@ -351,7 +373,7 @@ Voice remains post-v1. Local transcription and Kokoro text-to-speech are the
 current preferences, using the same identity/conversation boundary; the exact
 transport and processing pipeline remain unscoped.
 
-## 8. Immediate next actions (this month)
+## 8. Original immediate actions (historical; not the current backlog)
 
 1. Decide the two challengeable assumptions: solo pace (§0.1) and
    MVP-vs-cut-down target (§3 cut line) — this picks the calendar.

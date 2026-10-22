@@ -1,7 +1,10 @@
 # Wildstone concepts
 
 The mental model, in the order the pieces depend on each other. Each
-section cites the ADR that decided it.
+section cites the ADR that decided it. Reviewed 2026-10-22 against
+`60df9dcbc1daa99d43f7692eb83f7d72f7070956`; use the [glossary](glossary.md)
+for shared terms and [documentation review](design/documentation-refresh-2026-10-22.md)
+for evidence and limits. Proposed placement/contract semantics are not runtime guarantees.
 
 ## Desired state lives in the Statefile
 
@@ -12,21 +15,23 @@ The **Statefile** is a git-backed store of typed resources
 it. Container images must be digest-pinned (`repo@sha256:...`); the
 agent refuses anything else.
 
-Every resource but `DnsRecord` and `Automation` names the node it is
+Node-scoped resources name the node they are
 applied at, in `metadata.node`, and that field is required: the
 reconciler groups desired state by node and dispatches each group at one
-agent, so a resource with no node is never dispatched anywhere.
-`DnsRecord` is an exception because it is applied through an external
-provider rather than an agent; `Automation` because Keystone itself acts
-on it. Neither may carry a node.
+agent, so a node-scoped resource without a node cannot be dispatched.
+`DnsRecord` uses an external provider; `Automation`, `Meter` and `Commitment`
+are Keystone-owned. Those kinds do not carry a node. The closed registry in
+`keystone/resource/resource.go` is authoritative; the kinds listed above are
+examples rather than the complete registry.
 
 For most resources the node is obvious — the machine running the
 container. Two are less so: `OidcClient` and `LdapGroup` are applied at
 the node running the **identity provider**, not the node running the app
 that consumes them, because what they produce is configuration Authelia
-and LLDAP read. App packages expose this as an optional `identity_node`
-param that defaults to the package's own `node`, which is correct for a
-single-node homelab; set it when identity runs on a different machine.
+and LLDAP read. Some app packages, including Immich and Jellyfin, expose an optional
+`identity_node` parameter that defaults to their own `node`. Inspect each
+manifest: this parameter is not universal, and placement on another machine
+also needs valid endpoints and node-local secrets.
 
 ### Identity, and what an `OidcClient` has to say
 
@@ -63,9 +68,10 @@ the reverse proxy's config, or the reverse.
 
 An app's configuration is the package's business. Authelia needs an LDAP
 base DN and a storage backend; Jellyfin's LDAP plugin needs an XML
-document; Immich reads JSON. None of that belongs in the control plane,
-which is meant to know nothing about any particular profile — so a
-package declares a `ConfigFile` and Wildstone renders it.
+document; Immich reads JSON. The architectural goal is to express app configuration in package data, so a
+package declares a `ConfigFile` and Wildstone renders it. Current code still
+contains application-specific synthesis and controllers; this goal is not a
+claim that Keystone is already entirely profile-agnostic.
 
 **The path is derived, never supplied**: `<prefix>/<capability>/<filename>`,
 with the directory taken from the owning capability. A package therefore
@@ -123,15 +129,18 @@ you to name the address for their private surface rather than defaulting
 it, because a surface documented as private that silently binds a public
 interface is the worst of both.
 
-## Plans are the only write path
+## Infrastructure desired-state changes use Plans
 
-Every change to the Statefile is a **plan**: proposed (by a human, a
-package install, or the Butler), reviewed, and **approved by a human**
-before anything happens (ADR-W004 A3, ADR-W007). A plan lists its
+Infrastructure proposals are **Plans**: proposed by a human, a package
+install or an Agent, reviewed, and **approved by a human** before execution
+(ADR-W004 A3, ADR-W007). Household tracker edits have a distinct audit-only
+Plan path and do not grant host-execution authority. A plan lists its
 steps with a risk grade (`Low`/`Medium`/`High`) and blast radius.
 Approval commits the change; the reconciler then converges nodes to
-it. There is no unmediated write anywhere — not for the UI, not for
-the CLI, not for the AI.
+it. This is the infrastructure proposal path. Household evidence writes, granted
+application actions and the separately scoped opt-in `host.*` action family
+have their own authorization/confirmation rules; they are not authority to
+approve or apply infrastructure Plans. No new bypass is introduced here.
 
 ## Routing is generated, never hand-written
 
@@ -182,18 +191,25 @@ Nodes run **wardstoned**, which accepts a fixed set of signed
 operations over mTLS (ADR-W003): ensure/stop/remove container, ensure
 volume, write managed file (under a managed prefix only), health,
 stats, logs, probes, and the write-only secret ops. There is no Exec.
-A compromised Keystone still cannot run arbitrary commands on a node.
+The protocol has no arbitrary host-shell operation. This does not make a
+compromised Keystone harmless: allowed container creation, commands, mounts,
+networks and approved device/capability access still carry substantial power.
 
 ## Principals, roles, one API
 
-Everything — Console, `wild`, Butler — consumes the ONE public
-HTTP+JSON API (ADR-W007). Callers are **principals** with closed
-roles: `admin` (everything), `operator` (read/propose/approve),
-`butler` (read/propose — structurally cannot approve), `publisher`
-(emit household events, nothing else — ADR-W024). Tokens are
-opaque `wst_` bearers, stored hashed. Every request runs
-authn → RBAC → rate limit → handler → audit, and every response body
-passes a redacting encoder that strips secret-shaped values.
+Console, `wild`, automation and Agents use authorized public API/gateway
+boundaries. A **Person** has an Owner or Member role; an **Agent** has an
+Owner or Member class; an API **principal** has a machine credential role.
+These are different axes. The current machine-role set is in
+`keystone/runtimedb/principals.go`, including adapter/publisher roles as well
+as `admin`, `operator` and `butler`. Do not infer a Person's authority from a
+legacy machine role name.
+
+Console uses the Owner OIDC/PKCE session and freshness boundary (ADR-W033);
+opaque bearer tokens remain for CLI and machine callers. Agent HTTP/MCP
+transport uses the existing Agent API (ADR-W039/W040/W049); runtime identity
+does not manufacture a Person's authority. Redaction is defense in depth,
+alongside route-specific authorization and response handling.
 
 Redaction is deliberately blunt — over-redacting is the safe direction —
 so a handful of shapes that look secret but are not carry explicit
@@ -228,11 +244,11 @@ a plan, like everything else.
 
 Secret values transit `wild secret set` once, travel to the node over
 mTLS, and are stored encrypted in the node's local store (ADR-W012).
-The protocol has no read-back operation; Keystone never persists a
-value; specs reference `secret/<name>` and the agent materializes the
-value only into a container's environment at create time. Rotation is
-re-set + container re-create. Consequence: **your password manager is
-the secret backup** — see [recovery.md](recovery.md).
+The protocol has no individual secret read-back operation. Specs reference
+`secret/<name>`; Wardstone resolves values locally for supported environment
+and managed-file uses. Whole-site recovery can carry sealed node bundles and
+the sealed household-vault key; Personal credentials have separate exclusions.
+Keep recovery keys and required credentials off-host — see [recovery.md](recovery.md).
 
 ## Backups run themselves, restores restore alongside
 
@@ -577,128 +593,53 @@ spec:
 Uninstall Home Assistant and nothing breaks. The commitment still knows
 what it is owed and still asks — on its own schedule, and less cleverly.
 
-## The Butler proposes; humans approve
+## Agents, Connections and scoped authority
 
-The Butler (ADR-W006, ADR-W017) is an LLM operator with read tools
-(overview, status, health, diagnose, explain, plan preview) and
-exactly one write tool: `propose_change`, which produces a plan in
-state `proposed`. Its ceiling is structural, not conventional: the
-butler role holds no approve verb, tool results are redacted,
-bounded, and enveloped as untrusted data, and every conversation is a
-persisted, principal-bound session (`butler` acting-for you). The
-morning report is deterministic — no LLM involved — and keeps working
-with the Butler off.
+Agent and Butler refer to the same architectural object (ADR-W033). Owners
+administer through Console; Members use the household surface. Owner Agents
+can receive Owner and Member tools; Member Agents cannot receive Owner tools.
+Actual grants, resource-specific rules, processing class and disclosure
+audience narrow every call. Having an Owner Agent is not permission to approve
+its infrastructure proposals.
 
-### Two surfaces: the operator's butler and the household's
+Infrastructure changes use human-approved Plans. Permitted household actions
+use existing application gateways, including confirmation where required.
+The opt-in `host.*` family includes diagnostics and selected operational
+actions under separate tier/confirmation checks; it is absent from Member
+manifests (`keystone/butler/hostops_manifest_test.go`). The old statement that
+every Agent has exactly one write tool is no longer an accurate global model.
 
-The Butler answers on two surfaces (ADR-W026), and they are two
-gateways rather than one gateway with a filter:
+Connections bind a Person and Agent to a conversation route. They do not grant
+every recipient access to every fact. Chat adapters translate transports;
+the server resolves identity and authority. External runtimes consume the
+canonical Agent API rather than receiving an unrestricted node shell.
+Credential enrollment, task admission and live compatibility must be checked
+against their implementation and tests, not inferred from accepting an ADR.
 
-| | `admin` | `family` |
-|---|---|---|
-| Endpoint | `POST /api/v1/butler/ask` | `POST /api/v1/household/butler/ask` |
-| Reads | the Statefile, plans, health, diagnosis | the household timeline |
-| Writes | `propose_change` — a plan a human approves | one `domestic`-tier action, through the same gateway an approved household rule uses |
-| Cannot | approve or apply anything | see or touch the home lab at all |
+People are canonical Person records; directory accounts and machine
+principals are bindings, not synonyms for a Person. Themes, grants, admission
+and role changes use that identity. Consult [agent system design](agent-system-design.md)
+and [ADR-W033](decisions/ADR-W033-the-agent-design.md) for the current design,
+including the limits on child admission and Owner authority.
 
-The family surface holds no Statefile, no node reader and no plan
-pipeline — not a filtered one, none — so a household conversation has
-no path to infrastructure to be talked into taking. Its system prompt
-does not describe one either: naming a capability a surface lacks is an
-invitation to try it.
+## Deployment and application management boundaries
 
-Which surface answered is stamped on the session record from the
-endpoint the request arrived on — never from the request body — so the
-audit trail separates the two forever after:
-`wild butler sessions -surface family`, or the Console's Butler screen,
-which offers the two side by side with the ceilings written out. The
-family surface binds each session to the caller as its member, and every
-action it dispatches carries that member into the domestic gateway's
-audit record.
+Today a Wardstone node is an enrolled execution environment, not a Proxmox
+physical node or a claim of high availability. Multiple guests may share one
+physical failure domain. The installer does not provision the guests.
 
-### Chat: bindings, then a queue
+[ADR-W050](decisions/ADR-W050-proxmox-first-deployment-and-recovery.md)
+proposes independent management and application recovery groups. The
+[Application Management Contract 0.1](design/application-management-contract-v0.1.md)
+proposes common operational facets; it complements existing package traits
+and service-domain adapters. Both remain drafts. A provider manages approved
+hosting operations; an application adapter understands supported app behavior.
+Neither is a second authority source or an arbitrary executable plugin.
 
-A chat account reaches a Butler only through a **binding** — a row an
-operator created by issuing a single-use claim code (`wild chat code`)
-that the person sends to the bot once. Bindings are per-surface and
-revocable, and every refusal (unknown code, expired, spent, wrong
-transport) is the same answer, so somebody guessing learns nothing. An
-unbound account gets exactly one reply: how to get a code.
-
-An invite can be a link rather than a code to read aloud. The adapter
-reports its own bot's handle on a heartbeat — it is the only party that
-can, since the bot token is a write-only secret — and Keystone builds
-`https://t.me/<bot>?start=<code>` from it. Tapping that opens the bot
-with the code already in it, so the person types nothing; the code is
-still single-use, still expiring, and still binds only what it names. On
-a transport with no such payload the link just opens the conversation.
-
-Neither half of an invite is free text. A code names a person — a
-declared household member on the family surface (see **The household's
-people** below), a Keystone principal on the operator's — and a
-transport this deployment has an adapter installed for
-(`GET /api/v1/chat/transports`). Anything else is refused when the code
-is issued rather than when the person it was meant for says nothing ever
-happened: a code for a bot that does not exist is valid, unredeemable,
-and looks exactly like a working one.
-
-An adapter's whole job is protocol translation. It posts what it heard
-to `POST /api/v1/chat/messages`, polls `GET /api/v1/chat/outbound` for
-what to say, and acks what it delivered. It never chooses a surface —
-its credential does, from its role — and it never asserts who somebody
-is; the binding does that. Replies and rule-driven pushes share the one
-queue, so both are delivered and retried the same way, deduped on the
-transport's own message id.
-
-A voice message goes to `POST /api/v1/chat/voice` instead: the same
-fields, with the recording in place of the text (ADR-W042). Keystone
-checks the sender, the room and the redelivery exactly as for text,
-and only then transcribes; the words become an ordinary turn, except
-that they can never store a secret, answer a rule, or run a slash
-command. When the deployment reads replies aloud (`-speech-replies`),
-the answer to a voice message is marked to be spoken too: the adapter
-delivers the text, then takes the audio once from
-`POST /api/v1/chat/outbound/{seq}/speech` and sends it as a voice
-message (ADR-W043).
-
-Group chats: the operator surface answers in a direct message only. The
-family surface may answer in a group, and is told in its prompt that the
-audience is shared.
-
-A household rule can ask over chat as well as over ntfy: a package
-declares `send` as a `domestic` tool, the rule names it like any other
-action, and the member's reply — free text, not a button — is matched
-back to the question that is still open for that conversation and
-recorded as `household.answered` with the rule's own correlation id.
-Recording an answer involves no model, so that loop closes with the
-Butler switched off.
-
-### The household's people
-
-A household member is an `LdapUser` in the Statefile (ADR-W020 A3) — not
-a row somebody typed into LLDAP's own admin UI. The admin adds people
-from the Console's Household screen or `wild household member`, which
-**proposes a plan**; approving it is what declares the person, and the
-identity capability's provisioning job then creates the account and adds
-the group memberships it is missing. The job only ever adds: no plan
-removes an account, because a control plane that deletes people because
-a YAML file changed is one bad plan away from deleting the household.
-
-No password travels with any of that (ADR-W020 A4). The account exists
-and cannot sign in until the person sets their own credential through
-the sign-in page's reset flow.
-
-Group memberships are offered from the `LdapGroup`s capabilities have
-declared, and a group nothing declares is refused: the provisioning job
-is additive and best-effort, so an invented group name fails one
-membership in a container log rather than the request, and the person
-quietly cannot open the app they were added for.
-
-Chat transports (Telegram, Matrix, and whatever comes next) are the
-point of the split:
-they arrive as packages, and each one is two separate bots against these
-two endpoints, never one bot deciding for itself which side of the house
-a message belongs to.
+Guest running, process running and application ready are different states.
+A container restart does not repair corrupt data. Recovery requires coherent
+backups, alongside restore and application checks; monitoring of host loss
+must survive that host's outage.
 
 ## Themes belong to a person
 
