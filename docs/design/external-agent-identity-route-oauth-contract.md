@@ -10,8 +10,8 @@ ADR-W049 governs the scoped amendments to W039/W040. Concrete interface shapes
 below remain design sketches where the ADR does not fix them; resolve any
 conflict in favor of the accepted ADR.
 
-This source-backed contract belongs to [#541](https://github.com/chickenrat17/wildstone_homelab-control-plane/issues/541)
-under [#580](https://github.com/chickenrat17/wildstone_homelab-control-plane/issues/580).
+This source-backed contract belongs to [#124](https://github.com/Wildstone-Systems/wildstone-homelab/issues/124)
+under [#130](https://github.com/Wildstone-Systems/wildstone-homelab/issues/130).
 Only explicitly readied implementation issues are authorized; #586 is limited
 to inert pending-registration storage. Acceptance does not authorize OAuth
 deployment, generic event activation, or live household testing.

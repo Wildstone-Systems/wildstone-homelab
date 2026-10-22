@@ -1,18 +1,18 @@
 # Gap register: repository against the architecture baseline
 
-Tracked by [#151](https://github.com/chickenrat17/wildstone-homelab/issues/151).
+Tracked by old private issue 151.
 See [`README.md`](README.md) for how to run a slice.
 
 **One file per slice, and no session writes into another's.** The audit slices were run independently so detailed evidence stays in per-slice files rather than one shared document.
 
 | Slice | Issue | Findings |
 |---|---|---|
-| Bot routing and per-Butler chat connections | [#153](https://github.com/chickenrat17/wildstone-homelab/issues/153) | [`findings/153-bot-routing.md`](findings/153-bot-routing.md) |
-| Routine authoring, execution, approval integrity | [#154](https://github.com/chickenrat17/wildstone-homelab/issues/154) | [`findings/154-routines.md`](findings/154-routines.md) |
-| Identity and authorization | [#155](https://github.com/chickenrat17/wildstone-homelab/issues/155) | [`findings/155-identity.md`](findings/155-identity.md) |
-| Shared memory, audiences, semantic recall | [#156](https://github.com/chickenrat17/wildstone-homelab/issues/156) | [`findings/156-memory.md`](findings/156-memory.md) |
-| Secrets and privacy gateway | [#157](https://github.com/chickenrat17/wildstone-homelab/issues/157) | [`findings/157-secrets.md`](findings/157-secrets.md) |
-| Durable execution, delegation, lifecycle | [#158](https://github.com/chickenrat17/wildstone-homelab/issues/158) | [`findings/158-execution.md`](findings/158-execution.md) |
+| Bot routing and per-Butler chat connections | old private issue 153 | [`findings/153-bot-routing.md`](findings/153-bot-routing.md) |
+| Routine authoring, execution, approval integrity | old private issue 154 | [`findings/154-routines.md`](findings/154-routines.md) |
+| Identity and authorization | old private issue 155 | [`findings/155-identity.md`](findings/155-identity.md) |
+| Shared memory, audiences, semantic recall | old private issue 156 | [`findings/156-memory.md`](findings/156-memory.md) |
+| Secrets and privacy gateway | old private issue 157 | [`findings/157-secrets.md`](findings/157-secrets.md) |
+| Durable execution, delegation, lifecycle | old private issue 158 | [`findings/158-execution.md`](findings/158-execution.md) |
 
 Each findings file carries its own audit status. This index holds no findings of its own.
 
@@ -70,15 +70,15 @@ September 10 audit snapshot, not a current pass/fail report.
 | superseded | 7 | The accepted design changed the contract; the row points to its governing section. |
 | **total** | **121** | Every original ID has exactly one current disposition. |
 
-Open work is grouped in [chat delivery #314](https://github.com/chickenrat17/wildstone-homelab/issues/314),
-[routine execution #315](https://github.com/chickenrat17/wildstone-homelab/issues/315),
-[identity #316](https://github.com/chickenrat17/wildstone-homelab/issues/316),
-[memory and privacy #317](https://github.com/chickenrat17/wildstone-homelab/issues/317),
-and [durable work #318](https://github.com/chickenrat17/wildstone-homelab/issues/318).
-[Semantic recall #311](https://github.com/chickenrat17/wildstone-homelab/issues/311),
-[Agent delegation #312](https://github.com/chickenrat17/wildstone-homelab/issues/312),
-and [clone credentials #313](https://github.com/chickenrat17/wildstone-homelab/issues/313)
-have focused issues. Child identity remains tracked by [#284](https://github.com/chickenrat17/wildstone-homelab/issues/284).
+Open work is grouped in [chat delivery #57](https://github.com/Wildstone-Systems/wildstone-homelab/issues/57),
+[routine execution #58](https://github.com/Wildstone-Systems/wildstone-homelab/issues/58),
+[identity #59](https://github.com/Wildstone-Systems/wildstone-homelab/issues/59),
+[memory and privacy #60](https://github.com/Wildstone-Systems/wildstone-homelab/issues/60),
+and [durable work #61](https://github.com/Wildstone-Systems/wildstone-homelab/issues/61).
+[Semantic recall #55](https://github.com/Wildstone-Systems/wildstone-homelab/issues/55),
+[Agent delegation #56](https://github.com/Wildstone-Systems/wildstone-homelab/issues/56),
+and clone credentials old private issue 313
+have focused issues. Child identity remains tracked by [#54](https://github.com/Wildstone-Systems/wildstone-homelab/issues/54).
 
 ## Design resolution after the audit
 
@@ -126,4 +126,4 @@ This register was originally framed as an audit against the 10 September 2026 ar
 
 ## Supplementary IaC assessment
 
-[Infrastructure as Code architecture assessment](findings/566-iac-architecture.md), tracked by [#566](https://github.com/chickenrat17/wildstone_homelab-control-plane/issues/566), preserves the October 7, 2026 implementation snapshot at `b4836adda35c69ae8fde38199fdb92ab292807d8`. Its discussion and current-code revalidation remain in progress. The assessment uses document-local G/A identifiers and does not change the 121 historical finding IDs or disposition counts above. Its tool assignments and roadmap are recommendations pending review, not accepted architecture decisions.
+[Infrastructure as Code architecture assessment](findings/566-iac-architecture.md), tracked by [#128](https://github.com/Wildstone-Systems/wildstone-homelab/issues/128), preserves the October 7, 2026 implementation snapshot at `b4836adda35c69ae8fde38199fdb92ab292807d8`. Its discussion and current-code revalidation remain in progress. The assessment uses document-local G/A identifiers and does not change the 121 historical finding IDs or disposition counts above. Its tool assignments and roadmap are recommendations pending review, not accepted architecture decisions.

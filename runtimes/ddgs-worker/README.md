@@ -1,6 +1,6 @@
 # Bounded DDGS worker (S18)
 
-Dormant worker for [#491](https://github.com/chickenrat17/wildstone-homelab/issues/491),
+Dormant worker for old private issue 491,
 [ADR-W047](../../docs/decisions/ADR-W047-native-agent-research-and-workspaces.md)
 and the [v1 contract](../../docs/design/native-agent-capability-contract-v1.md).
 This adds no tool grants, provider records, catalog activation or deployment.

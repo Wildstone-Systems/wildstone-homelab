@@ -6,7 +6,7 @@
 - **Acceptance criteria:** AC08
 
 Written by the audit slice for
-[#153](https://github.com/chickenrat17/wildstone-homelab/issues/153).
+old private issue 153.
 **This file belongs to that slice alone** — no other session writes
 here, which is what keeps parallel audits from colliding. See
 [`../README.md`](../README.md) for how to run one and
@@ -501,17 +501,17 @@ settling before either is built.
 
 - **AC08's second half — shared knowledge when switching Butlers —
   fails on memory, not on routing.** Memory is siloed per Butler
-  (#151 finding 1). Belongs to [#156](https://github.com/chickenrat17/wildstone-homelab/issues/156).
+  (#151 finding 1). Belongs to old private issue 156.
 - **Access lists and admission** decide whether a bound person may talk
   to the Butler at their address (`ResolveButlerFor`); their correctness
-  is [#155](https://github.com/chickenrat17/wildstone-homelab/issues/155)'s.
+  is old private issue 155's.
 - **Routine ownership.** `household_routines` records a Butler that the
   notification path ignores (F-153-04); whether routines are correctly
   owned in the first place is
-  [#154](https://github.com/chickenrat17/wildstone-homelab/issues/154)'s.
+  old private issue 154's.
 - **Quiet hours and quarantine** gate the same queue this slice audited
   and were not exercised here; durable delivery belongs to
-  [#158](https://github.com/chickenrat17/wildstone-homelab/issues/158).
+  old private issue 158.
 
 ## ADR amendments required
 

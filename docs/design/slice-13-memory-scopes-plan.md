@@ -1,10 +1,10 @@
 # Slice 13: memory scopes implementation and review
 
-Implements [#214](https://github.com/chickenrat17/wildstone-homelab/issues/214), part of [#201](https://github.com/chickenrat17/wildstone-homelab/issues/201). The contract is `docs/agent-system-design.md` sections 11, 17.2 and 18.5, with ADR-W033 taking precedence over the previous blanket Butler isolation rule in ADR-W031 A4.
+Implements old private issue 214, part of old private issue 201. The contract is `docs/agent-system-design.md` sections 11, 17.2 and 18.5, with ADR-W033 taking precedence over the previous blanket Butler isolation rule in ADR-W031 A4.
 
 ## Settled decisions
 
-After reviewing slice 12 ([PR #293](https://github.com/chickenrat17/wildstone-homelab/pull/293), merged as `e2b8de9`), the user selected:
+After reviewing slice 12 (old private PR 293, merged as `e2b8de9`), the user selected:
 
 1. Keep session context separate in `butler_sessions` / turns. Do not duplicate transcripts into durable memory or change first-turn session allocation.
 2. Apply Personal and Household defaults retroactively. Retain genuinely Agent-local material and all original provenance.

@@ -4,7 +4,7 @@
 - **Date:** 2026-10-08
 - **Project:** Wildstone-Systems/wildstone-homelab
 - **ADR identifier:** W048
-- **Issue:** [#561](https://github.com/chickenrat17/wildstone-homelab/issues/561); tracker [#559](https://github.com/chickenrat17/wildstone-homelab/issues/559).
+- **Issue:** old private issue 561; tracker [#126](https://github.com/Wildstone-Systems/wildstone-homelab/issues/126).
 - **Decision owner:** Wildstone maintainer.
 - **Scope:** lifecycle states, dependency validation, bulk rollout and rollback, concurrency, revocation, side-effect honesty, audit, and implementation slicing for governed native Agent skills.
 - **Related:** ADR-W033 (Agent design, Owner/Member separation), ADR-W039 (canonical Agent API), ADR-W041 (native AgentRuntime contract), ADR-W047 (native research and workspaces).

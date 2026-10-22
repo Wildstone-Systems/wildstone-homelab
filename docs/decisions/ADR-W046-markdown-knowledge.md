@@ -3,7 +3,7 @@
 - **Status:** proposed; implemented on this branch (`keystone/knowledge`,
   `keystone/domestic/knowledge.go`, `packages/knowledge-wildstone`,
   `packages/notes-silverbullet`).
-- **Issue:** [#367](https://github.com/chickenrat17/wildstone-homelab/issues/367).
+- **Issue:** old private issue 367.
 - **Builds on:** ADR-W024 A5/A5.1 (household action tiers), ADR-W033 §6
   (tool assignments), ADR-W037 (path refusal rules), ADR-W045 A4 (host
   folders in a BackupPlan).

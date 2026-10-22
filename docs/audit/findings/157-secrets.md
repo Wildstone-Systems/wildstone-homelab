@@ -8,7 +8,7 @@
 - **Acceptance criteria:** AC04, AC07, AC12
 
 Written by the audit slice for
-[#157](https://github.com/chickenrat17/wildstone-homelab/issues/157).
+old private issue 157.
 **This file belongs to that slice alone** — no other session writes
 here, which is what keeps parallel audits from colliding. See
 [`../README.md`](../README.md) for how to run one and

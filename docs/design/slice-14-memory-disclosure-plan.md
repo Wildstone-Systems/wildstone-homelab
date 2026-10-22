@@ -1,6 +1,6 @@
 # Slice 14: Person-aware memory retrieval and assembled context
 
-Implements [#215](https://github.com/chickenrat17/wildstone-homelab/issues/215), part of [#201](https://github.com/chickenrat17/wildstone-homelab/issues/201). Based on main after slice 13 / PR #295. The epic's main-branch instruction supersedes the older branch named in the issue.
+Implements old private issue 215, part of old private issue 201. Based on main after slice 13 / PR #295. The epic's main-branch instruction supersedes the older branch named in the issue.
 
 ## Policy decision
 

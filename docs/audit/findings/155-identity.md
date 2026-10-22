@@ -6,7 +6,7 @@
 - **Acceptance criteria:** AC03, AC06, AC09
 
 Written by the audit slice for
-[#155](https://github.com/chickenrat17/wildstone-homelab/issues/155).
+old private issue 155.
 **This file belongs to that slice alone** — no other session writes
 here, which is what keeps parallel audits from colliding. See
 [`../README.md`](../README.md) for how to run one and
@@ -509,7 +509,7 @@ household deployment in establishing any of this.
 - **Also, at runtime (host round):** `propose_change` was dispatched for a `household`-profile member and an `operator`-profile member with no grant issued to either (F-155-01's AC03 pair); offboarding `jude` later reported `grants-revoked: 0`.
 
 Raised by `chatgpt-codex-connector[bot]` on
-[#161](https://github.com/chickenrat17/wildstone-homelab/pull/161) and
+old private PR 161 and
 verified. It corrects an overstatement in the first version of this
 report, which credited AC03's authorized-operator half to work-bound
 grants.

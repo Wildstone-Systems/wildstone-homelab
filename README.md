@@ -23,7 +23,7 @@ CI, secrets, installer, CLI, web console, and the Butler (sessions,
 diagnostics, injection-hardening red-team suite). What remains before an
 alpha tag: the dogfood migration of a real household and the first
 release-pipeline exercise — tracked in the
-[road-to-alpha issue](https://github.com/chickenrat17/wildstone-homelab/issues/11).
+[road-to-alpha issue](https://github.com/Wildstone-Systems/wildstone-homelab/issues/13).
 
 Not ready to run your home yet. Watch the repo if you want to be there
 when it is.
