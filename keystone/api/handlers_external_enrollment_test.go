@@ -10,11 +10,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/agentapi"
-	"github.com/chickenrat17/wildstone-homelab/keystone/consoleauth/fakeidp"
-	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
-	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
-	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/agentapi"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/consoleauth/fakeidp"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/principal"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/resource"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/runtimedb"
 )
 
 func externalEnrollmentHarness(t *testing.T) (*harness, runtimedb.ExternalClientRegistration, string, *fakeidp.IdP) {
