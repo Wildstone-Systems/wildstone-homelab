@@ -19,7 +19,7 @@ jobs:
     # so it runs on every pull request, including one from a fork.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       # The gitleaks binary, pinned by checksum like shellcheck below.
@@ -45,7 +45,7 @@ jobs:
     name: shell scripts (ADR-W014/W018)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: syntax
         run: for f in scripts/*.sh; do bash -n "$f"; done
       - name: disk guard offline checks
@@ -121,8 +121,8 @@ jobs:
     env:
       PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
@@ -144,8 +144,8 @@ jobs:
     name: bounded DDGS worker (ADR-W047, S18)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12.14"
       - name: pinned dependencies and offline contract fixtures
@@ -162,13 +162,13 @@ jobs:
     name: "native agent runtime (OpenAI Agents SDK sidecar, #357)"
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
           cache-dependency-path: runtimes/native-agent/package-lock.json
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version: "1.25"
       - name: install
@@ -211,8 +211,8 @@ jobs:
       matrix:
         goarch: [amd64, arm64]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version: "1.25"
       - name: gofmt
@@ -269,7 +269,7 @@ jobs:
         # The whole package, so every test that skipped under -race above
         # runs here. Without -race it takes about a minute.
         run: cd keystone && go test -timeout 30m ./runtimedb
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         if: matrix.goarch == 'amd64'
         with:
           python-version: "3.12"
