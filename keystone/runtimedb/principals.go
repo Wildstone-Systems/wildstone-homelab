@@ -193,13 +193,37 @@ func (db *DB) InsertToken(hash, principal, actingFor string, expiresAt time.Time
 	if !expiresAt.IsZero() {
 		exp = expiresAt.UTC().Format(time.RFC3339Nano)
 	}
-	_, err := db.sql.Exec(
+	tx, err := db.sql.Begin()
+	if err != nil {
+		return fmt.Errorf("runtimedb: inserting token: %w", err)
+	}
+	defer tx.Rollback()
+	var registrationTable int
+	err = tx.QueryRow(`SELECT COUNT(*) FROM sqlite_master
+		WHERE type='table' AND name='external_client_registrations'`).Scan(&registrationTable)
+	if err != nil {
+		return fmt.Errorf("runtimedb: checking external authentication profile storage: %w", err)
+	}
+	if registrationTable != 0 {
+		var active int
+		err = tx.QueryRow(`SELECT COUNT(*)
+			FROM external_client_registrations ecr
+			JOIN runtime_principals rp ON rp.butler=ecr.butler
+			WHERE rp.principal=? AND ecr.state='active'`, principal).Scan(&active)
+		if err != nil {
+			return fmt.Errorf("runtimedb: checking external authentication profile: %w", err)
+		}
+		if active != 0 {
+			return fmt.Errorf("runtimedb: runtime principal uses an active external authentication profile")
+		}
+	}
+	_, err = tx.Exec(
 		`INSERT INTO tokens (hash, principal, acting_for, expires_at, created_at) VALUES (?, ?, ?, ?, ?)`,
 		hash, principal, actingFor, exp, now())
 	if err != nil {
 		return fmt.Errorf("runtimedb: inserting token: %w", err)
 	}
-	return nil
+	return tx.Commit()
 }
 
 // GetToken looks a token record up by secret hash.
@@ -236,6 +260,32 @@ func (db *DB) TouchToken(hash string) error {
 	_, err := db.sql.Exec(`UPDATE tokens SET last_used = ? WHERE hash = ?`, now(), hash)
 	if err != nil {
 		return fmt.Errorf("runtimedb: touching token: %w", err)
+	}
+	return nil
+}
+
+// TouchUsableStaticToken atomically proves that a static bearer is still live
+// and that its runtime principal has not switched to an active external OAuth
+// profile. The conditional write serializes with activation's token retirement
+// and profile transition, closing the gap between two independent reads.
+func (db *DB) TouchUsableStaticToken(hash, principal string) error {
+	stamp := now()
+	res, err := db.sql.Exec(`UPDATE tokens SET last_used=?
+		WHERE hash=? AND principal=? AND revoked_at=''
+		  AND (expires_at='' OR expires_at>?)
+		  AND NOT EXISTS (
+		    SELECT 1
+		      FROM external_client_registrations ecr
+		      JOIN runtime_principals rp ON rp.butler=ecr.butler
+		     WHERE rp.principal=? AND ecr.state='active'
+		  )`, stamp, hash, principal, stamp, principal)
+	if err != nil {
+		return fmt.Errorf("runtimedb: touching usable static token: %w", err)
+	}
+	if n, err := res.RowsAffected(); err != nil {
+		return fmt.Errorf("runtimedb: reading usable static token update: %w", err)
+	} else if n != 1 {
+		return ErrNotFound
 	}
 	return nil
 }

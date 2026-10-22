@@ -35,7 +35,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: wildstone-console
-  version: 1.1.0
+  version: 1.2.1
   capability: console
   profile: wildstone
   exclusive: true
@@ -99,6 +99,40 @@ templates:
       idTokenClaims: [preferred_username]
       authPolicy: two_factor
       requireGroups: [console_users]
+  # The external-Agent enrollment ceremony is a separate public relying
+  # party. It authenticates an admitted household Person and returns only an
+  # ID token for consent; it is not the runtime's OAuth client, carries no
+  # Agent/API scope, and never reuses the Owner-only Console session.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: OidcClient
+    metadata: { name: wildstone-external-enrollment, node: "{{ or .Params.identity_node .Params.node }}" }
+    spec:
+      clientId: wildstone-external-enrollment
+      clientName: Wildstone external Agent enrollment
+      public: true
+      requirePkce: true
+      consentMode: explicit
+      redirectUris:
+        - "https://enroll.{{ .Params.admin_domain }}/api/v1/external-enrollment/callback"
+      scopes: [openid, profile]
+      idTokenClaims: [preferred_username]
+      authPolicy: two_factor
+  # Enrollment has its own private forward-auth Route. It explicitly admits
+  # any authenticated household account because Keystone re-resolves the
+  # trusted-ingress identity and requires the exact configured Person at
+  # start, callback, and confirmation; inheriting console_users here would
+  # reject non-Owner household Members before those checks can run.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Route
+    metadata: { name: wildstone-external-enrollment, node: "{{ .Params.node }}" }
+    spec:
+      host: "enroll.{{ .Params.admin_domain }}"
+      upstream: "{{ .Params.keystone_addr }}"
+      auth: authelia_oidc
+      requireGroups: []
+      classification: admin_tailscale
   # The route.
   #
   # auth: authelia_oidc is what makes the proxy emit forward_auth and

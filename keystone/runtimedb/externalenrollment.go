@@ -2,9 +2,10 @@ package runtimedb
 
 // Person-bound one-time enrollment challenges (ADR-W049, #598).
 //
-// These helpers are storage primitives for a future independently
-// authenticated Person service. They are not HTTP handlers, do not authenticate
-// a Person, do not activate a registration, and confer no Agent API authority.
+// These helpers are storage primitives used by the independently authenticated
+// browser ceremony. They are not HTTP handlers, do not authenticate a Person,
+// and confer no Agent API authority. Consumption remains transaction-scoped so
+// only atomic registration activation can spend a proof.
 
 import (
 	"crypto/rand"
@@ -82,7 +83,7 @@ func (db *DB) challengeNow() time.Time {
 	return time.Now().UTC()
 }
 
-// IssueExternalEnrollmentChallenge is called only after a future service has
+// IssueExternalEnrollmentChallenge is called only after the enrollment service has
 // independently authenticated the exact canonical Person. PersonID is not a
 // client/body claim: callers must pass the identity established at that trusted
 // service boundary. This method rechecks it and every stored binding in the
@@ -179,7 +180,7 @@ func (db *DB) ExternalEnrollmentChallenge(id string) (ExternalEnrollmentChalleng
 }
 
 // verifyExternalEnrollmentChallengeTx verifies without consuming. It is kept
-// transaction-scoped so the future activation transaction can add issuer
+// transaction-scoped so the activation transaction can add issuer
 // state/nonce, subject, uniqueness, and profile checks before atomically
 // calling consumeExternalEnrollmentChallengeTx and committing.
 func (db *DB) verifyExternalEnrollmentChallengeTx(tx *sql.Tx, in ConsumeExternalEnrollmentChallenge) (ExternalEnrollmentChallenge, error) {
