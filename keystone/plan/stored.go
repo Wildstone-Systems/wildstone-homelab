@@ -1,6 +1,6 @@
 package plan
 
-import "github.com/chickenrat17/wildstone-homelab/keystone/research"
+import "github.com/Wildstone-Systems/wildstone-homelab/keystone/research"
 
 // StoredProposal is what a plan record's plan_json carries: the computed
 // plan plus the exact desired-state documents approval will commit.

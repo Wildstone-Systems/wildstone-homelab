@@ -3,8 +3,8 @@ package butlerlive
 import (
 	"errors"
 	"fmt"
-	"github.com/chickenrat17/wildstone-homelab/keystone/butler"
-	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/butler"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/runtimedb"
 	"strings"
 )
 

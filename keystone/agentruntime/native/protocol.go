@@ -3,7 +3,7 @@ package native
 import (
 	"encoding/json"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/agentruntime"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/agentruntime"
 )
 
 // The sidecar protocol: newline-delimited JSON over the sidecar's stdin

@@ -3,8 +3,8 @@ package butler
 import (
 	"strings"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/policy"
-	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/policy"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/resource"
 )
 
 // PolicyError is returned by policyValidate when a proposed change is

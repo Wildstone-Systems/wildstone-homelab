@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/butler/provider"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/butler/provider"
 )
 
 func TestSession_ReadFlow_GetHealth(t *testing.T) {

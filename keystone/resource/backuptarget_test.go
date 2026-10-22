@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/chickenrat17/wildstone-homelab/proto/recoveryseal"
+	"github.com/Wildstone-Systems/wildstone-homelab/proto/recoveryseal"
 )
 
 func TestReservedWholeSiteBackupPlan(t *testing.T) {

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/principal"
 )
 
 func (s *Server) getHouseholdExecutionStop(_ *http.Request, _ principal.Identity) (any, int, error) {

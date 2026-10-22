@@ -6,10 +6,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/ingressorigin"
-	"github.com/chickenrat17/wildstone-homelab/keystone/pkgspec"
-	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
-	"github.com/chickenrat17/wildstone-homelab/keystone/trait"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/ingressorigin"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/pkgspec"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/resource"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/trait"
 )
 
 // The trait-export mechanism (ADR-W025 A2) replaced a hardcoded lookup of

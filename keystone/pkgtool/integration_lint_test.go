@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/pkgspec"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/pkgspec"
 )
 
 // #381: a package's events are held to the closed integration vocabulary

@@ -8,12 +8,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/butler"
-	"github.com/chickenrat17/wildstone-homelab/keystone/butler/provider"
-	"github.com/chickenrat17/wildstone-homelab/keystone/butlerlive"
-	"github.com/chickenrat17/wildstone-homelab/keystone/butlerstore"
-	"github.com/chickenrat17/wildstone-homelab/keystone/portal"
-	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/butler"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/butler/provider"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/butlerlive"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/butlerstore"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/portal"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/runtimedb"
 )
 
 // wireHouseholdButler wires BOTH surfaces on one host, which is the real

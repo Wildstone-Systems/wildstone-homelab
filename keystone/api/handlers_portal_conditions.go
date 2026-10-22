@@ -25,9 +25,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/ingressorigin"
-	"github.com/chickenrat17/wildstone-homelab/keystone/reconcile"
-	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/ingressorigin"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/reconcile"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/resource"
 )
 
 // condition is one thing the household should be told about the state

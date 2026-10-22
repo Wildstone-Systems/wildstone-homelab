@@ -1,6 +1,6 @@
 package butler
 
-import ksredact "github.com/chickenrat17/wildstone-homelab/keystone/redact"
+import ksredact "github.com/Wildstone-Systems/wildstone-homelab/keystone/redact"
 
 // untrustedOpenTag / untrustedCloseTag delimit the untrusted-content
 // envelope (ADR-W006 A5.2): attacker-influenceable tool output — currently

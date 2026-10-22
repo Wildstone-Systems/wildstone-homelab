@@ -42,7 +42,7 @@ import (
 // ToolGateway/HouseholdGateway to drive through a Session, exactly as
 // keystone/butler's own tests do.
 func TestPackageNeverReachesWildstoneDirectly(t *testing.T) {
-	const module = "github.com/chickenrat17/wildstone-homelab/keystone"
+	const module = "github.com/Wildstone-Systems/wildstone-homelab/keystone"
 	forbidden := map[string]bool{
 		module + "/runtimedb":   true,
 		module + "/statefile":   true,

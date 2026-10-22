@@ -3,7 +3,7 @@ package pantry
 import (
 	"testing"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/integration"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/integration"
 )
 
 // Every pantry-1 capability this adapter asks for is declared in the closed

@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/agentruntime"
-	"github.com/chickenrat17/wildstone-homelab/keystone/butler/provider"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/agentruntime"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/butler/provider"
 )
 
 // defaultMaxIterations bounds the agent loop's tool-call round trips

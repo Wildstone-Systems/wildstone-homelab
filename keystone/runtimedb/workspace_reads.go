@@ -5,7 +5,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/internal/confinedpath"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/internal/confinedpath"
 )
 
 // WorkspaceReadFiles is a confined metadata query for read-tool coordinators.

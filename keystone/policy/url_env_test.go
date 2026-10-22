@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/internal/fakesecret"
-	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/internal/fakesecret"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/resource"
 )
 
 // The defect these cover was found building the sidecar scaffold

@@ -1,6 +1,6 @@
 package principal
 
-import "github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
+import "github.com/Wildstone-Systems/wildstone-homelab/keystone/runtimedb"
 
 // Verb is a public-plane permission (ADR-W007 A2). The set is closed:
 // adding a verb is a code change reviewed against the role table below.

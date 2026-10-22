@@ -27,7 +27,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/resource"
 )
 
 func homepageSettingsPath(managedPrefix string) string {

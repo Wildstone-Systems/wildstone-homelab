@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/pkgspec"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/pkgspec"
 )
 
 // IndexEntry is one published package version in a registry index

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/runtimedb"
 )
 
 // TestPlanViewDropsLegacyPlanJSON pins F25. The blob was meant to be

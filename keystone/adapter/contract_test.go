@@ -25,10 +25,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/adapter"
-	"github.com/chickenrat17/wildstone-homelab/keystone/adapter/caldav"
-	"github.com/chickenrat17/wildstone-homelab/keystone/adapter/homeassistant"
-	"github.com/chickenrat17/wildstone-homelab/keystone/adapter/pantry"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/adapter"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/adapter/caldav"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/adapter/homeassistant"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/adapter/pantry"
 )
 
 // subject is one Upstream under test, with the capability names this

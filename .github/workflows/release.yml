@@ -14,17 +14,17 @@ permissions:
 
 jobs:
   release:
-    runs-on: [self-hosted, dev-services]
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version: "1.25"
       # The Console is shipped as its own release asset so a control-plane
       # host never needs Node. Building it took 568 apt packages and three
       # seconds to produce 160 KB, on a machine whose job is running
       # containers (#34).
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
@@ -116,10 +116,9 @@ jobs:
           # Bare names, no ./ prefix: the installer greps checksums.txt
           # for " <artifact>$" and verifies in its own workdir.
           ( cd dist && sha256sum -- *.tar.gz install.sh uninstall.sh > checksums.txt )
-      # The runner image (deploy/ci-runner/) is the stock actions-runner
-      # container, which has no GitHub CLI; hosted runners happen to. So
-      # the release brings its own, pinned by checksum like shellcheck in
-      # ci.yml. Bumping it is a reviewed change: version and both
+      # The release brings its own GitHub CLI, pinned by checksum like
+      # shellcheck in ci.yml, rather than whatever version GitHub last put
+      # in the runner image. Bumping it is a reviewed change: version and both
       # checksums together, from gh_<v>_checksums.txt on the release.
       - name: github cli (pinned)
         run: |

@@ -17,7 +17,7 @@ bookmarks-linkding 1.0.2 244e8d7f8885964f
 books-calibre-web 1.0.3 c3bdac664deed86b
 books-kavita 1.0.3 6c6fe6006484fde9
 budget-actual 1.1.1 3bcb0569c996b8f4
-calendar-radicale 2.2.1 a2e9cfe5fffa618b
+calendar-radicale 2.2.2 57a39ba301022a9e
 cameras-frigate 2.0.0 41ebd29eadcdd2f7
 captcha-flaresolverr 1.0.1 6420402a747e2ee5
 chat-discord 2.0.0 f18460627b32cd15
@@ -25,7 +25,7 @@ chat-matrix 2.1.1 94161d2dc154aea0
 chat-slack 2.0.2 cf78429005a88e11
 chat-telegram 2.0.0 84b38bec04e10fc1
 code-gitea 1.0.3 7f235031587c2e35
-dashboard 1.0.1 c0a5ca5341926568
+dashboard 1.0.2 043c053ef14808f7
 dashboard-homarr 1.0.3 d6ad61a6afaacde0
 dns-adguard 1.0.1 64b38a3352ca358e
 dns-pihole 1.0.1 580d2adc5d34c138
@@ -35,8 +35,8 @@ feeds-freshrss 1.0.2 d1e80a90969a95cc
 filedrop-wildstone 1.2.0 8e69efa33ff62a5b
 files-filebrowser 1.0.2 266e96f7d1c1a945
 home-assistant 2.1.0 3b9e945b6ea291fd
-home-automation 1.0.3 08e9b3aa603b35a1
-homepage-wildstone 1.0.1 743bd19598b58400
+home-automation 1.0.4 2fd54d982fc388be
+homepage-wildstone 1.0.2 59496b8434204c43
 identity 1.2.0 a0464ffe5909a85a
 indexers-prowlarr 1.0.3 7cd42be5106f7470
 ingress 1.0.2 4bbd2bd5e6db1d92

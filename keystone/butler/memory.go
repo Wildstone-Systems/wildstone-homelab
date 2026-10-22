@@ -38,8 +38,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/butler/provider"
-	ksredact "github.com/chickenrat17/wildstone-homelab/keystone/redact"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/butler/provider"
+	ksredact "github.com/Wildstone-Systems/wildstone-homelab/keystone/redact"
 )
 
 // MemoryHit is one remembered thing, as a session sees it.

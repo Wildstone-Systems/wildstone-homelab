@@ -29,9 +29,9 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/knowledge"
-	ksredact "github.com/chickenrat17/wildstone-homelab/keystone/redact"
-	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/knowledge"
+	ksredact "github.com/Wildstone-Systems/wildstone-homelab/keystone/redact"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/runtimedb"
 )
 
 // KnowledgeCapability is the capability these executors belong to, and

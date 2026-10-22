@@ -6,7 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/chickenrat17/wildstone-homelab/proto/recoveryseal"
+	"github.com/Wildstone-Systems/wildstone-homelab/proto/recoveryseal"
 )
 
 const householdRecoveryKeyMagic = "wildstone-household-key-v1\x00"

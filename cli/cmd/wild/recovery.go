@@ -9,8 +9,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/recovery"
-	"github.com/chickenrat17/wildstone-homelab/proto/recoveryseal"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/recovery"
+	"github.com/Wildstone-Systems/wildstone-homelab/proto/recoveryseal"
 )
 
 func runRecovery(args []string) int {

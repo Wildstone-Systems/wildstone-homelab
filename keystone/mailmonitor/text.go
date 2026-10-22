@@ -7,7 +7,7 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/runtimedb"
 )
 
 // linkPattern matches anything a calendar client would render as a link.

@@ -9,16 +9,16 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"github.com/chickenrat17/wildstone-homelab/keystone/sharedcalendar"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/sharedcalendar"
 	"sort"
 	"strconv"
 	"strings"
 	"text/template"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/ingressorigin"
-	"github.com/chickenrat17/wildstone-homelab/keystone/pkgspec"
-	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
-	"github.com/chickenrat17/wildstone-homelab/keystone/trait"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/ingressorigin"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/pkgspec"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/resource"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/trait"
 )
 
 // MissingParamError reports a required ParamDecl with no value supplied, or

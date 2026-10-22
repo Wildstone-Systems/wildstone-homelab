@@ -8,8 +8,8 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
-	"github.com/chickenrat17/wildstone-homelab/keystone/speech"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/runtimedb"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/speech"
 )
 
 // voicing turns reading aloud on with one voice, and nothing else.

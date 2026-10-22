@@ -81,7 +81,7 @@ func TestEventIDPreserved(t *testing.T) {
 		"01J6ZK8Q2M7Y4N3R5T9V1W0X2A",                   // ULID
 		"550e8400-e29b-41d4-a716-446655440000",         // UUID
 		"ha-01J6ZK8Q2M7Y4N3R5T9V1W0X2A",                // prefixed ULID
-		"pantry:meal:20260905T073000Z:mika",           // structured
+		"pantry:meal:20260905T073000Z:mika",            // structured
 		"7f3a9c2e1b4d5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c", // content hash
 		"school-pickup-suppression@41207:act",          // an engine decision id
 	} {

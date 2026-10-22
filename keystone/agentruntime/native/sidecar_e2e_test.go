@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/agentruntime"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/agentruntime"
 )
 
 // These tests run the REAL TypeScript sidecar — the real OpenAI Agents

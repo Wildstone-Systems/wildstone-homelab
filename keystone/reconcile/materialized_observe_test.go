@@ -5,7 +5,7 @@ import (
 	"encoding/hex"
 	"testing"
 
-	wsv1 "github.com/chickenrat17/wildstone-homelab/proto/gen/wardstone/v1"
+	wsv1 "github.com/Wildstone-Systems/wildstone-homelab/proto/gen/wardstone/v1"
 )
 
 // TestMaterializedFileComparesBySourceHash is the trap this mechanism

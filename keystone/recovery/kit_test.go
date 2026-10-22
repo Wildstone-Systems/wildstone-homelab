@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/chickenrat17/wildstone-homelab/proto/recoveryseal"
+	"github.com/Wildstone-Systems/wildstone-homelab/proto/recoveryseal"
 )
 
 func TestLoadKitAndRepository(t *testing.T) {

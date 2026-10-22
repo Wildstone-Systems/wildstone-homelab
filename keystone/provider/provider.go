@@ -11,7 +11,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/resource"
 )
 
 // Provider is the external-resource controller contract (ADR-W004 A5).

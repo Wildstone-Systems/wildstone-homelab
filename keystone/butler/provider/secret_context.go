@@ -2,7 +2,7 @@ package provider
 
 import (
 	"encoding/json"
-	"github.com/chickenrat17/wildstone-homelab/keystone/redact"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/redact"
 )
 
 // SafeMessages copies history before inference, including resumed tool results.

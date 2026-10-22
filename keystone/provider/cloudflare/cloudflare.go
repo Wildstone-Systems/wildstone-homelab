@@ -36,8 +36,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/provider"
-	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/provider"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/resource"
 )
 
 // DefaultBaseURL is Cloudflare's real API v4 base. Tests override BaseURL

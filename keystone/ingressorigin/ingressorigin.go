@@ -26,7 +26,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/resource"
 )
 
 // Posture is the part of an Ingress declaration that decides addressing.

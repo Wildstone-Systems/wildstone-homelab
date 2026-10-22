@@ -10,7 +10,7 @@ package pkgtool
 import (
 	"testing"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/domestic"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/domestic"
 )
 
 func TestListsToolsAreDeclaredByThePackage(t *testing.T) {

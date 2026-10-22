@@ -35,8 +35,8 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/pkgspec"
-	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/pkgspec"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/resource"
 )
 
 // manualStepPatterns match text that addresses a person rather than a

@@ -40,7 +40,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/runtimedb"
 )
 
 // geteuid is indirected so the refusal can be tested. The test suite

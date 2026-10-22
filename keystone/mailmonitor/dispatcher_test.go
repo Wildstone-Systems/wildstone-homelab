@@ -14,9 +14,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/automation"
-	"github.com/chickenrat17/wildstone-homelab/keystone/householdtz"
-	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/automation"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/householdtz"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/runtimedb"
 )
 
 type clock struct{ t time.Time }

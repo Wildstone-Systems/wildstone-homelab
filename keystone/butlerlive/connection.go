@@ -21,7 +21,7 @@ package butlerlive
 import (
 	"fmt"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/butler"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/butler"
 )
 
 // connectionCeiling refuses tools a named connection denies, ahead of

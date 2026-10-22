@@ -23,7 +23,7 @@ package butlerstore
 import (
 	"fmt"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/runtimedb"
 )
 
 // Notifier implements butler.StallNotifier over the existing outbound

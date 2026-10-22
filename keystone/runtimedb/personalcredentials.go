@@ -35,7 +35,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/chickenrat17/wildstone-homelab/proto/secreterase"
+	"github.com/Wildstone-Systems/wildstone-homelab/proto/secreterase"
 )
 
 // Credential lifecycle states (integration_secrets.state, migration

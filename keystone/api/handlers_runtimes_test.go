@@ -9,8 +9,8 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/agentapi"
-	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/agentapi"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/runtimedb"
 )
 
 func TestRuntimeInventoryListsEveryLiveAgentsRuntime(t *testing.T) {

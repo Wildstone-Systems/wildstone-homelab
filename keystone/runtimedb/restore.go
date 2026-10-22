@@ -32,7 +32,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/chickenrat17/wildstone-homelab/proto/secreterase"
+	"github.com/Wildstone-Systems/wildstone-homelab/proto/secreterase"
 )
 
 // ErrQuarantined is returned by anything Butler-facing while a restored

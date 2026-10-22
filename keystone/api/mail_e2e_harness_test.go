@@ -31,23 +31,23 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/adapter"
-	"github.com/chickenrat17/wildstone-homelab/keystone/adapter/caldav"
-	"github.com/chickenrat17/wildstone-homelab/keystone/adapter/caldav/caldavfake"
-	"github.com/chickenrat17/wildstone-homelab/keystone/adapter/mail"
-	"github.com/chickenrat17/wildstone-homelab/keystone/adapter/mail/imapread/imapfake"
-	"github.com/chickenrat17/wildstone-homelab/keystone/adapter/mail/mailadapter"
-	"github.com/chickenrat17/wildstone-homelab/keystone/automation"
-	"github.com/chickenrat17/wildstone-homelab/keystone/butler/provider"
-	"github.com/chickenrat17/wildstone-homelab/keystone/capability"
-	"github.com/chickenrat17/wildstone-homelab/keystone/domestic"
-	"github.com/chickenrat17/wildstone-homelab/keystone/householdtz"
-	"github.com/chickenrat17/wildstone-homelab/keystone/mailmonitor"
-	"github.com/chickenrat17/wildstone-homelab/keystone/mailreview"
-	"github.com/chickenrat17/wildstone-homelab/keystone/redact"
-	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
-	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
-	"github.com/chickenrat17/wildstone-homelab/keystone/sharedcalendar"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/adapter"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/adapter/caldav"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/adapter/caldav/caldavfake"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/adapter/mail"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/adapter/mail/imapread/imapfake"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/adapter/mail/mailadapter"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/automation"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/butler/provider"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/capability"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/domestic"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/householdtz"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/mailmonitor"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/mailreview"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/redact"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/resource"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/runtimedb"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/sharedcalendar"
 )
 
 // The scenario's dates follow the real clock (the API reads tokens and
@@ -255,8 +255,8 @@ func newMailE2E(t *testing.T, people ...string) *mailE2E {
 		model:    &recordingModel{replies: map[string]string{}},
 		adapters: map[string]*e2eAdapter{}, subs: map[string]int64{},
 		access: map[string]map[string]string{
-			"sam":   {"sam-family": "rw", "household": "rw"},
-			"bo":    {"bo-club": "rw", "household": "rw", "bo-private": "rw"},
+			"sam":  {"sam-family": "rw", "household": "rw"},
+			"bo":   {"bo-club": "rw", "household": "rw", "bo-private": "rw"},
 			"mika": {"household": "rw"},
 		}}
 	vault, err := db.OpenMailExcerptVault(t.TempDir() + "/mail-excerpts.key")

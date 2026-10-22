@@ -22,7 +22,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/trait"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/trait"
 )
 
 func runTraits(args []string) int {

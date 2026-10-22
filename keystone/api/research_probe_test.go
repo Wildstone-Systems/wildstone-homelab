@@ -10,10 +10,10 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/reconcile"
-	"github.com/chickenrat17/wildstone-homelab/keystone/research"
-	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
-	"github.com/chickenrat17/wildstone-homelab/keystone/statefile"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/reconcile"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/research"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/resource"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/statefile"
 )
 
 // Fake worker and dependency observation only: never release or live evidence.

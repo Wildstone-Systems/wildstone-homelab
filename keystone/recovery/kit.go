@@ -7,7 +7,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/chickenrat17/wildstone-homelab/proto/recoveryseal"
+	"github.com/Wildstone-Systems/wildstone-homelab/proto/recoveryseal"
 )
 
 type Kit struct {

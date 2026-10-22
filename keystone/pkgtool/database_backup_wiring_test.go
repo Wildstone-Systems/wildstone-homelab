@@ -4,7 +4,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/resource"
 )
 
 // TestDBBackedPackagesUseConsistentExports pins the package half of I10: the

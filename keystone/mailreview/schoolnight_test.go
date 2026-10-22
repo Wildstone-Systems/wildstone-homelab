@@ -20,10 +20,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/adapter/mail/imapread/mimenorm"
-	"github.com/chickenrat17/wildstone-homelab/keystone/householdtz"
-	"github.com/chickenrat17/wildstone-homelab/keystone/mailmonitor"
-	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/adapter/mail/imapread/mimenorm"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/householdtz"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/mailmonitor"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/runtimedb"
 )
 
 func mailFixture(t *testing.T, name string) mailmonitor.Message {

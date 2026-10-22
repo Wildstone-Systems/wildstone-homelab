@@ -2,7 +2,7 @@
 
 - **Status:** proposed; reconciled against the repository snapshot below; not implemented by this draft.
 - **Date:** 2026-09-30
-- **Project:** chickenrat17/wildstone-homelab
+- **Project:** Wildstone-Systems/wildstone-homelab
 - **ADR identifier:** W047
 - **Issue:** [#473](https://github.com/chickenrat17/wildstone-homelab/issues/473); tracker [#471](https://github.com/chickenrat17/wildstone-homelab/issues/471).
 - **Binding v1 interface proposal:** [native-agent-capability-contract-v1](../design/native-agent-capability-contract-v1.md). These are new contracts to implement, not an inventory of shipped tools.
@@ -16,7 +16,7 @@ The native Agent needs to retrieve current service documentation, perform resear
 
 The native runtime's short-lived sidecar owns the reasoning loop. Keystone owns effective tool availability, identity, permissions, privacy, execution, task lifecycle, evidence, and audit. These capabilities extend that platform tool surface. They do not require a shell, arbitrary host filesystem access, authenticated browser sessions, or a different agent framework.
 
-This draft records decisions accepted in the design discussion and incorporates a source review at commit `6516fd74c2fa63b734ea5756d7be39fb36c8a20a`. Section 13 separates existing machinery, required extensions, and explicit ADR amendments. Source inspection establishes compatibility and gaps; it does not certify deployed behavior.
+This draft records decisions accepted in the design discussion and incorporates a source review at commit `71ff92a95c108c91a897a8b649c99d92bb4b2e2d`. Section 13 separates existing machinery, required extensions, and explicit ADR amendments. Source inspection establishes compatibility and gaps; it does not certify deployed behavior.
 
 ## 2. Decision summary
 
@@ -255,7 +255,7 @@ Use provider contract fixtures and native-runtime end-to-end tests, then a separ
 
 ## 13. Repository reconciliation result
 
-**Reviewed snapshot:** [`6516fd74c2fa63b734ea5756d7be39fb36c8a20a`](https://github.com/chickenrat17/wildstone-homelab/commit/6516fd74c2fa63b734ea5756d7be39fb36c8a20a), retrieved from current GitHub code search and used explicitly for file reads on 2026-09-30. Review covered the controlling ADRs and runtime, gateway, grants, privacy, Files/knowledge, Console, and backup code. No runtime deployment or live DDGS conformance test was performed. ADR status labels are not treated as runtime evidence.
+**Reviewed snapshot:** [`71ff92a95c108c91a897a8b649c99d92bb4b2e2d`](https://github.com/Wildstone-Systems/wildstone-homelab/commit/71ff92a95c108c91a897a8b649c99d92bb4b2e2d), retrieved from current GitHub code search and used explicitly for file reads on 2026-09-30. Review covered the controlling ADRs and runtime, gateway, grants, privacy, Files/knowledge, Console, and backup code. No runtime deployment or live DDGS conformance test was performed. ADR status labels are not treated as runtime evidence.
 
 | Area | Current evidence | Reconciled result |
 | --- | --- | --- |
@@ -293,14 +293,14 @@ The earlier [research issue #467](https://github.com/chickenrat17/wildstone-home
 
 All paths above refer to the reviewed commit. Key source links:
 
-- [Agent design / ADR-W033](https://github.com/chickenrat17/wildstone-homelab/blob/6516fd74c2fa63b734ea5756d7be39fb36c8a20a/docs/decisions/ADR-W033-the-agent-design.md)
-- [Native runtime contract / ADR-W041](https://github.com/chickenrat17/wildstone-homelab/blob/6516fd74c2fa63b734ea5756d7be39fb36c8a20a/docs/decisions/ADR-W041-agent-runtime-contract.md)
-- [Tool seeding](https://github.com/chickenrat17/wildstone-homelab/blob/6516fd74c2fa63b734ea5756d7be39fb36c8a20a/keystone/api/handlers_butlers.go#L243-L280)
-- [Tool gateway](https://github.com/chickenrat17/wildstone-homelab/blob/6516fd74c2fa63b734ea5756d7be39fb36c8a20a/keystone/butler/gateway.go)
-- [Privacy enforcement](https://github.com/chickenrat17/wildstone-homelab/blob/6516fd74c2fa63b734ea5756d7be39fb36c8a20a/keystone/runtimedb/privacy.go)
-- [Filedrop contract / ADR-W037](https://github.com/chickenrat17/wildstone-homelab/blob/6516fd74c2fa63b734ea5756d7be39fb36c8a20a/docs/decisions/ADR-W037-shared-file-tree.md)
-- [Knowledge contract / ADR-W046](https://github.com/chickenrat17/wildstone-homelab/blob/6516fd74c2fa63b734ea5756d7be39fb36c8a20a/docs/decisions/ADR-W046-markdown-knowledge.md)
-- [Backup contract / ADR-W045](https://github.com/chickenrat17/wildstone-homelab/blob/6516fd74c2fa63b734ea5756d7be39fb36c8a20a/docs/decisions/ADR-W045-off-site-backup.md)
+- [Agent design / ADR-W033](https://github.com/Wildstone-Systems/wildstone-homelab/blob/71ff92a95c108c91a897a8b649c99d92bb4b2e2d/docs/decisions/ADR-W033-the-agent-design.md)
+- [Native runtime contract / ADR-W041](https://github.com/Wildstone-Systems/wildstone-homelab/blob/71ff92a95c108c91a897a8b649c99d92bb4b2e2d/docs/decisions/ADR-W041-agent-runtime-contract.md)
+- [Tool seeding](https://github.com/Wildstone-Systems/wildstone-homelab/blob/71ff92a95c108c91a897a8b649c99d92bb4b2e2d/keystone/api/handlers_butlers.go#L243-L280)
+- [Tool gateway](https://github.com/Wildstone-Systems/wildstone-homelab/blob/71ff92a95c108c91a897a8b649c99d92bb4b2e2d/keystone/butler/gateway.go)
+- [Privacy enforcement](https://github.com/Wildstone-Systems/wildstone-homelab/blob/71ff92a95c108c91a897a8b649c99d92bb4b2e2d/keystone/runtimedb/privacy.go)
+- [Filedrop contract / ADR-W037](https://github.com/Wildstone-Systems/wildstone-homelab/blob/71ff92a95c108c91a897a8b649c99d92bb4b2e2d/docs/decisions/ADR-W037-shared-file-tree.md)
+- [Knowledge contract / ADR-W046](https://github.com/Wildstone-Systems/wildstone-homelab/blob/71ff92a95c108c91a897a8b649c99d92bb4b2e2d/docs/decisions/ADR-W046-markdown-knowledge.md)
+- [Backup contract / ADR-W045](https://github.com/Wildstone-Systems/wildstone-homelab/blob/71ff92a95c108c91a897a8b649c99d92bb4b2e2d/docs/decisions/ADR-W045-off-site-backup.md)
 
 ## 14. Follow-up sequence
 
@@ -310,7 +310,7 @@ All paths above refer to the reviewed commit. Key source links:
 
 ## 15. Publication refresh for #473
 
-The original reconciliation remains pinned to `6516fd74c2fa63b734ea5756d7be39fb36c8a20a`.
+The original reconciliation remains pinned to `71ff92a95c108c91a897a8b649c99d92bb4b2e2d`.
 Publication source reads were refreshed against current main
 `0727a5d57b90216896a931dd0209c2f3c33791fc` on 2026-09-30. The controlling
 W033/W037/W039/W041/W045 documents and the inspected gateway, authority,

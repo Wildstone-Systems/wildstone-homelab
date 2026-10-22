@@ -1,0 +1,4 @@
+# Shows a "Sponsor" button on the repository. It points at the
+# organization's GitHub Sponsors profile, which starts working once
+# GitHub approves the profile (docs/repository-settings.md).
+github: [Wildstone-Systems]

@@ -1,6 +1,6 @@
 package agentruntime
 
-import "github.com/chickenrat17/wildstone-homelab/keystone/plan"
+import "github.com/Wildstone-Systems/wildstone-homelab/keystone/plan"
 
 // ToolCallRecord is one audited tool call: what the model asked for, and
 // the (already redacted/enveloped/truncated) result it got back.

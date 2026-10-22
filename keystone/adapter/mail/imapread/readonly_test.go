@@ -13,8 +13,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/adapter"
-	mailapi "github.com/chickenrat17/wildstone-homelab/keystone/adapter/mail"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/adapter"
+	mailapi "github.com/Wildstone-Systems/wildstone-homelab/keystone/adapter/mail"
 )
 
 // The read-only guarantee is pinned three ways: the command surface is

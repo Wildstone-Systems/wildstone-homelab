@@ -18,10 +18,10 @@ import (
 	"net"
 	"strconv"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/adapter/mail"
-	"github.com/chickenrat17/wildstone-homelab/keystone/adapter/mail/imapread"
-	"github.com/chickenrat17/wildstone-homelab/keystone/capability"
-	"github.com/chickenrat17/wildstone-homelab/keystone/pkgspec"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/adapter/mail"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/adapter/mail/imapread"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/capability"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/pkgspec"
 )
 
 // Environment names specific to the mail adapter. The generic ones are

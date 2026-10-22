@@ -33,8 +33,8 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/consoleauth"
-	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/consoleauth"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/principal"
 )
 
 // errStepUp is the message a consequential operation is refused with

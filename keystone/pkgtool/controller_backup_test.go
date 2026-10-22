@@ -3,7 +3,7 @@ package pkgtool
 import (
 	"testing"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/resource"
 )
 
 // Every home-automation controller keeps identity-bearing state: the keys

@@ -4,9 +4,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
-	"github.com/chickenrat17/wildstone-homelab/keystone/report"
-	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/principal"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/report"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/resource"
 )
 
 // morningReport serves the deterministic morning report (ADR-W017 A5) —

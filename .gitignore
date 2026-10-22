@@ -40,3 +40,6 @@ tmp/
 
 # graft's local graph cache — regenerable, not committed (run `graft build`).
 /graft/
+
+# Same for the chat adapter, built in place by `go build` in its directory.
+/cli/cmd/chat-adapter/chat-adapter

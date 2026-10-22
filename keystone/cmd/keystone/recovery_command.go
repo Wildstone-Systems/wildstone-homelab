@@ -10,7 +10,7 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/recovery"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/recovery"
 )
 
 func recoverCommand(args []string) error {

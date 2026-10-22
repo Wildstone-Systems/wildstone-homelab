@@ -6,9 +6,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	wsv1 "github.com/chickenrat17/wildstone-homelab/proto/gen/wardstone/v1"
-	"github.com/chickenrat17/wildstone-homelab/proto/recoveryseal"
-	"github.com/chickenrat17/wildstone-homelab/proto/secreterase"
+	wsv1 "github.com/Wildstone-Systems/wildstone-homelab/proto/gen/wardstone/v1"
+	"github.com/Wildstone-Systems/wildstone-homelab/proto/recoveryseal"
+	"github.com/Wildstone-Systems/wildstone-homelab/proto/secreterase"
 )
 
 // TestEraseSecretProvesAbsence pins the erase contract (protocol minor

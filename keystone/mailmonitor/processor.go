@@ -30,9 +30,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/adapter/mail/imapread/mimenorm"
-	"github.com/chickenrat17/wildstone-homelab/keystone/householdtz"
-	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/adapter/mail/imapread/mimenorm"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/householdtz"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/runtimedb"
 )
 
 // MaxModelAttempts bounds how many runs retry a message whose model

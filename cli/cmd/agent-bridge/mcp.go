@@ -23,7 +23,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/agentapi"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/agentapi"
 )
 
 // mcpProtocolVersion is the MCP spec revision this server speaks.

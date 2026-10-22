@@ -5,7 +5,7 @@ package portal
 import (
 	"errors"
 	"fmt"
-	"github.com/chickenrat17/wildstone-homelab/keystone/internal/confinedpath"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/internal/confinedpath"
 	"io"
 	"os"
 	"path"

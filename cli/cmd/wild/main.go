@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/pkgtool"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/pkgtool"
 )
 
 var version = "dev" // set via -ldflags at release

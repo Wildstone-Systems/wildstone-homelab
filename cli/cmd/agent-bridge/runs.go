@@ -3,7 +3,7 @@ package main
 import (
 	"sync"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/agentapi"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/agentapi"
 )
 
 // runRegistry maps a Hermes run id to the Wildstone handle that started

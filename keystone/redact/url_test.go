@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/internal/fakesecret"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/internal/fakesecret"
 )
 
 // The URL shelter (ADR-W025 A6). "/" is in the base64 character class, so
