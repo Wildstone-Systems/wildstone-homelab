@@ -20,7 +20,7 @@ Wildstone is two binaries plus a CLI:
 ## 1. Install Keystone
 
 ```sh
-curl -fsSLO https://github.com/chickenrat17/wildstone-homelab/releases/latest/download/install.sh
+curl -fsSLO https://github.com/Wildstone-Systems/wildstone-homelab/releases/latest/download/install.sh
 sudo bash ./install.sh --role keystone
 ```
 
@@ -38,7 +38,7 @@ fine-grained PAT scoped to it is enough). `WILDSTONE_TOKEN` and
 `GITHUB_TOKEN` are also read. The `curl` above that fetches
 `install.sh` is itself anonymous, so while the repo is private get the
 script with an authenticated client instead:
-`gh release download <tag> -R chickenrat17/wildstone-homelab -p install.sh`.
+`gh release download <tag> -R Wildstone-Systems/wildstone-homelab -p install.sh`.
 
 **Air-gapped host?** Download the release assets (`*_linux_*.tar.gz` +
 `checksums.txt` + `install.sh`) elsewhere with `gh release download`,
@@ -96,7 +96,7 @@ ever runs.
 
 ```sh
 # what mint-join prints, while the repo is private
-gh release download --repo chickenrat17/wildstone-homelab --pattern install.sh
+gh release download --repo Wildstone-Systems/wildstone-homelab --pattern install.sh
 sudo GH_TOKEN=<pat> bash ./install.sh --role node \
   --keystone <keystone-host>:9440 \
   --join-token <token> \

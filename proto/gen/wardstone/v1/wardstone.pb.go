@@ -8032,7 +8032,7 @@ const file_wardstone_v1_wardstone_proto_rawDesc = "" +
 	"\x0fKeystoneGateway\x12=\n" +
 	"\x04Join\x12\x19.wardstone.v1.JoinRequest\x1a\x1a.wardstone.v1.JoinResponse\x12H\n" +
 	"\aSession\x12\x1a.wardstone.v1.AgentMessage\x1a\x1d.wardstone.v1.KeystoneMessage(\x010\x01\x12@\n" +
-	"\x05Renew\x12\x1a.wardstone.v1.RenewRequest\x1a\x1b.wardstone.v1.RenewResponseBNZLgithub.com/chickenrat17/wildstone-homelab/proto/gen/wardstone/v1;wardstonev1b\x06proto3"
+	"\x05Renew\x12\x1a.wardstone.v1.RenewRequest\x1a\x1b.wardstone.v1.RenewResponseBSZQgithub.com/Wildstone-Systems/wildstone-homelab/proto/gen/wardstone/v1;wardstonev1b\x06proto3"
 
 var (
 	file_wardstone_v1_wardstone_proto_rawDescOnce sync.Once

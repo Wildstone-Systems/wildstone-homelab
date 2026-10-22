@@ -29,7 +29,7 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/adapter"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/adapter"
 )
 
 // The operations, exactly the mail domain's queries.

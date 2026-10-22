@@ -60,7 +60,7 @@
 #     them, for air-gapped hosts.
 set -euo pipefail
 
-REPO="chickenrat17/wildstone-homelab"
+REPO="Wildstone-Systems/wildstone-homelab"
 VERSION="${WILDSTONE_VERSION:-latest}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ARTIFACT_DIR=""

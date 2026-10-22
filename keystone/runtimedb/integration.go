@@ -23,7 +23,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/integration"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/integration"
 )
 
 // Connection ownership and the defaults it decides (A5).

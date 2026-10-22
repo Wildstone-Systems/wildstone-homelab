@@ -30,8 +30,8 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
-	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/principal"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/resource"
 )
 
 // consoleCommitmentCall runs a portal authoring handler as the Console.

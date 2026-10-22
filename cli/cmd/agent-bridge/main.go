@@ -35,7 +35,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/agentapi/httpclient"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/agentapi/httpclient"
 )
 
 var version = "dev" // set via -ldflags at release, exactly as chat-adapter's is.

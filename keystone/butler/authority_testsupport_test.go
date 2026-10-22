@@ -14,7 +14,7 @@ package butler
 // testConnection is the Connection a test session arrives over. §10.1
 // fails closed without one, so a test that opened a session with no
 // Connection would be testing the refusal rather than its subject.
-import "github.com/chickenrat17/wildstone-homelab/keystone/statefile"
+import "github.com/Wildstone-Systems/wildstone-homelab/keystone/statefile"
 
 const testConnection = "test_connection"
 

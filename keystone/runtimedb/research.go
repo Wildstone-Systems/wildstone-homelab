@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/research"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/research"
 )
 
 func scanSearchProvider(row interface{ Scan(...any) error }) (research.Provider, error) {

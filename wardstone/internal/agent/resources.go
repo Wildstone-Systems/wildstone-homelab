@@ -4,7 +4,7 @@ import (
 	"strconv"
 	"strings"
 
-	wsv1 "github.com/chickenrat17/wildstone-homelab/proto/gen/wardstone/v1"
+	wsv1 "github.com/Wildstone-Systems/wildstone-homelab/proto/gen/wardstone/v1"
 )
 
 // The H1 hardening fields (ADR-W039 Phase 6, protocol minor 18) narrow a

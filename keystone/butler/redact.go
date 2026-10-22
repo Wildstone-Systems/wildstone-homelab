@@ -1,6 +1,6 @@
 package butler
 
-import ksredact "github.com/chickenrat17/wildstone-homelab/keystone/redact"
+import ksredact "github.com/Wildstone-Systems/wildstone-homelab/keystone/redact"
 
 // redact delegates to the shared keystone/redact package — ADR-W007 A5
 // moved the S4 implementation there so the public API's response encoder

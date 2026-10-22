@@ -10,11 +10,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/adapter/caldav"
-	"github.com/chickenrat17/wildstone-homelab/keystone/adapter/caldav/caldavfake"
-	"github.com/chickenrat17/wildstone-homelab/keystone/domestic"
-	"github.com/chickenrat17/wildstone-homelab/keystone/internal/dbtemplate"
-	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/adapter/caldav"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/adapter/caldav/caldavfake"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/domestic"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/internal/dbtemplate"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/runtimedb"
 )
 
 // now is a week before the school-night scenario (Thursday 15 October
@@ -159,8 +159,8 @@ func newEnv(t *testing.T) *env {
 
 	e := &env{db: db, vault: vault, dav: newFakeDAV(t), clock: &clock{t: now}, sub: sub, agent: agent, binding: binding,
 		access: map[string]map[string]string{
-			"sam":   {"sam-family": "rw", "household": "r"},
-			"bo":    {"household": "rw", "bo-private": "rw"},
+			"sam":  {"sam-family": "rw", "household": "r"},
+			"bo":   {"household": "rw", "bo-private": "rw"},
 			"mika": {"household": "rw"},
 		}}
 	e.cal = &domestic.Calendar{Authority: allowExecution{}, Location: newYork(), Now: e.clock.Now,

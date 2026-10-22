@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/research"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/research"
 )
 
 func researchPlan(t *testing.T, db *DB, c research.Change) string {

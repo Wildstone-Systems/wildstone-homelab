@@ -3,7 +3,7 @@ package api
 import (
 	"testing"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/pkgspec"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/pkgspec"
 )
 
 // A param the deployment can answer should arrive answered. Before the

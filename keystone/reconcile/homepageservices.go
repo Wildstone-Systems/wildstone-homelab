@@ -41,7 +41,7 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/resource"
 )
 
 // homepageServicesPath is the file the dashboard container bind-mounts

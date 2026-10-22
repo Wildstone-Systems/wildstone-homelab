@@ -3,8 +3,8 @@ package capability
 import (
 	"testing"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/pkgspec"
-	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/pkgspec"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/resource"
 )
 
 // identityNodePkg mirrors the shape every app package now uses for the

@@ -16,9 +16,9 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
-	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
-	wsv1 "github.com/chickenrat17/wildstone-homelab/proto/gen/wardstone/v1"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/principal"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/runtimedb"
+	wsv1 "github.com/Wildstone-Systems/wildstone-homelab/proto/gen/wardstone/v1"
 )
 
 // joinTokenResponse is the pairing reply. Like mintResponse it skips the
@@ -47,7 +47,7 @@ type joinTokenResponse struct {
 }
 
 // releaseRepo is where install.sh and the release assets live.
-const releaseRepo = "chickenrat17/wildstone-homelab"
+const releaseRepo = "Wildstone-Systems/wildstone-homelab"
 
 // addrPlaceholder stands in when Keystone has no advertised gateway
 // address to offer (-hosts left at its loopback default).

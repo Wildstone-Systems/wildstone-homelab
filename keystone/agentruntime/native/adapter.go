@@ -30,7 +30,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/agentruntime"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/agentruntime"
 )
 
 // RuntimeName is this adapter's name in configuration and audit.

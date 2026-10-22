@@ -1,8 +1,8 @@
 package api
 
 import (
-	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
-	"github.com/chickenrat17/wildstone-homelab/keystone/workspace"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/resource"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/workspace"
 )
 
 // WorkspaceSettings is the per-call desired-state seam for workspace storage

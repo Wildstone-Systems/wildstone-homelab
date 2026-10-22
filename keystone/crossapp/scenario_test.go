@@ -29,11 +29,11 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/adapter"
-	"github.com/chickenrat17/wildstone-homelab/keystone/adapter/caldav"
-	"github.com/chickenrat17/wildstone-homelab/keystone/adapter/homeassistant"
-	"github.com/chickenrat17/wildstone-homelab/keystone/adapter/pantry"
-	"github.com/chickenrat17/wildstone-homelab/keystone/crossapp"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/adapter"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/adapter/caldav"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/adapter/homeassistant"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/adapter/pantry"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/crossapp"
 )
 
 // directIntegrations wires the runner straight onto Upstreams. It stands

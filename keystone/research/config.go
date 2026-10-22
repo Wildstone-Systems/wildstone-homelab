@@ -12,7 +12,7 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/redact"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/redact"
 )
 
 var ErrConflict = errors.New("research configuration changed; reload and propose again")

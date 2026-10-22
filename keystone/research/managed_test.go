@@ -1,7 +1,7 @@
 package research
 
 import (
-	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/resource"
 	"strings"
 	"testing"
 )

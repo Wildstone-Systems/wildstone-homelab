@@ -11,51 +11,41 @@ concurrency:
 
 permissions:
   contents: read
-  # gitleaks-action enumerates a PR's commits via the API on pull_request
-  # events; without this it 403s ("Resource not accessible by integration").
-  pull-requests: read
 
 jobs:
   secrets-scan:
     name: secret scan (gitleaks)
     # This is the check that keeps a credential out of public history,
-    # so it must run on EVERY pull request, including one from a fork,
-    # and it is deliberately not guarded: a skipped required check
-    # counts as passing, which would make a guard worse than useless.
-    #
-    # Where it runs follows the repository's visibility, automatically:
-    #   private  -> the self-hosted runner. Hosted minutes are metered on
-    #               a private repository (the reason CI moved to
-    #               self-hosted in the first place), and nobody outside
-    #               the repository can open a fork PR against it, so
-    #               running unguarded here is safe.
-    #   public   -> a GitHub-hosted runner, free for public repositories.
-    #               It needs nothing from the maintainer's network and
-    #               holds nothing worth protecting, so a fork's code
-    #               running there is fine.
-    # Nothing has to be edited on flip day; the expression re-evaluates
-    # on every run.
-    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted", "dev-services"]') || 'ubuntu-latest' }}
+    # so it runs on every pull request, including one from a fork.
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # The gitleaks binary, pinned by checksum like shellcheck below.
+      # gitleaks-action needs a license key on an organization's
+      # repository; the scanner itself needs nothing. It scans the whole
+      # history on every run, so .gitleaksignore is the only allowlist.
+      - name: gitleaks
+        run: |
+          set -euo pipefail
+          v=8.28.0
+          case "$(uname -m)" in
+            x86_64)  arch=x64;   sum=a65b5253807a68ac0cafa4414031fd740aeb55f54fb7e55f386acb52e6a840eb ;;
+            aarch64) arch=arm64; sum=eff65261156100e5d94a6b3dec313d532fddfe19ae1590bf7a2b4f2699128356 ;;
+            *) echo "no pinned gitleaks for $(uname -m)"; exit 1 ;;
+          esac
+          curl -fsSL -o "$RUNNER_TEMP/gitleaks.tar.gz" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v$v/gitleaks_${v}_linux_$arch.tar.gz"
+          echo "$sum  $RUNNER_TEMP/gitleaks.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/gitleaks.tar.gz" -C "$RUNNER_TEMP" gitleaks
+          "$RUNNER_TEMP/gitleaks" git . --redact --no-banner
 
   installer:
     name: shell scripts (ADR-W014/W018)
-    runs-on: [self-hosted, dev-services]
-    # These jobs run on a self-hosted runner inside the maintainer's own
-    # network (deploy/ci-runner/ is how it is meant to be run: one job
-    # per container, then discarded). On a public repository a pull
-    # request from a fork would otherwise execute its workflow changes on
-    # that machine. So a fork's PR is skipped here; push the branch into
-    # this repository to run CI on it.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: syntax
         run: for f in scripts/*.sh; do bash -n "$f"; done
       - name: disk guard offline checks
@@ -68,12 +58,6 @@ jobs:
       # where 0.11 does not. A shell change can therefore be clean
       # locally and fail here, or — worse — stop being checked at all
       # the day GitHub bumps the runner.
-      #
-      # This used to be `docker run koalaman/shellcheck@sha256:...`. It
-      # is a verified release tarball now so that the self-hosted runner
-      # needs no Docker socket at all: a job that can reach the host's
-      # Docker daemon can reach everything on that host, which is the
-      # one thing deploy/ci-runner/ exists to prevent.
       #
       # Run the identical check before pushing:
       #   docker run --rm -v "$PWD:/mnt" koalaman/shellcheck:v0.9.0 scripts/*.sh
@@ -129,14 +113,7 @@ jobs:
 
   console:
     name: console (typecheck + build + checks, ADR-W016/W027)
-    runs-on: [self-hosted, dev-services]
-    # These jobs run on a self-hosted runner inside the maintainer's own
-    # network (deploy/ci-runner/ is how it is meant to be run: one job
-    # per container, then discarded). On a public repository a pull
-    # request from a fork would otherwise execute its workflow changes on
-    # that machine. So a fork's PR is skipped here; push the branch into
-    # this repository to run CI on it.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
     # `playwright` is a devDependency for scripts/ui-check.mjs, which is an
     # operator's check against their own control plane and never runs here.
     # Without this, every install in this job downloads a browser nothing
@@ -144,8 +121,8 @@ jobs:
     env:
       PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
@@ -165,12 +142,10 @@ jobs:
 
   ddgs-worker:
     name: bounded DDGS worker (ADR-W047, S18)
-    runs-on: [self-hosted, dev-services]
-    # Keep the same fork guard as every job on the household runner.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12.14"
       - name: pinned dependencies and offline contract fixtures
@@ -184,23 +159,16 @@ jobs:
           "$ddgs_venv/bin/python" -m unittest discover -s tests -v
 
   native-agent:
-    name: native agent runtime (OpenAI Agents SDK sidecar, #357)
-    runs-on: [self-hosted, dev-services]
-    # These jobs run on a self-hosted runner inside the maintainer's own
-    # network (deploy/ci-runner/ is how it is meant to be run: one job
-    # per container, then discarded). On a public repository a pull
-    # request from a fork would otherwise execute its workflow changes on
-    # that machine. So a fork's PR is skipped here; push the branch into
-    # this repository to run CI on it.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    name: "native agent runtime (OpenAI Agents SDK sidecar, #357)"
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
           cache-dependency-path: runtimes/native-agent/package-lock.json
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version: "1.25"
       - name: install
@@ -238,20 +206,13 @@ jobs:
 
   go:
     name: go (${{ matrix.goarch }})
-    runs-on: [self-hosted, dev-services]
-    # These jobs run on a self-hosted runner inside the maintainer's own
-    # network (deploy/ci-runner/ is how it is meant to be run: one job
-    # per container, then discarded). On a public repository a pull
-    # request from a fork would otherwise execute its workflow changes on
-    # that machine. So a fork's PR is skipped here; push the branch into
-    # this repository to run CI on it.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
     strategy:
       matrix:
         goarch: [amd64, arm64]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version: "1.25"
       - name: gofmt
@@ -308,7 +269,7 @@ jobs:
         # The whole package, so every test that skipped under -race above
         # runs here. Without -race it takes about a minute.
         run: cd keystone && go test -timeout 30m ./runtimedb
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         if: matrix.goarch == 'amd64'
         with:
           python-version: "3.12"

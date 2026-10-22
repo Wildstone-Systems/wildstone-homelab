@@ -28,8 +28,8 @@ import (
 	"context"
 	"log"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/plan"
-	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/plan"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/resource"
 )
 
 // applyLdapGroupStep records step's LdapGroup as managed (Create/Update) or

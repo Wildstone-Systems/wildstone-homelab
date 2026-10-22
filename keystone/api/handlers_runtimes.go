@@ -15,8 +15,8 @@ package api
 import (
 	"net/http"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/agentapi"
-	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/agentapi"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/principal"
 )
 
 // runtimeInventoryRow is one line of the inventory: which Agent, its

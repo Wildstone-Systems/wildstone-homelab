@@ -1,4 +1,4 @@
-module github.com/chickenrat17/wildstone-homelab/testing/e2e
+module github.com/Wildstone-Systems/wildstone-homelab/testing/e2e
 
 go 1.25
 

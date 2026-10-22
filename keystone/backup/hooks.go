@@ -6,8 +6,8 @@ import (
 	"path"
 	"strings"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/reconcile"
-	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/reconcile"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/resource"
 )
 
 // DefaultSQLiteImage is a multi-architecture keinos/sqlite3 3.50.4 image.

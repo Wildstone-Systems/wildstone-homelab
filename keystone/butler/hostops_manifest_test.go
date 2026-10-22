@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/domestic"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/domestic"
 )
 
 // hostToolNames is the closed menu, restated here so this test does not

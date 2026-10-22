@@ -16,7 +16,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/runtimedb"
 )
 
 func TestOffboardingAMemberRevokesTheirPortalAccess(t *testing.T) {

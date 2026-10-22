@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	ksredact "github.com/chickenrat17/wildstone-homelab/keystone/redact"
+	ksredact "github.com/Wildstone-Systems/wildstone-homelab/keystone/redact"
 )
 
 func knowledgeAt(root string) *Knowledge {

@@ -25,7 +25,7 @@ import (
 	"os"
 	"sort"
 
-	wsv1 "github.com/chickenrat17/wildstone-homelab/proto/gen/wardstone/v1"
+	wsv1 "github.com/Wildstone-Systems/wildstone-homelab/proto/gen/wardstone/v1"
 )
 
 func (a *Agent) listDirectory(_ context.Context, op *wsv1.ListDirectory) (*wsv1.OpResult_ListDirectory, *wsv1.OpError) {

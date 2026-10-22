@@ -13,7 +13,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/research/publicfetch"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/research/publicfetch"
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
 	mdtext "github.com/yuin/goldmark/text"

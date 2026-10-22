@@ -14,7 +14,7 @@ import (
 
 	"github.com/coreos/go-systemd/v22/dbus"
 
-	wsv1 "github.com/chickenrat17/wildstone-homelab/proto/gen/wardstone/v1"
+	wsv1 "github.com/Wildstone-Systems/wildstone-homelab/proto/gen/wardstone/v1"
 )
 
 // systemdClient is the seam over the D-Bus connection: tests substitute a

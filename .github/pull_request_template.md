@@ -43,5 +43,5 @@ is a release blocker, not a nit.
 <!-- Delete this section if .github/workflows/ is untouched. -->
 
 - [ ] I changed a workflow, and the diff is limited to what the PR needs
-- [ ] Self-hosted jobs keep the fork guard (`if:` on `github.event.pull_request.head.repo.full_name`)
+- [ ] Every job stays on a GitHub-hosted runner (`runs-on: ubuntu-latest`)
 - [ ] No new secret is referenced by a workflow

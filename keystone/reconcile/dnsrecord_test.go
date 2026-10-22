@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/plan"
-	"github.com/chickenrat17/wildstone-homelab/keystone/provider"
-	"github.com/chickenrat17/wildstone-homelab/keystone/provider/cloudflare"
-	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/plan"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/provider"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/provider/cloudflare"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/resource"
 )
 
 func dnsRecordResource(name, zone, rtype, content string, proxied bool) resource.Resource {

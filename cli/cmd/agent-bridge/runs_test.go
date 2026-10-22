@@ -3,7 +3,7 @@ package main
 import (
 	"testing"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/agentapi"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/agentapi"
 )
 
 func TestRunRegistrySetGetDelete(t *testing.T) {

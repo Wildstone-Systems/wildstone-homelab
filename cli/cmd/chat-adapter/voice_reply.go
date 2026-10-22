@@ -209,7 +209,7 @@ func (d *discord) SendVoice(ctx context.Context, conversation string, audio []by
 		return err
 	}
 	req.Header.Set("Authorization", "Bot "+d.token)
-	req.Header.Set("User-Agent", "DiscordBot (https://github.com/chickenrat17/wildstone-homelab, 1)")
+	req.Header.Set("User-Agent", "DiscordBot (https://github.com/Wildstone-Systems/wildstone-homelab, 1)")
 	req.Header.Set("Content-Type", ct)
 	resp, err := d.client().Do(req)
 	if err != nil {

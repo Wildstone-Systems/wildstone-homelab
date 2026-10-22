@@ -21,7 +21,7 @@ linux/amd64 and linux/arm64 — CGO_ENABLED=0 throughout (the pure-Go
 SQLite choice in ADR-W007 exists exactly so this cross-compile is
 boring) — and publishes one tar.gz per binary/arch plus a single
 `checksums.txt`. The installer downloads from
-`github.com/chickenrat17/wildstone-homelab/releases` and verifies
+`github.com/Wildstone-Systems/wildstone-homelab/releases` and verifies
 sha256 before installing anything; a `get.wildstone.dev` alias stays
 the post-launch nicety the scope doc says it is.
 

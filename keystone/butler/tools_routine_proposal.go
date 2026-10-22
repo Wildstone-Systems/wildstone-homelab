@@ -2,7 +2,7 @@ package butler
 
 import (
 	"context"
-	"github.com/chickenrat17/wildstone-homelab/keystone/butler/provider"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/butler/provider"
 )
 
 type RoutineProposalCall struct{ Name, OutputAudience, Member string }

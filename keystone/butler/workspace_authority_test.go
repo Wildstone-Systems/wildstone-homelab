@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/butler/provider"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/butler/provider"
 )
 
 // Pair with butlerstore.TestWorkspaceKindOnlyGatewayQueryResolvesPrivateScope:

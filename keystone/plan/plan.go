@@ -10,7 +10,7 @@ import (
 	"reflect"
 	"sort"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/resource"
 )
 
 // RiskGrade is the pinned risk heuristic from ADR-W004 A3.

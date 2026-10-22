@@ -3,7 +3,7 @@ package butler
 import (
 	"context"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/butler/provider"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/butler/provider"
 )
 
 // scriptedProvider is a tiny fake Provider that returns whatever

@@ -15,7 +15,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/internal/confinedpath"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/internal/confinedpath"
 )
 
 type WorkspaceDirectory struct{ ID, WorkspaceID, Path, Revision, State, CreatedAt string }

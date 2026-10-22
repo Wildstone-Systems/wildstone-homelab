@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/internal/dbtemplate"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/internal/dbtemplate"
 )
 
 // migrated is the schema, built once for this whole test binary. Every

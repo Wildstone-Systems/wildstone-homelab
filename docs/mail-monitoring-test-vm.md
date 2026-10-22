@@ -29,7 +29,7 @@ one `checksums.txt`, and publishes the release with `--prerelease`. Check
 the run finished and the assets are there:
 
 ```sh
-gh release view v0.1.13-rc.mail1 -R chickenrat17/wildstone-homelab --json isPrerelease,assets \
+gh release view v0.1.13-rc.mail1 -R Wildstone-Systems/wildstone-homelab --json isPrerelease,assets \
   --jq '.isPrerelease, [.assets[].name]'
 # true, and the list includes wild-mail-adapter_linux_amd64.tar.gz
 ```
@@ -42,7 +42,7 @@ On a fresh VM (Debian/Ubuntu, 2 vCPU, 4 GB RAM is plenty), fetch the
 installer *from that release* and pin the version:
 
 ```sh
-gh release download v0.1.13-rc.mail1 -R chickenrat17/wildstone-homelab -p install.sh
+gh release download v0.1.13-rc.mail1 -R Wildstone-Systems/wildstone-homelab -p install.sh
 sudo GH_TOKEN=github_pat_... bash ./install.sh --role keystone --version v0.1.13-rc.mail1
 ```
 

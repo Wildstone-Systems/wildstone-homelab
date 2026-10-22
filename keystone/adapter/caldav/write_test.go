@@ -20,7 +20,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/adapter"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/adapter"
 )
 
 var testNow = time.Date(2026, 9, 18, 9, 0, 0, 0, time.UTC)

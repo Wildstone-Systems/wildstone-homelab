@@ -10,8 +10,8 @@ package reconcile
 // silently rather than loudly.
 
 import (
-	"github.com/chickenrat17/wildstone-homelab/keystone/ingressorigin"
-	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/ingressorigin"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/resource"
 )
 
 func assignTailnetPorts(desired []resource.Resource) map[string]int {

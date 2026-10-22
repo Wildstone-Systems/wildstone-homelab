@@ -32,7 +32,7 @@ import (
 )
 
 func TestPackageImportsOnlyAgentapi(t *testing.T) {
-	const allowed = "github.com/chickenrat17/wildstone-homelab/keystone/agentapi"
+	const allowed = "github.com/Wildstone-Systems/wildstone-homelab/keystone/agentapi"
 	entries, err := os.ReadDir(".")
 	if err != nil {
 		t.Fatalf("ReadDir: %v", err)
@@ -53,7 +53,7 @@ func TestPackageImportsOnlyAgentapi(t *testing.T) {
 			if path == allowed {
 				continue
 			}
-			if strings.HasPrefix(path, "github.com/chickenrat17/wildstone-homelab/") {
+			if strings.HasPrefix(path, "github.com/Wildstone-Systems/wildstone-homelab/") {
 				t.Errorf("%s imports %s — a conformance suite runnable against any agentapi.Client must import nothing under keystone except agentapi itself (#343)", name, path)
 				continue
 			}

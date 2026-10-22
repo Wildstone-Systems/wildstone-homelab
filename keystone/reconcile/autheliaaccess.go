@@ -14,12 +14,12 @@
 package reconcile
 
 import (
-	"github.com/chickenrat17/wildstone-homelab/keystone/ingressorigin"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/ingressorigin"
 	"path"
 	"sort"
 	"strings"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/resource"
 )
 
 // autheliaAccessPath is the merged access-control file.

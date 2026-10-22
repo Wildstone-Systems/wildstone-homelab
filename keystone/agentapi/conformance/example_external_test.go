@@ -27,9 +27,9 @@ import (
 	"os"
 	"testing"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/agentapi"
-	"github.com/chickenrat17/wildstone-homelab/keystone/agentapi/conformance"
-	"github.com/chickenrat17/wildstone-homelab/keystone/agentapi/httpclient"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/agentapi"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/agentapi/conformance"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/agentapi/httpclient"
 )
 
 var targetURL = flag.String("target-url", "", "base URL of a live Keystone (or Wildstone-compatible) deployment to test against")

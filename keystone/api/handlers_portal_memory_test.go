@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/runtimedb"
 )
 
 func TestDashboardPromotionRequiresTheOwningPerson(t *testing.T) {

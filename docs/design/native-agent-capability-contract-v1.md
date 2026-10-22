@@ -2,7 +2,7 @@
 
 - **Status:** proposed with [ADR-W047](../decisions/ADR-W047-native-agent-research-and-workspaces.md); not implemented by this document.
 - **Issue:** [#473](https://github.com/chickenrat17/wildstone-homelab/issues/473), parent [#471](https://github.com/chickenrat17/wildstone-homelab/issues/471).
-- **Baseline:** `0727a5d57b90216896a931dd0209c2f3c33791fc`; original reconciliation `6516fd74c2fa63b734ea5756d7be39fb36c8a20a`.
+- **Baseline:** `0727a5d57b90216896a931dd0209c2f3c33791fc`; original reconciliation `71ff92a95c108c91a897a8b649c99d92bb4b2e2d`.
 
 This fixes interfaces for the implementation slices. Database table names,
 locking mechanisms and UI labels are implementation choices. Changing these
