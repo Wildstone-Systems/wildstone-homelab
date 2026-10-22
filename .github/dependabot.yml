@@ -1,0 +1,39 @@
+# Version updates, once a month and grouped, so a solo maintainer gets a
+# handful of pull requests rather than one per dependency. Security
+# updates are separate: they open as soon as an advisory lands, whatever
+# this schedule says (Settings → Advanced Security → Dependabot security
+# updates).
+#
+# What this does not cover, on purpose: the checksum-pinned tools in
+# .github/workflows/ (shellcheck, gitleaks, gh) and scripts/ (Node), and
+# the container images in packages/. Bumping those is a reviewed change
+# that moves the version and its checksums together.
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directories: ["/proto", "/wardstone", "/keystone", "/cli", "/testing/e2e"]
+    schedule: { interval: monthly }
+    groups:
+      go: { patterns: ["*"], update-types: ["minor", "patch"] }
+
+  - package-ecosystem: npm
+    directories: ["/console", "/runtimes/native-agent"]
+    schedule: { interval: monthly }
+    groups:
+      npm: { patterns: ["*"], update-types: ["minor", "patch"] }
+
+  - package-ecosystem: pip
+    directory: "/runtimes/ddgs-worker"
+    schedule: { interval: monthly }
+    groups:
+      pip: { patterns: ["*"], update-types: ["minor", "patch"] }
+
+  - package-ecosystem: docker
+    directories: ["/runtimes/ddgs-worker", "/cli/cmd/agent-bridge", "/cli/cmd/chat-adapter"]
+    schedule: { interval: monthly }
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule: { interval: monthly }
+    groups:
+      actions: { patterns: ["*"] }

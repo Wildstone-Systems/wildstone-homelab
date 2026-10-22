@@ -72,3 +72,7 @@ f52e8d9d89a57543b3f3386a4ff21a0a76eacb16:console/scripts/render-check.tsx:generi
 0d83a1d5990f146e801e6a17234c0b50c1e10566:wardstone/internal/agent/materialize_test.go:private-key:290
 2b0791c0c8304fbc1f08f4a096dce401b4fd1192:keystone/redact/f27_test.go:github-pat:53
 d9e06bee8f76ae45f5a7e1efbcca341383d5a06d:keystone/butler/fixtures_test.go:generic-api-key:18
+# gitleaks 8.28.0 reads one more invented fixture as a key: the redaction
+# test's "IMMICH_API_KEY=abc123", in a commit whose successors no longer
+# carry it.
+b144b5f0ef51512484bd7d0c47f14937fd7b58c6:keystone/butler/hardening_test.go:generic-api-key:25
