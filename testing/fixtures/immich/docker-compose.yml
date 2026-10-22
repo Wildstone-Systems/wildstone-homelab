@@ -1,0 +1,73 @@
+services:
+  immich-server:
+    image: ghcr.io/immich-app/immich-server:release
+    container_name: immich_server
+    command: ["start.sh", "immich"]
+    depends_on:
+      - redis
+      - database
+    ports:
+      - "2283:2283"
+    environment:
+      TZ: Etc/UTC
+      DB_HOSTNAME: database
+      DB_USERNAME: immich
+      DB_PASSWORD: immich
+      DB_DATABASE_NAME: immich
+      REDIS_HOSTNAME: redis
+      PUBLIC_IMMICH_SERVER_URL: https://photos.example.com
+      # OIDC Configuration - using direct IP instead of hostname
+      OAUTH_ENABLED: "true"
+      OAUTH_ISSUER_URL: "https://auth.example.com"
+      OAUTH_CLIENT_ID: "immich"
+      OAUTH_CLIENT_SECRET: "REPLACED-CLIENT-SECRET"
+      OAUTH_BUTTON_TEXT: "Login with Authelia"
+      OAUTH_AUTO_LAUNCH: "false"
+      OAUTH_SYNC_GROUPS: "true"
+      OAUTH_SIGNUP_ENABLED: "true"
+    volumes:
+      - ./upload:/usr/src/app/upload
+    restart: unless-stopped
+
+  immich-microservices:
+    image: ghcr.io/immich-app/immich-server:release
+    container_name: immich_microservices
+    command: ["start.sh", "microservices"]
+    depends_on:
+      - redis
+      - database
+    environment:
+      TZ: Etc/UTC
+      DB_HOSTNAME: database
+      DB_USERNAME: immich
+      DB_PASSWORD: immich
+      DB_DATABASE_NAME: immich
+      REDIS_HOSTNAME: redis
+    volumes:
+      - ./upload:/usr/src/app/upload
+    restart: unless-stopped
+
+  immich-machine-learning:
+    image: ghcr.io/immich-app/immich-machine-learning:release
+    container_name: immich_machine_learning
+    environment:
+      TZ: Etc/UTC
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: immich_redis
+    volumes:
+      - ./redis:/data
+    restart: unless-stopped
+
+  database:
+    image: tensorchord/pgvecto-rs:pg14-v0.2.0
+    container_name: immich_postgres
+    environment:
+      POSTGRES_USER: immich
+      POSTGRES_PASSWORD: immich
+      POSTGRES_DB: immich
+    volumes:
+      - ./pgdata:/var/lib/postgresql/data
+    restart: unless-stopped

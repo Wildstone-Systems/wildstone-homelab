@@ -1,0 +1,1252 @@
+// Wardstone <-> Keystone protocol, v1.
+//
+// Design invariants (ADR-W003):
+//   - Wardstone DIALS OUT. Keystone is the gRPC server; the agent holds a
+//     long-lived bidirectional Session stream over which Keystone sends
+//     typed operations and the agent returns typed results.
+//   - The operation surface is a CLOSED ONEOF. There is no Exec(string)
+//     and never will be: "no arbitrary shell" is a property of the wire
+//     format, not a policy hope.
+//   - v1 evolves additively only (new fields, new oneof arms). Breaking
+//     changes mean wardstone.v2, and one minor version of skew between
+//     Keystone and Wardstone is always supported.
+
+syntax = "proto3";
+
+package wardstone.v1;
+
+option go_package = "github.com/Wildstone-Systems/wildstone-homelab/proto/gen/wardstone/v1;wardstonev1";
+
+// KeystoneGateway is implemented by Keystone (the control plane).
+service KeystoneGateway {
+  // Join exchanges a one-time join token + CSR for a client certificate
+  // issued by Keystone's embedded CA. Called on a server-auth-only TLS
+  // channel exactly once per node; every later connection is mTLS.
+  rpc Join(JoinRequest) returns (JoinResponse);
+
+  // Session is the agent's persistent operation stream (mTLS required).
+  // The first agent message is Hello; afterwards Keystone sends Operation
+  // messages and the agent answers with OpResult, correlated by op_id.
+  rpc Session(stream AgentMessage) returns (stream KeystoneMessage);
+
+  // Renew exchanges a fresh CSR for a new client certificate ahead of the
+  // ~3-month expiry (ADR-W003 W4). mTLS required — the same per-RPC
+  // verified-client-cert check as Session. The issued certificate's CN is
+  // always the caller's existing mTLS client-cert CN (peer identity), NEVER
+  // taken from RenewRequest or the CSR subject, so a node cannot renew its
+  // way into a different identity.
+  rpc Renew(RenewRequest) returns (RenewResponse);
+}
+
+// ---------------------------------------------------------------- bootstrap
+
+message JoinRequest {
+  string join_token = 1; // one-time, minted by installer/Keystone
+  string node_id = 2;
+  bytes csr_pem = 3;
+}
+
+message JoinResponse {
+  bytes cert_pem = 1;
+  bytes ca_pem = 2;
+  // Public key the agent must use to verify per-operation signatures once
+  // op signing lands (E1). Delivered at join so it is pinned before any
+  // operation is ever accepted.
+  bytes op_signing_public_key = 3;
+}
+
+// ---------------------------------------------------------------- rotation
+
+message RenewRequest {
+  bytes csr_pem = 1; // Subject.CommonName is ignored; CN comes from the mTLS peer cert
+}
+
+message RenewResponse {
+  bytes cert_pem = 1;
+}
+
+// ---------------------------------------------------------------- session
+
+message AgentMessage {
+  oneof msg {
+    Hello hello = 1;
+    OpResult result = 2;
+  }
+}
+
+message Hello {
+  string node_id = 1;
+  string agent_version = 2;
+  // Highest v1 minor protocol revision the agent speaks. Keystone must
+  // tolerate agents one minor revision behind its own.
+  uint32 protocol_minor = 3;
+}
+
+message KeystoneMessage {
+  string op_id = 1;
+  Operation op = 2;
+  // Per-operation ed25519 signature — defense against a transport MITM
+  // (or a compromised load balancer) injecting operations inside an
+  // otherwise-valid mTLS tunnel (ADR-W003 W1). Verified against the key
+  // pinned from JoinResponse.op_signing_public_key.
+  //
+  // Signed payload:
+  //   sha256("wardstone-op-v1" || op_id || deterministic-marshal(op))
+  // where deterministic-marshal uses
+  // proto.MarshalOptions{Deterministic: true} over the Operation message,
+  // op_id is the raw (unterminated) string bytes, and "wardstone-op-v1"
+  // is a fixed domain-separation prefix — part of the wire contract, do
+  // not change it without a new prefix (and thus a v2 signing scheme).
+  bytes op_signature = 3;
+}
+
+// The ENTIRE privileged surface. Closed set; no free-form escape hatch.
+message Operation {
+  oneof op {
+    EnsureContainer ensure_container = 1;
+    StopContainer stop_container = 2;
+    ContainerLogs container_logs = 3;
+    PullImage pull_image = 4;
+    WriteManagedFile write_managed_file = 5;
+    ReadManagedFile read_managed_file = 6;
+    HostFacts host_facts = 7;
+    Health health = 8;
+    SelfUpdate self_update = 9;
+    RemoveContainer remove_container = 10;
+    ContainerStats container_stats = 11;
+    PruneImages prune_images = 12;
+    EnsureVolume ensure_volume = 13;
+    SnapshotDir snapshot_dir = 14;
+    MeasureUsage measure_usage = 15;
+    ListBlockDevices list_block_devices = 16;
+    EnsureMount ensure_mount = 17;
+    TestNfs test_nfs = 18;
+    TestSmb test_smb = 19;
+    ListPorts list_ports = 20;
+    ProbeTcp probe_tcp = 21;
+    ProbeHttp probe_http = 22;
+    EnsureDockerNetwork ensure_docker_network = 23;
+    SystemdUnitStatus systemd_unit_status = 24;
+    TimeSyncStatus time_sync_status = 25;
+    InspectContainer inspect_container = 26;
+    EnsureSecret ensure_secret = 27;
+    PutSecret put_secret = 28;
+    ListSecrets list_secrets = 29;
+    SeedVolumeFile seed_volume_file = 30;
+    StatVolumeFile stat_volume_file = 31;
+    ListDirectory list_directory = 32;
+    DiskSpace disk_space = 33;
+    ExportSecretBundle export_secret_bundle = 34;
+    ImportSecretBundle import_secret_bundle = 35;
+    EraseSecret erase_secret = 36;
+    ListRadios list_radios = 37; // protocol minor 25
+    HomeAutomationReadiness home_automation_readiness = 38; // protocol minor 26
+  }
+}
+
+message OpResult {
+  string op_id = 1;
+  oneof result {
+    OpError error = 2;
+    EnsureContainerResult ensure_container = 3;
+    StopContainerResult stop_container = 4;
+    ContainerLogsResult container_logs = 5;
+    PullImageResult pull_image = 6;
+    WriteManagedFileResult write_managed_file = 7;
+    ReadManagedFileResult read_managed_file = 8;
+    HostFactsResult host_facts = 9;
+    HealthResult health = 10;
+    SelfUpdateResult self_update = 11;
+    RemoveContainerResult remove_container = 12;
+    ContainerStatsResult container_stats = 13;
+    PruneImagesResult prune_images = 14;
+    EnsureVolumeResult ensure_volume = 15;
+    SnapshotDirResult snapshot_dir = 16;
+    MeasureUsageResult measure_usage = 17;
+    ListBlockDevicesResult list_block_devices = 18;
+    EnsureMountResult ensure_mount = 19;
+    TestNfsResult test_nfs = 20;
+    TestSmbResult test_smb = 21;
+    ListPortsResult list_ports = 22;
+    ProbeTcpResult probe_tcp = 23;
+    ProbeHttpResult probe_http = 24;
+    EnsureDockerNetworkResult ensure_docker_network = 25;
+    SystemdUnitStatusResult systemd_unit_status = 26;
+    TimeSyncStatusResult time_sync_status = 27;
+    InspectContainerResult inspect_container = 28;
+    EnsureSecretResult ensure_secret = 29;
+    PutSecretResult put_secret = 30;
+    ListSecretsResult list_secrets = 31;
+    SeedVolumeFileResult seed_volume_file = 32;
+    StatVolumeFileResult stat_volume_file = 33;
+    ListDirectoryResult list_directory = 34;
+    DiskSpaceResult disk_space = 35;
+    ExportSecretBundleResult export_secret_bundle = 36;
+    ImportSecretBundleResult import_secret_bundle = 37;
+    EraseSecretResult erase_secret = 38;
+    ListRadiosResult list_radios = 39; // protocol minor 25
+    HomeAutomationReadinessResult home_automation_readiness = 40; // protocol minor 26
+  }
+}
+
+message OpError {
+  ErrorCode code = 1;
+  string message = 2;
+}
+
+enum ErrorCode {
+  ERROR_CODE_UNSPECIFIED = 0;
+  ERROR_CODE_INVALID = 1;          // malformed operation
+  ERROR_CODE_FORBIDDEN = 2;        // agent-side invariant refused it (prefix, ownership, digest)
+  ERROR_CODE_NOT_FOUND = 3;
+  ERROR_CODE_RUNTIME = 4;          // docker/filesystem failure
+  ERROR_CODE_VERIFICATION = 5;     // signature/digest verification failed
+}
+
+// ---------------------------------------------------------------- containers
+
+message EnsureContainer {
+  string name = 1;
+  // Image MUST be digest-pinned (repo@sha256:...). The agent refuses tags.
+  string image = 2;
+  map<string, string> env = 3;
+  repeated PortBinding ports = 4;
+  repeated Mount mounts = 5;
+  map<string, string> labels = 6; // agent adds/asserts dev.wildstone.owner
+  string restart_policy = 7;      // "no" | "unless-stopped" | "always"
+  // Container argument vector, appended after the image's entrypoint
+  // (docker Cmd; ADR-W011 A3, protocol minor 6). A pre-minor-6 agent
+  // ignores this field.
+  repeated string command = 8;
+  // User-defined Docker network to attach the container to (protocol
+  // minor 8). Docker's default bridge has no embedded DNS, so a
+  // container can only be reached by name on a user-defined network —
+  // which is what every package's "container/<name>:<port>" upstream
+  // assumes. The network must already exist and be wildstone-owned: the
+  // agent refuses to attach to one it did not create, the same rule
+  // EnsureDockerNetwork applies (never adopt a foreign resource).
+  // Empty attaches nothing, leaving the pre-minor-8 default bridge
+  // behavior; a pre-minor-8 agent ignores this field.
+  string network = 9;
+  // Host devices handed to the container (protocol minor 12): a Zigbee
+  // stick on /dev/ttyUSB0, a GPU's /dev/dri, a VPN's /dev/net/tun. The
+  // agent refuses any path outside its closed device allowlist — a
+  // block device is never a "device" in this sense, because handing a
+  // container /dev/sda is handing it the host. A pre-minor-12 agent
+  // ignores this field, so the container starts without the device and
+  // the app reports it missing, which is loud where it matters.
+  repeated DeviceMapping devices = 10;
+  // Linux capabilities added over Docker's default set (protocol minor
+  // 12), by name without the CAP_ prefix: "NET_ADMIN". The agent holds
+  // a closed allowlist and refuses everything else; SYS_ADMIN is not on
+  // it and never will be, for the reason Exec(string) is not an op.
+  // A pre-minor-12 agent ignores this field.
+  repeated string cap_add = 11;
+  // Hostnames the container must be able to RESOLVE, which the node
+  // resolves on its own behalf and writes into the container's
+  // /etc/hosts (protocol minor 14).
+  //
+  // This exists for one shape of problem: a name that is correct for the
+  // browser but unresolvable from inside a container. Under the tailnet
+  // ingress posture the OIDC issuer is the node's MagicDNS name, because
+  // an issuer must match what the browser saw byte for byte (ADR-W019
+  // A10) — but Docker's embedded DNS forwards to the host's EXTERNAL
+  // nameservers and never learns a .ts.net name, so every server-side
+  // discovery and token exchange fails with "Name or service not known"
+  // and the app answers 500 to a login it never got to attempt.
+  //
+  // The node resolves these rather than Keystone supplying addresses,
+  // because the node is where the name works: MagicDNS is configured on
+  // the host. A name that does not resolve is skipped rather than
+  // failing the container — the app then reports the same error it would
+  // have anyway, which is a better failure than a service that will not
+  // start.
+  //
+  // A pre-minor-14 agent ignores this field, so the container starts
+  // exactly as it does today.
+  //
+  // One name is not resolved (protocol minor 24): "host.docker.internal"
+  // is written as Docker's literal "host-gateway", which the daemon
+  // replaces with its bridge gateway. Keystone sends it only to the
+  // ingress proxy and the dashboard, so a Route upstream "host/<port>"
+  // reaches a host-networked service with no machine-specific address in
+  // desired state. An older agent resolves it like any other name, fails
+  // and skips it, so Keystone withholds it from one.
+  repeated string host_aliases = 12;
+
+  // The following five fields (protocol minor 18, ADR-W039 Phase 6/H1)
+  // hardening keys for a container that must contain a shell rather than
+  // merely run one: a Hermes-backed Agent's Tier 2 sandbox (docs/design/
+  // hermes-capability-package-and-execution-profiles.md §5.2), and useful
+  // to every package. Unlike devices/cap_add (protocol minor 12), these
+  // narrow what the container can do rather than widen it — an agent that
+  // ignores one silently gives the container MORE reach than the spec
+  // asked for, which is the wrong direction to fail quiet in. Keystone's
+  // reconciler therefore refuses to dispatch a spec using any of them to
+  // an agent below minor 18 (resource.HostAccessProtocolMinor's sibling)
+  // rather than letting it start unhardened.
+
+  // Mounts the container's own filesystem read-only, leaving only
+  // declared volumes/binds and tmpfs writable. A coerced shell can still
+  // read and fill /opt/data; it cannot install a persistent implant
+  // anywhere else in the image.
+  bool read_only_rootfs = 13;
+  // Linux capabilities REMOVED from Docker's default set, named without
+  // the CAP_ prefix, e.g. "ALL". The mirror of cap_add: cap_add WIDENS
+  // (closed allowlist, agent-enforced), cap_drop NARROWS, so it carries
+  // no allowlist of its own — dropping a capability never grants the
+  // container anything.
+  repeated string cap_drop = 14;
+  // Sets the no-new-privileges security option: a process inside the
+  // container can never gain more privileges than it started with (no
+  // setuid escalation), regardless of the image's own file permissions.
+  bool no_new_privileges = 15;
+  // Resource ceilings (memory, cpus, pids). Unset/zero fields are left to
+  // the node's own defaults, exactly as today.
+  ContainerResources resources = 16;
+  // Size of the container's /dev/shm, in Docker's own size-string syntax
+  // (e.g. "1g"); empty leaves Docker's default (64m). Hermes's browser
+  // toolset needs this raised (§5.2); most images never touch /dev/shm at
+  // all, which is why Docker's default is small enough to matter.
+  string shm_size = 17;
+
+  // Which network namespace the container runs in (protocol minor 23).
+  // UNSPECIFIED is everything before this field existed: Docker's bridge
+  // networking, attached to `network` when that is set. HOST shares the
+  // node's own network namespace — what a home-automation hub needs to
+  // see mDNS, SSDP and the other link-local discovery traffic a bridge
+  // never forwards.
+  //
+  // HOST is mutually exclusive with `ports` (there is nothing to publish:
+  // every listener is already on the host) and with `network` (a
+  // container in the host namespace cannot also be attached to a bridge).
+  // The agent refuses either combination BEFORE touching an existing
+  // container, so a malformed spec fails with the old one still running.
+  // An unknown value from a newer Keystone is refused rather than read as
+  // UNSPECIFIED, because guessing bridge for a spec that asked for
+  // something else is a quiet wrong answer.
+  //
+  // A pre-minor-23 agent ignores this field and would start the container
+  // on the bridge with nothing published, which is why Keystone refuses to
+  // dispatch a HOST spec to one (resource.HostNetworkProtocolMinor).
+  ContainerNetworkMode network_mode = 18;
+}
+
+// ContainerNetworkMode is a closed set on purpose: Docker also accepts
+// "none", "container:<id>" and arbitrary network names here, and the
+// second of those joins another container's namespace — a capability no
+// package has asked for and none should get by accident.
+enum ContainerNetworkMode {
+  CONTAINER_NETWORK_MODE_UNSPECIFIED = 0; // bridge (plus `network`, if set)
+  CONTAINER_NETWORK_MODE_HOST = 1;
+}
+
+// ContainerResources bounds what one container may consume (protocol
+// minor 18). Every field is optional; a zero/empty field means "the
+// node's default", not "none" — there is no way to ask Wardstone for an
+// UNLIMITED pids count once a limit exists, because "unlimited" is
+// already what omitting Resources means.
+message ContainerResources {
+  // Memory limit in Docker's own size-string syntax, e.g. "4g", "512m".
+  string memory = 1;
+  // CPU limit as a decimal count of cores, e.g. "2" or "0.5" (Docker's
+  // --cpus). Fractional values are honoured through CFS quota/period, not
+  // by rounding.
+  string cpus = 2;
+  // Maximum number of PIDs (processes/threads) the container's cgroup may
+  // hold. The one field here that stops a fork bomb from taking the node
+  // rather than merely the container — Tier 2's whole reason for existing
+  // (§5.2).
+  int64 pids_limit = 3;
+}
+
+message PortBinding {
+  uint32 host_port = 1;
+  uint32 container_port = 2;
+  string host_ip = 3; // default 0.0.0.0
+  // Transport (protocol minor 12). UNSPECIFIED means TCP, so an older
+  // Keystone that never sets it publishes exactly what it always has.
+  // Until this field existed every published port was TCP, which is
+  // why the catalog's DNS packages could not answer the UDP query every
+  // resolver sends first.
+  PortProtocol protocol = 4;
+}
+
+enum PortProtocol {
+  PORT_PROTOCOL_UNSPECIFIED = 0; // TCP
+  PORT_PROTOCOL_TCP = 1;
+  PORT_PROTOCOL_UDP = 2;
+}
+
+// DeviceMapping is one host device visible inside a container, in
+// Docker's own terms: PathOnHost, PathInContainer (empty means the same
+// path), and the cgroup permissions, which the agent always sets to
+// "rwm" — a device a container may not open is not worth mapping.
+message DeviceMapping {
+  string host_path = 1;
+  string container_path = 2;
+}
+
+message Mount {
+  string source = 1; // host path (managed-prefix-restricted, plus read-only /run/dbus from minor 27) or volume name
+  string target = 2;
+  bool read_only = 3;
+}
+
+message EnsureContainerResult {
+  string container_id = 1;
+  bool created = 2; // false if it already existed in the desired state
+  bool started = 3;
+}
+
+message StopContainer {
+  string name = 1;
+  uint32 timeout_seconds = 2;
+}
+
+message StopContainerResult {
+  bool was_running = 1;
+}
+
+message ContainerLogs {
+  string name = 1;
+  uint32 tail = 2;          // 0 = default (100)
+  int64 since_unix_sec = 3; // 0 = no bound
+}
+
+message ContainerLogsResult {
+  bytes logs = 1; // raw multiplexed docker log stream, size-capped by agent
+}
+
+message PullImage {
+  string image = 1; // digest-pinned, repo@sha256:... — tags are refused
+}
+
+message PullImageResult {
+  string digest = 1;
+}
+
+message RemoveContainer {
+  string name = 1;
+  bool force = 2;
+}
+
+// Idempotent remove: a container that does not exist is NOT an error —
+// existed=false is returned as a success result. A container that exists
+// but is not wildstone-owned is still refused with FORBIDDEN (ownership
+// is checked before existence is even considered "not found").
+message RemoveContainerResult {
+  bool existed = 1;
+}
+
+message ContainerStats {
+  string name = 1;
+}
+
+message ContainerStatsResult {
+  uint64 cpu_usage_ns = 1;
+  uint64 mem_usage_bytes = 2;
+  uint64 mem_limit_bytes = 3;
+}
+
+// InspectContainer (protocol minor 5, ADR-W008 R2c) reads back a
+// wildstone-owned container's identity so the reconciler's observe step
+// can detect SPEC drift, not just presence: image, labels (including the
+// dev.wildstone.spec-hash label Keystone stamps at EnsureContainer), and
+// run state. Ownership semantics match ContainerStats exactly: a foreign
+// container is FORBIDDEN (checked before existence), an absent one is
+// NOT_FOUND. Env values are deliberately NOT returned — they may carry
+// secrets, and the spec-hash label answers "does the running container
+// match the desired spec" without them.
+message InspectContainer {
+  string name = 1;
+}
+
+message InspectContainerResult {
+  bool running = 1;
+  string image = 2;
+  map<string, string> labels = 3;
+
+  // Exit state (protocol minor 11). `running` alone cannot describe a
+  // container that is SUPPOSED to stop: a one-shot provisioning job that
+  // finished successfully and one that crashed on its first line are
+  // both "not running", and treating either as the other is the whole
+  // difference between a provisioned directory and an empty one.
+  //
+  // status is Docker's own State.Status verbatim — "created", "running",
+  // "exited", "dead", "restarting", "paused" — rather than an enum this
+  // repo would have to keep in step with the engine. An agent older than
+  // minor 11 leaves it empty, which readers must treat as "unknown",
+  // falling back to `running`.
+  //
+  // exit_code is meaningful only when status is "exited"; it is 0 in
+  // every other state, including the states where nothing has run at
+  // all. Never read it without checking status first — a zero here is
+  // "no information" far more often than it is "succeeded".
+  string status = 4;
+  int32 exit_code = 5;
+
+  // The APPLICATION'S own opinion of itself: Docker's State.Health.Status
+  // verbatim — "starting", "healthy", "unhealthy" — and empty when the
+  // image declares no healthcheck (protocol minor 16).
+  //
+  // Distinct from `running` and `status` because it answers a different
+  // question. Those say whether Wildstone got the container into the
+  // shape desired state asked for; this says whether the thing inside it
+  // is ready to serve anybody. A container can be running, converged and
+  // reported healthy by every surface while the app inside is still
+  // building an index and refusing connections — which is exactly what
+  // open-webui did on its first boot, for several minutes, while the
+  // dashboard read 0 unhealthy.
+  //
+  // Verbatim rather than an enum, for the same reason `status` is: the
+  // engine owns this vocabulary, and a mapping kept in this repo is a
+  // mapping that goes stale. An agent older than minor 16 leaves it
+  // empty, which is indistinguishable from "no healthcheck defined" and
+  // must be read as "no opinion" either way.
+  string app_health = 6;
+
+  // The container's addresses on the Docker networks it is attached to
+  // (protocol minor 17), one per network, in no guaranteed order.
+  //
+  // This exists for exactly one caller and the field is narrow on
+  // purpose. Keystone must know which address the identity proxy will
+  // appear as, because a forwarded Remote-User is honoured only from
+  // that exact peer (ADR-W030 A8.1) — and an address pinned at install
+  // time goes stale the moment the reconciler recreates the container,
+  // which Docker is free to give a different address. A stale value
+  // does not degrade: forward-auth refuses everyone and the Console's
+  // own pages refuse everyone, so the household loses its control
+  // plane until somebody edits a flag by hand.
+  //
+  // Reported rather than inferred, because the alternatives are worse.
+  // A subnet would widen an exact-match trust boundary into a range,
+  // and a DNS name would let whatever answers the query decide who is
+  // trusted — both are the failure ADR-W030 A8.1 names.
+  //
+  // Empty from an agent older than minor 17, and empty is "unknown"
+  // rather than "no addresses": a reader must keep whatever it already
+  // had rather than concluding the proxy has gone.
+  repeated string ip_addresses = 7;
+
+  // Docker's HostConfig.NetworkMode verbatim (protocol minor 23): "host"
+  // for a container in the node's namespace, otherwise the bridge or
+  // network name Docker recorded. Verbatim for the reason `status` is.
+  // Empty from an agent older than minor 23, which readers must treat as
+  // "unknown" rather than "bridge".
+  string network_mode = 8;
+}
+
+message PruneImages {}
+
+// PruneImages ALWAYS scopes to wildstone-owned images: the agent issues
+// the Engine API call with filters={"label":["dev.wildstone.owner=wildstone"]}.
+// An implementation that prunes without this filter violates the
+// ownership invariant (ADR-W003 §A4.3) even if it otherwise behaves.
+message PruneImagesResult {
+  uint64 reclaimed_bytes = 1;
+  uint32 deleted_count = 2;
+}
+
+// ---------------------------------------------------------------- volumes
+
+// EnsureVolume creates a named, owner-labeled Docker volume if it does not
+// exist. Docker's own /volumes/create is idempotent but silently returns
+// the pre-existing volume without changing its labels — so the agent
+// inspects first: absent -> create (created=true); present and
+// wildstone-owned -> created=false; present and NOT wildstone-owned ->
+// FORBIDDEN (never adopt a volume Wardstone did not create).
+message EnsureVolume {
+  string name = 1;
+}
+
+message EnsureVolumeResult {
+  bool created = 1;
+}
+
+// ---------------------------------------------------------------- fs ops
+
+// SnapshotDir archives source_dir into a gzip'd tar at dest_path. Both
+// paths must resolve under a managed prefix. Symlinks inside source_dir
+// are recorded as link entries (target string only) and NEVER followed —
+// following them could let a symlink planted inside the managed tree
+// exfiltrate arbitrary host files into the snapshot, escaping the managed
+// prefix invariant through the back door. Regular files and directories
+// are archived; sockets/devices/FIFOs are skipped silently. Cumulative
+// regular-file bytes are capped at 4 GiB (ADR-W003 §A4.4 bounded
+// responses) — the walk aborts, the partial temp file is removed, and the
+// op returns INVALID; dest_path is never partially written (tmp+rename).
+message SnapshotDir {
+  string source_dir = 1;
+  string dest_path = 2; // must end in .tar.gz
+}
+
+message SnapshotDirResult {
+  string sha256_hex = 1; // sha256 of the final .tar.gz bytes
+  uint64 size_bytes = 2;
+  uint32 file_count = 3; // regular files archived (symlinks/dirs not counted)
+}
+
+// MeasureUsage recursively sums regular-file sizes under path (managed
+// prefix required). Symlinks are not followed. The walk is capped at
+// 1,000,000 entries — beyond that the op returns a RUNTIME error rather
+// than an unbounded scan of an attacker-grown tree.
+//
+// volume (protocol minor 19) measures a wildstone-owned Docker volume
+// instead, so a backup can size its sources before it runs. Exactly one
+// of path and volume is set.
+message MeasureUsage {
+  string path = 1;
+  string volume = 2;
+}
+
+message MeasureUsageResult {
+  uint64 total_bytes = 1;
+  uint64 file_count = 2;
+}
+
+// DiskSpace reports the filesystem that holds a managed path or a
+// wildstone-owned Docker volume (protocol minor 19): its size, the space
+// still available to unprivileged writers, and which mount it is. Exactly
+// one of path and volume is set. Read-only; it never creates anything.
+//
+// It exists so a backup can refuse to fill a disk (ADR-W045 A3.1) and can
+// tell a NAS share that is mounted from the empty directory it would be
+// mounted over (A3.2): a path whose mount_point is the host's root
+// filesystem instead of the share is a backup of nothing.
+//
+// A path that does not exist yet is answered for its nearest existing
+// ancestor, with exists=false — a repository directory restic has not
+// created yet still has a filesystem it will be written to.
+message DiskSpace {
+  string path = 1;
+  string volume = 2;
+}
+
+message DiskSpaceResult {
+  uint64 total_bytes = 1;
+  uint64 free_bytes = 2;  // available to unprivileged writers (statfs f_bavail)
+  string mount_point = 3; // the mount point of the filesystem, from mountinfo
+  string fstype = 4;      // e.g. "ext4", "nfs4"
+  bool exists = 5;        // false: answered for the nearest existing ancestor
+  // The mount's source ("nas.example.internal:/media" for an NFS share)
+  // and its live options — per-mount and superblock options together —
+  // from mountinfo, so a declared share can be told from a different one
+  // mounted at the same place.
+  string source = 6;
+  repeated string options = 7;
+}
+
+// ---------------------------------------------------------------- files
+
+message WriteManagedFile {
+  string path = 1; // must resolve under a managed prefix
+  bytes content = 2;
+  uint32 mode = 3; // e.g. 0644; 0 = 0644
+  // When true, the agent resolves secret references inside content before
+  // writing (protocol minor 9). Keystone never holds secret values, so a
+  // rendered config carries references and the node substitutes them:
+  //
+  //   secret/<name>        -> the stored value
+  //   pbkdf2:secret/<name> -> $pbkdf2-sha512$... of the stored value
+  //
+  // Off by default and per-write, because a file may legitimately contain
+  // that text without meaning it — an agent that rewrote every managed
+  // file it recognised something in would be editing documents nobody
+  // asked it to edit.
+  bool materialize_secrets = 4;
+}
+
+message WriteManagedFileResult {
+  // sha256 of the content AS SUPPLIED, before any materialization — the
+  // caller can only verify what it sent.
+  string sha256_hex = 1;
+}
+
+// SeedVolumeFile writes a file INTO an application's own data volume, and
+// only if it is not already there (protocol minor 13).
+//
+// This is deliberately not WriteManagedFile with a different prefix. A
+// managed file is Wildstone's: it is rewritten to match desired state on
+// every tick, and the app may not edit it. A seed is the opposite — it is
+// the app's file from the moment it lands. Wildstone writes it once,
+// because some applications only read a setting on their FIRST start
+// (Home Assistant migrates http: out of YAML into its own store and never
+// reads that YAML again), and never touches it afterwards. An operator or
+// the app itself may edit it freely.
+//
+// Write-if-absent is the whole safety property, enforced at the node with
+// O_EXCL rather than a read-then-write: a seed can only ever create a file
+// that was not there, so it cannot clobber user data no matter how often
+// it is retried, and no ordering between two seeds can lose an edit.
+message SeedVolumeFile {
+  string volume = 1; // docker volume name; must already exist
+  string path = 2;   // relative path within the volume; no absolute, no ".."
+  bytes content = 3;
+  uint32 mode = 4; // e.g. 0644; 0 = 0644
+}
+
+message SeedVolumeFileResult {
+  // False means the file already existed and was left exactly as it was.
+  // Not an error: it is the expected steady state after the first seed.
+  bool written = 1;
+}
+
+// StatVolumeFile reports whether a path exists inside a volume, so
+// observation of a seed can be existence-only. Content is deliberately NOT
+// returned: after seeding, the file belongs to the application, and a
+// reconciler that compared it against the original would report drift
+// every time a user edited their own config.
+message StatVolumeFile {
+  string volume = 1;
+  string path = 2;
+}
+
+message StatVolumeFileResult {
+  bool exists = 1;
+}
+
+// ListDirectory lists the SUBDIRECTORIES of a managed path, so the
+// install form can offer a folder instead of a blank box (protocol minor
+// 15).
+//
+// It exists because a free-text path field is the field that let a
+// corrupted default through unnoticed: the operator was shown
+// "/[REDACTED]", had nothing to compare it against, and accepted it. A
+// control that can only offer directories that exist makes that class
+// unrepresentable rather than merely fixed.
+//
+// Directories ONLY, and names only. This is a read primitive over the
+// host filesystem, so it is kept as narrow as the question it answers:
+// "which folder do you mean". File names are not returned (nothing binds
+// a single file), sizes and modes are not returned, and the path is
+// confined to the managed prefixes by the same resolveManaged check every
+// other path-taking op uses — which is also the honest answer, because a
+// bind mount outside those prefixes is refused at apply time anyway. A
+// picker that browsed the whole host would offer folders that can never
+// work.
+message ListDirectory {
+  string path = 1; // must resolve under a managed prefix
+}
+
+message ListDirectoryResult {
+  // Immediate subdirectory names, sorted, without the parent path.
+  // Symlinks are not followed and not listed: a link is a second name for
+  // a directory that resolveManaged may or may not admit, and offering
+  // one in a picker is offering a path that fails later.
+  repeated string directories = 1;
+}
+
+message ReadManagedFile {
+  string path = 1; // must resolve under a managed prefix
+}
+
+message ReadManagedFileResult {
+  // Empty for a materialized file: see source_sha256_hex.
+  bytes content = 1;
+  // Set iff the file was last written with materialize_secrets. It is the
+  // sha256 of the pre-materialization content, which is the only thing
+  // the caller can compare against — the bytes on disk hold resolved
+  // secrets and were never what the caller sent.
+  //
+  // The content field is left EMPTY in that case, deliberately. Returning
+  // it would carry live secrets to Keystone, into plans, error strings
+  // and the Butler's tool results; the hash answers "did this drift?"
+  // without any of that, and a secret that never leaves the node cannot
+  // leak from anywhere else.
+  string source_sha256_hex = 2;
+}
+
+// ---------------------------------------------------------------- system
+
+message HostFacts {}
+
+message HostFactsResult {
+  string hostname = 1;
+  string os = 2;
+  string kernel = 3;
+  uint32 num_cpu = 4;
+  uint64 mem_total_bytes = 5;
+  uint64 root_disk_total_bytes = 6;
+  uint64 root_disk_free_bytes = 7;
+  string agent_version = 8;
+  // What the machine is actually DOING, as opposed to what it has.
+  // Both are optional in the honest sense: an agent that cannot read
+  // them reports zero, and a zero here means "not measured" rather than
+  // "idle" — a surface must not draw a bar at zero from a missing
+  // reading (ADR-W026's household dashboard rules say so explicitly).
+  //
+  // mem_available_bytes is MemAvailable, not MemFree: free memory on a
+  // healthy Linux box is near zero because the page cache uses the
+  // rest, so a "memory used" bar built from MemFree reads as a machine
+  // permanently about to die.
+  uint64 mem_available_bytes = 9;
+  // cpu_busy_percent is sampled over a short interval inside the agent
+  // rather than derived from load average. Load is a queue length, not
+  // a percentage, and dividing it by the core count produces a number
+  // that looks like a utilisation and is not one.
+  uint32 cpu_busy_percent = 10;
+  // cpu_measured says cpu_busy_percent is a reading, zero included. A
+  // quiet machine really is under 1% busy over the sample, which rounds
+  // to 0 and read as "not measured" — so the household's card lost its
+  // CPU line whenever the machine was idle. An agent from before this
+  // field never sets it; zero with it unset still means "not measured".
+  bool cpu_measured = 11;
+}
+
+message Health {}
+
+message HealthResult {
+  bool ok = 1;
+  string detail = 2;
+}
+
+// ---------------------------------------------------------------- self-update
+
+message SelfUpdate {
+  // Inline delivery (ADR-W003 W5): the binary travels as one message on the
+  // existing unary-op stream, bounded by the gRPC transport's max message
+  // size — raised to 64 MiB on both the Keystone server and the Wardstone
+  // client to give Wardstone's ~10-20 MiB static binaries comfortable
+  // headroom. True chunked delivery (a streaming SelfUpdateChunk{bytes
+  // data; uint32 seq; bool last} arm) is deferred until a real binary
+  // approaches that cap.
+  bytes binary = 1;      // the new wardstoned (spike: inline; E1: chunked/fetched)
+  bytes signature = 2;   // ed25519 over sha256(binary), verified against baked-in key
+  string version = 3;
+  string sha256_hex = 4; // integrity check before signature check
+}
+
+message SelfUpdateResult {
+  string staged_path = 1;
+  string previous_path = 2; // rollback artifact
+  bool promoted = 3;
+}
+
+// ---------------------------------------------------------------- storage/network (W6c)
+
+// ListBlockDevices enumerates block devices by reading /sys/block directly
+// (no lsblk, no shell-out). loop* and ram* devices are skipped. Linux-only;
+// on other platforms the agent returns an empty list.
+message ListBlockDevices {}
+
+message BlockDevice {
+  string name = 1;
+  uint64 size_bytes = 2;
+  bool removable = 3;
+}
+
+message ListBlockDevicesResult {
+  repeated BlockDevice devices = 1;
+}
+
+// EnsureMount is, per ADR-W003, the most dangerous op in the product: it
+// performs a real syscall.Mount and edits /etc/fstab. Agent-side hard
+// invariants (checked regardless of what Keystone asks, ADR-W003 §A4):
+//   - target must resolve under a configured managed prefix (resolveManaged)
+//     AND under Config.MountRoot (prod default /srv/wildstone).
+//   - fstype must be one of: nfs, nfs4, cifs, ext4, xfs. Anything else is
+//     FORBIDDEN.
+//   - every option must match ^[a-zA-Z0-9._=/-]+$ (no commas/whitespace —
+//     fstab field injection); nosuid and nodev are mandatory and appended
+//     if the caller omitted them.
+// The agent owns a marker-delimited block in /etc/fstab ("# BEGIN
+// wildstone-managed" / "# END wildstone-managed") — lines outside that
+// block are never touched. Ordering: the actual mount is attempted FIRST;
+// fstab is only updated after a successful mount, so a mount that fails
+// never leaves a boot-time landmine entry behind.
+message EnsureMount {
+  string source = 1;
+  string target = 2;
+  string fstype = 3;
+  repeated string options = 4;
+}
+
+message EnsureMountResult {
+  bool mounted = 1;       // false if already mounted (idempotent, no-op)
+  bool fstab_updated = 2; // false if an identical entry already existed
+}
+
+// TestNfs dials host:port over TCP only (default port 2049) — no mount is
+// performed. An unreachable host is a valid answer (reachable=false), not
+// an OpError.
+message TestNfs {
+  string host = 1;
+  uint32 port = 2;
+}
+
+message TestNfsResult {
+  bool reachable = 1;
+  string detail = 2;
+}
+
+// TestSmb dials host:port over TCP only (default port 445) — no mount is
+// performed.
+message TestSmb {
+  string host = 1;
+  uint32 port = 2;
+}
+
+message TestSmbResult {
+  bool reachable = 1;
+  string detail = 2;
+}
+
+// ListPorts parses /proc/net/tcp and /proc/net/tcp6 for sockets in LISTEN
+// state (st == 0A).
+message ListPorts {}
+
+message ListeningPort {
+  string proto = 1; // "tcp" or "tcp6"
+  uint32 port = 2;
+  string local_ip = 3;
+}
+
+message ListPortsResult {
+  repeated ListeningPort ports = 1;
+}
+
+// ProbeTcp dials host:port with a bounded timeout (default 10s, max 30s —
+// larger is INVALID). port must be 1-65535 and host non-empty, or INVALID.
+// Target allowlisting is Keystone-side policy (ADR-W003): the agent only
+// enforces shape and timeout sanity, not which hosts may be probed.
+message ProbeTcp {
+  string host = 1;
+  uint32 port = 2;
+  uint32 timeout_seconds = 3; // 0 = default 10s
+}
+
+message ProbeTcpResult {
+  bool reachable = 1;
+  uint32 latency_ms = 2;
+  string detail = 3;
+}
+
+// ProbeHttp issues a single GET with no redirects followed (the response's
+// status code is reported as-is; Location is never fetched) and drains at
+// most 64 KiB of the body before closing it. url's scheme must be http or
+// https — anything else (e.g. file://) is FORBIDDEN. Same timeout rules as
+// ProbeTcp. Target allowlisting is Keystone-side policy; the agent only
+// enforces scheme + timeout sanity.
+message ProbeHttp {
+  string url = 1;
+  uint32 timeout_seconds = 2; // 0 = default 10s, max 30s
+}
+
+message ProbeHttpResult {
+  bool reachable = 1;
+  uint32 status_code = 2;
+  uint32 latency_ms = 3;
+  string detail = 4;
+}
+
+// EnsureDockerNetwork creates an owner-labeled Docker network if it does
+// not exist, mirroring EnsureVolume's idempotent/ownership pattern: absent
+// -> create (created=true); present and wildstone-owned -> created=false;
+// present and NOT wildstone-owned -> FORBIDDEN (never adopt a network
+// Wardstone did not create).
+message EnsureDockerNetwork {
+  string name = 1;
+}
+
+message EnsureDockerNetworkResult {
+  bool created = 1;
+}
+
+// ---------------------------------------------------------------- system (W6d)
+
+// SystemdUnitStatus queries a single systemd unit's state over D-Bus
+// (github.com/coreos/go-systemd/v22 — pre-approved exception to ADR-W003
+// §A4.5's dependency floor, pure Go, no shell-out). The requested unit
+// MUST be present in the agent's Config.SystemdUnitAllowlist (prod default:
+// wardstoned.service, docker.service) or the agent refuses with FORBIDDEN
+// — this is agent-side defense in depth: even a compromised Keystone can
+// only observe the allowlisted units, never arbitrary ones. An empty unit
+// name is INVALID.
+message SystemdUnitStatus {
+  string unit = 1;
+}
+
+message SystemdUnitStatusResult {
+  string active_state = 1;
+  string sub_state = 2;
+  string load_state = 3;
+  uint64 active_since_unix_sec = 4; // 0 if never activated
+}
+
+// TimeSyncStatus reports whether the kernel clock is synchronized, via
+// golang.org/x/sys/unix.Adjtimex (pre-approved dependency, ADR-W003 §A4.5)
+// — no shell-out to timedatectl/chronyc.
+message TimeSyncStatus {}
+
+message TimeSyncStatusResult {
+  bool synchronized = 1;
+  string detail = 2;
+}
+
+// ---------------------------------------------------------------- secrets
+// The E8 secrets path (ADR-W012, protocol minor 7). Deliberately
+// WRITE-ONLY: there is no GetSecret arm at all, so the protocol cannot
+// read a value back out of the node's store. Values are materialized
+// only into container env at docker-create time, agent-side.
+
+// EnsureSecret creates <name> with a locally generated random value if
+// absent (generation-at-install: the value never crosses the wire).
+// rotate=true regenerates even when the secret exists.
+// SecretKind selects what EnsureSecret generates. Closed, like every
+// other vocabulary on this wire: the agent must know how to produce the
+// material, so "some other algorithm" is a code change, not a parameter.
+enum SecretKind {
+  SECRET_KIND_UNSPECIFIED = 0; // treated as RANDOM
+  // Random bytes, base64url-encoded. The default, and what an HMAC key,
+  // a session secret or a storage encryption key wants.
+  SECRET_KIND_RANDOM = 1;
+  // A PEM-encoded RSA private key. An OIDC provider signs ID tokens with
+  // one and cannot generate it on demand, so it must exist before the
+  // provider starts — and it is multi-line, which is why materialization
+  // has to preserve the indentation of the reference it replaces.
+  SECRET_KIND_RSA_PRIVATE_KEY = 2;
+}
+
+message EnsureSecret {
+  string name = 1;
+  // Random bytes to generate before base64url encoding. 0 = default (32).
+  // Ignored for kinds whose size is not a free parameter.
+  uint32 length_bytes = 2;
+  bool rotate = 3;
+  // Protocol minor 10. Absent/UNSPECIFIED means RANDOM, so an older
+  // Keystone asking an newer agent for a secret still gets what it meant.
+  SecretKind kind = 4;
+}
+
+message EnsureSecretResult {
+  bool existed = 1;   // true if the secret was already present (pre-rotate)
+  uint32 version = 2; // increments on every (re)generation or put
+}
+
+// PutSecret stores an operator-supplied value (e.g. a Cloudflare tunnel
+// token). The value transits this one op over the mTLS agent plane and
+// is never persisted or logged by Keystone.
+message PutSecret {
+  string name = 1;
+  string value = 2;
+}
+
+message PutSecretResult {
+  uint32 version = 1;
+}
+
+// ListSecrets returns name-level metadata only — never values.
+message ListSecrets {}
+
+message SecretInfo {
+  string name = 1;
+  uint32 version = 2;
+  int64 created_unix_sec = 3;
+  int64 updated_unix_sec = 4;
+}
+
+message ListSecretsResult {
+  repeated SecretInfo secrets = 1;
+}
+
+// Recovery-only sealed movement (protocol minor 20, ADR-W045 A5). Export
+// returns ciphertext encrypted to an offline recovery public key; there is
+// still no operation that returns an individual plaintext secret. Import is
+// accepted only by an empty fresh-node store and re-seals values under that
+// node's newly generated local store key.
+message ExportSecretBundle {
+  string recovery_public_key = 1;
+}
+
+message ExportSecretBundleResult {
+  bytes sealed_bundle = 1;
+  uint32 secret_count = 2;
+}
+
+message ImportSecretBundle {
+  string recovery_private_key = 1;
+  bytes sealed_bundle = 2;
+}
+
+message ImportSecretBundleResult {
+  uint32 secret_count = 1;
+}
+
+// EraseSecret removes one secret from the node's store and proves it is
+// gone (protocol minor 22, ADR-W030 A5.1, epic #326 S02). It is the
+// erase half of the write-only path: there is still no arm that reads a
+// value back, and this one returns nothing about the value either.
+//
+// It is VERSION-FENCED. max_version names the newest version the caller
+// means to erase; a store holding a NEWER version under the same name
+// (a later PutSecret the caller has not seen) is refused as FORBIDDEN
+// rather than erased, so a stale erase can never destroy a credential
+// that replaced the one it was aimed at. 0 means "any version".
+//
+// It is idempotent: erasing an absent secret succeeds with existed =
+// false and absent = true, which is what a retry after a lost answer
+// must see.
+//
+// The result is EVIDENCE, not an acknowledgement. After unlinking, the
+// agent re-checks that neither the sealed value nor its sidecar exists
+// and reports that as absent. evidence binds the answer to this request:
+// sha256("wardstone-erase-v1" || name || 0x00 || nonce || 0x00 ||
+// decimal(erased_version) || 0x00 || ("absent"|"present")), so a replayed
+// or reordered answer for another erase does not verify. The channel is
+// the mTLS session; evidence is what makes the answer specific.
+message EraseSecret {
+  string name = 1;
+  uint32 max_version = 2;
+  // A caller-chosen random value echoed into the evidence. Required.
+  string nonce = 3;
+}
+
+message EraseSecretResult {
+  bool existed = 1;
+  uint32 erased_version = 2;
+  bool absent = 3;
+  bytes evidence = 4;
+}
+
+// ---------------------------------------------------------------- home automation (protocol minor 25)
+
+// ListRadios inventories the device candidates a home-automation app may
+// be handed: USB-backed serial adapters (Zigbee/Z-Wave/Thread coordinators
+// are all serial devices to the kernel) and Bluetooth adapters. Read-only
+// and parameterless: the agent reads fixed locations only
+// (/dev/serial/by-id, /sys/class/tty, /sys/class/bluetooth and the sysfs
+// device directories they link to), so the op cannot be pointed at an
+// arbitrary path. No udevadm, no shell-out (ADR-W003 §A4.5).
+//
+// Classification is deliberately conservative. A serial adapter is
+// RADIO_KIND_UNKNOWN unless its exact USB vendor:product pair names a
+// single-protocol radio; a tty name (ttyUSB0, ttyACM0) or a generic
+// USB-UART bridge chip never implies Zigbee, Z-Wave or Thread, because the
+// same CP210x can carry any of them or none.
+//
+// Non-Linux agents answer platform_supported=false with no radios — an
+// empty, successful result, not an error.
+message ListRadios {}
+
+enum RadioKind {
+  RADIO_KIND_UNSPECIFIED = 0;
+  // A serial device the agent will not guess about.
+  RADIO_KIND_UNKNOWN = 1;
+  // Listed under /sys/class/bluetooth.
+  RADIO_KIND_BLUETOOTH = 2;
+  // Classified by an exact USB vendor:product match only.
+  RADIO_KIND_ZIGBEE = 3;
+  RADIO_KIND_ZWAVE = 4;
+  RADIO_KIND_THREAD = 5;
+}
+
+message Radio {
+  // Stable identity key, deterministic for the same hardware. The prefix
+  // names how stable it is:
+  //   "serial-by-id:<alias>"  udev's /dev/serial/by-id name (vendor,
+  //                           model, serial number, interface) — follows
+  //                           the device to any USB port.
+  //   "usb:<vid>:<pid>:<serial>" a Bluetooth adapter whose USB device
+  //                           reports a serial number.
+  //   "sysfs:<device path>"   the kernel device path — stable while the
+  //                           device stays in the same physical port.
+  string id = 1;
+  RadioKind kind = 2;
+  // Why kind was chosen, e.g. "usb id 1cf1:0030" or "no identifying
+  // usb id; serial adapter".
+  string kind_reason = 3;
+  // Kernel name: ttyUSB0, ttyACM0, hci0. Not stable across reboots.
+  string kernel_name = 4;
+  // /dev/<kernel_name> for a serial device; empty for Bluetooth, which
+  // has no device node.
+  string dev_path = 5;
+  // Every /dev/serial/by-id alias resolving to dev_path, sorted. Empty
+  // when udev is absent or produced no alias.
+  repeated string by_id_paths = 6;
+  // The device's resolved sysfs path, e.g. /sys/devices/.../1-1.3:1.0.
+  // Empty when sysfs has no device link for it.
+  string sysfs_path = 7;
+  // "usb" when a USB device was found above it; otherwise the sysfs
+  // subsystem name (e.g. "platform"), or empty when unknown.
+  string bus = 8;
+  // Kernel driver bound to the device (cp210x, cdc_acm, btusb), or empty.
+  string driver = 9;
+  // USB identity, all empty when bus != "usb" or sysfs lacks the file.
+  // vendor_id/product_id are 4 lowercase hex digits.
+  string usb_vendor_id = 10;
+  string usb_product_id = 11;
+  string usb_manufacturer = 12;
+  string usb_product = 13;
+  string usb_serial = 14;
+  // The USB port path (e.g. "1-1.3"): where it is plugged in.
+  string usb_port = 15;
+}
+
+message ListRadiosResult {
+  // Sorted by id.
+  repeated Radio radios = 1;
+  bool platform_supported = 2;
+}
+
+// ---------------------------------------------------------------- home automation readiness (protocol minor 26)
+
+// HomeAutomationReadiness reports whether a node can host LAN-native home
+// automation. Bounded and read-only: procfs/sysfs values, the kernel's
+// interface list, an Lstat of the D-Bus socket and of /dev/net/tun, and
+// one systemd property query for the fixed unit bluetooth.service. It
+// never writes a sysctl, installs a package or starts a unit, and it
+// takes no parameters, so nothing on the wire chooses what is read.
+//
+// A missing prerequisite is a ReadinessCheck in state MISSING, never an
+// OpError. Non-Linux agents answer platform_supported=false with every
+// check UNSUPPORTED.
+message HomeAutomationReadiness {}
+
+enum ReadinessState {
+  READINESS_STATE_UNSPECIFIED = 0;
+  // The prerequisite is present.
+  READINESS_STATE_READY = 1;
+  // Observed absent, disabled or of the wrong type.
+  READINESS_STATE_MISSING = 2;
+  // This node cannot have it at all (non-Linux, kernel without IPv6).
+  READINESS_STATE_UNSUPPORTED = 3;
+  // The agent could not tell (read error, unreachable systemd,
+  // unexpected value).
+  READINESS_STATE_UNKNOWN = 4;
+}
+
+message ReadinessCheck {
+  // Closed vocabulary: "ipv6", "interface_ipv6", "ipv6_forwarding",
+  // "multicast", "dbus_system_bus", "bluez_service",
+  // "bluetooth_adapter", "tun". Per-interface and per-adapter checks
+  // repeat the name once per subject.
+  string check = 1;
+  ReadinessState state = 2;
+  // What produced the state: a path ("/proc/sys/net/ipv6/conf/all/
+  // forwarding", "/run/dbus/system_bus_socket"), an interface ("eth0"),
+  // a unit ("bluetooth.service") or an adapter ("hci0"). Empty only
+  // when there was nothing to check (no candidate interface).
+  string subject = 3;
+  // The observed raw value ("0", "socket", "char 10:200", flags).
+  string value = 4;
+  // Human-readable evidence.
+  string detail = 5;
+}
+
+// A LAN-facing candidate interface: one holding a default route or, when
+// there is none, an up, addressed, non-loopback, non-container one.
+message NodeInterface {
+  string name = 1;
+  repeated string addresses = 2; // CIDR, sorted
+  bool up = 3;
+  bool multicast = 4;
+  bool default_route = 5;
+}
+
+message HomeAutomationReadinessResult {
+  bool platform_supported = 1;
+  repeated NodeInterface interfaces = 2;
+  // In a fixed order: the check names above, each once per subject.
+  repeated ReadinessCheck checks = 3;
+}

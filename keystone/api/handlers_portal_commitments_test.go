@@ -1,0 +1,903 @@
+package api
+
+import (
+	"bytes"
+	"encoding/json"
+	"io"
+	"net/http"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/portal"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/resource"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/runtimedb"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/upkeep"
+)
+
+// commitmentHarness is the household page with the commitment engine
+// wired to it, the way main.go does.
+func commitmentHarness(t *testing.T) *harness {
+	t.Helper()
+	h := homeHarness(t)
+	h.s.Upkeep = &upkeep.Engine{DB: h.s.DB, State: h.s.State, Loc: time.UTC}
+	return h
+}
+
+func (h *harness) declareCommitment(t *testing.T, name string, spec resource.CommitmentSpec, owner string) {
+	t.Helper()
+	if err := h.s.State.Put(resource.Resource{
+		ApiVersion: resource.ApiVersion, Kind: resource.KindCommitment,
+		Metadata:   resource.Metadata{Name: name, Owner: owner},
+		Commitment: &spec,
+	}); err != nil {
+		t.Fatalf("Put(%s): %v", name, err)
+	}
+}
+
+// overdueCheckup is Kai's, and the household's adults answer it.
+func overdueCheckup(t *testing.T, h *harness, mayComplete []string, scope string) {
+	t.Helper()
+	h.declareCommitment(t, "kai-checkup", resource.CommitmentSpec{
+		Description:     "Kai's annual well-child visit",
+		Rollover:        resource.RolloverFromSchedule,
+		Anchor:          time.Now().AddDate(-2, 0, 0).Format("2006-01-02"),
+		Due:             []resource.CommitmentDue{{Meter: resource.MeterClock, Every: "1yr", Lead: "60d"}},
+		RequiresBooking: true,
+		MayComplete:     mayComplete,
+		Scope:           scope,
+	}, "household/kai")
+}
+
+func (h *harness) needsYou(t *testing.T, user string) []needsYouItem {
+	t.Helper()
+	return h.summary(t, user).NeedsYou.Items
+}
+
+func commitmentItem(items []needsYouItem, ref string) (needsYouItem, bool) {
+	for _, it := range items {
+		if it.Kind == needsYouCommitment && it.Ref == ref {
+			return it, true
+		}
+	}
+	return needsYouItem{}, false
+}
+
+// The case the whole design exists for: the item is ABOUT a child and
+// ANSWERED by a parent, and the page must render it that way to both.
+func TestTheCheckupIsAboutTheChildAndAnsweredByAParent(t *testing.T) {
+	h := commitmentHarness(t)
+	overdueCheckup(t, h, []string{"household/mika"}, "")
+
+	parent, ok := commitmentItem(h.needsYou(t, "mika"), "kai-checkup")
+	if !ok {
+		t.Fatal("the checkup is missing from the parent's card")
+	}
+	if !parent.Decidable {
+		t.Errorf("the parent cannot act on it: %+v", parent)
+	}
+	if parent.WaitingOn != "you" {
+		t.Errorf("waitingOn = %q, want you", parent.WaitingOn)
+	}
+
+	child, ok := commitmentItem(h.needsYou(t, "kai"), "kai-checkup")
+	if !ok {
+		t.Fatal("the checkup is missing from the child's card")
+	}
+	if child.Decidable {
+		t.Errorf("the child was offered an affordance they do not have: %+v", child)
+	}
+	if child.WaitingOn != "mika" && child.WaitingOn != "kai" {
+		t.Errorf("waitingOn = %q, want the person who must act", child.WaitingOn)
+	}
+}
+
+// A personal commitment is the owner's business. Same boundary the
+// memory scopes draw, not a second vocabulary for the same question.
+func TestAPersonalCommitmentIsNotOnSomebodyElsesPage(t *testing.T) {
+	h := commitmentHarness(t)
+	h.declareCommitment(t, "mika-refill", resource.CommitmentSpec{
+		Description: "Repeat prescription", Rollover: resource.RolloverFromCompletion,
+		Anchor: time.Now().AddDate(0, -6, 0).Format("2006-01-02"),
+		Due:    []resource.CommitmentDue{{Meter: resource.MeterClock, Every: "3mo", Lead: "14d"}},
+		Scope:  resource.CommitmentScopePersonal,
+	}, "household/mika")
+
+	if _, ok := commitmentItem(h.needsYou(t, "mika"), "mika-refill"); !ok {
+		t.Error("the owner cannot see their own personal commitment")
+	}
+	if _, ok := commitmentItem(h.needsYou(t, "sarah"), "mika-refill"); ok {
+		t.Error("a personal commitment appeared on somebody else's page")
+	}
+}
+
+// A commitment quietly counting down is not waiting on anybody.
+func TestOnlyCommitmentsThatWantSomethingAppear(t *testing.T) {
+	h := commitmentHarness(t)
+	h.declareCommitment(t, "furnace-filter", resource.CommitmentSpec{
+		Description: "Furnace filter", Rollover: resource.RolloverFromCompletion,
+		Anchor: time.Now().Format("2006-01-02"),
+		Due:    []resource.CommitmentDue{{Meter: resource.MeterClock, Every: "3mo", Lead: "14d"}},
+	}, "household")
+	if _, ok := commitmentItem(h.needsYou(t, "mika"), "furnace-filter"); ok {
+		t.Error("a commitment three months from due is filling the card")
+	}
+}
+
+// Booking is an answer, and answering makes the item go away.
+func TestBookingAnswersTheItem(t *testing.T) {
+	h := commitmentHarness(t)
+	overdueCheckup(t, h, []string{"household/mika"}, "")
+	if _, ok := commitmentItem(h.needsYou(t, "mika"), "kai-checkup"); !ok {
+		t.Fatal("the checkup is not on the card to begin with")
+	}
+
+	when := time.Now().AddDate(0, 0, 14)
+	resp := h.memberJSON(t, http.MethodPost, "/api/v1/home/commitments/kai-checkup/booked", "mika",
+		map[string]any{"at": when})
+	if resp != http.StatusCreated {
+		t.Fatalf("booking: status %d", resp)
+	}
+	if _, ok := commitmentItem(h.needsYou(t, "mika"), "kai-checkup"); ok {
+		t.Error("the item is still asking after somebody booked it")
+	}
+}
+
+func TestDoneAndWaivedBothCloseTheCycle(t *testing.T) {
+	for _, what := range []string{"done", "waived"} {
+		t.Run(what, func(t *testing.T) {
+			h := commitmentHarness(t)
+			overdueCheckup(t, h, []string{"household/mika"}, "")
+			if got := h.memberJSON(t, http.MethodPost,
+				"/api/v1/home/commitments/kai-checkup/"+what, "mika",
+				map[string]any{"reason": "seen to"}); got != http.StatusCreated {
+				t.Fatalf("status %d", got)
+			}
+			done, err := h.s.DB.ListCommitmentCompletions("kai-checkup")
+			if err != nil || len(done) != 1 {
+				t.Fatalf("completions = %+v, %v", done, err)
+			}
+			if done[0].Waived != (what == "waived") {
+				t.Errorf("waived = %v for %q", done[0].Waived, what)
+			}
+			if done[0].RecordedBy != "mika" {
+				t.Errorf("recordedBy = %q, want the authenticated member", done[0].RecordedBy)
+			}
+		})
+	}
+}
+
+// The affordance is absent for somebody who may not answer; going round
+// the page is still refused.
+func TestSomebodyWhoMayNotAnswerIsRefusedAtTheWritePath(t *testing.T) {
+	h := commitmentHarness(t)
+	overdueCheckup(t, h, []string{"household/mika"}, "")
+	if got := h.memberJSON(t, http.MethodPost, "/api/v1/home/commitments/kai-checkup/done", "kai", nil); got != http.StatusForbidden {
+		t.Errorf("status = %d, want 403", got)
+	}
+}
+
+// A member can answer the other kind of question too: what does it say.
+func TestAMemberCanRecordAMeterReadingFromTheirOwnPage(t *testing.T) {
+	h := commitmentHarness(t)
+	if err := h.s.State.Put(resource.Resource{
+		ApiVersion: resource.ApiVersion, Kind: resource.KindMeter,
+		Metadata: resource.Metadata{Name: "f150-odometer", Owner: "household"},
+		Meter:    &resource.MeterSpec{Description: "Odometer", Unit: "miles"},
+	}); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	if got := h.memberJSON(t, http.MethodPost, "/api/v1/home/meters/f150-odometer/readings", "mika",
+		map[string]any{"value": 84210}); got != http.StatusCreated {
+		t.Fatalf("status %d", got)
+	}
+	latest, err := h.s.DB.LatestMeterReading("f150-odometer")
+	if err != nil {
+		t.Fatalf("LatestMeterReading: %v", err)
+	}
+	if latest.Value != 84210 || latest.RecordedBy != "mika" || latest.Source != runtimedb.ReadingByPerson {
+		t.Errorf("reading = %+v", latest)
+	}
+	if got := h.memberJSON(t, http.MethodPost, "/api/v1/home/meters/nope/readings", "mika",
+		map[string]any{"value": 1}); got != http.StatusNotFound {
+		t.Errorf("an undeclared meter gave %d, want 404", got)
+	}
+}
+
+// An overdue commitment is red and a due-soon one is amber, because
+// colour is never the only signal but it is still a signal.
+func TestToneSeparatesOverdueFromComingDue(t *testing.T) {
+	h := commitmentHarness(t)
+	overdueCheckup(t, h, nil, "")
+	item, ok := commitmentItem(h.needsYou(t, "mika"), "kai-checkup")
+	if !ok {
+		t.Fatal("missing")
+	}
+	if item.Tone != portal.ToneFailed {
+		t.Errorf("tone = %q, want the overdue one", item.Tone)
+	}
+	if !strings.Contains(item.Consequence, "past its date") {
+		t.Errorf("consequence = %q", item.Consequence)
+	}
+}
+
+// memberJSON posts a JSON body as the identity proxy would for a member
+// and returns the status.
+func (h *harness) memberJSON(t *testing.T, method, path, user string, body any) int {
+	t.Helper()
+	var r io.Reader = strings.NewReader("")
+	if body != nil {
+		encoded, err := json.Marshal(body)
+		if err != nil {
+			t.Fatalf("encode: %v", err)
+		}
+		r = bytes.NewReader(encoded)
+	}
+	resp := h.member(method, path, user, "homepage_users", r, "application/json")
+	defer resp.Body.Close()
+	return resp.StatusCode
+}
+
+// memberJSONAs is memberJSON for a member in extra directory groups.
+func (h *harness) memberJSONAs(t *testing.T, method, path, user, groups string, body any) int {
+	t.Helper()
+	var r io.Reader = strings.NewReader("")
+	if body != nil {
+		encoded, err := json.Marshal(body)
+		if err != nil {
+			t.Fatalf("encode: %v", err)
+		}
+		r = bytes.NewReader(encoded)
+	}
+	resp := h.member(method, path, user, groups, r, "application/json")
+	defer resp.Body.Close()
+	return resp.StatusCode
+}
+
+// summaryAs reads the page for a member the proxy put in extra groups.
+func (h *harness) summaryAs(t *testing.T, user, groups string) homeSummaryResponse {
+	t.Helper()
+	res := h.member(http.MethodGet, "/api/v1/home/summary", user, groups, nil, "")
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("summary for %s: status %d", user, res.StatusCode)
+	}
+	var got homeSummaryResponse
+	if err := json.NewDecoder(res.Body).Decode(&got); err != nil {
+		t.Fatalf("decoding summary: %v", err)
+	}
+	return got
+}
+
+// `mayComplete: [group/parents]` is a rule, not a comment (Codex, #244).
+//
+// This used to pass for everybody: a group reference was treated as
+// permissive on the reasoning that the write path would refuse anyone
+// who was not in it, and the write path calls the same function. So a
+// commitment narrowed to the adults could be ticked off by anybody who
+// could reach the page, and the narrowing was decorative.
+func TestAGroupInMayCompleteIsAnsweredRatherThanAssumed(t *testing.T) {
+	h := commitmentHarness(t)
+	overdueCheckup(t, h, []string{"group/parents"}, "")
+
+	inGroup, ok := commitmentItem(h.summaryAs(t, "mika", "homepage_users,parents").NeedsYou.Items, "kai-checkup")
+	if !ok {
+		t.Fatal("the checkup is missing from a parent's card")
+	}
+	if !inGroup.Decidable {
+		t.Errorf("somebody in group/parents was not offered the affordance: %+v", inGroup)
+	}
+	outOfGroup, ok := commitmentItem(h.needsYou(t, "kai"), "kai-checkup")
+	if !ok {
+		t.Fatal("the checkup should still be visible to the child it is about")
+	}
+	if outOfGroup.Decidable {
+		t.Errorf("somebody outside group/parents was offered the affordance: %+v", outOfGroup)
+	}
+
+	// Read both cards before writing: answering it closes the cycle, and
+	// a closed commitment is asking nobody for anything.
+	if got := h.memberJSONAs(t, http.MethodPost,
+		"/api/v1/home/commitments/kai-checkup/done", "mika", "homepage_users,parents", nil); got != http.StatusCreated {
+		t.Errorf("a parent was refused: status %d, want 201", got)
+	}
+}
+
+// And the write path refuses them, which is what the comment claimed
+// all along.
+func TestSomebodyOutsideTheGroupIsRefusedAtTheWritePath(t *testing.T) {
+	h := commitmentHarness(t)
+	overdueCheckup(t, h, []string{"group/parents"}, "")
+	if got := h.memberJSONAs(t, http.MethodPost,
+		"/api/v1/home/commitments/kai-checkup/done", "kai", "homepage_users", nil); got != http.StatusForbidden {
+		t.Errorf("status = %d, want 403", got)
+	}
+	// A group the household never created narrows the commitment to
+	// nobody. That is the safe direction and it is deliberate: finding
+	// out because nobody can tick it off beats finding out because
+	// everybody could.
+	h.declareCommitment(t, "nobody", resource.CommitmentSpec{
+		Description: "narrowed to a group that does not exist",
+		Rollover:    resource.RolloverFromCompletion,
+		Anchor:      time.Now().AddDate(-1, 0, 0).Format("2006-01-02"),
+		Due:         []resource.CommitmentDue{{Meter: resource.MeterClock, Every: "3mo", Lead: "14d"}},
+		MayComplete: []string{"group/nonexistent"},
+	}, "household/mika")
+	if got := h.memberJSONAs(t, http.MethodPost,
+		"/api/v1/home/commitments/nobody/done", "mika", "homepage_users", nil); got != http.StatusForbidden {
+		t.Errorf("status = %d, want 403", got)
+	}
+}
+
+// A counter-based commitment answered with no number wedges itself
+// forever (Codex, #244).
+//
+// The completion closes the cycle and records `{}` for positions. Both
+// rollover modes need the position the meter stood at to measure the
+// next cycle from, so the new cycle opens permanently unresolved — and
+// there is no endpoint that deletes or corrects a completion, so the
+// household cannot get it back. The schema has said "evidence is not
+// optional" since it was written; this is the code agreeing.
+func TestACounterCommitmentCannotBeClosedWithoutItsNumber(t *testing.T) {
+	h := commitmentHarness(t)
+	if err := h.s.State.Put(resource.Resource{
+		ApiVersion: resource.ApiVersion, Kind: resource.KindMeter,
+		Metadata: resource.Metadata{Name: "f150-odometer", Owner: "household"},
+		Meter:    &resource.MeterSpec{Description: "Odometer", Unit: "miles"},
+	}); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	h.declareCommitment(t, "f150-oil", resource.CommitmentSpec{
+		Description: "F-150 oil and filter", Rollover: resource.RolloverFromCompletion,
+		Anchor: time.Now().AddDate(-1, 0, 0).Format("2006-01-02"),
+		Due:    []resource.CommitmentDue{{Meter: "f150-odometer", Every: "5000", Lead: "300"}},
+	}, "household/mika")
+
+	for _, what := range []string{"done", "waived"} {
+		t.Run(what+" with no number", func(t *testing.T) {
+			got := h.memberJSON(t, http.MethodPost, "/api/v1/home/commitments/f150-oil/"+what, "mika", nil)
+			if got != http.StatusBadRequest {
+				t.Errorf("status = %d, want 400: closing a counter cycle with no reading "+
+					"leaves the next one permanently unresolved and nothing can undo it", got)
+			}
+		})
+	}
+
+	// With the number, it closes — and the number is what the next cycle
+	// is measured from.
+	if got := h.memberJSON(t, http.MethodPost, "/api/v1/home/commitments/f150-oil/done", "mika",
+		map[string]any{"meters": map[string]any{"f150-odometer": 84210}}); got != http.StatusCreated {
+		t.Fatalf("status = %d, want 201", got)
+	}
+	done, err := h.s.DB.ListCommitmentCompletions("f150-oil")
+	if err != nil {
+		t.Fatalf("ListCommitmentCompletions: %v", err)
+	}
+	if len(done) != 1 || done[0].Positions["f150-odometer"] != 84210 {
+		t.Errorf("completion = %+v, want the odometer recorded", done)
+	}
+}
+
+// A member who has just read the meter should not have to type the
+// number twice. A reading recorded at or before the completion is the
+// evidence, and the intake snapshots it.
+func TestARecentReadingIsEvidenceEnoughToCloseACounterCycle(t *testing.T) {
+	h := commitmentHarness(t)
+	if err := h.s.State.Put(resource.Resource{
+		ApiVersion: resource.ApiVersion, Kind: resource.KindMeter,
+		Metadata: resource.Metadata{Name: "f150-odometer", Owner: "household"},
+		Meter:    &resource.MeterSpec{Description: "Odometer", Unit: "miles", StaleAfter: "720h"},
+	}); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	h.declareCommitment(t, "f150-oil", resource.CommitmentSpec{
+		Description: "F-150 oil and filter", Rollover: resource.RolloverFromCompletion,
+		Anchor: time.Now().AddDate(-1, 0, 0).Format("2006-01-02"),
+		Due:    []resource.CommitmentDue{{Meter: "f150-odometer", Every: "5000", Lead: "300"}},
+	}, "household/mika")
+
+	if got := h.memberJSON(t, http.MethodPost, "/api/v1/home/meters/f150-odometer/readings", "mika",
+		map[string]any{"value": 84210}); got != http.StatusCreated {
+		t.Fatalf("recording the reading: status %d", got)
+	}
+	if got := h.memberJSON(t, http.MethodPost, "/api/v1/home/commitments/f150-oil/done", "mika", nil); got != http.StatusCreated {
+		t.Fatalf("status = %d, want 201: a reading the household just took is the evidence", got)
+	}
+	done, err := h.s.DB.ListCommitmentCompletions("f150-oil")
+	if err != nil {
+		t.Fatalf("ListCommitmentCompletions: %v", err)
+	}
+	if len(done) != 1 || done[0].Positions["f150-odometer"] != 84210 {
+		t.Errorf("completion = %+v, want the reading snapshotted", done)
+	}
+}
+
+// A reading too old to rely on still closes the cycle — and says so.
+//
+// The stricter first version refused it, on the reasoning that measuring
+// the next cycle from a June odometer produces a number nobody checked.
+// That was stricter than the household needs: the point is that the oil
+// gets changed at about five thousand miles, and a commitment that
+// cannot be closed sits overdue forever with the work already done,
+// which is the failure the ADR says a schema cannot fix.
+//
+// The error runs the safe way. A stale reading is BEHIND where the meter
+// actually stood, so the next cycle comes due EARLY. Nagging sooner is a
+// nuisance; nagging never is a missed oil change.
+//
+// What is not negotiable is that the record says which numbers were
+// guessed.
+func TestAStaleReadingClosesTheCycleAndIsRecordedAsApproximate(t *testing.T) {
+	h := commitmentHarness(t)
+	if err := h.s.State.Put(resource.Resource{
+		ApiVersion: resource.ApiVersion, Kind: resource.KindMeter,
+		Metadata: resource.Metadata{Name: "f150-odometer", Owner: "household"},
+		Meter:    &resource.MeterSpec{Description: "Odometer", Unit: "miles", StaleAfter: "168h"},
+	}); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	h.declareCommitment(t, "f150-oil", resource.CommitmentSpec{
+		Description: "F-150 oil and filter", Rollover: resource.RolloverFromCompletion,
+		Anchor: time.Now().AddDate(-1, 0, 0).Format("2006-01-02"),
+		Due:    []resource.CommitmentDue{{Meter: "f150-odometer", Every: "5000", Lead: "300"}},
+	}, "household/mika")
+	if _, _, err := h.s.DB.AppendMeterReading(runtimedb.MeterReading{
+		Meter: "f150-odometer", Value: 84210, At: time.Now().AddDate(0, -3, 0),
+		RecordedBy: "mika", Source: runtimedb.ReadingByPerson}); err != nil {
+		t.Fatalf("AppendMeterReading: %v", err)
+	}
+	if got := h.memberJSON(t, http.MethodPost, "/api/v1/home/commitments/f150-oil/done", "mika", nil); got != http.StatusCreated {
+		t.Fatalf("status = %d, want 201: a rough number is not no number", got)
+	}
+	done := h.completions(t, "f150-oil")
+	if len(done) != 1 {
+		t.Fatalf("completions = %d, want 1", len(done))
+	}
+	if done[0].Positions["f150-odometer"] != 84210 {
+		t.Errorf("position = %v, want the reading it had", done[0].Positions["f150-odometer"])
+	}
+	if len(done[0].Approximate) != 1 || done[0].Approximate[0] != "f150-odometer" {
+		t.Errorf("approximate = %v, want the odometer named: a maintenance history that hides "+
+			"which mileages were guessed is the quiet kind of lie", done[0].Approximate)
+	}
+}
+
+// A number nobody has EVER recorded is still refused, and is still the
+// only thing that is. There is nothing to be approximately right with.
+func TestAMeterNobodyHasEverReadStillRefusesToClose(t *testing.T) {
+	h := commitmentHarness(t)
+	if err := h.s.State.Put(resource.Resource{
+		ApiVersion: resource.ApiVersion, Kind: resource.KindMeter,
+		Metadata: resource.Metadata{Name: "f150-odometer", Owner: "household"},
+		Meter:    &resource.MeterSpec{Description: "Odometer", Unit: "miles"},
+	}); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	h.declareCommitment(t, "f150-oil", resource.CommitmentSpec{
+		Description: "F-150 oil and filter", Rollover: resource.RolloverFromCompletion,
+		Anchor: time.Now().AddDate(-1, 0, 0).Format("2006-01-02"),
+		Due:    []resource.CommitmentDue{{Meter: "f150-odometer", Every: "5000", Lead: "300"}},
+	}, "household/mika")
+	if got := h.memberJSON(t, http.MethodPost, "/api/v1/home/commitments/f150-oil/done", "mika", nil); got != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", got)
+	}
+	// Typed, it closes — and is not marked approximate, because somebody
+	// was standing at the truck.
+	if got := h.memberJSON(t, http.MethodPost, "/api/v1/home/commitments/f150-oil/done", "mika",
+		map[string]any{"meters": map[string]any{"f150-odometer": 90000}}); got != http.StatusCreated {
+		t.Fatalf("status = %d, want 201", got)
+	}
+	done := h.completions(t, "f150-oil")
+	if len(done) != 1 || len(done[0].Approximate) != 0 {
+		t.Errorf("completion = %+v, want one with nothing guessed", done)
+	}
+}
+
+func (h *harness) completions(t *testing.T, name string) []runtimedb.CommitmentCompletion {
+	t.Helper()
+	done, err := h.s.DB.ListCommitmentCompletions(name)
+	if err != nil {
+		t.Fatalf("ListCommitmentCompletions: %v", err)
+	}
+	return done
+}
+
+// A one-off measures nothing from its completion, because nothing
+// follows it. Requiring evidence there would refuse an answer for the
+// sake of a cycle that never opens.
+func TestAOneOffCounterCommitmentNeedsNoNumberToClose(t *testing.T) {
+	h := commitmentHarness(t)
+	if err := h.s.State.Put(resource.Resource{
+		ApiVersion: resource.ApiVersion, Kind: resource.KindMeter,
+		Metadata: resource.Metadata{Name: "f150-odometer", Owner: "household"},
+		Meter:    &resource.MeterSpec{Description: "Odometer", Unit: "miles"},
+	}); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	h.declareCommitment(t, "f150-warranty", resource.CommitmentSpec{
+		Description: "Warranty inspection, once", Rollover: resource.RolloverOnce,
+		Anchor: time.Now().AddDate(-1, 0, 0).Format("2006-01-02"),
+		Due:    []resource.CommitmentDue{{Meter: "f150-odometer", AtValue: 36000}},
+	}, "household/mika")
+	if got := h.memberJSON(t, http.MethodPost, "/api/v1/home/commitments/f150-warranty/done", "mika", nil); got != http.StatusCreated {
+		t.Errorf("status = %d, want 201: a one-off opens no next cycle to measure", got)
+	}
+}
+
+// The server lists what a commitment can be answered with, so the page
+// never works it out for itself (Codex, #244).
+func TestTheCardIsToldWhichAnswersACommitmentTakes(t *testing.T) {
+	h := commitmentHarness(t)
+	overdueCheckup(t, h, []string{"household/mika"}, "")
+
+	parent, ok := commitmentItem(h.needsYou(t, "mika"), "kai-checkup")
+	if !ok {
+		t.Fatal("the checkup is missing")
+	}
+	verbs := map[string]bool{}
+	for _, a := range parent.Asks {
+		verbs[a.Verb] = true
+		if a.Label == "" {
+			t.Errorf("ask %q has no label: the page has no sentence of its own to fall back on", a.Verb)
+		}
+	}
+	for _, want := range []string{"done", "waived", "booked"} {
+		if !verbs[want] {
+			t.Errorf("no %q ask: the checkup requires booking and is answerable", want)
+		}
+	}
+
+	// Somebody who may not answer is offered nothing. The affordance is
+	// absent, never present-and-refused.
+	child, ok := commitmentItem(h.needsYou(t, "kai"), "kai-checkup")
+	if !ok {
+		t.Fatal("the checkup is missing from the child's card")
+	}
+	if len(child.Asks) != 0 {
+		t.Errorf("asks = %+v for somebody who may not answer", child.Asks)
+	}
+}
+
+// A commitment nobody can conclude asks for the NUMBER and nothing
+// else. "Done" on a card that cannot say whether the thing is due is an
+// answer to a question nobody asked.
+func TestAnUnresolvedCommitmentAsksForTheNumberFirst(t *testing.T) {
+	h := commitmentHarness(t)
+	if err := h.s.State.Put(resource.Resource{
+		ApiVersion: resource.ApiVersion, Kind: resource.KindMeter,
+		Metadata: resource.Metadata{Name: "f150-odometer", Owner: "household"},
+		Meter:    &resource.MeterSpec{Description: "Odometer", Unit: "miles"},
+	}); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	h.declareCommitment(t, "f150-oil", resource.CommitmentSpec{
+		Description: "F-150 oil and filter", Rollover: resource.RolloverFromCompletion,
+		Anchor: time.Now().AddDate(-1, 0, 0).Format("2006-01-02"),
+		Due:    []resource.CommitmentDue{{Meter: "f150-odometer", Every: "5000", Lead: "300"}},
+	}, "household/mika")
+
+	item, ok := commitmentItem(h.needsYou(t, "mika"), "f150-oil")
+	if !ok {
+		t.Fatal("a commitment nobody can conclude is not asking for anything")
+	}
+	// A way to close the cycle is still offered: a card that asks and
+	// cannot be answered is the fault this pair of tests exists for.
+	if len(item.Asks) == 0 {
+		t.Fatalf("asks = %+v, want a way to close it", item.Asks)
+	}
+	if len(item.Needs) != 1 || item.Needs[0].Meter != "f150-odometer" {
+		t.Fatalf("needs = %+v, want the odometer", item.Needs)
+	}
+	if item.Needs[0].Unit != "miles" {
+		t.Errorf("unit = %q, want the declared unit so the box says what to type", item.Needs[0].Unit)
+	}
+}
+
+// The card must not offer an answer the write path will refuse.
+//
+// Two ways it did. Both are the same fault as the group check: two
+// places deciding one question and disagreeing.
+//
+// (1) A counter rule that is stale AND already crossed is `overdue`
+// with a trigger, not `unresolved` — so the card took the ordinary
+// branch and offered Done, while `Evidence` refused it for being
+// stale. Every tap returned 400.
+func TestAStaleButOverdueCommitmentAsksForTheNumberItWillDemand(t *testing.T) {
+	h := commitmentHarness(t)
+	if err := h.s.State.Put(resource.Resource{
+		ApiVersion: resource.ApiVersion, Kind: resource.KindMeter,
+		Metadata: resource.Metadata{Name: "f150-odometer", Owner: "household"},
+		Meter:    &resource.MeterSpec{Description: "Odometer", Unit: "miles", StaleAfter: "168h"},
+	}); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	h.declareCommitment(t, "f150-oil", resource.CommitmentSpec{
+		Description: "F-150 oil and filter", Rollover: resource.RolloverFromCompletion,
+		Anchor: time.Now().AddDate(-1, 0, 0).Format("2006-01-02"),
+		Due:    []resource.CommitmentDue{{Meter: "f150-odometer", Every: "5000", Lead: "300"}},
+	}, "household/mika")
+	// Read long ago, and already well past the threshold: stale, but
+	// crossed, so the engine can still say it is overdue.
+	if _, _, err := h.s.DB.AppendMeterReading(runtimedb.MeterReading{
+		Meter: "f150-odometer", Value: 90000, At: time.Now().AddDate(0, -3, 0),
+		RecordedBy: "mika", Source: runtimedb.ReadingByPerson}); err != nil {
+		t.Fatalf("AppendMeterReading: %v", err)
+	}
+
+	item, ok := commitmentItem(h.needsYou(t, "mika"), "f150-oil")
+	if !ok {
+		t.Fatal("an overdue oil change is not on the card")
+	}
+	assertAsksAreAnswerable(t, h, "f150-oil", item)
+}
+
+// (2) When the reason a rule cannot be concluded is that the LAST
+// COMPLETION recorded no reading, a fresh meter reading does not fix
+// it — only a new completion carrying the number does. The card
+// offered the reading box alone, so the household had no way out at
+// all.
+func TestACommitmentWedgedByAnOldCompletionCanStillBeAnswered(t *testing.T) {
+	h := commitmentHarness(t)
+	if err := h.s.State.Put(resource.Resource{
+		ApiVersion: resource.ApiVersion, Kind: resource.KindMeter,
+		Metadata: resource.Metadata{Name: "f150-odometer", Owner: "household"},
+		Meter:    &resource.MeterSpec{Description: "Odometer", Unit: "miles"},
+	}); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	h.declareCommitment(t, "f150-oil", resource.CommitmentSpec{
+		Description: "F-150 oil and filter", Rollover: resource.RolloverFromCompletion,
+		Anchor: time.Now().AddDate(-1, 0, 0).Format("2006-01-02"),
+		Due:    []resource.CommitmentDue{{Meter: "f150-odometer", Every: "5000", Lead: "300"}},
+	}, "household/mika")
+	// The shape every pre-0042 completion has: closed, with no number.
+	if _, _, err := h.s.DB.RecordCommitmentCompletion(runtimedb.CommitmentCompletion{
+		Commitment: "f150-oil", At: time.Now().AddDate(0, -6, 0), RecordedBy: "mika",
+	}); err != nil {
+		t.Fatalf("RecordCommitmentCompletion: %v", err)
+	}
+	if _, _, err := h.s.DB.AppendMeterReading(runtimedb.MeterReading{
+		Meter: "f150-odometer", Value: 84210, At: time.Now(),
+		RecordedBy: "mika", Source: runtimedb.ReadingByPerson}); err != nil {
+		t.Fatalf("AppendMeterReading: %v", err)
+	}
+
+	item, ok := commitmentItem(h.needsYou(t, "mika"), "f150-oil")
+	if !ok {
+		t.Fatal("a wedged commitment is not asking for anything")
+	}
+	assertAsksAreAnswerable(t, h, "f150-oil", item)
+}
+
+// assertAsksAreAnswerable is the property both cases are about: every
+// answer the card offers must be one the write path accepts, and the
+// card must offer at least one way forward.
+func assertAsksAreAnswerable(t *testing.T, h *harness, name string, item needsYouItem) {
+	t.Helper()
+	if len(item.Asks) == 0 {
+		t.Fatal("the card asks for something and offers no way to answer it")
+	}
+	// Whatever the card asks the household to type, typed once.
+	typed := map[string]any{}
+	for _, n := range item.Needs {
+		typed[n.Meter] = 99999.0
+	}
+	var closable bool
+	for _, a := range item.Asks {
+		switch a.Verb {
+		case "done", "waived":
+			closable = true
+			body := map[string]any{}
+			if len(typed) > 0 {
+				body["meters"] = typed
+			}
+			if got := h.memberJSON(t, http.MethodPost,
+				"/api/v1/home/commitments/"+name+"/"+a.Verb, "mika", body); got != http.StatusCreated {
+				t.Errorf("the card offered %q and the write path gave %d — "+
+					"an affordance the engine refuses is worse than none", a.Label, got)
+			}
+		}
+	}
+	if !closable {
+		t.Error("the card offers no way to close the cycle, so the household cannot get unstuck")
+	}
+}
+
+// One truck, one odometer, one question.
+//
+// Two commitments measured against the same meter each carried their
+// own `needs`, so a stale odometer produced "what does f150-odometer
+// say?" twice on one card — once under the oil and once under the
+// tyres. One number, one truck, asked for twice.
+//
+// The meter is the unit a number is ENTERED against; the commitment is
+// the unit an answer is given against. Collapsing the two is what
+// produced the duplicate.
+func TestOneMeterIsAskedForOnceHoweverManyCommitmentsWantIt(t *testing.T) {
+	h := commitmentHarness(t)
+	if err := h.s.State.Put(resource.Resource{
+		ApiVersion: resource.ApiVersion, Kind: resource.KindMeter,
+		Metadata: resource.Metadata{Name: "f150-odometer", Owner: "household"},
+		Meter:    &resource.MeterSpec{Description: "Odometer", Unit: "miles"},
+	}); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	for _, c := range []struct{ name, desc, every string }{
+		{"f150-oil", "F-150 oil and filter", "5000"},
+		{"f150-tyres", "F-150 tyre rotation", "7500"},
+	} {
+		h.declareCommitment(t, c.name, resource.CommitmentSpec{
+			Description: c.desc, Rollover: resource.RolloverFromCompletion,
+			Anchor: time.Now().AddDate(-1, 0, 0).Format("2006-01-02"),
+			Due:    []resource.CommitmentDue{{Meter: "f150-odometer", Every: c.every, Lead: "300"}},
+		}, "household/mika")
+	}
+
+	card := h.summary(t, "mika").NeedsYou
+	// Both commitments are asking, because neither can be concluded.
+	if _, ok := commitmentItem(card.Items, "f150-oil"); !ok {
+		t.Fatal("the oil change is not on the card")
+	}
+	if _, ok := commitmentItem(card.Items, "f150-tyres"); !ok {
+		t.Fatal("the tyre rotation is not on the card")
+	}
+	// But the card asks for the odometer ONCE.
+	if len(card.Needs) != 1 || card.Needs[0].Meter != "f150-odometer" {
+		t.Fatalf("card needs = %+v, want the odometer exactly once", card.Needs)
+	}
+	if card.Needs[0].Unit != "miles" {
+		t.Errorf("unit = %q, want the declared unit", card.Needs[0].Unit)
+	}
+	// And one reading answers both.
+	if got := h.memberJSON(t, http.MethodPost, "/api/v1/home/meters/f150-odometer/readings", "mika",
+		map[string]any{"value": 84210}); got != http.StatusCreated {
+		t.Fatalf("recording the reading: %d", got)
+	}
+	after := h.summary(t, "mika").NeedsYou
+	if len(after.Needs) != 0 {
+		t.Errorf("still asking for %+v after one reading answered it", after.Needs)
+	}
+}
+
+// A completion records the positions of the meters THIS commitment
+// measures against, and not whatever else a client sent.
+//
+// The card collects numbers per meter, so a page could reasonably hand
+// the same map to every answer on it. `positions` is documented as what
+// the next cycle is measured from, so a tyre rotation carrying the
+// water filter's gallons is a record that means something it does not.
+func TestACompletionRecordsOnlyItsOwnMeters(t *testing.T) {
+	h := commitmentHarness(t)
+	for _, m := range []string{"f150-odometer", "water-filter-gallons"} {
+		if err := h.s.State.Put(resource.Resource{
+			ApiVersion: resource.ApiVersion, Kind: resource.KindMeter,
+			Metadata: resource.Metadata{Name: m, Owner: "household"},
+			Meter:    &resource.MeterSpec{Description: m, Unit: "units"},
+		}); err != nil {
+			t.Fatalf("Put: %v", err)
+		}
+	}
+	h.declareCommitment(t, "f150-oil", resource.CommitmentSpec{
+		Description: "F-150 oil and filter", Rollover: resource.RolloverFromCompletion,
+		Anchor: time.Now().AddDate(-1, 0, 0).Format("2006-01-02"),
+		Due:    []resource.CommitmentDue{{Meter: "f150-odometer", Every: "5000", Lead: "300"}},
+	}, "household/mika")
+
+	if got := h.memberJSON(t, http.MethodPost, "/api/v1/home/commitments/f150-oil/done", "mika",
+		map[string]any{"meters": map[string]any{
+			"f150-odometer": 84210, "water-filter-gallons": 300,
+		}}); got != http.StatusCreated {
+		t.Fatalf("status %d", got)
+	}
+	done := h.completions(t, "f150-oil")
+	if len(done) != 1 {
+		t.Fatalf("completions = %d", len(done))
+	}
+	if _, ok := done[0].Positions["water-filter-gallons"]; ok {
+		t.Errorf("the oil change recorded the water filter: %+v — positions is what the "+
+			"NEXT cycle is measured from, and that is not", done[0].Positions)
+	}
+	if done[0].Positions["f150-odometer"] != 84210 {
+		t.Errorf("positions = %+v, want the odometer", done[0].Positions)
+	}
+}
+
+// The card has to tell the two kinds of number apart, because A8 does.
+//
+// A completion is three-way: a number typed, a number approximated from
+// a reading too old to rely on, or a refusal. The card collects boxes
+// for both of the first two and the page greys Done out until they are
+// all filled — so unless the card says WHICH ones actually block the
+// write, the page is stricter than the engine, and a household that can
+// answer is told it cannot.
+func TestTheCardSaysWhichNumbersActuallyBlockAnAnswer(t *testing.T) {
+	h := commitmentHarness(t)
+	for _, m := range []struct{ name, unit, stale string }{
+		{"f150-odometer", "miles", "24h"},
+		{"well-filter", "gallons", ""},
+	} {
+		if err := h.s.State.Put(resource.Resource{
+			ApiVersion: resource.ApiVersion, Kind: resource.KindMeter,
+			Metadata: resource.Metadata{Name: m.name, Owner: "household"},
+			Meter:    &resource.MeterSpec{Description: m.name, Unit: m.unit, StaleAfter: m.stale},
+		}); err != nil {
+			t.Fatalf("Put: %v", err)
+		}
+	}
+	h.declareCommitment(t, "f150-oil", resource.CommitmentSpec{
+		Description: "F-150 oil and filter", Rollover: resource.RolloverFromCompletion,
+		Anchor: time.Now().AddDate(-1, 0, 0).Format("2006-01-02"),
+		Due:    []resource.CommitmentDue{{Meter: "f150-odometer", Every: "5000", Lead: "300"}},
+	}, "household/mika")
+	h.declareCommitment(t, "well-cartridge", resource.CommitmentSpec{
+		Description: "Well filter cartridge", Rollover: resource.RolloverFromCompletion,
+		Anchor: time.Now().AddDate(-1, 0, 0).Format("2006-01-02"),
+		Due:    []resource.CommitmentDue{{Meter: "well-filter", Every: "5000", Lead: "300"}},
+	}, "household/mika")
+
+	// An odometer read two days ago, on a meter that goes stale after
+	// one. The engine will approximate from it rather than refuse.
+	if _, _, err := h.s.DB.AppendMeterReading(runtimedb.MeterReading{
+		Meter: "f150-odometer", Value: 84210, At: time.Now().Add(-48 * time.Hour),
+		RecordedBy: "mika", Source: runtimedb.ReadingByPerson}); err != nil {
+		t.Fatalf("AppendMeterReading: %v", err)
+	}
+
+	items := h.needsYou(t, "mika")
+	want := map[string]bool{"f150-odometer": false, "well-filter": true}
+	seen := map[string]bool{}
+	for _, ref := range []string{"f150-oil", "well-cartridge"} {
+		it, ok := commitmentItem(items, ref)
+		if !ok {
+			t.Fatalf("%s is not on the card", ref)
+		}
+		if len(it.Needs) != 1 {
+			t.Fatalf("%s asks for %+v, want one number", ref, it.Needs)
+		}
+		n := it.Needs[0]
+		seen[n.Meter] = true
+		if n.Required != want[n.Meter] {
+			t.Errorf("%s: %s required = %v, want %v — the page blocks on exactly this, "+
+				"so a stale-but-usable number reported as required grounds an answer "+
+				"the engine would have taken", ref, n.Meter, n.Required, want[n.Meter])
+		}
+	}
+	if len(seen) != 2 {
+		t.Fatalf("saw %v, want both meters", seen)
+	}
+
+	// And the engine agrees with what the card just said: the one marked
+	// optional closes with nothing typed.
+	if got := h.memberJSON(t, http.MethodPost, "/api/v1/home/commitments/f150-oil/done", "mika",
+		nil); got != http.StatusCreated {
+		t.Errorf("status = %d, want 201: the card called this number optional", got)
+	}
+}
+
+// A note is the household's own words about what they did, and until
+// now nothing they could reach could write one.
+//
+// Migration 0050 added the column and the engine filled it on a
+// harvested completion. A member tapping Done had no way to say "used
+// the cheap filter" — the record existed and the people whose record it
+// is could not add to it.
+func TestTheWordsAMemberPutsWithAnAnswerAreKept(t *testing.T) {
+	h := commitmentHarness(t)
+	h.declareCommitment(t, "filter", resource.CommitmentSpec{
+		Description: "Furnace filter", Rollover: resource.RolloverFromCompletion,
+		Anchor: time.Now().AddDate(-1, 0, 0).Format("2006-01-02"),
+		Due:    []resource.CommitmentDue{{Meter: resource.MeterClock, Every: "3mo", Lead: "14d"}},
+	}, "household/mika")
+
+	if got := h.memberJSON(t, http.MethodPost, "/api/v1/home/commitments/filter/done", "mika",
+		map[string]any{"note": "used the cheap one, swap next time"}); got != http.StatusCreated {
+		t.Fatalf("status = %d, want 201", got)
+	}
+	done, err := h.s.DB.ListCommitmentCompletions("filter")
+	if err != nil {
+		t.Fatalf("ListCommitmentCompletions: %v", err)
+	}
+	if len(done) != 1 || done[0].Note != "used the cheap one, swap next time" {
+		t.Errorf("completion = %+v, want the member's own sentence kept with it", done)
+	}
+}

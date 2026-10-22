@@ -1,0 +1,37 @@
+name: e2e
+
+# Manually triggered: boots a real VM with the local QEMU provider
+# (ADR-W002 — hosted CI never reaches Proxmox).
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke-local:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+      - name: Install QEMU
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils
+      - name: Enable KVM access
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Fetch Ubuntu 24.04 cloud image
+        run: curl -fsSL -o /tmp/noble.img https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img
+      - name: Boot smoke test
+        working-directory: testing/e2e
+        env:
+          WILDSTONE_E2E_PROVIDER: local
+          WILDSTONE_E2E_IMAGE: /tmp/noble.img
+        run: go test -v -run TestSmoke -timeout 35m ./...

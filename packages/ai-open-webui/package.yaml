@@ -1,0 +1,117 @@
+# AI chat capability, profile "open-webui": a ChatGPT-style page for the
+# household, talking to models that run at home (ai-ollama) — so what
+# the family asks stays in the house. Install ai-ollama first; the
+# default ollama_url names it by container-name DNS.
+#
+# SINGLE SIGN-ON. Open WebUI supports OpenID Connect natively, so the
+# Route is app_oidc with an OidcClient registration: household accounts
+# sign in with the "Continue with Authelia" button. The FIRST account
+# to sign up is the admin, whichever path it arrives by. New OIDC
+# sign-ins are auto-created (ENABLE_OAUTH_SIGNUP) and merged onto an
+# existing account with the same email, so nobody ends up with two.
+#
+# WEBUI_SECRET_KEY signs sessions; generated on the node, and its loss
+# only signs everyone out. Chats and settings live in the data volume,
+# backed up weekly.
+#
+# Image digest is REAL, resolved 2026-09-07 via the OCI registry API:
+#   ghcr.io/open-webui/open-webui:main -> sha256:1a6399d2...b924
+apiVersion: wildstone.dev/v1
+kind: Package
+metadata:
+  name: ai-open-webui
+  version: 1.0.2
+  capability: ai-chat
+  profile: open-webui
+requires:
+  - { trait: identity, mode: oidc }
+  - { trait: ingress, mode: public }
+params:
+  - { name: public_domain, required: true, description: "The domain your services are named under, e.g. home.example.com. Under a tailnet this is a label rather than an address you type.", source: domain }
+  - { name: chat_subdomain, default: chat, description: "The name this service appears under, e.g. chat." }
+  - { name: node, required: true, description: "Which machine to install this on.", source: node }
+  - { name: ollama_url, default: "http://ollama:11434", description: "Where the models run. The default is the ai-ollama package on the same machine." }
+policies:
+  classifications: [family_public]
+  dataSensitivity: medium
+templates:
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: open-webui-secret-key, node: "{{ .Params.node }}" }
+    spec: { name: open-webui-secret-key }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: restic-ai-chat, node: "{{ .Params.node }}" }
+    spec: { name: restic-ai-chat }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: open-webui-data, node: "{{ .Params.node }}" }
+    spec: { name: open-webui-data }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: ai-chat-backup-repo, node: "{{ .Params.node }}" }
+    spec: { name: ai-chat-backup-repo }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: open-webui, node: "{{ .Params.node }}" }
+    spec:
+      image: "ghcr.io/open-webui/open-webui@sha256:1a6399d237dc392a2313e0ca826020b3fd5d22536357840eb63393d18dc8b924"
+      env:
+        OLLAMA_BASE_URL: "{{ .Params.ollama_url }}"
+        WEBUI_URL: '{{ origin (printf "%s.%s" .Params.chat_subdomain .Params.public_domain) }}'
+        WEBUI_SECRET_KEY: "secret/open-webui-secret-key"
+        ENABLE_SIGNUP: "false"
+        ENABLE_OAUTH_SIGNUP: "true"
+        OAUTH_MERGE_ACCOUNTS_BY_EMAIL: "true"
+        OAUTH_PROVIDER_NAME: Authelia
+        OAUTH_CLIENT_ID: open-webui
+        OAUTH_CLIENT_SECRET: "{{ .Resolved.OidcSecretRef }}"
+        OPENID_PROVIDER_URL: "{{ .Resolved.IssuerURL }}/.well-known/openid-configuration"
+        OAUTH_SCOPES: "openid email profile"
+      mounts:
+        - { source: open-webui-data, target: /app/backend/data }
+      restart: unless-stopped
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Route
+    metadata: { name: chat, node: "{{ .Params.node }}" }
+    spec:
+      host: "{{ .Params.chat_subdomain }}.{{ .Params.public_domain }}"
+      upstream: "container/open-webui:8080"
+      auth: app_oidc
+      classification: family_public
+  # The OidcClient lives on THIS package's node, not on a separate
+  # identity node: the engine synthesises the client secret on the
+  # OidcClient's node, the container reads the same reference on its
+  # own node, and secrets are node-local — a split would leave the app
+  # unable to materialise a secret that exists one machine over. Keystone
+  # merges every node's OidcClients into the provider's clients file
+  # regardless of where they are declared.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: OidcClient
+    metadata: { name: open-webui, node: "{{ .Params.node }}" }
+    spec:
+      clientId: open-webui
+      clientName: Open WebUI
+      redirectUris:
+        - "https://{{ .Params.chat_subdomain }}.{{ .Params.public_domain }}/oauth/oidc/callback"
+      scopes: [openid, profile, email]
+      authPolicy: two_factor
+      secretRef: "{{ .Resolved.OidcSecretRef }}"
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: BackupPlan
+    metadata: { name: ai-chat, node: "{{ .Params.node }}" }
+    spec:
+      volumes: [open-webui-data]
+      repository: ai-chat-backup-repo
+      passwordSecret: secret/restic-ai-chat
+      schedule: weekly
+      class: important
+      retention: { keepWeekly: 4 }

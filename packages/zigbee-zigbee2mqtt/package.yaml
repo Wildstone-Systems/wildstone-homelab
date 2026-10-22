@@ -1,0 +1,151 @@
+# Zigbee capability, profile "zigbee2mqtt": bridges Zigbee bulbs,
+# sensors and switches onto MQTT, where Home Assistant picks them up
+# automatically.
+#
+# THE BROKER. Requires mqtt:broker (mqtt-mosquitto) and takes its
+# address and credential from it: MqttURL is the one private address
+# the broker was bound to, never the container name "mosquitto", which
+# a host-networked Home Assistant cannot resolve either. The username is
+# this capability's name ("zigbee") and the password is the broker's
+# secret/mqtt-zigbee, handed over by reference in env — the agent
+# substitutes it at container start, so no literal password is written
+# here, in a plan, or in Zigbee2MQTT's own configuration.yaml.
+#
+# SAME MACHINE AS THE BROKER. That password is a node secret on the
+# broker's machine, and node secrets never leave their node, so this
+# package must be installed on the machine mqtt-mosquitto is on. Put
+# anywhere else it is refused at expansion, naming both machines,
+# rather than installed to fail authentication on every connect.
+#
+# UPGRADING FROM 1.x. The free-form mqtt_server param is gone (its
+# default pointed at the container name). Nothing Zigbee2MQTT keeps
+# moves: the zigbee2mqtt-data volume at /app/data (network key, every
+# pairing), usb_device, coordinator_url and coordinator_adapter keep
+# their meaning, and only the MQTT variables change. From 2.0.1 a stick
+# reaches Zigbee2MQTT as /dev/zigbee rather than its host path; the
+# network lives in the volume and on the stick, not in the port name.
+#
+# THE COORDINATOR: a USB stick on this machine, or a coordinator on the
+# network. For a stick, set usb_device to its stable name under
+# /dev/serial/by-id/ (ls that directory with the stick plugged in);
+# the agent hands it to the container (protocol minor 12) and refuses
+# any path outside its device allowlist. Inside the container the stick
+# is always /dev/zigbee, and ZIGBEE2MQTT_CONFIG_SERIAL_PORT says so: a
+# real by-id name is a long mixed-case run the policy engine reads as
+# secret-shaped, so the host path in env would get every real install
+# refused (secret-values-forbidden). The device mapping carries it
+# instead, where it is a path, not a value. For a network coordinator —
+# an SLZB-06, a Tube's ZB, an ESPHome-flashed stick — set
+# coordinator_url to tcp://<address>:<port> and leave usb_device empty.
+# Either way, choose the adapter type to match the chip: "zstack" for
+# Texas Instruments (SLZB-06, Sonoff Dongle-P, most sticks), "ember"
+# for Silicon Labs (SLZB-06M, Sonoff Dongle-E), "deconz" for ConBee.
+#
+# CONFIGURATION IS ENVIRONMENT, NOT A FILE. Zigbee2MQTT owns its
+# configuration.yaml and writes paired devices into it, so a managed
+# file would lose the devices on the next tick. The ZIGBEE2MQTT_CONFIG_*
+# variables override just the values this package decides and leave
+# the rest to the app. The volume is backed up daily because it holds
+# the network key and every pairing — losing it means re-pairing
+# every device in the house.
+#
+# Image digest is REAL, resolved 2026-09-07 via the OCI registry API:
+#   koenkk/zigbee2mqtt:latest -> sha256:fef0de76...20f3
+apiVersion: wildstone.dev/v1
+kind: Package
+metadata:
+  name: zigbee-zigbee2mqtt
+  # 2.0.0: the broker is a requirement (mqtt:broker) with its own
+  # credential, and the mqtt_server param is gone.
+  # 2.0.1: a USB stick is /dev/zigbee inside the container, so a real
+  # by-id name no longer sits in env. Params and the volume are unchanged.
+  # 2.0.2: the backup is class critical (the network key is
+  # irreplaceable). Nothing that runs changes.
+  # 2.0.3: Z2M_ONBOARD_NO_SERVER, so a fresh install starts the stick
+  # instead of waiting on Zigbee2MQTT's onboarding page.
+  version: 2.0.3
+  capability: zigbee
+  profile: zigbee2mqtt
+requires:
+  - { trait: identity, mode: oidc }
+  - { trait: ingress, mode: private }
+  - { trait: mqtt, mode: broker }
+params:
+  - { name: admin_domain, required: true, description: "The domain your admin-only services are named under. Under a tailnet this is a label rather than an address you type.", source: domain }
+  - { name: node, required: true, description: "Which machine to install this on. It must be the machine the MQTT broker (mqtt-mosquitto) is on: the broker's password for Zigbee2MQTT is kept on that machine only.", source: node }
+  - { name: timezone, default: UTC, source: timezone, validate: iana_timezone, description: "Your timezone, e.g. Europe/London." }
+  - { name: usb_device, default: "", example: "/dev/serial/by-id/usb-ITead_Sonoff_Zigbee_3.0_USB_Dongle_Plus_0001-if00-port0", description: "A USB Zigbee stick plugged into this machine, by its name under /dev/serial/by-id/. Leave empty to use a network coordinator instead." }
+  - { name: coordinator_url, default: "tcp://192.168.1.60:6638", description: "Where a network Zigbee coordinator is, e.g. tcp://192.168.1.60:6638. Ignored when usb_device is set." }
+  - { name: coordinator_adapter, default: zstack, description: "The coordinator's chip family: zstack, ember, deconz, zigate or zboss." }
+policies:
+  classifications: [admin_tailscale]
+  dataSensitivity: medium
+templates:
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: restic-zigbee, node: "{{ .Params.node }}" }
+    spec: { name: restic-zigbee }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: zigbee2mqtt-data, node: "{{ .Params.node }}" }
+    spec: { name: zigbee2mqtt-data }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: zigbee-backup-repo, node: "{{ .Params.node }}" }
+    spec: { name: zigbee-backup-repo }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: zigbee2mqtt, node: "{{ .Params.node }}" }
+    spec:
+      image: "koenkk/zigbee2mqtt@sha256:fef0de769dcd04c27b3a6d277b61046eb96284bdd4198dcb1687c3a01b3020f3"
+      env:
+        TZ: "{{ .Params.timezone }}"
+        ZIGBEE2MQTT_CONFIG_MQTT_SERVER: "{{ .Resolved.MqttURL }}"
+        ZIGBEE2MQTT_CONFIG_MQTT_USER: "{{ .Resolved.MqttUsername }}"
+        ZIGBEE2MQTT_CONFIG_MQTT_PASSWORD: "{{ .Resolved.MqttPasswordSecretRef }}"
+        ZIGBEE2MQTT_CONFIG_SERIAL_PORT: "{{ if .Params.usb_device }}/dev/zigbee{{ else }}{{ .Params.coordinator_url }}{{ end }}"
+        ZIGBEE2MQTT_CONFIG_SERIAL_ADAPTER: "{{ .Params.coordinator_adapter }}"
+        ZIGBEE2MQTT_CONFIG_FRONTEND_ENABLED: "true"
+        ZIGBEE2MQTT_CONFIG_FRONTEND_PORT: "8080"
+        ZIGBEE2MQTT_CONFIG_HOMEASSISTANT_ENABLED: "true"
+        ZIGBEE2MQTT_CONFIG_ADVANCED_LOG_LEVEL: info
+        # Zigbee2MQTT 2.x serves an onboarding page instead of starting
+        # whenever data/configuration.yaml is missing, which on a fresh
+        # install it always is: this package configures through env, so
+        # nothing writes that file first. The page waits for a form
+        # submit, so the stick is never opened and MQTT never connected.
+        # Everything it would ask is already decided above.
+        Z2M_ONBOARD_NO_SERVER: "1"
+      mounts:
+        - { source: zigbee2mqtt-data, target: /app/data }
+      devices: {{ with .Params.usb_device }}[{ source: "{{ . }}", target: /dev/zigbee }]{{ else }}[]{{ end }}
+      restart: unless-stopped
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Route
+    metadata: { name: zigbee, node: "{{ .Params.node }}" }
+    spec:
+      host: "zigbee.{{ .Params.admin_domain }}"
+      upstream: "container/zigbee2mqtt:8080"
+      auth: authelia_oidc
+      classification: admin_tailscale
+  # The data volume is the Zigbee network's identity: the network key,
+  # PAN ids and channel (configuration.yaml), every pairing
+  # (database.db) and the coordinator's own backup
+  # (coordinator_backup.json). Losing it means re-pairing every device,
+  # so it is critical.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: BackupPlan
+    metadata: { name: zigbee, node: "{{ .Params.node }}" }
+    spec:
+      volumes: [zigbee2mqtt-data]
+      repository: zigbee-backup-repo
+      passwordSecret: secret/restic-zigbee
+      schedule: daily
+      class: critical
+      retention: { keepDaily: 7, keepWeekly: 4 }

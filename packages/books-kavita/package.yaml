@@ -1,0 +1,84 @@
+# Books capability, profile "kavita": a reader for e-books, comics and
+# manga straight from folders — no Calibre library needed — with
+# reading progress that follows you between devices. books-calibre-web
+# is the other profile of this capability; install one.
+#
+# THE LIBRARY is a read-only host-path mount under the managed prefix;
+# Kavita never writes to it. Add a library on first visit and point it
+# at /books. Accounts, progress, bookmarks and cover cache live in the
+# config volume, backed up weekly.
+#
+# THE ROUTE. Its own login (the first account created is the admin),
+# plus OPDS for reading apps, so the proxy passes through (auth: none)
+# on the family_private class — the ntfy posture. Kavita offers OIDC
+# from its own settings page.
+#
+# Image digest is REAL, resolved 2026-09-07 via the OCI registry API:
+#   ghcr.io/kareadita/kavita:latest -> sha256:31181a32...421a
+apiVersion: wildstone.dev/v1
+kind: Package
+metadata:
+  name: books-kavita
+  version: 1.0.3
+  capability: books
+  profile: kavita
+requires:
+  - { trait: ingress, mode: private }
+  - { trait: storage, class: bulk }
+params:
+  - { name: public_domain, required: true, description: "The domain your services are named under, e.g. home.example.com. Under a tailnet this is a label rather than an address you type.", source: domain }
+  - { name: books_subdomain, default: kavita, description: "The name this service appears under, e.g. kavita." }
+  - { name: node, required: true, description: "Which machine to install this on.", source: node }
+  - { name: books_path, default: /srv/wildstone/media/books, description: "Folder on this machine holding your books and comics.", source: directory }
+  - { name: timezone, default: UTC, source: timezone, validate: iana_timezone, description: "Your timezone, e.g. Europe/London." }
+policies:
+  classifications: [family_private]
+  dataSensitivity: low
+templates:
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: restic-books, node: "{{ .Params.node }}" }
+    spec: { name: restic-books }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: kavita-config, node: "{{ .Params.node }}" }
+    spec: { name: kavita-config }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: books-backup-repo, node: "{{ .Params.node }}" }
+    spec: { name: books-backup-repo }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: kavita, node: "{{ .Params.node }}" }
+    spec:
+      image: "ghcr.io/kareadita/kavita@sha256:31181a32f0dda73cae68721867028a7253d57881b58bea5754cd9e578e75421a"
+      env:
+        TZ: "{{ .Params.timezone }}"
+      mounts:
+        - { source: kavita-config, target: /kavita/config }
+        - { source: "{{ .Params.books_path }}", target: /books, readOnly: true }
+      restart: unless-stopped
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Route
+    metadata: { name: kavita, node: "{{ .Params.node }}" }
+    spec:
+      host: "{{ .Params.books_subdomain }}.{{ .Params.public_domain }}"
+      upstream: "container/kavita:5000"
+      auth: none
+      classification: family_private
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: BackupPlan
+    metadata: { name: books-kavita, node: "{{ .Params.node }}" }
+    spec:
+      volumes: [kavita-config]
+      repository: books-backup-repo
+      passwordSecret: secret/restic-books
+      schedule: weekly
+      class: important
+      retention: { keepWeekly: 4 }

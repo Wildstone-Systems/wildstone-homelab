@@ -1,0 +1,127 @@
+# Matrix client capability, profile "element": Element Web, the browser
+# client for the household's own Matrix homeserver.
+#
+# THIS IS NOT THE HOMESERVER. packages/matrix-synapse stores and serves the
+# rooms; this package is only the page a person opens to use them. It holds
+# no data of its own: messages, accounts and encryption-key backups live in
+# Synapse, and the per-device session and keys live in the person's browser.
+# There is nothing here to back up.
+#
+# LOCKED TO THIS HOUSEHOLD. config.json fixes the homeserver to Synapse's
+# Route and hides the server picker, so the page cannot be pointed at
+# another server. server_name must match matrix-synapse's: both default to
+# matrix.<public_domain>, and a household that set a custom one on Synapse
+# sets the same value here.
+#
+# SIGN-IN. Synapse accepts only household SSO, so Element sends a signed-out
+# visitor straight to it (sso_redirect_options.immediate) instead of showing
+# a login form whose password field could never work. The Route is also
+# behind the proxy's forward-auth: every request Element makes to its own
+# origin is a browser loading static files, and its API traffic goes to the
+# matrix Route, which passes through. That is the "only to a browser" test
+# packages/README.md holds authelia_oidc to.
+#
+# NOTHING LEAVES THE HOUSE BY DEFAULT. Element's built-in defaults point
+# conference calls at meet.element.io and Element Call's hosted service,
+# offer Scalar as an integration manager, and allow widgets from anywhere.
+# Each of those would carry a private, non-federated household's traffic to
+# a third party, so this config turns them off. Location sharing needs a
+# map tile service and identity lookups need an identity server; neither is
+# configured, so their menus are hidden rather than left to fail.
+#
+# THE ADDRESS MUST NOT MOVE. Element keeps each device's session and
+# end-to-end encryption keys in the browser's storage for this origin. The
+# "element" label is pinned in keystone/ingressorigin, and it is not a
+# parameter for the same reason matrix-synapse's "matrix" label is not: a
+# custom label would lose the pin, and a moved port signs everyone out and
+# strands any keys they had not backed up.
+#
+# Image digest is REAL, resolved 2026-09-28 via the OCI registry API:
+#   vectorim/element-web:v1.12.29 (also :latest) -> sha256:da32e88c...56d8
+# The image runs nginx as uid 101 and listens on $ELEMENT_WEB_PORT, whose
+# default is 80. It is set to 8080 below so an unprivileged process never
+# depends on the runtime allowing it a low port.
+apiVersion: wildstone.dev/v1
+kind: Package
+metadata:
+  name: matrix-element
+  version: 1.0.0
+  capability: matrix-client
+  profile: element
+requires:
+  - { trait: identity, mode: oidc }
+  - { trait: ingress, mode: private }
+params:
+  - { name: public_domain, required: true, description: "The domain your services are named under, e.g. home.example.com. Under a tailnet this is a label rather than an address you type.", source: domain }
+  - { name: server_name, default: "", description: "The Matrix homeserver's server name. Leave empty unless you set one on matrix-synapse; it must match that value." }
+  - { name: node, required: true, description: "Which machine to install this on.", source: node }
+accessGroups: [family]
+policies:
+  classifications: [family_private]
+  dataSensitivity: low
+templates:
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: ConfigFile
+    metadata: { name: element-config, node: "{{ .Params.node }}" }
+    spec:
+      filename: config.json
+      content: |
+        {
+          "default_server_config": {
+            "m.homeserver": {
+              "base_url": "{{ origin (printf "matrix.%s" .Params.public_domain) }}",
+              "server_name": "{{ or .Params.server_name (printf "matrix.%s" .Params.public_domain) }}"
+            }
+          },
+          "disable_custom_urls": true,
+          "disable_guests": true,
+          "disable_3pid_login": true,
+          "sso_redirect_options": { "immediate": true },
+          "permalink_prefix": "{{ origin (printf "element.%s" .Params.public_domain) }}",
+          "room_directory": {
+            "servers": ["{{ or .Params.server_name (printf "matrix.%s" .Params.public_domain) }}"]
+          },
+          "integrations_ui_url": null,
+          "integrations_rest_url": null,
+          "integrations_widgets_urls": null,
+          "element_call": { "disable": true },
+          "setting_defaults": {
+            "UIFeature.voip": false,
+            "UIFeature.widgets": false,
+            "UIFeature.feedback": false,
+            "UIFeature.registration": false,
+            "UIFeature.passwordReset": false,
+            "UIFeature.deactivate": false,
+            "UIFeature.thirdPartyId": false,
+            "UIFeature.identityServer": false,
+            "UIFeature.locationSharing": false,
+            "UIFeature.shareSocial": false
+          }
+        }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: element-web, node: "{{ .Params.node }}" }
+    spec:
+      image: "vectorim/element-web@sha256:da32e88c8dafe2c3d4f40ca5e90ab2f43a7c9ac35f0977ec7662dcb4fdcd56d8"
+      env:
+        ELEMENT_WEB_PORT: "8080"
+      mounts:
+        # A single file over the one the image ships, as the dashboard does:
+        # the rest of /app is the application itself. A change to this file
+        # replaces the container (configdigest.go), so nginx never serves a
+        # stale copy.
+        - { source: /etc/wildstone/matrix-client/config.json, target: /app/config.json, readOnly: true }
+      restart: unless-stopped
+      noNewPrivileges: true
+      resources: { memory: 128m, cpus: "0.5", pidsLimit: 128 }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Route
+    metadata: { name: element, node: "{{ .Params.node }}" }
+    spec:
+      host: "element.{{ .Params.public_domain }}"
+      upstream: "container/element-web:8080"
+      auth: authelia_oidc
+      classification: family_private

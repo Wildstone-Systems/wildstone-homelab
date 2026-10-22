@@ -1,0 +1,198 @@
+package butler
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/agentruntime"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/butler/provider"
+)
+
+// defaultMaxIterations bounds the agent loop's tool-call round trips
+// (ADR-W006 A5.3/B3: "no infinite tool loops").
+const defaultMaxIterations = 8
+
+// ToolCallRecord, Audit and Transcript moved to keystone/agentruntime in
+// ADR-W039 Phase 2b (#337), the small leaf package shared with
+// keystone/agentruntime/legacy's Runner, so the two sides of the split
+// agree on one shape for a turn's audit record without native importing
+// this package. These aliases keep every existing reference — in this
+// package, keystone/agentgateway, keystone/butlerlive and
+// keystone/api — compiling unchanged.
+type (
+	ToolCallRecord = agentruntime.ToolCallRecord
+	Audit          = agentruntime.Audit
+	Transcript     = agentruntime.Transcript
+)
+
+// Toolset is the surface a Session drives (ADR-W026 A1). Two implement
+// it, and which one a Session holds is the whole difference between the
+// operator's Butler and the household's:
+//
+//   - *ToolGateway — the operator surface: Statefile reads, diagnosis,
+//     and propose_change.
+//   - *HouseholdGateway — the family surface: household timeline reads
+//     and domestic-tier actions, with no Statefile access at all.
+//
+// The interface carries the system prompt as well as the tools, so a
+// session cannot be opened with one surface's tools and the other's
+// prompt — describing capabilities a surface does not have is exactly
+// the invitation this package spends its comments avoiding.
+type Toolset interface {
+	// OfferedSpecs is the tool set advertised to the model, narrowed to
+	// reads when the session is read-only.
+	OfferedSpecs(readOnly bool) []provider.Tool
+	// Execute runs one tool, enforcing the read-only constraint at the
+	// dispatch boundary rather than only in the offered set.
+	Execute(ctx context.Context, name string, input map[string]any, readOnly bool) (ToolOutcome, error)
+	// SystemPrompt is this surface's instruction hierarchy.
+	SystemPrompt() string
+	// Permits reports whether a tool would be allowed to run RIGHT NOW,
+	// without running it, and why not when it would not.
+	//
+	// It exists for the one path that returns a tool's result without
+	// dispatching it: a verified result served from the ledger on a
+	// resume. ADR-W030 A2.1 is "check current membership and link
+	// generation at every retrieval AND dispatch", and a cached
+	// retrieval is the retrieval half — the authority behind that
+	// result can have been withdrawn since it was recorded, and handing
+	// it back would be the withdrawal having no effect on the one path
+	// that never calls Execute. Found by a review bot on #287.
+	//
+	// It asks the same question dispatch asks, through the same call,
+	// so the two cannot answer differently.
+	Permits(name string, readOnly bool) (bool, string)
+	// Capabilities is this surface's effective inventory for a session
+	// with the given constraint (ADR-W030 P2). It is on the interface
+	// rather than beside it so a surface cannot ship tools it cannot
+	// describe, and so a work trace can record which manifest a run was
+	// offered without knowing which gateway answered.
+	Capabilities(readOnly bool) CapabilityManifest
+}
+
+// Session drives a Provider through one of the Butler's tool gateways
+// (ADR-W006 A5): the agent loop. Its only mutation surface is whatever
+// the Toolset exposes — propose_change on the operator surface, which
+// itself never applies anything (see doc.go); a domestic-tier action on
+// the family surface, which cannot touch the Statefile. Session holds no
+// apply capability of its own.
+type Session struct {
+	Gateway Toolset
+	// System overrides SystemPrompt if non-empty.
+	System string
+	// MaxIterations bounds tool-call round trips. <= 0 uses
+	// defaultMaxIterations.
+	MaxIterations int
+	// ReadOnly restricts the tool set offered to the model to read tools
+	// only, omitting propose_change (ADR-W006 A4: QAOnly mode for a model
+	// that failed the tool-reliability probe).
+	ReadOnly bool
+	// History is the conversation so far, replayed as context for a
+	// follow-up (ADR-W027). It carries the user and assistant TEXT of
+	// earlier turns and never their tool traffic.
+	//
+	// That is a deliberate omission, not an oversight. A tool result is
+	// a reading taken at a moment — "jellyfin's health endpoint returns
+	// 500" — and replaying it hours later hands the model a stale fact
+	// with the authority of a fresh one. The earlier answer already
+	// summarises what those reads found, in the model's own words, and
+	// if the follow-up needs the current reading the model can take it
+	// again. Nothing here is trusted more than it was when it was said:
+	// the whole history passed through Dispatch's redaction before it
+	// was ever stored.
+	History []provider.Message
+}
+
+func (s *Session) maxIterations() int {
+	if s.MaxIterations > 0 {
+		return s.MaxIterations
+	}
+	return defaultMaxIterations
+}
+
+func (s *Session) systemPrompt() string {
+	if s.System != "" {
+		return s.System
+	}
+	return s.Gateway.SystemPrompt()
+}
+
+func (s *Session) toolSpecs() []provider.Tool {
+	return s.Gateway.OfferedSpecs(s.ReadOnly)
+}
+
+// dispatch routes a model-requested tool call through the gateway, applying
+// the session's read-only constraint at the execution boundary. A ReadOnly
+// session refuses mutating tools even if the model names one that was not in
+// its offered set — the enforcement the spec set (offered tools) only
+// advertises.
+func (s *Session) dispatch(ctx context.Context, name string, input map[string]any) (ToolOutcome, error) {
+	return s.Gateway.Execute(ctx, name, input, s.ReadOnly)
+}
+
+// Run drives p through the agent loop for one userMessage: send the
+// system prompt + tool set + History + the new message, execute any tool
+// calls the model requests through the gateway (which redacts, envelopes,
+// and bounds every result — ToolGateway.Dispatch), feed results back, and
+// repeat until the model stops requesting tools or MaxIterations is hit.
+//
+// MaxIterations bounds THIS turn's tool calls, not the conversation's:
+// a follow-up gets its own budget, because the ceiling exists to stop a
+// runaway loop and a second question is not one.
+func (s *Session) Run(ctx context.Context, p provider.Provider, userMessage string) (*Transcript, error) {
+	tr := &Transcript{Audit: Audit{Provider: p.Name()}}
+	messages := append(append([]provider.Message{}, s.History...), provider.Message{Role: "user", Text: userMessage})
+	tools := s.toolSpecs()
+
+	for i := 0; i < s.maxIterations(); i++ {
+		resp, err := p.Chat(ctx, provider.ChatRequest{
+			System:   s.systemPrompt(),
+			Messages: provider.SafeMessages(messages),
+			Tools:    tools,
+		})
+		if err != nil {
+			return tr, fmt.Errorf("butler session: chat: %w", err)
+		}
+
+		if len(resp.ToolCalls) == 0 {
+			tr.FinalText = resp.Text
+			return tr, nil
+		}
+
+		messages = append(messages, provider.Message{
+			Role:      "assistant",
+			Text:      resp.Text,
+			ToolCalls: resp.ToolCalls,
+		})
+
+		results := make([]provider.ToolResult, 0, len(resp.ToolCalls))
+		for _, tc := range resp.ToolCalls {
+			rec := ToolCallRecord{Name: tc.Name, Input: tc.Input}
+			outcome, err := s.dispatch(ctx, tc.Name, tc.Input)
+			content := outcome.Content
+			if err != nil {
+				rec.Error = err.Error()
+				content = fmt.Sprintf("error: %v", err)
+			} else {
+				rec.Result = outcome.Content
+				rec.Plan = outcome.Plan
+				rec.ResourceYAML = outcome.ResourceYAML
+				rec.Rejected = outcome.Rejected
+				if outcome.Failed {
+					rec.Error = outcome.Content
+				}
+				if outcome.Plan != nil {
+					tr.Audit.Plans = append(tr.Audit.Plans, outcome.Plan)
+				}
+			}
+			tr.Audit.Calls = append(tr.Audit.Calls, rec)
+			results = append(results, provider.ToolResult{CallID: tc.ID, Content: content})
+		}
+
+		messages = append(messages, provider.Message{Role: "tool", ToolResults: results})
+	}
+
+	tr.CappedIterations = true
+	tr.FinalText = "(reached the maximum number of tool-call iterations without a final answer)"
+	return tr, nil
+}

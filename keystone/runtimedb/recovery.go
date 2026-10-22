@@ -1,0 +1,175 @@
+package runtimedb
+
+import (
+	"database/sql"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"time"
+)
+
+// RecoveryNodeSecretsImportedEvent is the durable handoff between the node
+// recovery endpoint and the quarantined reconcile loop.
+const RecoveryNodeSecretsImportedEvent = "recovery.node-secrets-imported"
+
+// RecoveryNodeSecretsImported reports whether this restored control plane has
+// recorded a successful sealed-secret import for node. RestoreBackup removes
+// historical markers, so only imports performed after the current restore can
+// satisfy the gate.
+func (db *DB) RecoveryNodeSecretsImported(node string) (bool, error) {
+	var imported bool
+	err := db.sql.QueryRow(`SELECT EXISTS(
+		SELECT 1 FROM events WHERE type = ? AND node = ?
+	)`, RecoveryNodeSecretsImportedEvent, node).Scan(&imported)
+	if err != nil {
+		return false, fmt.Errorf("runtimedb: checking recovery import for node %s: %w", node, err)
+	}
+	return imported, nil
+}
+
+// BackupTo creates a transactionally consistent SQLite snapshot while the
+// live WAL-mode database remains online. VACUUM INTO is SQLite's online
+// backup mechanism; unlike copying keystone.db, it includes committed WAL
+// content and cannot produce a torn database.
+func (db *DB) BackupTo(destination string) error {
+	if destination == "" || destination == ":memory:" {
+		return fmt.Errorf("runtimedb: backup destination must be a file")
+	}
+	absDestination, err := filepath.Abs(destination)
+	if err != nil {
+		return fmt.Errorf("runtimedb: resolving backup destination: %w", err)
+	}
+	if _, err := os.Stat(absDestination); err == nil {
+		return fmt.Errorf("runtimedb: backup destination already exists")
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("runtimedb: checking backup destination: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(absDestination), 0o700); err != nil {
+		return fmt.Errorf("runtimedb: creating backup directory: %w", err)
+	}
+	if _, err := db.sql.Exec(`VACUUM INTO ?`, absDestination); err != nil {
+		return fmt.Errorf("runtimedb: online backup: %w", err)
+	}
+	if err := scrubBackupCopy(absDestination); err != nil {
+		_ = os.Remove(absDestination)
+		return err
+	}
+	return nil
+}
+
+// scrubBackupCopy removes from a snapshot what must never be in a backup
+// (epic #326 S05/S08): a mail read's answer still in the work queue
+// (it carries normalized message text, and the collector or the sweep
+// may not have scrubbed it yet) and every sealed mail excerpt (its key
+// is in no backup, and a restore discards them anyway). The copy is then
+// vacuumed again, so the removed rows do not survive as free pages.
+//
+// Credentials need nothing here: no column can hold a Personal
+// credential value (migration 0098), and the node bundles leave out
+// every pc.<connection> name.
+func scrubBackupCopy(path string) error {
+	copyDB, err := sql.Open("sqlite", fmt.Sprintf("file:%s?_pragma=busy_timeout(5000)", path))
+	if err != nil {
+		return fmt.Errorf("runtimedb: opening the backup copy to scrub it: %w", err)
+	}
+	defer copyDB.Close()
+	for _, q := range []struct {
+		query string
+		args  []any
+	}{
+		{`UPDATE integration_work SET result_json = '{}' WHERE capability IN (?, ?, ?) AND result_json <> '{}'`, mailCapabilities},
+		{`DELETE FROM mail_candidate_excerpts`, nil},
+		{`VACUUM`, nil},
+	} {
+		if _, err := copyDB.Exec(q.query, q.args...); err != nil {
+			return fmt.Errorf("runtimedb: scrubbing mail content from the backup copy: %w", err)
+		}
+	}
+	return nil
+}
+
+// RestoreBackup installs a consistent, already-offline snapshot into a fresh
+// path and enters restore quarantine before returning it to the caller. The
+// live database was captured through BackupTo; copying this immutable artifact
+// is safe and preserves the source recovery set byte-for-byte.
+func RestoreBackup(source, destination, reason string, snapshotAt time.Time) (*DB, error) {
+	if reason == "" {
+		return nil, fmt.Errorf("runtimedb: restore reason is required")
+	}
+	if _, err := os.Stat(destination); err == nil {
+		return nil, fmt.Errorf("runtimedb: restore destination already exists")
+	} else if !os.IsNotExist(err) {
+		return nil, fmt.Errorf("runtimedb: checking restore destination: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(destination), 0o700); err != nil {
+		return nil, fmt.Errorf("runtimedb: creating restore directory: %w", err)
+	}
+	in, err := os.Open(source)
+	if err != nil {
+		return nil, fmt.Errorf("runtimedb: opening recovery snapshot: %w", err)
+	}
+	defer in.Close()
+	out, err := os.OpenFile(destination, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("runtimedb: creating restored database: %w", err)
+	}
+	_, copyErr := io.Copy(out, in)
+	if copyErr == nil {
+		copyErr = out.Sync()
+	}
+	closeErr := out.Close()
+	if copyErr != nil || closeErr != nil {
+		_ = os.Remove(destination)
+		if copyErr != nil {
+			return nil, fmt.Errorf("runtimedb: copying recovery snapshot: %w", copyErr)
+		}
+		return nil, fmt.Errorf("runtimedb: closing restored database: %w", closeErr)
+	}
+	restored, err := Open(destination)
+	if err != nil {
+		_ = os.Remove(destination)
+		return nil, err
+	}
+	// Quarantine first, before anything else is touched: a restored copy
+	// that a crash left half-prepared must still hold every Butler-facing
+	// path, including scheduled mail reads and review delivery (epic #326
+	// S08). Nothing below revives access; it only removes.
+	if err := restored.EnterRestoreQuarantine(reason, snapshotAt); err != nil {
+		restored.Close()
+		_ = os.Remove(destination)
+		return nil, err
+	}
+	// Observed rows describe the machine that was lost, not durable household
+	// intent. Keeping them would make the fresh reconciler believe volumes,
+	// containers and external backup routes still exist on the replacement
+	// host, bypassing both reconstruction and the required drift approval.
+	if _, err := restored.sql.Exec(`DELETE FROM observed`); err != nil {
+		restored.Close()
+		_ = os.Remove(destination)
+		return nil, fmt.Errorf("runtimedb: clearing stale observations during restore: %w", err)
+	}
+	if _, err := restored.sql.Exec(`DELETE FROM events WHERE type = ?`, RecoveryNodeSecretsImportedEvent); err != nil {
+		restored.Close()
+		_ = os.Remove(destination)
+		return nil, fmt.Errorf("runtimedb: clearing stale recovery imports during restore: %w", err)
+	}
+	// A scheduled subscription run recorded as in flight belonged to the
+	// lost machine and can never report (epic #326 S03). Abandoning it
+	// keeps its checkpoint where it was, so the first run after release
+	// re-reads that work rather than skipping it.
+	if err := abandonRunsOnRestore(restored); err != nil {
+		restored.Close()
+		_ = os.Remove(destination)
+		return nil, fmt.Errorf("runtimedb: abandoning in-flight subscription runs during restore: %w", err)
+	}
+	// A mail candidate's excerpt and a mail read's result never come back
+	// from a snapshot (epic #326 S05): the excerpt key is not in the
+	// recovery set, and the read results carry message text.
+	if err := purgeMailOnRestore(restored); err != nil {
+		restored.Close()
+		_ = os.Remove(destination)
+		return nil, fmt.Errorf("runtimedb: purging mail excerpts during restore: %w", err)
+	}
+	return restored, nil
+}

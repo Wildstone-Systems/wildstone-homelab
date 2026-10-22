@@ -1,0 +1,101 @@
+# Dashboard capability: Homepage, family-facing behind Authelia
+# forward-auth — the reference deployment's family-homepage posture
+# (classification family_public, authelia_forward_auth). Replaces the
+# hand-maintained homepage instances the scope doc lists as an MVP pain
+# point (ADR-W011 A2).
+#
+# Image digest is REAL, resolved 2026-08-25 via the OCI registry API:
+#   ghcr.io/gethomepage/homepage:latest -> sha256:da9dca9e...363d60
+apiVersion: wildstone.dev/v1
+kind: Package
+metadata:
+  name: dashboard
+  version: 1.0.2
+  capability: dashboard
+  profile: homepage
+  exclusive: true
+params:
+  - { name: public_domain, required: true, description: "The domain your services are named under, e.g. home.example.com. Under a tailnet this is a label rather than an address you type.", source: domain }
+  - { name: node, required: true, description: "Which machine to install this on.", source: node }
+  # What the family calls this place. Appears as the page heading and
+  # nowhere else; Homepage never reads it (see WILDSTONE_DASHBOARD_TITLE
+  # below). Optional, because a household that does not care gets a
+  # perfectly working dashboard titled "Household".
+  - { name: household_name, default: "Household", description: "What to call this household on the dashboard, e.g. The Reed Family." }
+templates:
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: homepage-config, node: "{{ .Params.node }}" }
+    spec: { name: homepage-config }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: homepage, node: "{{ .Params.node }}" }
+    spec:
+      image: "ghcr.io/gethomepage/homepage@sha256:da9dca9ec258c628146bed1445da0853f2b88f0b10bafd97c091de807c363d60"
+      env:
+        # Homepage refuses any request whose Host it was not told about,
+        # so this must name the host a BROWSER will send — not the one
+        # the Route declares. Under the tailnet posture those differ: the
+        # Route is served at the node's certified name (ADR-W019 A10),
+        # and the dashboard holds 443, so a browser omits the port and
+        # sends the bare tailnet name.
+        #
+        # Both are listed rather than switched between. A deployment can
+        # be reached at its own hostname and over the tailnet at
+        # different times, and a list costs nothing; picking one would
+        # make the other a 400 with no clue as to why.
+        HOMEPAGE_ALLOWED_HOSTS: "home.{{ .Params.public_domain }}{{ if .Resolved.TailnetHost }},{{ .Resolved.TailnetHost }}{{ end }}"
+        # NOT read by Homepage. A param is known only during template
+        # expansion; the renderers that write settings.yaml run later,
+        # against desired state — so the container spec is the one
+        # carrier this package has that survives the gap. Keystone reads
+        # it back out and writes it as the page title, which keeps the
+        # household's name declared once, here, next to the other
+        # dashboard params, instead of hard-coded in Go.
+        #
+        # A LITERAL BLOCK SCALAR, not a quoted one. This is the only
+        # param in the catalog that is deliberately free text a person
+        # writes, and a double-quoted scalar breaks on the first name
+        # containing a quote — `The "Reed" Family` rendered invalid YAML,
+        # so the resource failed to parse and the capability could not be
+        # enabled at all. A block scalar processes no escapes, so quotes,
+        # backslashes and colons are all just characters.
+        #
+        # Safe because mergeParams already refuses newlines, tabs and
+        # control characters in every param value (the structural
+        # injection vector), so this can only ever be one plain line.
+        WILDSTONE_DASHBOARD_TITLE: |-
+          {{ .Params.household_name }}
+      mounts:
+        - { source: homepage-config, target: /app/config }
+        # The service list Keystone renders from the Route set (F55,
+        # ADR-W021 A6), bind-mounted OVER the sample file Homepage seeds
+        # into its own config volume. A single file rather than the whole
+        # directory: Homepage writes its other config there on first run,
+        # and a read-only /app/config would stop it starting.
+        #
+        # Safe to mount a file that Docker would otherwise create as a
+        # directory, because managed prereq files are written before any
+        # plan step runs — so this exists before the container does.
+        - { source: /etc/wildstone/dashboard/services.yaml, target: /app/config/services.yaml, readOnly: true }
+        # The rest of Homepage's config, managed for the same reason and
+        # by the same mechanism (F87). settings.yaml carries the LAYOUT,
+        # whose group names have to match the service list's — two files
+        # that must agree, so one renderer derives both. bookmarks.yaml
+        # is deliberately empty: without it Homepage seeds its "My First
+        # Group" sample underneath the household's real services.
+        - { source: /etc/wildstone/dashboard/settings.yaml, target: /app/config/settings.yaml, readOnly: true }
+        - { source: /etc/wildstone/dashboard/widgets.yaml, target: /app/config/widgets.yaml, readOnly: true }
+        - { source: /etc/wildstone/dashboard/bookmarks.yaml, target: /app/config/bookmarks.yaml, readOnly: true }
+      restart: unless-stopped
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Route
+    metadata: { name: home, node: "{{ .Params.node }}" }
+    spec:
+      host: "home.{{ .Params.public_domain }}"
+      upstream: "container/homepage:3000"
+      auth: authelia_oidc
+      classification: family_public

@@ -1,0 +1,156 @@
+# Ingress capability, tailnet profile with TAILSCALE-ISSUED TLS: Caddy
+# serving every Route under this node's own MagicDNS name, with a
+# certificate a real CA issued and every device already trusts.
+#
+# Why this exists next to ingress-tailnet-public. That profile also gets
+# publicly trusted certificates, and gets them for real hostnames — which
+# is better. It also requires a domain in a Cloudflare zone and an API
+# token that can edit it. This profile requires neither, which makes it
+# the one a household can install on day one, before anybody has bought a
+# domain. The upgrade path is real: secure a domain, switch profiles, and
+# the hostnames come back.
+#
+# What it costs, said plainly: a tailnet certificate covers exactly ONE
+# name — this node's — with no wildcards and no subdomains. Four services
+# cannot have four hostnames under it. So they share the hostname and are
+# told apart by PORT, and the addresses a family sees have port numbers
+# in them. The dashboard holds 443 so the address people actually type
+# has none (ADR-W019 A10).
+#
+# Caddy needs no certificate configuration here at all: it fetches
+# *.ts.net certificates from a locally-running tailscaled automatically.
+# What it does need is the socket, which is why tailscaled runs on the
+# HOST and its socket is mounted in. That also means Tailscale is not
+# managed by this package — installing it is the installer's job.
+#
+# PREREQUISITE: tailscaled must expose its socket inside a managed prefix
+# (see the mount below). On a stock install it does not, and this package
+# will converge but serve no certificate.
+apiVersion: wildstone.dev/v1
+kind: Package
+metadata:
+  name: ingress-tailnet-ts
+  version: 1.1.3
+  capability: ingress
+  profile: caddy-tailnet-ts
+  exclusive: true
+provides:
+  - { trait: ingress, mode: private }
+params:
+  # This node's MagicDNS name, e.g. "wildstone.tailnet.ts.net" — exactly
+  # what `tailscale status --json | jq -r .Self.DNSName` prints, without
+  # the trailing dot. It is the only name the certificate covers, so it
+  # is the only name any Route on this node can be served under.
+  - { name: tailnet_name, required: true, description: "This machine’s full Tailscale name, e.g. box.tailnet.ts.net." }
+  - { name: node, required: true, description: "Which machine to install this on.", source: node }
+  # The node's tailnet address. Required and undefaulted for the reason
+  # caddy-tailnet gives (#41): a profile whose whole claim is that it is
+  # private must not be private only by accident.
+  - { name: listen_addr, required: true, example: "100.64.0.1", description: "The address the proxy listens on. Normally this machine’s tailnet address." }
+policies:
+  classifications: [admin_tailscale]
+templates:
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Ingress
+    metadata: { name: ingress, node: "{{ .Params.node }}" }
+    spec:
+      tls: tailscale
+      tailnetName: "{{ .Params.tailnet_name }}"
+      trustedProxies: [private_ranges]
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: caddy-tailnet-ts-data, node: "{{ .Params.node }}" }
+    spec: { name: caddy-tailnet-ts-data }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: caddy-tailnet-ts, node: "{{ .Params.node }}" }
+    spec:
+      image: "caddy@sha256:df7f1c2fb114453b951de51a98efc010db1655a92c2e86be6706714e2417a78d"
+      # Stock Caddy, not a custom build: fetching a *.ts.net certificate
+      # from tailscaled needs no module, only the socket below.
+      command: ["caddy", "run", "--config", "/etc/wildstone/Caddyfile", "--adapter", "caddyfile", "--watch"]
+      ports:
+        # The whole port block Keystone assigns from, published together.
+        # Publishing only some would leave a Route that was assigned a
+        # port genuinely unreachable, with nothing anywhere saying so —
+        # the config would render, converge, and report healthy.
+        #
+        # The list is keystone/ingressorigin's PortBlock, verbatim, and
+        # TestTailnetIngressPublishesTheWholePortBlock fails if the two
+        # ever disagree: 443, then every thousandth port from 7443 up.
+        - "{{ .Params.listen_addr }}:443:443"
+        - "{{ .Params.listen_addr }}:7443:7443"
+        - "{{ .Params.listen_addr }}:8443:8443"
+        - "{{ .Params.listen_addr }}:9443:9443"
+        - "{{ .Params.listen_addr }}:10443:10443"
+        - "{{ .Params.listen_addr }}:11443:11443"
+        - "{{ .Params.listen_addr }}:12443:12443"
+        - "{{ .Params.listen_addr }}:13443:13443"
+        - "{{ .Params.listen_addr }}:14443:14443"
+        - "{{ .Params.listen_addr }}:15443:15443"
+        - "{{ .Params.listen_addr }}:16443:16443"
+        - "{{ .Params.listen_addr }}:17443:17443"
+        - "{{ .Params.listen_addr }}:18443:18443"
+        - "{{ .Params.listen_addr }}:19443:19443"
+        - "{{ .Params.listen_addr }}:20443:20443"
+        - "{{ .Params.listen_addr }}:21443:21443"
+        - "{{ .Params.listen_addr }}:22443:22443"
+        - "{{ .Params.listen_addr }}:23443:23443"
+        - "{{ .Params.listen_addr }}:24443:24443"
+        - "{{ .Params.listen_addr }}:25443:25443"
+        - "{{ .Params.listen_addr }}:26443:26443"
+        - "{{ .Params.listen_addr }}:27443:27443"
+        - "{{ .Params.listen_addr }}:28443:28443"
+        - "{{ .Params.listen_addr }}:29443:29443"
+        - "{{ .Params.listen_addr }}:30443:30443"
+        - "{{ .Params.listen_addr }}:31443:31443"
+        - "{{ .Params.listen_addr }}:32443:32443"
+        - "{{ .Params.listen_addr }}:33443:33443"
+        - "{{ .Params.listen_addr }}:34443:34443"
+        - "{{ .Params.listen_addr }}:35443:35443"
+        - "{{ .Params.listen_addr }}:36443:36443"
+        - "{{ .Params.listen_addr }}:37443:37443"
+        - "{{ .Params.listen_addr }}:38443:38443"
+        - "{{ .Params.listen_addr }}:39443:39443"
+        - "{{ .Params.listen_addr }}:40443:40443"
+        - "{{ .Params.listen_addr }}:41443:41443"
+        - "{{ .Params.listen_addr }}:42443:42443"
+        - "{{ .Params.listen_addr }}:43443:43443"
+        - "{{ .Params.listen_addr }}:44443:44443"
+        - "{{ .Params.listen_addr }}:45443:45443"
+        - "{{ .Params.listen_addr }}:46443:46443"
+        - "{{ .Params.listen_addr }}:47443:47443"
+        - "{{ .Params.listen_addr }}:48443:48443"
+        - "{{ .Params.listen_addr }}:49443:49443"
+        - "{{ .Params.listen_addr }}:50443:50443"
+        - "{{ .Params.listen_addr }}:51443:51443"
+        - "{{ .Params.listen_addr }}:52443:52443"
+        - "{{ .Params.listen_addr }}:53443:53443"
+        - "{{ .Params.listen_addr }}:54443:54443"
+        - "{{ .Params.listen_addr }}:55443:55443"
+      mounts:
+        - { source: caddy-tailnet-ts-data, target: /data }
+        - { source: /etc/wildstone, target: /etc/wildstone, readOnly: true }
+        # tailscaled's local API, which is how Caddy asks for the node's
+        # certificate — the whole mechanism, read-only because fetching a
+        # certificate is all it is for.
+        #
+        # NOT /var/run/tailscale/tailscaled.sock, where tailscaled puts it
+        # by default. Wardstone bind-mounts host paths only from its
+        # managed prefixes (ADR-W003 A1) and refuses anything else at
+        # APPLY time — after the plan is written and approved. So the
+        # socket has to come to the prefix rather than the mount reaching
+        # out of it, which means tailscaled must be started with
+        #
+        #   --socket=/srv/wildstone/tailscale/tailscaled.sock
+        #
+        # That is a host-level prerequisite this package cannot satisfy
+        # itself, and the installer is where it belongs (F59). Until then
+        # it is a documented manual step, and an unsatisfied one shows up
+        # as Caddy serving no certificate rather than as anything naming
+        # the socket.
+        - { source: /srv/wildstone/tailscale/tailscaled.sock, target: /var/run/tailscale/tailscaled.sock, readOnly: true }
+      restart: unless-stopped

@@ -1,0 +1,78 @@
+# DNS capability, profile "pihole": Pi-hole v6, network-wide ad blocking
+# by being the household's DNS server. dns-adguard is the other profile
+# of this capability; install one.
+#
+# READ THIS BEFORE INSTALLING. Port 53 is published over both UDP and
+# TCP (protocol minor 12; a node whose agent predates it publishes TCP
+# only, and resolvers ask over UDP first). On Ubuntu and most systemd
+# hosts, systemd-resolved already holds port 53 on 127.0.0.53: bind
+# dns_listen_addr to the node's LAN address (the default asks for every
+# interface) to avoid the clash, or disable the stub listener in
+# resolved.conf. Then point the router's DHCP at that address.
+#
+# The admin password is generated on the node and set through Pi-hole's
+# v6 environment override; read it with `wild secret` tooling or reset
+# it with `pihole setpassword` inside the container. The web interface
+# sits behind Authelia forward-auth on the admin surface.
+#
+# Image digest is REAL, resolved 2026-09-07 via the OCI registry API:
+#   pihole/pihole:latest -> sha256:f7d1be83...038b
+apiVersion: wildstone.dev/v1
+kind: Package
+metadata:
+  name: dns-pihole
+  version: 1.0.1
+  capability: dns
+  profile: pihole
+  exclusive: true
+requires:
+  - { trait: identity, mode: oidc }
+  - { trait: ingress, mode: private }
+params:
+  - { name: admin_domain, required: true, description: "The domain your admin-only services are named under. Under a tailnet this is a label rather than an address you type.", source: domain }
+  - { name: node, required: true, description: "Which machine to install this on.", source: node }
+  - { name: timezone, default: UTC, source: timezone, validate: iana_timezone, description: "Your timezone, e.g. Europe/London." }
+  - { name: dns_listen_addr, default: "", example: "192.168.1.10", description: "Which address on this machine answers DNS, e.g. 192.168.1.10. Leave empty for every interface." }
+  - { name: upstream_dns, default: "9.9.9.9;149.112.112.112", description: "Where Pi-hole sends lookups it cannot answer itself. Two addresses separated by a semicolon." }
+policies:
+  classifications: [admin_tailscale]
+  dataSensitivity: medium
+templates:
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: pihole-admin-password, node: "{{ .Params.node }}" }
+    spec: { name: pihole-admin-password }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: pihole-data, node: "{{ .Params.node }}" }
+    spec: { name: pihole-data }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: pihole, node: "{{ .Params.node }}" }
+    spec:
+      image: "pihole/pihole@sha256:f7d1be836e3bc608b56d82fc9904f5a831cdfbc0dc9c6d58f94e4c985c70038b"
+      env:
+        TZ: "{{ .Params.timezone }}"
+        FTLCONF_webserver_api_password: "secret/pihole-admin-password"
+        FTLCONF_dns_upstreams: "{{ .Params.upstream_dns }}"
+        # Answer lookups from any network, not only the Docker one — the
+        # whole LAN is the client.
+        FTLCONF_dns_listeningMode: all
+      ports:
+        - "{{ with .Params.dns_listen_addr }}{{ . }}:{{ end }}53:53/udp"
+        - "{{ with .Params.dns_listen_addr }}{{ . }}:{{ end }}53:53"
+      mounts:
+        - { source: pihole-data, target: /etc/pihole }
+      restart: unless-stopped
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Route
+    metadata: { name: pihole, node: "{{ .Params.node }}" }
+    spec:
+      host: "pihole.{{ .Params.admin_domain }}"
+      upstream: "container/pihole:80"
+      auth: authelia_oidc
+      classification: admin_tailscale

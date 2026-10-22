@@ -1,0 +1,165 @@
+# Ingress capability: the dual-Caddy split from the reference deployment
+# (ADR-001 there; ADR-W011 A2 here) plus the Cloudflare Tunnel egress-only
+# public path — no open ports to the internet — and the proxied wildcard
+# DNS record that points the public domain at the tunnel.
+#
+# Both Caddy containers mount the managed prefix read-only: the
+# reconciler's Route fragments (<prefix>/routes/*.caddy) ARE their
+# configuration, and the Wardstone agent's managed-prefix guard is what
+# makes that bind safe.
+#
+# Tailscale join is host-level and belongs to the E9 installer, not a
+# container here.
+#
+# --watch is why a Route added later takes effect at all (F24). The
+# mechanism is not the one the flag's name suggests: it re-adapts the
+# WHOLE Caddyfile on every poll, so `import routes/*.caddy` is
+# re-evaluated each second and a new fragment is picked up without the
+# watched file itself changing. That same re-adaptation is why an
+# adaptation warning repeats once a second forever (F30).
+#
+# Caddy's own docs warn --watch suits development because it makes
+# unintended config changes easier to apply; that threat model is
+# inverted here, since this directory is machine-generated, mounted
+# READ-ONLY, and writable only through the agent's managed-prefix guard.
+# Anyone who can write it can already do worse than reload a proxy.
+#
+# Image digests are REAL, resolved 2026-08-25 via the OCI registry API
+# (`wild pkg refresh-digests` uses the same resolver):
+#   caddy:latest                 -> sha256:df7f1c2f...a78d
+#   cloudflare/cloudflared:latest-> sha256:0aa26e28...eb38
+#
+# The tunnel token is a secret REFERENCE (secret/cloudflared-tunnel-token);
+# only Wardstone materializes it (E8). No secret values appear here.
+apiVersion: wildstone.dev/v1
+kind: Package
+metadata:
+  name: ingress
+  version: 1.0.2
+  capability: ingress
+  profile: caddy-cloudflared
+  exclusive: true
+provides:
+  - { trait: ingress, mode: public }
+  - { trait: ingress, mode: private }
+params:
+  - { name: public_domain, required: true, description: "The domain your services are named under, e.g. home.example.com. Under a tailnet this is a label rather than an address you type.", source: domain }
+  - { name: node, required: true, description: "Which machine to install this on.", source: node }
+  # The Cloudflare tunnel UUID (from `cloudflared tunnel create`), used
+  # for the wildcard CNAME target <tunnel_id>.cfargotunnel.com.
+  - { name: tunnel_id, required: true, description: "The Cloudflare tunnel UUID from `cloudflared tunnel create`." }
+  # Deliberately without a default: a "tailnet-only" surface that quietly
+  # binds every interface is worse than one you had to think about (#41).
+  # The reasoning stays here; what an operator needs in order to ANSWER
+  # is in the description, where the form can render it.
+  - { name: admin_listen_addr, required: true, example: "127.0.0.1", description: "Which address on this machine the private admin surface listens on. Normally this node's tailnet address — `tailscale ip -4` prints it — so the admin pages are reachable over the tailnet and nowhere else. Use 0.0.0.0 only if you mean every interface, including the public one." }
+templates:
+  # ---- How this node's proxy is postured (ADR-W019 B5, F65).
+  #
+  # tls: off — the tunnel terminates TLS and hands Caddy plain http, so
+  # this listener must not try to provision certificates for hostnames it
+  # cannot validate (ADR-W019 A4). trustedProxies names cloudflared, so
+  # the X-Forwarded-Proto it sets survives instead of being overwritten
+  # with this hop's own scheme (A6).
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Ingress
+    metadata: { name: ingress, node: "{{ .Params.node }}" }
+    spec:
+      tls: "off"
+      trustedProxies: [private_ranges]
+  # ---- The secret this capability needs (ADR-W020 / F37).
+  #
+  # `provided`, not generated: the tunnel token is issued by Cloudflare
+  # for a specific tunnel. Random bytes here are not a weaker secret,
+  # they are a broken one, and the failure surfaces as cloudflared
+  # refusing to connect rather than as anything naming the token.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: cloudflared-tunnel-token, node: "{{ .Params.node }}" }
+    spec: { name: cloudflared-tunnel-token, provided: true }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: caddy-public-data, node: "{{ .Params.node }}" }
+    spec: { name: caddy-public-data }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: caddy-private-data, node: "{{ .Params.node }}" }
+    spec: { name: caddy-private-data }
+  # caddy-public terminates the tunnel's traffic: cloudflared connects to
+  # it locally; nothing binds public interfaces directly.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: caddy-public, node: "{{ .Params.node }}" }
+    spec:
+      image: "caddy@sha256:df7f1c2fb114453b951de51a98efc010db1655a92c2e86be6706714e2417a78d"
+        # argv[0] must be the binary: this image sets no ENTRYPOINT, so
+        # spec.command lands in Docker Cmd as the whole argv. Without
+        # "caddy" here the container dies with
+        # `exec: "run": executable file not found in $PATH` (F23).
+        # cloudflared below is the opposite case — it HAS an entrypoint,
+        # so ["tunnel","run"] is right there. Do not unify them.
+      command: ["caddy", "run", "--config", "/etc/wildstone/Caddyfile", "--adapter", "caddyfile", "--watch"]
+      ports:
+        # :80 only. The reconciler renders sites as http:// with
+        # auto_https off (#40) — TLS arrives already terminated from the
+        # tunnel — so nothing would answer on 443.
+        #
+        # Loopback only, which is what "nothing binds public interfaces
+        # directly" above has always claimed and, until #41, was not true
+        # of: cloudflared reaches this container by name over the
+        # `wildstone` network, so the published port is for local
+        # debugging and nothing else.
+        - "127.0.0.1:80:80"
+      mounts:
+        - { source: caddy-public-data, target: /data }
+        - { source: /etc/wildstone, target: /etc/wildstone, readOnly: true }
+      restart: unless-stopped
+  # caddy-private serves the tailnet-only admin surfaces on a distinct
+  # port, bound to the address the operator names.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: caddy-private, node: "{{ .Params.node }}" }
+    spec:
+      image: "caddy@sha256:df7f1c2fb114453b951de51a98efc010db1655a92c2e86be6706714e2417a78d"
+        # argv[0] must be the binary: this image sets no ENTRYPOINT, so
+        # spec.command lands in Docker Cmd as the whole argv. Without
+        # "caddy" here the container dies with
+        # `exec: "run": executable file not found in $PATH` (F23).
+        # cloudflared below is the opposite case — it HAS an entrypoint,
+        # so ["tunnel","run"] is right there. Do not unify them.
+      command: ["caddy", "run", "--config", "/etc/wildstone/Caddyfile", "--adapter", "caddyfile", "--watch"]
+      ports:
+        - "{{ .Params.admin_listen_addr }}:8443:80"
+      mounts:
+        - { source: caddy-private-data, target: /data }
+        - { source: /etc/wildstone, target: /etc/wildstone, readOnly: true }
+      restart: unless-stopped
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: cloudflared, node: "{{ .Params.node }}" }
+    spec:
+      image: "cloudflare/cloudflared@sha256:0aa26e284f05e6c77ae375b8c9c11d9eb6a448fb7bcd8d40f31cb6176189eb38"
+      command: ["tunnel", "run"]
+      env:
+        TUNNEL_TOKEN: "secret/cloudflared-tunnel-token"
+      restart: unless-stopped
+  # Wildcard CNAME to the tunnel, proxied: every public host under the
+  # domain resolves through Cloudflare to the tunnel with zero per-app
+  # DNS work.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: DnsRecord
+    metadata: { name: public-wildcard }
+    spec:
+      zone: "{{ .Params.public_domain }}"
+      name: "*"
+      type: CNAME
+      content: "{{ .Params.tunnel_id }}.cfargotunnel.com"
+      proxied: true

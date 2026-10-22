@@ -1,0 +1,19 @@
+# Wildstone control plane (ADR-W014 A2). First start prints the one-time
+# admin API token and the CA fingerprint to the journal:
+#   journalctl -u keystone | grep -A1 'first start'
+#   journalctl -u keystone | grep 'CA fingerprint'
+[Unit]
+Description=Wildstone Keystone control plane
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/keystone -data-dir /var/lib/wildstone/keystone
+Restart=on-failure
+RestartSec=3
+# The DataDir holds the CA, op-signing key, secrets... root-only.
+UMask=0077
+StateDirectory=wildstone/keystone
+
+[Install]
+WantedBy=multi-user.target

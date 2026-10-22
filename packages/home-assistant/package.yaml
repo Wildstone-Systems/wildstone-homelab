@@ -1,0 +1,373 @@
+# Home Assistant capability, profile "container": Wildstone RUNS Home
+# Assistant, for a household that does not already have one. The other
+# Home Assistant package in this catalog (home-automation/) is the
+# opposite case — an adapter for a Home Assistant that lives elsewhere —
+# and the two are separate capabilities on purpose, so installing one
+# never replaces the other's resources.
+#
+# LAN-NATIVE (2.0.0). Home Assistant runs with networkMode: host, in
+# the node's own network namespace, because most of what it is for
+# lives on the LAN: mDNS/SSDP/HomeKit discovery (Chromecast, Sonos,
+# HomeKit bridges) is multicast that never crosses into a Docker
+# bridge, and integrations that expect replies on the sender's address
+# break behind NAT. On the host's network all of that works as it does
+# on a bare install.
+#
+# What that means, stated plainly:
+#
+#   - Home Assistant listens on port 8123 of EVERY address the machine
+#     has, LAN included. http://<machine's LAN address>:8123 reaches it
+#     directly: plain HTTP, Home Assistant's own login, and nothing of
+#     Wildstone in the path. The Wildstone URL below is the other door —
+#     HTTPS through the household proxy under the family_private class —
+#     and the one the household should bookmark. The companion app may
+#     find the direct one by itself (zeroconf); both reach the same app
+#     and the same accounts.
+#   - Port 8123 must be free on the machine. If anything else already
+#     listens there, the install or upgrade is refused BEFORE the running
+#     container is touched (Keystone checks the node's listening ports
+#     for the port this package's host/8123 Route names), rather than
+#     starting a Home Assistant that cannot bind its port.
+#   - USB/serial radios: the recommended path is still a protocol
+#     package (zigbee-zigbee2mqtt, a Z-Wave package) that owns the stick
+#     and talks MQTT, so Home Assistant restarts never drop the radio.
+#     For ZHA or a direct Z-Wave stick, set serial_device (advanced): one
+#     device node, on the same closed allowlist every package's devices
+#     are held to (serial/USB radios, never a block device).
+#   - Bluetooth: see BLUETOOTH below. The default gives the container
+#     nothing of the host's.
+#
+# BLUETOOTH (2.1.0), the closed choice `bluetooth`:
+#
+#   proxy (default, recommended) — no host access at all. Home Assistant
+#     gets Bluetooth from ESPHome Bluetooth proxies: ESP32 boards on the
+#     household's Wi-Fi/Ethernet, placed near the devices, that forward
+#     BLE advertisements and connections over the network. Wildstone does
+#     not own, flash or configure those boards; you flash one yourself
+#     (ESPHome's web installer, "Bluetooth Proxy"), and Home Assistant
+#     discovers it on the LAN — which works because it is host-networked —
+#     under Settings > Devices & services, where you add it. Several
+#     proxies cover a larger home, and none needs anything on this machine.
+#   host-bluez — use the machine's own Bluetooth adapter through the
+#     host's BlueZ. The container gets EXACTLY two things more: the host's
+#     /run/dbus mounted read-only (the D-Bus system bus, the one host path
+#     outside Wildstone's own on the host-mount allowlist) and the
+#     capabilities NET_ADMIN and NET_RAW, which Home Assistant's Bluetooth
+#     stack needs to manage the adapter. Because the container is on the
+#     host's network, those two capabilities act on the HOST's network
+#     stack, not a private one — that is the price of local Bluetooth, and
+#     why it is not the default. No USB bus, no /dev, no privileged mode.
+#     BlueZ (bluetooth.service), the system bus and an unblocked adapter
+#     are the host's to provide; Wildstone checks the node's readiness
+#     evidence (GET /api/v1/nodes/{node}/probes/home-automation) before
+#     creating or replacing the container, and refuses with that evidence
+#     — leaving the running container untouched — when any is definitely
+#     missing.
+#   off — no host access, and no proxies expected. Renders the same
+#     container as proxy; the difference is intent. Home Assistant's
+#     Bluetooth integration simply finds no adapter; remove it in the UI
+#     if you want it gone.
+#
+# Home Assistant's Bluetooth is Bluetooth Low Energy only (sensors,
+# beacons, BLE locks, lights and plant sensors). It does NOT speak
+# Bluetooth Classic: no audio speakers, headsets or classic serial
+# devices, in any mode. Switching mode replaces the container only: the
+# same home-assistant-config volume stays at /config, so integrations,
+# history and paired BLE devices survive; an adapter's pairing keys held
+# by the host's BlueZ stay on the host.
+#
+# MQTT. Optional, behind mqtt_enabled (default off, so an existing
+# install upgrades without needing a broker). With it on, the package
+# requires mqtt:broker (mqtt-mosquitto) on THIS machine and hands the
+# container the broker's address and Home Assistant's own credential as
+# WILDSTONE_MQTT_* env — the password by reference, substituted by the
+# node, never written here or into a plan. Home Assistant does not read
+# its broker from YAML or env (the MQTT integration is configured only
+# through its UI, as a config entry), and a seeded config entry would
+# have to hold the password in plain text in the settings store, which
+# nothing on the node substitutes. So connecting it is one step in Home
+# Assistant: Settings > Devices & services > Add integration > MQTT,
+# with broker WILDSTONE_MQTT_HOST, port WILDSTONE_MQTT_PORT, username
+# home-assistant and the password WILDSTONE_MQTT_PASSWORD, read on this
+# machine with `docker exec home-assistant printenv`. The broker refuses
+# anonymous clients, so a wrong or missing credential fails at that
+# form, not later.
+#
+# UPGRADING FROM 1.x. The container is replaced (bridge -> host), and
+# nothing it keeps moves: the same home-assistant-config volume at
+# /config, the same BackupPlan, the same Route name and hostname. The
+# seeded files are never rewritten (a SeedFile is the app's once it
+# lands), so an upgraded install keeps the proxy trust it was seeded
+# with — the broader list, which also covers the proxy's new path, so
+# the Wildstone URL keeps working. To narrow it to what a fresh 2.x
+# install trusts, see the note on .storage/http below.
+#
+# THE ROUTE. Home Assistant runs its own login and its mobile app talks
+# to the same URL, so the proxy passes through (auth: none) and the
+# Route is family_private — the same posture as ntfy: reachable by the
+# household's own devices, with the app's own access control at the
+# app layer, and policy-clean off the public class (ADR-W009). The
+# upstream is host/8123: the proxy stays on the Wildstone bridge and
+# reaches the host through Docker's host gateway, since a host-networked
+# container has no name there.
+#
+# TRUSTING THE PROXY, AND WHY IT IS SEEDED INTO THE SETTINGS STORE.
+# Home Assistant refuses a proxied request unless it has been told which
+# peers may set X-Forwarded-For, answering 400 with "not set-up for
+# reverse proxies". Delivering that setting is harder than it looks, and
+# the two obvious ways both fail:
+#
+#   - A managed ConfigFile mounted alongside the app cannot work. On its
+#     first boot Home Assistant migrates any `http:` block out of
+#     configuration.yaml into its own settings store and records the
+#     migration as done; from then on the YAML is ignored permanently.
+#     Anything mounted after that first boot has already missed its turn.
+#
+#   - Seeding the `http:` block into configuration.yaml does not work
+#     either, and fails LATER, which is worse. A migrated YAML block is
+#     staged as a PENDING config on trial: unless a person promotes it in
+#     the UI within five minutes (AUTO_REVERT_DELAY), Home Assistant
+#     reverts to the stable config, restarts, and marks the pending one
+#     as failed so it is never applied again. The service works, then
+#     silently stops working, with no plan and no event to explain it.
+#
+# So the settings store itself is seeded, with the proxy trust already in
+# `stable` and the YAML migration already marked done. No trial, no
+# revert, no human. configuration.yaml deliberately carries NO http:
+# block: with the migration marked done, a leftover one only raises a
+# "your YAML is being ignored" repair notice.
+#
+# This does couple the package to Home Assistant's on-disk store shape,
+# which is why the image below is digest-pinned and why
+# TestSeededHomeAssistantTrustsTheProxy boots THAT image and asserts a
+# proxied request survives past the five-minute trial window. If a future
+# Home Assistant changes the store, that test fails loudly rather than a
+# household discovering it as a 400.
+#
+# Nothing here asks the operator to do anything, and nothing is guessed:
+# the proxy ranges come from .Resolved.HostNetworkProxyTrustCIDRs. On
+# the host's network, Home Assistant sees the proxy at the proxy's own
+# address on the Wildstone bridge (Docker does not masquerade bridge-to-
+# host traffic), which is in Docker's bridge pool; the LAN ranges are
+# deliberately NOT trusted, because the LAN now reaches port 8123
+# directly and must not be believed about X-Forwarded-For.
+#
+# Image digest is REAL, resolved 2026-09-07 via the OCI registry API:
+#   ghcr.io/home-assistant/home-assistant:stable -> sha256:612d7676...2918
+apiVersion: wildstone.dev/v1
+kind: Package
+metadata:
+  name: home-assistant
+  # 2.0.0: host networking (port 8123 on the machine's LAN), Route to
+  # host/8123, and optional authenticated MQTT (mqtt_enabled).
+  # 2.1.0: bluetooth (proxy | host-bluez | off); default proxy renders
+  # exactly what 2.0.0 did.
+  version: 2.1.0
+  capability: home-assistant
+  profile: container
+requires:
+  - { trait: ingress, mode: private }
+  - { trait: mqtt, mode: broker, when: mqtt_enabled }
+params:
+  - { name: public_domain, required: true, description: "The domain your services are named under, e.g. home.example.com. Under a tailnet this is a label rather than an address you type.", source: domain }
+  - { name: hass_subdomain, default: hass, description: "The name this service appears under, e.g. hass." }
+  - { name: node, required: true, description: "Which machine to install this on. Home Assistant uses this machine's network directly, so port 8123 on it must be free. With MQTT on, it must be the machine the MQTT broker (mqtt-mosquitto) is on.", source: node }
+  - { name: timezone, default: UTC, source: timezone, validate: iana_timezone, description: "Your timezone, e.g. Europe/London." }
+  - { name: mqtt_enabled, default: "false", validate: "enum:true|false", description: "Give Home Assistant its own login on the MQTT broker (mqtt-mosquitto), for Zigbee2MQTT, Frigate and other MQTT devices. Needs the broker installed on this same machine first; you then add the MQTT integration in Home Assistant once, with the details this provides. Leave false for none." }
+  - { name: serial_device, default: "", example: "/dev/serial/by-id/usb-Nabu_Casa_ZBT-1_0001-if00-port0", description: "Advanced: a USB/serial radio handed straight to Home Assistant (ZHA or Z-Wave JS inside Home Assistant), by its name under /dev/serial/by-id/. Leave empty and use a Zigbee2MQTT or Z-Wave package instead unless you know you want this." }
+  - { name: bluetooth, default: proxy, validate: "enum:proxy|host-bluez|off", description: "How Home Assistant gets Bluetooth (BLE only; Bluetooth Classic devices such as speakers are not supported). proxy (recommended): ESPHome Bluetooth proxies on your network, which you flash and add in Home Assistant yourself; nothing from this machine. host-bluez: this machine's own adapter through its BlueZ, which must be installed and running; gives Home Assistant read-only access to the host's D-Bus and the NET_ADMIN and NET_RAW capabilities. off: no Bluetooth." }
+policies:
+  classifications: [family_private]
+  dataSensitivity: high
+templates:
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: restic-home-assistant, node: "{{ .Params.node }}" }
+    spec: { name: restic-home-assistant }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: home-assistant-config, node: "{{ .Params.node }}" }
+    spec: { name: home-assistant-config }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: home-assistant-backup-repo, node: "{{ .Params.node }}" }
+    spec: { name: home-assistant-backup-repo }
+  # The first-run configuration directory. Every file here is what Home
+  # Assistant itself would have written (homeassistant/config.py:
+  # DEFAULT_CONFIG and _write_default_config), with the http: block added
+  # — the one thing that must be present before the first boot.
+  #
+  # scripts.yaml and scenes.yaml are written "{}" and "[]" rather than
+  # the empty files Home Assistant creates, because an empty seed is
+  # refused: seeding an empty file would claim the path and stop the app
+  # writing its own. The values are the empty mapping and empty list those
+  # includes parse to, so the result is identical.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: SeedFile
+    metadata: { name: home-assistant-configuration, node: "{{ .Params.node }}" }
+    spec:
+      volume: home-assistant-config
+      path: configuration.yaml
+      content: |
+        # Seeded once by Wildstone when this capability was installed.
+        # This file is YOURS: edit it freely, Wildstone will not rewrite it.
+
+        # Loads default set of integrations. Do not remove.
+        default_config:
+
+        # Load frontend themes from the themes folder
+        frontend:
+          themes: !include_dir_merge_named themes
+
+        automation: !include automations.yaml
+        script: !include scripts.yaml
+        scene: !include scenes.yaml
+
+        # No http: block here on purpose. The reverse-proxy trust lives in
+        # Home Assistant's settings store, seeded alongside this file;
+        # change it in Settings > System > Network.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: SeedFile
+    metadata: { name: home-assistant-http-settings, node: "{{ .Params.node }}" }
+    spec:
+      volume: home-assistant-config
+      path: .storage/http
+      # Home Assistant's own settings store for the http integration,
+      # written as it writes it. The proxy trust goes straight into
+      # "stable" — the confirmed-working slot — with "pending" empty, so
+      # there is no trial to promote and nothing to auto-revert.
+      # "yaml_migration_done" is already true so the first boot does not
+      # try to migrate YAML that deliberately has no http: block.
+      #
+      # Seeded once: an install from 1.x keeps the list it was seeded
+      # with (Docker's bridge ranges AND 10/8 and 192.168/16). That list
+      # still covers the proxy, so nothing breaks on upgrade; it also
+      # believes X-Forwarded-For from the LAN, which on host networking
+      # can now reach port 8123. To narrow it, stop Home Assistant and set
+      # trusted_proxies in /config/.storage/http to what a fresh install
+      # gets: ["172.16.0.0/12", "127.0.0.1/32"].
+      content: |
+        {
+          "version": 2,
+          "minor_version": 2,
+          "key": "http",
+          "data": {
+            "stable": {
+              "server_port": 8123,
+              "cors_allowed_origins": ["https://cast.home-assistant.io"],
+              "use_x_forwarded_for": true,
+              "trusted_proxies": {{ .Resolved.HostNetworkProxyTrustCIDRs }},
+              "login_attempts_threshold": -1,
+              "ip_ban_enabled": true,
+              "ssl_profile": "modern",
+              "use_x_frame_options": true,
+              "created_at": "2026-01-01T00:00:00+00:00",
+              "error": null,
+              "error_message": null
+            },
+            "pending": null,
+            "yaml_migration_done": true
+          }
+        }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: SeedFile
+    metadata: { name: home-assistant-version, node: "{{ .Params.node }}" }
+    spec:
+      volume: home-assistant-config
+      path: .HA_VERSION
+      # Must match the version of the pinned image below. Home Assistant
+      # reads this to decide whether to run a configuration upgrade, and
+      # treats the file's ABSENCE as version 0.7.7 — so omitting it would
+      # run every migration since 2019 against a directory that was
+      # created moments ago.
+      content: |
+        2026.9.1
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: SeedFile
+    metadata: { name: home-assistant-automations, node: "{{ .Params.node }}" }
+    spec:
+      volume: home-assistant-config
+      path: automations.yaml
+      content: |
+        []
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: SeedFile
+    metadata: { name: home-assistant-scripts, node: "{{ .Params.node }}" }
+    spec:
+      volume: home-assistant-config
+      path: scripts.yaml
+      content: |
+        {}
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: SeedFile
+    metadata: { name: home-assistant-scenes, node: "{{ .Params.node }}" }
+    spec:
+      volume: home-assistant-config
+      path: scenes.yaml
+      content: |
+        []
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: home-assistant, node: "{{ .Params.node }}" }
+    spec:
+      image: "ghcr.io/home-assistant/home-assistant@sha256:612d76760b544cb40b7ba01387fdac964c59a6a550a50a4d30b4773c822d2918"
+      # The machine's own network namespace: LAN discovery reaches Home
+      # Assistant, and it listens on 8123 of every address (see header).
+      networkMode: host
+      env:
+        TZ: "{{ .Params.timezone }}"
+        {{- if eq .Params.mqtt_enabled "true" }}
+        # For the one-time MQTT integration form; Home Assistant itself
+        # does not read these (see header). The password is a reference
+        # the node substitutes at start.
+        WILDSTONE_MQTT_HOST: "{{ .Resolved.MqttHost }}"
+        WILDSTONE_MQTT_PORT: "{{ .Resolved.MqttPort }}"
+        WILDSTONE_MQTT_USERNAME: "{{ .Resolved.MqttUsername }}"
+        WILDSTONE_MQTT_PASSWORD: "{{ .Resolved.MqttPasswordSecretRef }}"
+        {{- end }}
+      mounts:
+        - { source: home-assistant-config, target: /config }
+        {{- if eq .Params.bluetooth "host-bluez" }}
+        # host-bluez only: the host's D-Bus system bus, read-only, for
+        # BlueZ. Keystone checks the node's BlueZ readiness first.
+        - { source: /run/dbus, target: /run/dbus, readOnly: true }
+        {{- end }}
+      devices: {{ with .Params.serial_device }}[{ source: "{{ . }}" }]{{ else }}[]{{ end }}
+      {{- if eq .Params.bluetooth "host-bluez" }}
+      # What Home Assistant's Bluetooth stack needs to manage the adapter;
+      # on the host network these act on the host's stack (see header).
+      capAdd: [NET_ADMIN, NET_RAW]
+      {{- end }}
+      restart: unless-stopped
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Route
+    metadata: { name: hass, node: "{{ .Params.node }}" }
+    spec:
+      host: "{{ .Params.hass_subdomain }}.{{ .Params.public_domain }}"
+      upstream: "host/8123"
+      auth: none
+      classification: family_private
+  # Backup: the config volume holds every automation, dashboard and
+  # integration credential the household has set up. Daily.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: BackupPlan
+    metadata: { name: home-assistant, node: "{{ .Params.node }}" }
+    spec:
+      volumes: [home-assistant-config]
+      repository: home-assistant-backup-repo
+      passwordSecret: secret/restic-home-assistant
+      schedule: daily
+      class: important
+      retention: { keepDaily: 7, keepWeekly: 4, keepMonthly: 6 }

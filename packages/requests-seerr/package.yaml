@@ -1,0 +1,62 @@
+# Requests capability, profile "seerr": the page where the household
+# asks for a film or a series, and the *arr packages go and get it.
+# Seerr (formerly Jellyseerr) signs people in with their Jellyfin or
+# Plex account, and its own admin account is created on first run.
+#
+# THE ROUTE. Seerr runs its own login and has phone apps that speak
+# to the same URL, so the proxy passes through (auth: none) and the
+# Route is family_private — the ntfy posture: reachable by household
+# devices, access control at the app layer, policy-clean off the
+# public class (ADR-W009). Seerr can also be pointed at the household's
+# OIDC provider from its own settings page later.
+#
+# On first run, point it at the media server by container name —
+# http://jellyfin:8096 or http://plex:32400 — and at Radarr/Sonarr the
+# same way ("radarr", port 7878; "sonarr", port 8989).
+#
+# Image digest is REAL, resolved 2026-09-07 via the OCI registry API:
+#   ghcr.io/seerr-team/seerr:latest -> sha256:f4768de5...bda1
+apiVersion: wildstone.dev/v1
+kind: Package
+metadata:
+  name: requests-seerr
+  version: 1.0.1
+  capability: requests
+  profile: seerr
+requires:
+  - { trait: ingress, mode: private }
+params:
+  - { name: public_domain, required: true, description: "The domain your services are named under, e.g. home.example.com. Under a tailnet this is a label rather than an address you type.", source: domain }
+  - { name: requests_subdomain, default: requests, description: "The name this service appears under, e.g. requests." }
+  - { name: node, required: true, description: "Which machine to install this on.", source: node }
+  - { name: timezone, default: UTC, source: timezone, validate: iana_timezone, description: "Your timezone, e.g. Europe/London." }
+policies:
+  classifications: [family_private]
+  dataSensitivity: low
+templates:
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: seerr-config, node: "{{ .Params.node }}" }
+    spec: { name: seerr-config }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: seerr, node: "{{ .Params.node }}" }
+    spec:
+      image: "ghcr.io/seerr-team/seerr@sha256:f4768de5f616248d723e05891f3345a1402123775d03bf0890dbfedc0831bda1"
+      env:
+        TZ: "{{ .Params.timezone }}"
+        LOG_LEVEL: info
+      mounts:
+        - { source: seerr-config, target: /app/config }
+      restart: unless-stopped
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Route
+    metadata: { name: requests, node: "{{ .Params.node }}" }
+    spec:
+      host: "{{ .Params.requests_subdomain }}.{{ .Params.public_domain }}"
+      upstream: "container/seerr:5055"
+      auth: none
+      classification: family_private

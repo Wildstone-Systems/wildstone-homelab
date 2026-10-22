@@ -1,0 +1,471 @@
+package api
+
+// Household routines (ADR-W030 A6, as changed by ADR-W033 E2/E3).
+//
+// Anyone the household admits may draft, edit, trial or disable a
+// routine; activating a version is a Plan, and only a human Owner
+// approves it, at its exact version, through the Owner Review Queue in
+// the Console (handlers_plans.go, freshOwnerReview). There is no second
+// approval surface here: no review link, no household page, and chat
+// cannot approve.
+
+import (
+	"errors"
+	"fmt"
+	"net/http"
+	"sort"
+	"time"
+
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/automation"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/principal"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/resource"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/runtimedb"
+)
+
+// TrustedIngressHeader is the header the identity proxy sets. It is
+// honoured only when TrustedIngressCIDRs matches the peer, because a
+// header anyone can set is not an authentication.
+const TrustedIngressHeader = "Remote-User"
+
+// listHouseholdRoutines shows a household its routines.
+//
+// specs carries each Wildstone routine's parsed document, keyed by
+// routine name. A list row wants the trigger and the action tier, and
+// neither is a column — both live inside the document. Parsing here
+// rather than in the client is the same rule the detail read follows: a
+// second parser in a browser is a second place the closed grammar can
+// drift from the engine's. A document that will not parse is simply
+// absent from the map; the row renders without its chips rather than
+// failing.
+func (s *Server) listHouseholdRoutines(_ *http.Request, _ principal.Identity) (any, int, error) {
+	routines, err := s.DB.ListHouseholdRoutines()
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	specs := map[string]*resource.AutomationSpec{}
+	for _, r := range routines {
+		if r.Ownership != runtimedb.RoutineWildstone {
+			continue
+		}
+		parsed, perr := automation.ParseDraft(r.Document)
+		if perr != nil {
+			continue
+		}
+		specs[r.Name] = parsed.Automation
+	}
+	return map[string]any{"routines": routines, "specs": specs}, http.StatusOK, nil
+}
+
+// maxRoutineRuns bounds the run history one detail read pulls off the
+// household stream.
+const maxRoutineRuns = 200
+
+// routineDetail is one routine with everything the detail view needs to
+// say what it does and what it has been doing.
+type routineDetail struct {
+	Routine runtimedb.HouseholdRoutine `json:"routine"`
+	// Rule is the name the ENGINE knows this routine by: the document's
+	// metadata.name, which need not be the name it is filed under. Served
+	// because a caller that wants to replay this rule has no other way to
+	// learn it without parsing the document itself.
+	Rule string `json:"rule"`
+	// Spec is the parsed document. Parsing happens here rather than in
+	// the client because the engine parses it here too, and a second
+	// parser in a browser is a second place the grammar can drift.
+	Spec *resource.AutomationSpec `json:"spec"`
+	// SpecError says why a document did not parse. A routine whose spec
+	// is unreadable is exactly the one someone needs to look at, so this
+	// is a 200 with an explanation rather than a 500.
+	SpecError    string                         `json:"specError,omitempty"`
+	Revisions    []runtimedb.RoutineRevision    `json:"revisions"`
+	Runs         []runtimedb.HouseholdEvent     `json:"runs"`
+	ReviewedRuns []runtimedb.ReviewedRoutineRun `json:"reviewedRuns"`
+}
+
+// getHouseholdRoutine serves one routine: its spec, its edit history and
+// what it has done in the last week.
+//
+// Reviewed runs come from the exact Plan-version occurrence ledger; older
+// Statefile engine events remain visible separately for historical context.
+func (s *Server) getHouseholdRoutine(r *http.Request, _ principal.Identity) (any, int, error) {
+	name := r.PathValue("name")
+	routine, err := s.DB.GetHouseholdRoutine(name)
+	if err != nil {
+		if errors.Is(err, runtimedb.ErrNotFound) {
+			return nil, http.StatusNotFound, fmt.Errorf("no routine named %q", name)
+		}
+		return nil, http.StatusInternalServerError, err
+	}
+
+	out := routineDetail{
+		Routine:      routine,
+		Revisions:    []runtimedb.RoutineRevision{},
+		Runs:         []runtimedb.HouseholdEvent{},
+		ReviewedRuns: []runtimedb.ReviewedRoutineRun{},
+	}
+
+	// The rule the engine knows is the document's metadata.name, which
+	// need not equal the registry name this routine is filed under. Ask
+	// the parsed document first: matching on the wrong name serves an
+	// empty runs table for a routine that has been firing all week,
+	// which reads as "it never ran".
+	rule := routine.Name
+	if parsed, perr := automation.ParseDraft(routine.Document); perr != nil {
+		out.SpecError = perr.Error()
+	} else {
+		out.Spec = parsed.Automation
+		if parsed.Metadata.Name != "" {
+			rule = parsed.Metadata.Name
+		}
+	}
+
+	out.Rule = rule
+
+	revisions, err := s.DB.ListHouseholdRoutineRevisions(name)
+	if err != nil && !errors.Is(err, runtimedb.ErrNotFound) {
+		return nil, http.StatusInternalServerError, err
+	}
+	if revisions != nil {
+		out.Revisions = revisions
+	}
+
+	// A native routine runs inside its own application and Wildstone
+	// records only that it exists, so there is nothing on our stream to
+	// find. Asking anyway would be a query that always returns nothing.
+	if routine.Ownership == runtimedb.RoutineWildstone {
+		reviewed, err := s.DB.ListReviewedRoutineRuns(name, maxRoutineRuns)
+		if err != nil {
+			return nil, http.StatusInternalServerError, err
+		}
+		out.ReviewedRuns = reviewed
+		runs, err := s.routineRuns(name, rule)
+		if err != nil {
+			return nil, http.StatusInternalServerError, err
+		}
+		out.Runs = runs
+	}
+	return out, http.StatusOK, nil
+}
+
+// routineRuns collects a routine's last week off the household stream.
+//
+// An event is recorded against the rule's metadata.name AS IT WAS when
+// the rule fired, and nothing stops an edit from changing that name. So
+// asking only about the current name loses every run recorded under a
+// previous one, and the screen reports "nothing triggered it this week"
+// about a routine that fired all week — the same wrong answer this
+// handler already avoids for the registry name, one revision further
+// back.
+//
+// The names come from the recorded revisions, which is why the
+// documents are worth a second read: they are the only record of what
+// this routine used to be called.
+func (s *Server) routineRuns(name, current string) ([]runtimedb.HouseholdEvent, error) {
+	names := map[string]bool{current: true}
+	docs, err := s.DB.HouseholdRoutineRevisionDocuments(name)
+	if err != nil && !errors.Is(err, runtimedb.ErrNotFound) {
+		return nil, err
+	}
+	for _, doc := range docs {
+		// A revision that no longer parses is not an error here. It
+		// simply contributes no name, and the ones that do parse still
+		// find their runs.
+		if parsed, perr := automation.ParseDraft(doc); perr == nil && parsed.Metadata.Name != "" {
+			names[parsed.Metadata.Name] = true
+		}
+	}
+
+	since := time.Now().Add(-automation.DefaultDraftWindow)
+	seen := map[int64]bool{}
+	out := []runtimedb.HouseholdEvent{}
+	for rule := range names {
+		events, err := s.DB.QueryHouseholdEvents(runtimedb.HouseholdQuery{
+			Entity: rule,
+			Source: automation.Source,
+			From:   since,
+			Newest: true,
+			Limit:  maxRoutineRuns,
+		})
+		if err != nil {
+			return nil, err
+		}
+		for _, e := range events {
+			// A rename can leave two names pointing at overlapping
+			// history; the seq is what makes an event one event.
+			if !seen[e.Seq] {
+				seen[e.Seq] = true
+				out = append(out, e)
+			}
+		}
+	}
+	// Merged from one query per name, so the order has to be restored
+	// rather than assumed.
+	sort.Slice(out, func(i, j int) bool { return out[i].Seq > out[j].Seq })
+	if len(out) > maxRoutineRuns {
+		out = out[:maxRoutineRuns]
+	}
+	return out, nil
+}
+
+// createHouseholdRoutine records a routine, native or Wildstone-run.
+func (s *Server) createHouseholdRoutine(r *http.Request, id principal.Identity) (any, int, error) {
+	var req struct {
+		Name       string `json:"name"`
+		Ownership  string `json:"ownership"`
+		ExternalID string `json:"externalId"`
+		Connection string `json:"connection"`
+		Document   string `json:"document"`
+		State      string `json:"state"`
+	}
+	if code, err := decodeStrict(r, &req); err != nil {
+		return nil, code, err
+	}
+	// A routine is born a DRAFT, whatever the caller asked for.
+	//
+	// This route needs only propose, which the Butler service principal
+	// holds — so accepting a state verbatim let a compromised Butler
+	// credential create an action-capable routine and skip the review
+	// its activation is supposed to require (ADR-W030 A6/A7.1).
+	// Activation goes through SetHouseholdRoutineState and the Plan
+	// boundary, which is where a human is.
+	//
+	// Refused rather than silently downgraded: a caller that asked for
+	// enabled and got a draft with a cheerful note has been told
+	// something untrue about what it just did.
+	if req.State != "" && req.State != runtimedb.RoutineDraft {
+		return nil, http.StatusBadRequest, fmt.Errorf(
+			"a routine is created as a draft and activated separately, so it cannot be created %q — put it in trial or enable it once someone has reviewed it (ADR-W030 A6)",
+			req.State)
+	}
+	// A Wildstone-run routine acts without a per-firing approval, so it
+	// is held to the same standing policy as an Automation (ADR-W024 A5),
+	// whichever door it arrives through. A native routine's document is
+	// not Wildstone's, and an unparseable one cannot fire.
+	if req.Ownership == runtimedb.RoutineWildstone {
+		if proposed, perr := automation.ParseDraft(req.Document); perr == nil {
+			if err := s.checkRoutinePlanPolicy(proposed, id); err != nil {
+				return nil, http.StatusUnprocessableEntity, err
+			}
+		}
+	}
+	seq, err := s.DB.CreateHouseholdRoutine(runtimedb.HouseholdRoutine{
+		Name: req.Name, Ownership: req.Ownership, ExternalID: req.ExternalID,
+		Connection: req.Connection, Document: req.Document,
+		State:  runtimedb.RoutineDraft,
+		Author: actingMember(id),
+	})
+	if err != nil {
+		return nil, http.StatusBadRequest, err
+	}
+	return map[string]any{
+		"seq": seq,
+		"note": "a new routine starts as a draft; put it in trial to watch what it would do " +
+			"before letting it act",
+	}, http.StatusOK, nil
+}
+
+// editHouseholdRoutine records a new revision, which supersedes any
+// review token pinned to the old one.
+//
+// Three things it will not do.
+//
+// It will not take a spec for a routine the caller has not read. An
+// edit may carry basedOnRevision; when it does and the routine has moved
+// since, the edit is refused rather than overwriting whatever the other
+// person wrote. Two people editing at once used to mean the second one
+// won silently.
+//
+// It will not let the rule's name move. Events are recorded against the
+// document's metadata.name as it was when the rule fired, so renaming
+// through an edit splits a routine's history across two names with
+// nothing to join them. Ownership is already immutable at the schema for
+// the same sort of reason; this is the same decision one level down.
+//
+// And it will not leave a changed routine acting. See routineAfterEdit.
+func (s *Server) editHouseholdRoutine(r *http.Request, id principal.Identity) (any, int, error) {
+	name := r.PathValue("name")
+	var req struct {
+		// Document is one Automation YAML document — what the CLI and
+		// the Butler send.
+		Document string `json:"document"`
+		// Spec is the parsed form, for a caller that holds a structured
+		// spec and no YAML writer: the Console edits the spec the detail
+		// read served it and sends it straight back. Serialising here
+		// keeps one writer of this grammar, the same way parsing it here
+		// keeps one reader.
+		Spec *resource.AutomationSpec `json:"spec"`
+		Note string                   `json:"note"`
+		// BasedOnRevision is the revision the caller edited. Optional:
+		// an older client that does not send it keeps working.
+		BasedOnRevision int `json:"basedOnRevision"`
+	}
+	if code, err := decodeStrict(r, &req); err != nil {
+		return nil, code, err
+	}
+	if (req.Document == "") == (req.Spec == nil) {
+		return nil, http.StatusBadRequest, fmt.Errorf(
+			"exactly one of document (an Automation YAML document) or spec (its parsed form) is required")
+	}
+
+	current, err := s.DB.GetHouseholdRoutine(name)
+	if err != nil {
+		if errors.Is(err, runtimedb.ErrNotFound) {
+			return nil, http.StatusNotFound, fmt.Errorf("no routine named %q", name)
+		}
+		return nil, http.StatusInternalServerError, err
+	}
+	if current.Ownership != runtimedb.RoutineWildstone {
+		return nil, http.StatusBadRequest, fmt.Errorf(
+			"%q runs inside %s, so Wildstone records that it exists and cannot change it (ADR-W030 A6)",
+			name, current.Connection)
+	}
+	if req.BasedOnRevision != 0 && req.BasedOnRevision != current.Revision {
+		return nil, http.StatusConflict, fmt.Errorf(
+			"this routine is on rev %d; your change was written against rev %d",
+			current.Revision, req.BasedOnRevision)
+	}
+
+	// The rule keeps the name it already answers to, whichever form the
+	// edit arrived in.
+	existing, perr := automation.ParseDraft(current.Document)
+	document := req.Document
+	if req.Spec != nil {
+		if perr != nil {
+			return nil, http.StatusBadRequest, fmt.Errorf(
+				"this routine's current document does not parse, so it cannot be edited as a spec — send a whole document: %w", perr)
+		}
+		rule := existing
+		rule.Automation = req.Spec
+		out, merr := resource.Marshal(rule)
+		if merr != nil {
+			return nil, http.StatusBadRequest, fmt.Errorf("writing the rule: %w", merr)
+		}
+		document = string(out)
+	}
+
+	// A document sent whole is stored as sent, parseable or not — that is
+	// what this route has always done, and CreateHouseholdRoutine does
+	// not validate either, so refusing here would leave a household able
+	// to write a broken routine and unable to replace it. The detail read
+	// is built to show an unparseable document for exactly that reason.
+	//
+	// A spec is different: this handler wrote that document, so if it
+	// does not parse the spec was not a rule and saying so is the only
+	// useful answer.
+	proposed, perr2 := automation.ParseDraft(document)
+	if perr2 != nil && req.Spec != nil {
+		return nil, http.StatusBadRequest, perr2
+	}
+	// The rename guard needs both names. When either side is unreadable
+	// there is nothing to compare, and refusing on that basis would block
+	// the edit that fixes it.
+	if perr == nil && perr2 == nil && proposed.Metadata.Name != existing.Metadata.Name {
+		return nil, http.StatusBadRequest, fmt.Errorf(
+			"this rule is called %q and an edit cannot rename it to %q: its runs are recorded under the name it had when it fired, "+
+				"so renaming would split its history in two",
+			existing.Metadata.Name, proposed.Metadata.Name)
+	}
+
+	// The registry write is held to the same standing policy as the
+	// Statefile path, so the Console form is not the only guard on a
+	// routine's action tier (ADR-W024 A5). An unparseable whole document
+	// is still stored as sent: it cannot be checked, and cannot fire.
+	if perr2 == nil {
+		if err := s.checkRoutinePlanPolicy(proposed, id); err != nil {
+			return nil, http.StatusUnprocessableEntity, err
+		}
+	}
+
+	revision, err := s.DB.EditHouseholdRoutine(name, document, actingMember(id), req.Note)
+	if err != nil {
+		if errors.Is(err, runtimedb.ErrNotFound) {
+			return nil, http.StatusNotFound, fmt.Errorf("no routine named %q", name)
+		}
+		return nil, http.StatusBadRequest, err
+	}
+
+	state, note := s.routineAfterEdit(name, current, id)
+	return map[string]any{
+		"revision": revision,
+		"state":    state,
+		"note":     note,
+	}, http.StatusOK, nil
+}
+
+// routineAfterEdit puts a changed routine back under watch.
+//
+// A routine that was ENABLED acts on its next trigger. Editing what it
+// does and leaving it enabled means the house starts doing something
+// new with nobody having watched it once — and there is no approval step
+// on this path to catch that. ADR-W024's guarantee is that a routine is
+// watched before it acts, so an edit returns it to trial and says so.
+//
+// Draft, trial and disabled routines are left where they are: none of
+// them acts, so there is nothing to take away.
+func (s *Server) routineAfterEdit(name string, before runtimedb.HouseholdRoutine, id principal.Identity) (string, string) {
+	current, err := s.DB.GetHouseholdRoutine(name)
+	if err != nil {
+		return runtimedb.RoutineDraft, "The edited version needs Owner review."
+	}
+	return current.State, "This version needs a new Owner approval before it runs. An earlier approval does not carry over."
+}
+
+// setHouseholdRoutineState moves a routine between draft, trial and
+// enabled, or disables it exactly and immediately.
+func (s *Server) setHouseholdRoutineState(r *http.Request, id principal.Identity) (any, int, error) {
+	name := r.PathValue("name")
+	var req struct {
+		State string `json:"state"`
+	}
+	if code, err := decodeStrict(r, &req); err != nil {
+		return nil, code, err
+	}
+	if req.State == runtimedb.RoutineEnabled || req.State == runtimedb.RoutineTrial || req.State == runtimedb.RoutineDisabled {
+		if body, code, err := s.freshOwnerReview(r, id); err != nil {
+			return body, code, err
+		}
+	}
+	var err error
+	if req.State == runtimedb.RoutineDisabled {
+		err = s.DB.ChangeReviewedRoutine(name, actingMember(id), "disable")
+	} else {
+		err = s.DB.SetHouseholdRoutineState(name, req.State, actingMember(id))
+	}
+	if err != nil {
+		if errors.Is(err, runtimedb.ErrNotFound) {
+			return nil, http.StatusNotFound, fmt.Errorf("no routine named %q", name)
+		}
+		return nil, http.StatusBadRequest, err
+	}
+	routine, err := s.DB.GetHouseholdRoutine(name)
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	return map[string]any{
+		"routine":         routine,
+		"performsActions": routine.PerformsActions(),
+	}, http.StatusOK, nil
+}
+
+// peerIsTrustedIngress reports whether this request arrived through the
+// configured identity proxy.
+//
+// TrustedIngress is a list of exact remote addresses rather than a CIDR
+// or a hostname: on this deployment the proxy is one container on one
+// network, the list is short, and an exact match cannot be widened by a
+// DNS answer.
+func (s *Server) peerIsTrustedIngress(r *http.Request) bool {
+	if len(s.TrustedIngressAddrs()) == 0 {
+		// Nothing configured means the paths that trust the proxy are
+		// not available, rather than available to everyone. An unconfigured
+		// trust boundary must fail closed.
+		return false
+	}
+	host := remoteHost(r)
+	for _, allowed := range s.TrustedIngressAddrs() {
+		if allowed == host {
+			return true
+		}
+	}
+	return false
+}

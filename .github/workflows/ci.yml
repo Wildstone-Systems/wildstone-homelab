@@ -1,0 +1,279 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  # gitleaks-action enumerates a PR's commits via the API on pull_request
+  # events; without this it 403s ("Resource not accessible by integration").
+  pull-requests: read
+
+jobs:
+  secrets-scan:
+    name: secret scan (gitleaks)
+    # This is the check that keeps a credential out of public history,
+    # so it runs on every pull request, including one from a fork.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  installer:
+    name: shell scripts (ADR-W014/W018)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: syntax
+        run: for f in scripts/*.sh; do bash -n "$f"; done
+      - name: disk guard offline checks
+        run: bash scripts/test-disk-guard.sh
+      # Pinned by checksum, like every other artifact this project runs
+      # (ADR-W003 A4.2's reasoning, applied to CI). ubuntu-latest's
+      # shellcheck is whatever GitHub last put in the runner image, and
+      # it silently differs from any modern dev machine: 0.9.0 here
+      # against 0.11.0 locally, which reports SC2015 on `a && b || fail`
+      # where 0.11 does not. A shell change can therefore be clean
+      # locally and fail here, or — worse — stop being checked at all
+      # the day GitHub bumps the runner.
+      #
+      # Run the identical check before pushing:
+      #   docker run --rm -v "$PWD:/mnt" koalaman/shellcheck:v0.9.0 scripts/*.sh
+      #
+      # Bumping the version is a deliberate, reviewed change, which is
+      # the whole point of pinning it: change the version and both
+      # checksums together.
+      - name: shellcheck
+        run: |
+          set -euo pipefail
+          v=v0.9.0
+          case "$(uname -m)" in
+            x86_64)  arch=x86_64;  sum=700324c6dd0ebea0117591c6cc9d7350d9c7c5c287acbad7630fa17b1d4d9e2f ;;
+            aarch64) arch=aarch64; sum=179c579ef3481317d130adebede74a34dbbc2df961a70916dd4039ebf0735fae ;;
+            *) echo "no pinned shellcheck for $(uname -m)"; exit 1 ;;
+          esac
+          curl -fsSL -o "$RUNNER_TEMP/shellcheck.tar.xz" \
+            "https://github.com/koalaman/shellcheck/releases/download/$v/shellcheck-$v.linux.$arch.tar.xz"
+          echo "$sum  $RUNNER_TEMP/shellcheck.tar.xz" | sha256sum -c -
+          tar -xJf "$RUNNER_TEMP/shellcheck.tar.xz" -C "$RUNNER_TEMP"
+          "$RUNNER_TEMP/shellcheck-$v/shellcheck" --version | head -3
+          "$RUNNER_TEMP/shellcheck-$v/shellcheck" scripts/*.sh
+      # The Console asset's name lives in two files that never see each
+      # other: release.yml produces it, install.sh fetches it. A rename
+      # in one would not fail anything until a release was cut and an
+      # install came back with no Console, so assert they agree.
+      - name: release and installer agree on the console asset
+        run: |
+          set -euo pipefail
+          grep -q 'console_dist\.tar\.gz' .github/workflows/release.yml \
+            || { echo "release.yml no longer produces console_dist.tar.gz"; exit 1; }
+          grep -q 'console_dist\.tar\.gz' scripts/install.sh \
+            || { echo "install.sh no longer fetches console_dist.tar.gz"; exit 1; }
+          grep -q 'packages\.tar\.gz' .github/workflows/release.yml \
+            || { echo "release.yml no longer produces packages.tar.gz"; exit 1; }
+          grep -q 'packages\.tar\.gz' scripts/install.sh \
+            || { echo "install.sh no longer fetches packages.tar.gz"; exit 1; }
+          grep -q 'wallpapers\.tar\.gz' .github/workflows/release.yml \
+            || { echo "release.yml no longer produces wallpapers.tar.gz"; exit 1; }
+          grep -q 'wallpapers\.tar\.gz' scripts/install.sh \
+            || { echo "install.sh no longer fetches wallpapers.tar.gz"; exit 1; }
+          grep -q 'build-native-agent\.sh' .github/workflows/release.yml \
+            || { echo "release.yml no longer builds native-agent_linux_<arch>.tar.gz"; exit 1; }
+          grep -q 'native-agent_linux_' scripts/build-native-agent.sh \
+            || { echo "build-native-agent.sh no longer produces native-agent_linux_<arch>.tar.gz"; exit 1; }
+          grep -q 'native-agent_linux_' scripts/install.sh \
+            || { echo "install.sh no longer fetches native-agent_linux_<arch>.tar.gz"; exit 1; }
+          # And the pictures themselves are still there to be packed: an
+          # empty wallpapers/ would produce a valid tarball of nothing
+          # and every theme would quietly lose its picture again.
+          [ "$(find wallpapers -maxdepth 1 -type f \( -name '*.webp' -o -name '*.jpg' -o -name '*.png' \) | wc -l)" -gt 0 ] \
+            || { echo "wallpapers/ has no pictures in it"; exit 1; }
+
+  console:
+    name: console (typecheck + build + checks, ADR-W016/W027)
+    runs-on: ubuntu-latest
+    # `playwright` is a devDependency for scripts/ui-check.mjs, which is an
+    # operator's check against their own control plane and never runs here.
+    # Without this, every install in this job downloads a browser nothing
+    # in it will open.
+    env:
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: console/package-lock.json
+      - name: install
+        run: cd console && npm ci
+      - name: typecheck + build
+        run: cd console && npm run build
+      # The render check proves the screens and the shared components
+      # render; the contrast check proves the token set is legible on
+      # both grounds (ADR-W027). Neither needs a browser or a control
+      # plane, so both belong here rather than in the e2e job.
+      - name: render check
+        run: cd console && npm run render-check
+      - name: contrast check
+        run: cd console && npm run contrast-check
+
+  ddgs-worker:
+    name: bounded DDGS worker (ADR-W047, S18)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12.14"
+      - name: pinned dependencies and offline contract fixtures
+        run: |
+          set -euo pipefail
+          ddgs_venv="$(mktemp -d "$RUNNER_TEMP/ddgs-test.XXXXXX")"
+          trap 'rm -rf "$ddgs_venv"' EXIT
+          python -m venv "$ddgs_venv"
+          "$ddgs_venv/bin/python" -m pip install --require-hashes -r runtimes/ddgs-worker/requirements.txt
+          cd runtimes/ddgs-worker
+          "$ddgs_venv/bin/python" -m unittest discover -s tests -v
+
+  native-agent:
+    name: native agent runtime (OpenAI Agents SDK sidecar, #357)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: runtimes/native-agent/package-lock.json
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+      - name: install
+        run: cd runtimes/native-agent && npm ci
+      - name: typecheck + sidecar tests
+        run: cd runtimes/native-agent && npm test
+      # Build the release package exactly as release.yml does, then run
+      # the end-to-end tests against what is INSIDE it: its own Node and
+      # its bundled sidecar. The adapter's own tests (in the go job) use
+      # a fake sidecar; these use the real SDK loop with a scripted model,
+      # so protocol.go and protocol.ts cannot drift apart unnoticed, and a
+      # package that would not run on an installed host fails here rather
+      # than after a release.
+      - name: build release package (amd64)
+        # Downloads are verified against the hashes pinned in the script
+        # every time, so reusing the runner's cache cannot change what
+        # gets packaged.
+        env:
+          NODE_CACHE: ${{ runner.tool_cache }}/wildstone-node
+        run: |
+          set -euo pipefail
+          (cd runtimes/native-agent && npm run bundle)
+          scripts/build-native-agent.sh amd64 "$RUNNER_TEMP/native-agent-dist"
+          rm -rf "$RUNNER_TEMP/native-agent"
+          mkdir -p "$RUNNER_TEMP/native-agent"
+          tar -xzf "$RUNNER_TEMP/native-agent-dist/native-agent_linux_amd64.tar.gz" -C "$RUNNER_TEMP/native-agent"
+          "$RUNNER_TEMP/native-agent/bin/node" "$RUNNER_TEMP/native-agent/main.mjs" --health
+      - name: keystone ↔ packaged sidecar end-to-end
+        run: |
+          WILDSTONE_NATIVE_AGENT_NODE="$RUNNER_TEMP/native-agent/bin/node" \
+          WILDSTONE_NATIVE_AGENT_SIDECAR="$RUNNER_TEMP/native-agent/main.mjs" \
+            go -C keystone test -race -count=1 -run '^TestE2E' -v ./agentruntime/native ./butlerlive
+        env:
+          CGO_ENABLED: "1"
+
+  go:
+    name: go (${{ matrix.goarch }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        goarch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+      - name: gofmt
+        run: test -z "$(gofmt -l ./proto ./wardstone ./keystone ./cli ./testing/e2e)"
+      - name: vet
+        run: |
+          for m in proto wardstone keystone cli testing/e2e; do (cd "$m" && go vet ./...); done
+      - name: build
+        env:
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          for m in proto wardstone keystone cli testing/e2e; do (cd "$m" && go build ./...); done
+      - name: install caddy (route-config validation, #40)
+        if: matrix.goarch == 'amd64'
+        # keystone/reconcile renders Caddy config; the adapter itself is
+        # the only thing that can say whether the result parses. The test
+        # skips when caddy is absent, so without this step the check would
+        # quietly never run.
+        run: go install github.com/caddyserver/caddy/v2/cmd/caddy@v2.8.4
+      - name: test
+        if: matrix.goarch == 'amd64'
+        # -race: the product is concurrent (gateway, agent sessions,
+        # reconciler, butler loop); the detector is the cheapest guard
+        # against the data races those paths could grow. Requires cgo,
+        # available on the amd64 runner.
+        #
+        # -timeout: go test defaults to 10 minutes PER TEST BINARY, and
+        # under -race two packages already sit near it — runtimedb runs
+        # 353s on a fast runner and 506s on a slow one, and keystone/api
+        # is close behind. Runner speed then decides pass or fail: the
+        # same commit has gone green on one machine and panicked at
+        # 600.038s on another, with every unrelated package ~40% slower
+        # on the slow run. That is a coin toss dressed as a test result,
+        # and it costs a 25-minute cycle each time it lands wrong.
+        #
+        # 30m is headroom rather than a target. The cost itself is dealt
+        # with in keystone/internal/dbtemplate, which migrates one
+        # database per test binary and copies it: the whole keystone
+        # module now runs in under two minutes here rather than four,
+        # and butlerstore alone went from 133s to 12s. The ceiling stays
+        # because it keeps the failure honest — a timeout should mean
+        # something hung, not that the runner was busy.
+        #
+        # runtimedb's migration tests skip here: they replay the real
+        # migration history, which -race makes the slowest thing in the
+        # suite while checking nothing it can see (one goroutine running
+        # SQL). The next step runs them. See replaysMigrations.
+        env:
+          CGO_ENABLED: "1"
+        run: |
+          for m in proto wardstone keystone cli testing/e2e; do (cd "$m" && go test -race -timeout 30m ./...); done
+      - name: runtimedb migration tests (no -race)
+        if: matrix.goarch == 'amd64'
+        # The whole package, so every test that skipped under -race above
+        # runs here. Without -race it takes about a minute.
+        run: cd keystone && go test -timeout 30m ./runtimedb
+      - uses: actions/setup-python@v5
+        if: matrix.goarch == 'amd64'
+        with:
+          python-version: "3.12"
+      - name: shared calendar CalDAV conformance
+        if: matrix.goarch == 'amd64'
+        run: |
+          calendar_venv="$(mktemp -d "$RUNNER_TEMP/calendar-test.XXXXXX")"
+          trap 'rm -rf "$calendar_venv"' EXIT
+          python -m venv "$calendar_venv"
+          "$calendar_venv/bin/python" -m pip install 'radicale==3.8.0'
+          RADICALE_TEST_PYTHON="$calendar_venv/bin/python" go test -v ./keystone/pkgtool -run '^TestSharedCalendarRadicaleDiscovery$'
+      - name: ts codegen drift (ADR-W007 A7)
+        if: matrix.goarch == 'amd64'
+        # The committed console/src/generated/resources.ts must match what
+        # the generator emits from keystone/resource — the Console cannot
+        # drift from the schema silently.
+        run: |
+          (cd keystone && go run ./resource/gen -out ../console/src/generated/resources.ts)
+          git diff --exit-code console/src/generated/

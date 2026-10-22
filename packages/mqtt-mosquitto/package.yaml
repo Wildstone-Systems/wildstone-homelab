@@ -1,0 +1,141 @@
+# MQTT capability, profile "mosquitto": the message bus that lets the
+# household's devices talk to each other — Zigbee2MQTT publishes onto
+# it, Frigate publishes onto it, Home Assistant listens. Nothing a
+# person opens, so no Route and no dashboard card.
+#
+# WHO CAN CONNECT. Only a client with a username and password: anonymous
+# access is off. Each consuming capability gets its OWN credential — a
+# username equal to its capability name, and a password generated on
+# this node as secret/mqtt-<capability> — so one compromised client can
+# be rotated without re-keying the house. The password file below holds
+# only Mosquitto's own `$7$` hashes; the node derives them from the
+# secrets at write time (`mosquitto:secret/...`, ADR-W012), and no
+# plaintext reaches Keystone, a plan, or this file.
+#
+# The consumers are named here, deliberately: a broker that issued
+# credentials to whoever asked would be a broker with no list of who is
+# on it. A new consumer is a line in the password file and a Secret —
+# until it is, expansion refuses that consumer by name ("issues no such
+# secret") rather than letting it install and fail to authenticate.
+#
+# WHERE IT LISTENS. On ONE private address of this machine, which the
+# operator names (listen_addr) — never every interface by default. That
+# address is what the broker advertises through `.Resolved.MqttHost`,
+# because it is the one address that works for BOTH kinds of consumer:
+# Home Assistant on host networking cannot resolve the container name
+# "mosquitto", and a bridge-networked container reaches a host address
+# as readily as a name. The broker is also still reachable by name on
+# the Wildstone network; nothing advertises that, so nothing depends on
+# it.
+#
+# SAME NODE, FOR NOW. A consumer's password is a node secret here, and
+# node secrets never leave their node. A consumer installed on another
+# machine is refused at expansion with both node names, until a
+# supported cross-node credential path exists.
+#
+# `user root`: Mosquitto drops to its own uid BEFORE it reads the
+# password file (src/mosquitto.c: drop_privileges, then
+# mosquitto_security_init), and a secret-bearing managed file lands
+# root-owned and 0600 (wardstone ops.go) with no way to name another
+# owner. Staying root inside the container is what lets the broker read
+# its own credentials; the alternative is a group- or world-readable
+# password file, which is the thing that mode exists to prevent.
+#
+# Mosquitto's image runs /usr/sbin/mosquitto -c
+# /mosquitto/config/mosquitto.conf by default, and the managed config
+# directory is mounted at exactly that path, so no command is needed.
+#
+# Image digest is REAL, resolved 2026-09-07 via the OCI registry API:
+#   eclipse-mosquitto:latest -> sha256:6f8d8a94...9797
+apiVersion: wildstone.dev/v1
+kind: Package
+metadata:
+  name: mqtt-mosquitto
+  # 2.0.0: anonymous access is gone. Every client now needs the
+  # credential this package issues it, and the LAN listener needs an
+  # address the operator supplies.
+  version: 2.0.0
+  capability: mqtt
+  profile: mosquitto
+provides:
+  # WHAT A CONSUMER RENDERS AGAINST (keystone/trait, mqtt:broker). The
+  # address comes from what this package INSTALLED — the port it
+  # published — because an export cannot see the params the broker was
+  # installed with (ADR-W025 Part B item 4), and the one param that
+  # matters here is required. Before the broker is installed these
+  # render empty and are not published, so a consumer fails on a missing
+  # key rather than connecting to an address nobody chose.
+  - trait: mqtt
+    mode: broker
+    exports:
+      MqttHost: '{{ publishedHost "mosquitto" 1883 }}'
+      MqttPort: '{{ publishedPort "mosquitto" 1883 }}'
+      MqttURL: '{{ with publishedHost "mosquitto" 1883 }}mqtt://{{ . }}:{{ publishedPort "mosquitto" 1883 }}{{ end }}'
+      MqttUsername: '{{ .Consumer }}'
+      MqttPasswordSecretRef: 'secret/mqtt-{{ .Consumer }}'
+params:
+  - { name: node, required: true, description: "Which machine to install this on. Everything that talks to the broker must be installed on this same machine.", source: node }
+  - { name: listen_addr, required: true, example: "192.168.1.10", validate: private_ipv4, description: "The private address on this machine the broker listens on — its LAN address, e.g. 192.168.1.10, or its tailnet address. Home Assistant and devices on your network connect here. Every-interface (0.0.0.0) and loopback are refused." }
+  - { name: listen_port, default: "1883", validate: port, description: "The port the broker listens on at that address. 1883 is the MQTT default." }
+policies:
+  classifications: [internal_only]
+  dataSensitivity: medium
+templates:
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: mosquitto-data, node: "{{ .Params.node }}" }
+    spec: { name: mosquitto-data }
+  # ---- One generated password per consuming capability, on this node.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: mqtt-zigbee, node: "{{ .Params.node }}" }
+    spec: { name: mqtt-zigbee, purpose: "Zigbee2MQTT's password on the MQTT broker (username zigbee)." }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: mqtt-cameras, node: "{{ .Params.node }}" }
+    spec: { name: mqtt-cameras, purpose: "Frigate's password on the MQTT broker (username cameras)." }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: mqtt-home-assistant, node: "{{ .Params.node }}" }
+    spec: { name: mqtt-home-assistant, purpose: "Home Assistant's password on the MQTT broker (username home-assistant)." }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: ConfigFile
+    metadata: { name: mosquitto-passwd, node: "{{ .Params.node }}" }
+    spec:
+      filename: passwd
+      content: |
+        zigbee:mosquitto:secret/mqtt-zigbee
+        cameras:mosquitto:secret/mqtt-cameras
+        home-assistant:mosquitto:secret/mqtt-home-assistant
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: ConfigFile
+    metadata: { name: mosquitto-conf, node: "{{ .Params.node }}" }
+    spec:
+      filename: mosquitto.conf
+      content: |
+        # Managed by Wildstone — do not edit.
+        user root
+        listener 1883
+        allow_anonymous false
+        password_file /mosquitto/config/passwd
+        persistence true
+        persistence_location /mosquitto/data/
+        log_dest stdout
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: mosquitto, node: "{{ .Params.node }}" }
+    spec:
+      image: "eclipse-mosquitto@sha256:6f8d8a947c506f8a2290ec65cd4bd2bc7cb4d43fb5f6271f861cb013e2ef9797"
+      ports:
+        - "{{ .Params.listen_addr }}:{{ .Params.listen_port }}:1883"
+      mounts:
+        - { source: /etc/wildstone/mqtt, target: /mosquitto/config, readOnly: true }
+        - { source: mosquitto-data, target: /mosquitto/data }
+      restart: unless-stopped

@@ -1,0 +1,39 @@
+[Unit]
+Description=Wildstone Wardstone host agent
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+# --node-id and --keystone are required; --ca-fingerprint is strongly
+# recommended in production (see `keystone`'s startup log for the value to
+# pin). --join-token is only needed for the node's first-ever start — once
+# an identity is persisted under --data-dir it is not read again.
+#
+# Example:
+#   ExecStart=/usr/local/bin/wardstoned \
+#     --node-id=%H \
+#     --keystone=keystone.example.internal:7443 \
+#     --ca-fingerprint=<sha256 printed by keystone at startup> \
+#     --data-dir=/etc/wildstone/wardstone \
+#     --join-token=<one-time token, first start only>
+ExecStart=/usr/local/bin/wardstoned
+
+# Outer watchdog (ADR-W003 W5): the self-update health gate is entirely
+# agent-side — a promoted binary has update-state.json's 2-minute deadline
+# to establish a Keystone session before the NEXT process start reverts it.
+# Restart=always is what turns "the promoted binary crashes on startup"
+# into "there IS a next process start" quickly enough for that gate to
+# matter; WatchdogSec/sd_notify are deliberately NOT used here — there is
+# no liveness ping to send once a session is up, and a crash is already
+# covered by Restart=always relaunching the unit.
+Restart=always
+RestartSec=2
+
+# wardstoned touches the Docker socket and host paths under the configured
+# managed prefixes; it does not otherwise need elevated privileges beyond
+# that. Run as root in this spike unit — a locked-down user/group and
+# capability set is a packaging hardening pass, not part of W5.
+User=root
+
+[Install]
+WantedBy=multi-user.target

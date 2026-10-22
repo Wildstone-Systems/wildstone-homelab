@@ -1,0 +1,45 @@
+# Secrets and local env — never tracked
+.env
+.env.*
+*.pem
+*.key
+*.age
+secrets/
+
+# Build artifacts
+bin/
+dist/
+*.test
+coverage.out
+
+# Node / Console
+node_modules/
+console/dist/
+
+# Editor / OS noise
+.idea/
+.vscode/
+.DS_Store
+
+# Local scratch
+tmp/
+
+# Claude Code harness scratch (agent worktrees, session state)
+.claude/
+
+# Stub binaries built in-module by go build
+/cli/wild
+/keystone/keystone
+/wardstone/wardstoned
+
+# A compiled binary at the repo root. It was tracked once, at 11MB, and a
+# Go binary embeds the build machine's module paths — so it carried the
+# builder's home directory, and therefore their username, into every
+# clone. Build it with `go build -o wild ./cli/cmd/wild`.
+/wild
+
+# graft's local graph cache — regenerable, not committed (run `graft build`).
+/graft/
+
+# Same for the chat adapter, built in place by `go build` in its directory.
+/cli/cmd/chat-adapter/chat-adapter

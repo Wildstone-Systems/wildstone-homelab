@@ -1,0 +1,182 @@
+package runtimedb
+
+import (
+	"strings"
+	"testing"
+)
+
+// The bug this is written from: ListPlans deliberately blanks plan_json,
+// and installedVersions() read it anyway. Every unmarshal failed, the
+// version map was always empty, and the Console's "this capability is
+// behind the catalog" (F91) reported nothing on any real deployment —
+// shipped, tested against a fake, and inert.
+//
+// This asserts against the real schema, which is the only place the
+// difference is visible.
+func TestListPlansOmitsJSONAndAppliedPlanJSONReturnsIt(t *testing.T) {
+	db := open(t)
+	doc := `{"summary":"enable capability x","origin":{"package":"pkg-x","version":"1.2.3"}}`
+	id, err := db.InsertPlan("admin", "", "enable capability x", "low", doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, to := range []PlanState{PlanApproved, PlanApplying, PlanApplied} {
+		if err := db.TransitionPlan(id, to, "admin"); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// The listing does not carry it. That is deliberate, and stated here
+	// so a caller cannot rediscover it by accident.
+	recs, err := db.ListPlans(10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recs) != 1 {
+		t.Fatalf("want one plan, got %d", len(recs))
+	}
+	if recs[0].PlanJSON != "" {
+		t.Error("ListPlans is documented as omitting plan_json; something now depends on it carrying one")
+	}
+
+	// This is where origins come from.
+	docs, err := db.AppliedPlanJSON(10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(docs) != 1 {
+		t.Fatalf("want one applied plan document, got %d", len(docs))
+	}
+	if !strings.Contains(docs[0], `"package":"pkg-x"`) {
+		t.Errorf("the stored origin did not come back: %s", docs[0])
+	}
+}
+
+// A plan that never reached the Statefile is not an install. Approval is
+// what commits a change, so `proposed`, `rejected` and `superseded` are
+// the states that genuinely never happened — and they are the ones this
+// leaves out.
+func TestAppliedPlanJSONIgnoresPlansThatNeverCommitted(t *testing.T) {
+	db := open(t)
+	if _, err := db.InsertPlan("admin", "", "proposed only", "low", `{"origin":{"package":"never"}}`); err != nil {
+		t.Fatal(err)
+	}
+	rejected, err := db.InsertPlan("admin", "", "rejected one", "low", `{"origin":{"package":"rejected"}}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.TransitionPlan(rejected, PlanRejected, "admin"); err != nil {
+		t.Fatal(err)
+	}
+
+	docs, err := db.AppliedPlanJSON(10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(docs) != 0 {
+		t.Errorf("a plan that never committed is not an install, got %v", docs)
+	}
+}
+
+// A plan that failed at the NODE still changed desired state — the loop
+// says so: "approval already committed the change", and "the Statefile
+// is not reverted on failure: desired stays desired and the next tick
+// retries". Excluding it made the Console describe an install by the
+// params of the one before it, which is how a form went on offering a
+// timezone the running container no longer had.
+func TestAppliedPlanJSONKeepsAPlanThatFailedAtTheNode(t *testing.T) {
+	db := open(t)
+	failed, err := db.InsertPlan("admin", "", "failed one", "low", `{"origin":{"package":"failed"}}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, to := range []PlanState{PlanApproved, PlanApplying, PlanFailed} {
+		if err := db.TransitionPlan(failed, to, "admin"); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	docs, err := db.AppliedPlanJSON(10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(docs) != 1 {
+		t.Fatalf("a committed plan describes the install even when the node lagged, got %v", docs)
+	}
+}
+
+// PlansMentioning is a package's install history: every state, newest
+// first, with the JSON — so "the newest attempt failed" can be told from
+// "an older one failed and a later one applied" (#446).
+func TestPlansMentioningKeepsStateAndOrder(t *testing.T) {
+	db := open(t)
+	first, err := db.InsertPlan("admin", "", "enable x", "low", `{"origin":{"package":"pkg-x"}}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, to := range []PlanState{PlanApproved, PlanApplying, PlanFailed} {
+		if err := db.TransitionPlan(first, to, "admin"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := db.InsertPlan("admin", "", "enable y", "low", `{"origin":{"package":"pkg-y"}}`); err != nil {
+		t.Fatal(err)
+	}
+	second, err := db.InsertPlan("admin", "", "enable x again", "low", `{"origin":{"package":"pkg-x"}}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recs, err := db.PlansMentioning(`"package":"pkg-x"`, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recs) != 2 || recs[0].ID != second || recs[0].State != PlanProposed ||
+		recs[1].ID != first || recs[1].State != PlanFailed || recs[1].PlanJSON == "" {
+		t.Fatalf("PlansMentioning = %+v", recs)
+	}
+}
+
+func applyPlan(t *testing.T, db *DB, summary, doc string) {
+	t.Helper()
+	id, err := db.InsertPlan("admin", "", summary, "low", doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, to := range []PlanState{PlanApproved, PlanApplying, PlanApplied} {
+		if err := db.TransitionPlan(id, to, "admin"); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// #185: an install must stay visible however many unrelated plans follow
+// it, and only the newest origin per package#instance comes back.
+func TestLatestAppliedOriginJSONSurvivesUnrelatedPlans(t *testing.T) {
+	db := open(t)
+	applyPlan(t, db, "old x", `{"origin":{"package":"pkg-x","version":"1.0.0"}}`)
+	applyPlan(t, db, "new x", `{"origin":{"package":"pkg-x","version":"2.0.0"}}`)
+	applyPlan(t, db, "inst a", `{"origin":{"package":"pkg-y","version":"1.0.0","params":{"instance":"a"}}}`)
+	applyPlan(t, db, "inst b", `{"origin":{"package":"pkg-y","version":"1.0.0","params":{"instance":"b"}}}`)
+	if _, err := db.InsertPlan("admin", "", "proposed only", "low", `{"origin":{"package":"never","version":"1"}}`); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 1000; i++ {
+		applyPlan(t, db, "backup", `{"summary":"backup"}`)
+	}
+
+	docs, err := db.LatestAppliedOriginJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(docs) != 3 {
+		t.Fatalf("want newest origin for pkg-x, pkg-y#a and pkg-y#b, got %d: %v", len(docs), docs)
+	}
+	joined := strings.Join(docs, "\n")
+	if !strings.Contains(joined, `"version":"2.0.0"`) ||
+		strings.Contains(joined, `"package":"never"`) {
+		t.Errorf("wrong selection: %s", joined)
+	}
+	if strings.Count(joined, `"package":"pkg-x"`) != 1 {
+		t.Errorf("pkg-x should appear once, newest only: %s", joined)
+	}
+}

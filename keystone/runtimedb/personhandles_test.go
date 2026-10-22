@@ -1,0 +1,176 @@
+package runtimedb
+
+// What person_handles is held to (#372): a reference written as a handle
+// keeps reaching the same Person after a rename, and a retired handle is
+// never handed to somebody else.
+
+import (
+	"testing"
+)
+
+func TestAReferenceFollowsItsPersonThroughARename(t *testing.T) {
+	db := openWith(t, "sam", "alex")
+	before, err := db.ResolvePersonRef("sam")
+	if err != nil || before == "" {
+		t.Fatalf("ResolvePersonRef(sam) = %q, %v", before, err)
+	}
+	if err := db.RenameButlerMemberHandle("sam", "samuel"); err != nil {
+		t.Fatalf("rename: %v", err)
+	}
+	for _, ref := range []string{"sam", "samuel", before} {
+		got, err := db.ResolvePersonRef(ref)
+		if err != nil || got != before {
+			t.Errorf("ResolvePersonRef(%q) = %q, %v; want %q", ref, got, err, before)
+		}
+	}
+	if handle, err := db.PersonHandle(before); err != nil || handle != "samuel" {
+		t.Errorf("PersonHandle = %q, %v; want samuel", handle, err)
+	}
+	for _, ref := range []string{"nobody", "", "psn_0000000000000000", "Sam"} {
+		if got, err := db.ResolvePersonRef(ref); err != nil || got != "" {
+			t.Errorf("ResolvePersonRef(%q) = %q, %v; want nobody", ref, got, err)
+		}
+	}
+}
+
+func TestARetiredHandleIsNeverGivenToSomebodyElse(t *testing.T) {
+	db := openWith(t, "sam", "alex")
+	sam, _ := db.ResolvePersonRef("sam")
+	if err := db.RenameButlerMemberHandle("sam", "samuel"); err != nil {
+		t.Fatalf("rename: %v", err)
+	}
+	if err := db.RecordButlerMember("sam", RoleMember, "", ""); err == nil {
+		t.Fatal("a new Person took a retired handle, inheriting every grant written for it")
+	}
+	if err := db.RenameButlerMemberHandle("alex", "sam"); err == nil {
+		t.Fatal("another Person was renamed onto a retired handle")
+	}
+	// Their own old name is theirs to take back.
+	if err := db.RenameButlerMemberHandle("samuel", "sam"); err != nil {
+		t.Fatalf("taking an own handle back: %v", err)
+	}
+	if got, _ := db.ResolvePersonRef("samuel"); got != sam {
+		t.Errorf("samuel resolves to %q, want %q", got, sam)
+	}
+	// Re-recording an existing Person is still an update of that Person.
+	if err := db.RecordButlerMember("sam", RoleMember, "", ""); err != nil {
+		t.Fatalf("re-recording sam: %v", err)
+	}
+}
+
+func TestCalendarVisibilitySurvivesARename(t *testing.T) {
+	db := openWith(t, "sam")
+	if err := db.SetCalendarVisibility("sam", "school", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.RenameButlerMemberHandle("sam", "samuel"); err != nil {
+		t.Fatal(err)
+	}
+	prefs, err := db.CalendarVisibility("samuel")
+	if err != nil || prefs["school"] {
+		t.Fatalf("prefs after rename = %v, %v", prefs, err)
+	}
+	if v, ok := prefs["school"]; !ok || v {
+		t.Fatalf("hidden calendar lost across rename: %v", prefs)
+	}
+	if err := db.SetCalendarVisibility("stranger", "school", false); err == nil {
+		t.Fatal("stored a preference for nobody on record")
+	}
+}
+
+func TestAPersonalFolderStaysPutThroughARename(t *testing.T) {
+	db := openWith(t, "sam", "alex")
+	dir, ok, err := db.PersonalFilesDir("sam", "sam")
+	if err != nil || !ok || dir != "sam" {
+		t.Fatalf("first folder = %q, %v, %v", dir, ok, err)
+	}
+	if err := db.RenameButlerMemberHandle("sam", "samuel"); err != nil {
+		t.Fatal(err)
+	}
+	dir, ok, err = db.PersonalFilesDir("samuel", "samuel")
+	if err != nil || !ok || dir != "sam" {
+		t.Fatalf("folder after rename = %q, %v, %v; want the same folder", dir, ok, err)
+	}
+	if dir, _, err := db.PersonalFilesDir("alex", "sam"); err != nil || dir != "alex" {
+		t.Fatalf("alex's folder = %q %v; a recorded folder is never replaced by a proposal", dir, err)
+	}
+	// A new Person whose name gives a folder somebody already holds is not
+	// put in it.
+	record(t, db, "Sam")
+	if _, _, err := db.PersonalFilesDir("Sam", "sam"); err == nil {
+		t.Fatal("two People were given one folder")
+	}
+	if _, ok, err := db.PersonalFilesDir("stranger", "stranger"); ok || err != nil {
+		t.Fatalf("somebody with no Person got a recorded folder: %v, %v", ok, err)
+	}
+}
+
+func TestPersonHandlesListsTheCurrentNameFirst(t *testing.T) {
+	db := openWith(t, "sam")
+	if err := db.RenameButlerMemberHandle("sam", "samuel"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := db.PersonHandles("samuel")
+	if err != nil || len(got) != 2 || got[0] != "samuel" || got[1] != "sam" {
+		t.Fatalf("PersonHandles = %v, %v", got, err)
+	}
+	// A name that is only somebody's old handle is not that somebody.
+	if got, _ := db.PersonHandles("sam"); len(got) != 1 || got[0] != "sam" {
+		t.Fatalf("an old handle reached its Person's history: %v", got)
+	}
+}
+
+// Somebody signed in under a name another Person used to carry gets none
+// of that Person's own things (#426 review).
+func TestAnOldNameDoesNotSignInAsItsPerson(t *testing.T) {
+	db := openWith(t, "sam")
+	if _, _, err := db.PersonalFilesDir("sam", "sam"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SetCalendarVisibility("sam", "school", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.RenameButlerMemberHandle("sam", "samuel"); err != nil {
+		t.Fatal(err)
+	}
+	// "sam" is now only a directory account with no Person.
+	if dir, ok, err := db.PersonalFilesDir("sam", "sam"); ok || err == nil {
+		t.Fatalf("the old name reached the Person's folder: %q %v %v", dir, ok, err)
+	}
+	if prefs, err := db.CalendarVisibility("sam"); err != nil || len(prefs) != 0 {
+		t.Fatalf("the old name read the Person's choices: %v %v", prefs, err)
+	}
+	if err := db.SetCalendarVisibility("sam", "school", true); err == nil {
+		t.Fatal("the old name wrote the Person's choices")
+	}
+	samuel, _ := db.ResolvePersonRef("samuel")
+	for _, login := range []string{"sam", "SAM", "samuel"} {
+		if owners, err := db.HandleOwners(login); err != nil || len(owners) != 1 || owners[0] != samuel {
+			t.Fatalf("HandleOwners(%s) = %v %v", login, owners, err)
+		}
+	}
+}
+
+// Somebody who used Files as a plain directory account, became a Person and
+// was renamed before opening Files again keeps their folder, and a new
+// account under the old name does not get it (#426 review).
+func TestAFolderUsedBeforeBecomingAPersonStaysTheirs(t *testing.T) {
+	db := openWith(t)
+	if _, ok, err := db.PersonalFilesDir("sam", "sam"); ok || err != nil {
+		t.Fatalf("no Person yet: %v %v", ok, err)
+	}
+	record(t, db, "sam")
+	if err := db.RenameButlerMemberHandle("sam", "samuel"); err != nil {
+		t.Fatal(err)
+	}
+	if dir, ok, err := db.PersonalFilesDir("samuel", "samuel"); err != nil || !ok || dir != "sam" {
+		t.Fatalf("samuel's folder = %q %v %v; want the one they had", dir, ok, err)
+	}
+	if dir, ok, err := db.PersonalFilesDir("sam", "sam"); ok || err == nil {
+		t.Fatalf("a new account under the old name got the folder: %q %v %v", dir, ok, err)
+	}
+	// A case variant of a Person's handle is theirs too.
+	if _, ok, err := db.PersonalFilesDir("SAMUEL", "samuel"); ok || err == nil {
+		t.Fatal("a case variant reached the Person's folder")
+	}
+}

@@ -1,0 +1,179 @@
+# Home Automation capability: the Home Assistant adapter (ADR-W024 A10,
+# work package H5). This is the first third-party service to publish into
+# Wildstone's household event stream, and it does so in the "config"
+# shape: Home Assistant already knows how to call a webhook, so the
+# package ships the configuration that makes it call ours. No sidecar, no
+# polling, and no Wildstone code that knows anything about Home
+# Assistant's API.
+#
+# DELIBERATELY NOT a package that runs Home Assistant. A household with a
+# home-automation setup already has one — on bare metal, in a VM, on a
+# Raspberry Pi with a USB radio hanging off it — and adopting that is a
+# capability package of its own, not a side effect of wiring up events.
+# This package templates one managed file and nothing else, so it works
+# against whatever Home Assistant the household already runs.
+#
+# INSTALLING (two steps, in this order):
+#
+#  1. Give the capability its publisher credential, which mints the
+#     principal and places the token on the node as the provided secret
+#     this package's ConfigFile references:
+#
+#        wild household publisher home-automation -node <node>
+#
+#     The reconciler refuses to write the file until that secret exists,
+#     and names it if you forget — a config carrying the literal text
+#     "secret/..." where a token belongs is a Home Assistant that posts
+#     401s forever with nothing in any log to explain it.
+#
+#  2. Enable the capability, then include the rendered file from your
+#     Home Assistant configuration.yaml:
+#
+#        homeassistant:
+#          packages: !include_dir_named /etc/wildstone/home-automation
+#
+# THE SUBJECT MAPPING (ADR-W024 A8). A household event's subject must
+# name someone Wildstone can reason about, and Home Assistant's notion of
+# a person is a `person.<object_id>` entity. This adapter declares the
+# mapping it can actually achieve: **the subject is the Home Assistant
+# person's object id** — `person.mika` publishes events about `mika`.
+# It is not a lookup table, because Home Assistant's object ids are the
+# only stable per-person identifier it exposes to a template. A household
+# that wants these to match its Wildstone member names should name its
+# Home Assistant people accordingly; a household that does not can simply
+# write its rules against the object ids, which is what the subject is.
+apiVersion: wildstone.dev/v1
+kind: Package
+metadata:
+  name: home-automation-hass
+  version: 1.0.4
+  capability: home-automation
+  profile: home-assistant
+params:
+  # All three carry their explanation in `description`, not in a comment
+  # above them. The form renders a name and a description and cannot see
+  # this file: three required params with neither left an operator
+  # looking at "intake_url *" and a blank box, which is precisely the
+  # unanswerable question ParamDecl.Description exists to prevent.
+  - { name: node, required: true, source: node, description: "Which machine to install this on." }
+  # The WHOLE endpoint, filled in by the deployment. `source:
+  # household_intake_url` is the API's address plus the intake path,
+  # which the control plane knows and an operator would otherwise have
+  # to look up.
+  #
+  # Sourcing only the base and appending the path in the template below
+  # was the obvious alternative and it is wrong: this param has always
+  # meant the full URL, so anyone who supplied one would get
+  # /api/v1/household/events twice on their next reconcile.
+  - { name: intake_url, required: true, source: household_intake_url, validate: url, example: "http://100.64.0.1:9441/api/v1/household/events", description: "Where Home Assistant should POST household events. The Wildstone API binds loopback and the tailnet, so this is a tailnet or LAN address — never 127.0.0.1, which would mean Home Assistant's own container." }
+  - { name: people, required: true, example: "person.ada, person.sam", description: "The people to watch for arriving home, as Home Assistant's own entity names, comma-separated — e.g. person.ada, person.sam. Find them in Home Assistant under Settings, People." }
+publishes:
+  shape: config
+  events:
+    - type: person.arrived_home
+      subject: member
+      description: A tracked person's presence changed to home.
+      fields:
+        - { name: entity, type: string, required: true }
+        - { name: from, type: string }
+        - { name: to, type: string }
+    - type: person.left_home
+      subject: member
+      description: A tracked person's presence changed away from home.
+      fields:
+        - { name: entity, type: string, required: true }
+        - { name: from, type: string }
+        - { name: to, type: string }
+# The rendered file is read by Home Assistant, which Wildstone does not
+# run — so the standing invariant that every rendered config is mounted
+# into a container of its own package cannot hold here, and this says so
+# rather than letting the file look like the Authelia bug that invariant
+# exists to catch (a correct config on disk that nothing reads).
+externalConfig:
+  - filename: wildstone.yaml
+    consumer: Home Assistant
+    reason: >-
+      Home Assistant runs outside Wildstone — on bare metal, in a VM, on
+      a Pi with a radio attached — so no container in this package can
+      mount its configuration. The operator includes the rendered file
+      from configuration.yaml with
+      `packages: !include_dir_named /etc/wildstone/home-automation`.
+templates:
+  # NOTE ON THE DOUBLE TEMPLATING. This file is rendered twice: once by
+  # Wildstone's Go templates when the package expands, and then forever
+  # after by Home Assistant's Jinja at runtime. Both spell a template
+  # action "{{ ... }}", so every Jinja expression below is wrapped in a Go
+  # raw string — {{`...`}} — which emits it literally for Home Assistant
+  # to evaluate later. Contiguous Jinja is wrapped in one block rather
+  # than one wrapper per expression, so the file stays readable.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: ConfigFile
+    metadata: { name: home-assistant-wildstone, node: "{{ .Params.node }}" }
+    spec:
+      filename: wildstone.yaml
+      content: |
+        # Managed by Wildstone — do not edit. Changes are reverted on the
+        # next reconcile tick.
+        #
+        # Include from configuration.yaml:
+        #   homeassistant:
+        #     packages: !include_dir_named /etc/wildstone/home-automation
+
+        rest_command:
+          wildstone_household_event:
+            url: "{{ .Params.intake_url }}"
+            method: POST
+            content_type: "application/json"
+            headers:
+              # Resolved on the node when this file is written; Wildstone
+              # itself never holds the value (ADR-W012).
+              Authorization: "Bearer secret/home-automation-publisher"
+            payload: >-
+              {{`{"eventId": "{{ event_id }}", "occurredAt": "{{ occurred_at }}",
+              "type": "{{ event_type }}", "subject": "{{ subject }}",
+              "payload": {"entity": "{{ entity }}", "from": "{{ from_state }}",
+              "to": "{{ to_state }}"}}`}}
+
+        automation:
+          - id: wildstone_person_presence
+            alias: "Wildstone: publish person arrivals and departures"
+            # queued, not restart: two people arriving together are two
+            # facts, and dropping one because the other is still posting
+            # would be a silent hole in the household's history.
+            mode: queued
+            max: 25
+            trigger:
+              # The trigger id IS the canonical event type, so adding an
+              # event means adding a trigger and nothing else.
+              - platform: state
+                entity_id: "{{ .Params.people }}"
+                to: "home"
+                id: person.arrived_home
+              - platform: state
+                entity_id: "{{ .Params.people }}"
+                from: "home"
+                id: person.left_home
+            condition:
+              # Home Assistant fires a state trigger on attribute-only
+              # changes too (a GPS accuracy update while someone sits at
+              # home). A presence event that did not change presence is
+              # not a fact, and publishing it would make every rule that
+              # counts arrivals wrong.
+              - condition: template
+                value_template: {{`"{{ trigger.from_state.state != trigger.to_state.state }}"`}}
+            action:
+              - service: rest_command.wildstone_household_event
+                data:
+    {{`              # Derived from the transition itself, not from the clock, so
+                  # the id is stable: if Home Assistant retries this call the
+                  # intake recognises the delivery and records it once.
+                  event_id: "{{ trigger.entity_id }}:{{ trigger.id }}:{{ trigger.to_state.last_changed.timestamp() | int }}"
+                  occurred_at: "{{ trigger.to_state.last_changed.isoformat() }}"
+                  event_type: "{{ trigger.id }}"
+                  # The declared subject mapping: the person entity's
+                  # object id (see the package header).
+                  subject: "{{ trigger.entity_id.split('.')[1] }}"
+                  entity: "{{ trigger.entity_id }}"
+                  from_state: "{{ trigger.from_state.state }}"
+                  to_state: "{{ trigger.to_state.state }}"`}}

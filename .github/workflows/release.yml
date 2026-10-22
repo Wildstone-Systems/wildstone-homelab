@@ -1,0 +1,163 @@
+# Release pipeline (ADR-W014 A1): a v* tag builds keystone, wardstoned,
+# and wild for linux amd64/arm64 — CGO_ENABLED=0 throughout (the pure-Go
+# SQLite choice exists exactly so this cross-compile is boring) — and
+# publishes one tar.gz per binary/arch, install.sh, and a single
+# checksums.txt the installer verifies against.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+      # The Console is shipped as its own release asset so a control-plane
+      # host never needs Node. Building it took 568 apt packages and three
+      # seconds to produce 160 KB, on a machine whose job is running
+      # containers (#34).
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            console/package-lock.json
+            runtimes/native-agent/package-lock.json
+      - name: build console
+        # Same reason as ci.yml: the release build has no use for the
+        # browser `playwright` would otherwise fetch on install.
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+        run: |
+          set -euo pipefail
+          cd console && npm ci && npm run build
+      # The native agent runtime's sidecar (ADR-W039), bundled into one
+      # file. It is packaged per architecture below, next to the Node
+      # runtime it runs on, so a control-plane host still needs no Node.
+      - name: bundle native agent sidecar
+        run: |
+          set -euo pipefail
+          cd runtimes/native-agent && npm ci && npm test && npm run bundle
+      - name: build matrix
+        env:
+          CGO_ENABLED: "0"
+          NODE_CACHE: ${{ runner.tool_cache }}/wildstone-node
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          build() { # build <name> <module-dir> <package>
+            local name="$1" dir="$2" pkg="$3"
+            for arch in amd64 arm64; do
+              ( cd "$dir" && GOARCH="$arch" go build -trimpath \
+                  -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" \
+                  -o "../dist/$name" "$pkg" )
+              tar -czf "dist/${name}_linux_${arch}.tar.gz" -C dist "$name"
+              rm "dist/$name"
+            done
+          }
+          build keystone   keystone  ./cmd/keystone
+          build wardstoned wardstone ./cmd/wardstoned
+          build wild       cli       ./cmd/wild
+          # The chat transport adapter (ADR-W033 B7.1). Shipped as a
+          # binary like everything else, and that is the whole of its
+          # distribution: the installer puts it on every node at
+          # /srv/wildstone/bin, and the chat packages run it in a public
+          # distroless image with that directory mounted. No image of
+          # ours is published, so a private repository stays private.
+          build chat-adapter cli ./cmd/chat-adapter
+          # The agent runtime bridge (ADR-W039 Phase 6/H3, #349): ships
+          # the same way chat-adapter does — a binary the installer puts
+          # on every node at /srv/wildstone/bin, run by a package in a
+          # public distroless image with that directory mounted. No
+          # image of ours is published for this either.
+          build agent-bridge cli ./cmd/agent-bridge
+          # The read-only mailbox adapter bundled with mail-roundcube
+          # (epic #326): shipped the same way again — the installer puts
+          # it on every node at /srv/wildstone/bin and a Person's approved
+          # mailbox placement runs it in the public distroless image. It
+          # stays dormant until then.
+          build wild-mail-adapter keystone ./cmd/wild-mail-adapter
+          # The Console's built output. Architecture-independent — it is
+          # static files a browser runs — so it has no _linux_<arch>
+          # suffix, and install.sh fetches it by that plain name.
+          tar -czf dist/console_dist.tar.gz -C console/dist .
+          # The packages this release can install (ADR-W021 A3). Also
+          # architecture-independent — YAML a control plane reads — so it
+          # travels under a plain name like the Console does, and is
+          # verified through the same checksums.txt.
+          #
+          # Bundled is not optional: a homelab must not have to host a
+          # registry to install the packages that shipped with the
+          # product. A registry source is additive and comes later.
+          tar -czf dist/packages.tar.gz -C packages .
+          # The picture each shipped theme arrives with (wallpapers/).
+          # Architecture-independent like the two above, and a separate
+          # artifact on purpose: migration 0061 refused to put nine
+          # megabytes of art inside the binary, and this is how a theme
+          # gets its picture without reopening that.
+          tar -czf dist/wallpapers.tar.gz -C wallpapers .
+          # The native agent runtime: the bundled sidecar plus a pinned,
+          # checksum-verified Node, one archive per architecture
+          # (native-agent_linux_<arch>.tar.gz). install.sh puts it in
+          # /usr/lib/wildstone/native-agent.
+          for arch in amd64 arm64; do
+            scripts/build-native-agent.sh "$arch" dist
+          done
+          cp scripts/install.sh dist/install.sh
+          cp scripts/uninstall.sh dist/uninstall.sh
+          # Bare names, no ./ prefix: the installer greps checksums.txt
+          # for " <artifact>$" and verifies in its own workdir.
+          ( cd dist && sha256sum -- *.tar.gz install.sh uninstall.sh > checksums.txt )
+      # The release brings its own GitHub CLI, pinned by checksum like
+      # shellcheck in ci.yml, rather than whatever version GitHub last put
+      # in the runner image. Bumping it is a reviewed change: version and both
+      # checksums together, from gh_<v>_checksums.txt on the release.
+      - name: github cli (pinned)
+        run: |
+          set -euo pipefail
+          v=2.86.0
+          case "$(uname -m)" in
+            x86_64)  arch=amd64; sum=f3b08bd6a28420cc2229b0a1a687fa25f2b838d3f04b297414c1041ca68103c7 ;;
+            aarch64) arch=arm64; sum=83cf7a7962ea9dfcc2c123666695792916a87af32cba5f1f6e585db08fa57547 ;;
+            *) echo "no pinned gh for $(uname -m)"; exit 1 ;;
+          esac
+          curl -fsSL -o "$RUNNER_TEMP/gh.tar.gz" \
+            "https://github.com/cli/cli/releases/download/v$v/gh_${v}_linux_$arch.tar.gz"
+          echo "$sum  $RUNNER_TEMP/gh.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/gh.tar.gz" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/gh_${v}_linux_$arch/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/gh_${v}_linux_$arch/bin/gh" --version
+      - name: publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # Idempotent: publishing a release from the GitHub UI creates the
+        # tag AND the release together, so this workflow's create then
+        # collides ("a release with the same tag name already exists") and
+        # the release ships with zero assets. Fall back to uploading onto
+        # the existing release instead.
+        #
+        # A release-candidate tag (anything with "-rc." in it, such as
+        # v0.1.13-rc.mail1, cut from a feature branch to test on a VM) is
+        # published as a PRE-release, so it never becomes "latest": the
+        # installer's default (releases/latest) keeps pointing at the last
+        # real release, and only an explicit --version installs the
+        # candidate. Ordinary tags, -alpha ones included, are unchanged.
+        run: |
+          prerelease=()
+          case "${GITHUB_REF_NAME}" in
+            *-rc.*) prerelease=(--prerelease) ;;
+          esac
+          if ! gh release create "${GITHUB_REF_NAME}" dist/* \
+            --title "${GITHUB_REF_NAME}" \
+            --generate-notes "${prerelease[@]}"; then
+            echo "release exists; uploading assets onto it"
+            gh release upload "${GITHUB_REF_NAME}" dist/* --clobber
+          fi

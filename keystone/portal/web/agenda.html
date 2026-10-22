@@ -1,0 +1,570 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agenda</title>
+<link rel="stylesheet" href="/portal/assets/nocturne.css">
+<!--wildstone:theme-->
+<!--
+  One person's day.
+
+  A HOUSEHOLD SURFACE WITH A SUBJECT SELECTOR, not a per-person
+  authenticated one (ADR-W033 A10). Whoever came through the door sees
+  whichever day they pick, because on a kitchen tablet that is what is
+  actually true, and a page that implied otherwise would be claiming a
+  privacy it cannot enforce. The selector says whose day is on screen;
+  it does not say who is asking.
+
+  WHOSE NAME IS ON THE TAB is the first thing the page answers, because
+  on a shared screen the previous person's day is the thing most likely
+  to still be showing.
+
+  THE THREE KINDS STAY DISTINGUISHABLE. An appointment at four o'clock,
+  a thing to keep up with, and a notice waiting are different kinds of
+  obligation, and flattening them into one list of grey rows is how an
+  agenda stops being read. Each carries its own mark and its own idiom:
+  a time, a standing, a dot.
+-->
+<style>
+  .people { display: flex; gap: var(--space-2); flex-wrap: wrap; }
+  .person {
+    display: inline-flex; align-items: center; gap: var(--space-2);
+    padding: var(--space-2) var(--space-4); border-radius: 999px;
+    border: 1px solid var(--hair); background: none; color: var(--color-text);
+    font: inherit; font-size: 13.5px; cursor: pointer;
+  }
+  .person:hover { background: var(--faint); }
+  .person.on { background: color-mix(in srgb, var(--color-accent) 18%, transparent);
+               border-color: var(--color-accent); color: var(--color-accent-200); }
+  .person .kid { font-size: 11px; color: var(--muted); }
+  .person.on .kid { color: var(--color-accent-300); }
+
+  .day { margin-bottom: var(--space-6); }
+  .dayhead { display: flex; align-items: baseline; gap: var(--space-3); margin-bottom: var(--space-3); }
+  .dayhead .when { font-size: 15px; font-weight: 600; }
+
+  /* WRAPS, because four controls and a title do not fit a phone. On a
+     wide screen the actions sit at the right of the row; when there is
+     no room they take a line of their own under the title rather than
+     running off the edge — which is what they did, with Done entirely
+     off-screen and the whole page scrolling sideways. */
+  .arow { display: flex; gap: var(--space-4); align-items: flex-start; padding: var(--space-3) 0;
+          border-bottom: 1px solid var(--faint); flex-wrap: wrap; }
+  .arow:last-child { border-bottom: 0; }
+  /* The time column is fixed so the day reads as a column of times
+     rather than a ragged left edge. An undated row leaves it blank
+     rather than inventing a time it does not have. */
+  .arow .time { flex: none; width: 5.5rem; font-variant-numeric: tabular-nums;
+                font-size: 13px; color: var(--muted); padding-top: 1px; }
+  .arow .what { flex: 1; min-width: 0; }
+  .arow .title { font-size: 14px; }
+  .arow .sub { font-size: 12px; color: var(--muted); }
+  .mark { flex: none; width: 8px; height: 8px; border-radius: 50%; margin-top: 6px; }
+  /* The actions are one group, so they wrap together instead of
+     breaking up mid-row. margin-left:auto keeps them right on a wide
+     row; the mobile rule below gives them their own line. */
+  .acts { display: flex; gap: var(--space-2); flex-wrap: wrap; margin-left: auto; flex: none; }
+  /* --mark is a THEME token and nocturne.css does not define it, so a
+     household on the default theme had an invisible dot on every
+     commitment row. Fallback to a token the base sheet guarantees; a
+     theme that brings --mark still wins. */
+  .mark-event { background: var(--color-accent); }
+  .mark-commitment { background: var(--mark, var(--color-accent-300)); }
+  .mark-notice { background: var(--st-warn); }
+  .empty { color: var(--muted); font-size: 13px; padding: var(--space-3) 0; }
+
+  /* Ticking something off is the one moment on this page worth
+     celebrating, and it is also the moment the row leaves the day —
+     a weekly chore reopens a week out, so Done makes it disappear from
+     today. Without an acknowledgement that reads as deletion. The
+     confetti is the receipt.
+   *
+   * No library: the portal's CSP allows no external script at all, and
+   * this is a dozen divs and one keyframe. pointer-events:none so it
+   * cannot swallow a tap on the way down, and above the theme strip's
+   * z-index so it falls in front of the page rather than behind a
+   * card. */
+  .confetti { position: fixed; inset: 0; z-index: 60; pointer-events: none; overflow: hidden; }
+  .confetti i {
+    position: absolute; top: -16px; width: 8px; height: 13px; border-radius: 1px;
+    animation-name: fall; animation-timing-function: cubic-bezier(.25,.6,.5,1);
+    animation-fill-mode: forwards;
+  }
+  @keyframes fall {
+    0%   { transform: translate3d(0, 0, 0) rotate(0deg); opacity: 1; }
+    100% { transform: translate3d(var(--drift, 0px), 104vh, 0) rotate(var(--spin, 540deg)); opacity: .9; }
+  }
+  /* SOMEBODY ASKED NOT TO BE MOVED AT. A wall tablet in a kitchen is
+     exactly where a household member with vestibular trouble meets an
+     animation they did not choose, and the tick still works without
+     it. */
+  @media (prefers-reduced-motion: reduce) {
+    .confetti { display: none; }
+  }
+  .tick { flex: none; }
+  .part { flex: none; font-size: 11px; color: var(--muted); text-transform: uppercase;
+          letter-spacing: 0.1em; padding-top: 3px; width: 5rem; }
+  .addbox { display: grid; gap: var(--space-3); }
+  .addrow { display: flex; gap: var(--space-3); flex-wrap: wrap; align-items: center; }
+  .addrow label { font-size: 12px; color: var(--muted); }
+  @media (max-width: 720px) {
+    .arow .time, .arow .part { width: 4.25rem; font-size: 11px; }
+    /* A line of their own, indented to the text column so the row still
+       reads as one thing. flex-basis 100% is what forces the break. */
+    .acts { flex: 0 0 100%; margin-left: 0; padding-left: calc(4.25rem + var(--space-4) + 8px); }
+    /* Tighter, so four of them fit a 390px screen without a second
+       wrap that would make every row three lines tall. */
+    .acts .hbtn { padding: var(--space-2) var(--space-3); font-size: 12.5px; }
+    /* The strip above the day is a heading and a button, and on a
+       phone they belong on two lines rather than one squeezed one. */
+    .row-between { flex-wrap: wrap; gap: var(--space-3); }
+  }
+  /* On a SMALL phone the indent is the thing that no longer fits: four
+     controls need about 220px and a 320px screen has 296px of card, so
+     aligning them under the text column pushed Done onto a line of its
+     own and made every routine three lines tall. They go to the card's
+     own left edge instead, which is less tidy and fits. */
+  @media (max-width: 430px) {
+    .acts { padding-left: 0; }
+  }
+</style>
+
+<main class="page">
+  <div class="spread" style="margin-bottom: var(--space-6)">
+    <a class="hbtn hbtn-ghost" href="/home/"><i class="ph ph-arrow-left" aria-hidden="true"></i> Home</a>
+    <span class="fade" aria-hidden="true"></span>
+    <span class="muted" id="member"></span>
+  </div>
+
+  <div class="row-between" style="margin-bottom: var(--space-4)">
+    <div>
+      <h1 id="title">Agenda</h1>
+      <div class="muted" id="sub">What today looks like</div>
+    </div>
+  </div>
+
+  <div class="people" id="people" style="margin-bottom: var(--space-6)"></div>
+
+  <div class="row-between" style="margin-bottom: var(--space-4)">
+    <span class="eyebrow" id="addfor"></span>
+    <button type="button" class="hbtn hbtn-primary" id="addopen">
+      <i class="ph ph-plus" aria-hidden="true"></i> Add a routine
+    </button>
+  </div>
+
+  <!-- Authoring lives on the DASHBOARD, not the Console. A commitment
+       cannot act, so handlers_portal_authoring.go already lets a Member
+       add one without an Owner approving a Plan — which is the whole
+       reason the person who actually runs the kids' week can enter it
+       herself. This form sends the same typed fields that door has
+       always taken; it invents no new path to the Statefile. -->
+  <section class="wid" id="addform" hidden style="margin-bottom: var(--space-6)">
+    <h2 style="font-size: 15px" id="a-title">Add a routine</h2>
+    <div class="addbox">
+      <div class="addrow">
+        <input class="hinput" id="a-what" type="text" maxlength="200" style="flex: 1; min-width: 14rem"
+               placeholder="Make your bed" aria-label="What is the routine">
+      </div>
+      <div class="addrow">
+        <label for="a-who">For</label>
+        <select class="hbtn hbtn-secondary" id="a-who"></select>
+        <label for="a-every">Every</label>
+        <select class="hbtn hbtn-secondary" id="a-every">
+          <option value="1d">day</option>
+          <option value="1w">week</option>
+        </select>
+        <!-- WHICH DAY, for the weekly ones. "Bins out every Thursday"
+             is a Thursday fact, and a weekly routine with no weekday
+             lands on whatever day it happened to be created and drifts
+             from there. Shown only for a weekly routine because a daily
+             one has no weekday to choose. -->
+        <select class="hbtn hbtn-secondary" id="a-dow" hidden aria-label="Which day">
+          <option value="1">Monday</option>
+          <option value="2">Tuesday</option>
+          <option value="3">Wednesday</option>
+          <option value="4">Thursday</option>
+          <option value="5">Friday</option>
+          <option value="6">Saturday</option>
+          <option value="0">Sunday</option>
+        </select>
+        <label for="a-part">When</label>
+        <select class="hbtn hbtn-secondary" id="a-part">
+          <option value="morning">morning</option>
+          <option value="afternoon">afternoon</option>
+          <option value="evening">evening</option>
+          <option value="">any time</option>
+        </select>
+      </div>
+      <div class="addrow">
+        <button type="button" class="hbtn hbtn-primary" id="a-save">Add it</button>
+        <button type="button" class="hbtn hbtn-ghost" id="a-cancel">Cancel</button>
+        <span class="muted" id="a-problem"></span>
+      </div>
+    </div>
+  </section>
+
+  <div id="note"></div>
+  <section id="body"></section>
+
+  <footer class="muted" style="margin-top: var(--space-8); font-size: 12px">
+    Anyone at this screen can see any of these days — including your own private things when
+    your own day is showing. Somebody else's private things are not here unless you are their
+    guardian.
+  </footer>
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  function el(id) { return document.getElementById(id); }
+  function text(id, v) { var n = el(id); if (n) { n.textContent = v; } }
+  function clear(n) { while (n && n.firstChild) { n.removeChild(n.firstChild); } }
+  function make(tag, cls, content) {
+    var n = document.createElement(tag);
+    if (cls) { n.className = cls; }
+    if (content !== undefined && content !== null) { n.textContent = String(content); }
+    return n;
+  }
+
+  var page = null;
+
+  // ---- the receipt for a tick.
+  function celebrate() {
+    try {
+      if (window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+        return;
+      }
+    } catch (e) { /* no matchMedia: fall through and animate */ }
+    var box = make("div", "confetti");
+    box.setAttribute("aria-hidden", "true");
+    // The theme's own colours, so the celebration belongs to whatever
+    // skin the household chose rather than arriving in somebody
+    // else's palette.
+    var colours = ["var(--color-accent)", "var(--color-accent-300)", "var(--st-ok)",
+                   "var(--st-warn)", "var(--mark, var(--color-accent-200))"];
+    for (var i = 0; i < 26; i++) {
+      var bit = document.createElement("i");
+      bit.style.left = (Math.random() * 100) + "vw";
+      bit.style.background = colours[i % colours.length];
+      bit.style.setProperty("--drift", (Math.random() * 120 - 60).toFixed(0) + "px");
+      bit.style.setProperty("--spin", (360 + Math.random() * 720).toFixed(0) + "deg");
+      bit.style.animationDuration = (1.1 + Math.random() * 0.9).toFixed(2) + "s";
+      bit.style.animationDelay = (Math.random() * 0.25).toFixed(2) + "s";
+      bit.style.opacity = (0.7 + Math.random() * 0.3).toFixed(2);
+      box.appendChild(bit);
+    }
+    document.body.appendChild(box);
+    // Cleaned up rather than left in the document. A page that runs for
+    // a day on a wall tablet would otherwise accumulate one of these
+    // per chore, forever.
+    window.setTimeout(function () { box.remove(); }, 2600);
+  }
+
+  function paintPeople() {
+    var box = el("people");
+    clear(box);
+    (page.people || []).forEach(function (p) {
+      var b = make("button", "person" + (p.handle === page.who ? " on" : ""));
+      b.type = "button";
+      b.appendChild(make("span", "", p.handle));
+      if (p.child) { b.appendChild(make("span", "kid", "child")); }
+      b.addEventListener("click", function () { load(p.handle); });
+      box.appendChild(b);
+    });
+  }
+
+  function row(item) {
+    var r = make("div", "arow");
+    r.appendChild(make("span", "mark mark-" + (item.kind || "event")));
+    // All-day and undated rows say so in words rather than leaving the
+    // reader to work out why the time column is empty. A routine has a
+    // part of day instead, which is the honest answer for a thing
+    // nobody does at 07:15.
+    var when = item.at || (item.allDay ? "All day" : "");
+    if (!when && item.partOfDay) {
+      r.appendChild(make("span", "part", item.partOfDay));
+    } else {
+      r.appendChild(make("span", "time", when));
+    }
+    var what = make("div", "what");
+    what.appendChild(make("div", "title", item.title));
+    if (item.calendarName) { var calendarLabel = make("div", "muted", item.calendarName); calendarLabel.style.borderLeft = "3px solid " + item.color; what.appendChild(calendarLabel); }
+    if (item.detail) { what.appendChild(make("div", "sub", item.detail)); }
+    r.appendChild(what);
+    // One group for every control on the row, so they wrap together.
+    if (item.moved) {
+      what.appendChild(make("div", "sub", "moved this time"));
+    }
+    // One group for every control on the row, so they wrap together.
+    var acts = make("div", "acts");
+    // MOVE JUST THIS ONE. A booking is per cycle — upkeep drops it
+    // once the cycle closes — so shifting the bins to Friday for a
+    // holiday week shifts this week and nothing after it. That is the
+    // whole reason this is a booking and not an edit to the schedule.
+    if (item.done && item.name) {
+      var move = make("button", "hbtn hbtn-ghost tick", "Move");
+      move.type = "button";
+      move.addEventListener("click", function () {
+        var when = window.prompt(
+          "Move \"" + item.title + "\" to which date, just this time? (YYYY-MM-DD)", "");
+        if (!when) { return; }
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(when)) {
+          window.alert("Use a date like 2026-11-27.");
+          return;
+        }
+        move.disabled = true;
+        fetch("/api/v1/home/commitments/" + encodeURIComponent(item.name) + "/booked", {
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ at: when + "T12:00:00Z" })
+        }).then(function (res) {
+          if (!res.ok) { throw new Error("move: " + res.status); }
+          load(page.who);
+        }).catch(function () {
+          move.disabled = false;
+          move.textContent = "Wouldn't move";
+        });
+      });
+      acts.appendChild(move);
+    }
+    // Edit and remove, for the routine that was wrong or is over. Both
+    // are member-facing doors that already existed; until now the only
+    // way to change a routine was the API, and the only way to remove
+    // one was to go and find it on the tracker page.
+    if (item.done && item.name && item.kind === "commitment") {
+      // Only what this form can put back. A commitment carrying a
+      // booking requirement, a mayComplete list or notify list holds
+      // more than these four fields, and the PUT rewrites all of them
+      // from what it is sent — so editing a dentist appointment here
+      // would quietly turn it into a daily routine. The server says
+      // which records are safe; those keep the tracker page.
+      if (item.editable) {
+        var edit = make("button", "hbtn hbtn-ghost tick", "Edit");
+        edit.type = "button";
+        edit.addEventListener("click", function () { openForm(item); });
+        acts.appendChild(edit);
+      }
+
+      var drop = make("button", "hbtn hbtn-ghost tick", "Remove");
+      drop.type = "button";
+      drop.addEventListener("click", function () {
+        if (!window.confirm("Remove \"" + item.title + "\" for good? Ticking it off is the other button.")) {
+          return;
+        }
+        drop.disabled = true;
+        fetch("/api/v1/home/commitments/" + encodeURIComponent(item.name), { method: "DELETE" })
+          .then(function (res) {
+            if (!res.ok) { throw new Error("remove: " + res.status); }
+            load(page.who);
+          }).catch(function () {
+            drop.disabled = false;
+            drop.textContent = "Wouldn't remove";
+          });
+      });
+      acts.appendChild(drop);
+    }
+    // Ticking off goes through the door the upkeep page already uses,
+    // and is offered only where the server said this reader may.
+    if (item.done && item.name) {
+      var tick = make("button", "hbtn hbtn-ghost tick", "Done");
+      tick.type = "button";
+      tick.addEventListener("click", function () {
+        tick.disabled = true;
+        fetch("/api/v1/home/commitments/" + encodeURIComponent(item.name) + "/done", {
+          method: "POST", headers: { "content-type": "application/json" }, body: "{}"
+        }).then(function (res) {
+          if (!res.ok) { throw new Error("done: " + res.status); }
+          celebrate();
+          load(page.who);
+        }).catch(function () {
+          tick.disabled = false;
+          tick.textContent = "Wouldn't save";
+        });
+      });
+      acts.appendChild(tick);
+    }
+    if (acts.firstChild) { r.appendChild(acts); }
+    return r;
+  }
+
+  // ---- adding a routine.
+  function paintAddWho() {
+    var sel = el("a-who");
+    clear(sel);
+    (page.people || []).forEach(function (p) {
+      var o = document.createElement("option");
+      o.value = p.handle;
+      o.textContent = p.handle + (p.child ? " (child)" : "");
+      if (p.handle === page.who) { o.selected = true; }
+      sel.appendChild(o);
+    });
+  }
+
+  // editing is the same form. A second one would drift from the first
+  // the day somebody adds a field to either.
+  var editing = null;      // the commitment name, or null for a new one
+  var editingWas = null;   // its schedule as loaded, so an edit that does
+                           // not touch the schedule does not re-anchor it
+
+  function openForm(item) {
+    editing = item ? item.name : null;
+    // The weekday too, or an edit that only fixed the wording re-read
+    // the selector's untouched default and moved a Thursday routine to
+    // Monday.
+    var dow = item && typeof item.weekday === "number" ? String(item.weekday) : "";
+    editingWas = item
+      ? { every: item.every || "1d", part: item.partOfDay || "", dow: dow }
+      : null;
+    paintAddWho();
+    el("a-what").value = item ? item.title : "";
+    el("a-every").value = (item && item.every) || "1d";
+    el("a-part").value = (item && item.partOfDay) || "";
+    if (dow !== "") { el("a-dow").value = dow; }
+    everyChanged();
+    text("a-problem", "");
+    el("a-title").textContent = item ? "Edit routine" : "Add a routine";
+    el("a-save").textContent = item ? "Save" : "Add it";
+    el("addform").hidden = false;
+    el("a-what").focus();
+  }
+
+  el("addopen").addEventListener("click", function () {
+    if (el("addform").hidden) { openForm(null); } else { el("addform").hidden = true; }
+  });
+  el("a-cancel").addEventListener("click", function () { el("addform").hidden = true; });
+
+  function everyChanged() {
+    el("a-dow").hidden = el("a-every").value !== "1w";
+  }
+  el("a-every").addEventListener("change", everyChanged);
+  everyChanged();
+
+  // THE ANCHOR IS ONE INTERVAL BEFORE THE FIRST DUE DATE, and that is
+  // the whole subtlety here. The anchor opens the cycle and the
+  // threshold falls one interval later, so anchoring "bins out" to
+  // next Thursday makes it due the Thursday AFTER that. Anchor to the
+  // Thursday before the one you want and the first threshold lands on
+  // the right day; fromSchedule then repeats from there forever.
+  function firstDueAnchor() {
+    var d = new Date();
+    d.setHours(12, 0, 0, 0); // midday, so a timezone shift cannot move the date
+    if (el("a-every").value === "1w") {
+      // The next of that weekday, counting today as that day.
+      var want = parseInt(el("a-dow").value, 10);
+      d.setDate(d.getDate() + ((want - d.getDay() + 7) % 7));
+      d.setDate(d.getDate() - 7);
+    } else {
+      d.setDate(d.getDate() - 1); // due today
+    }
+    var mm = String(d.getMonth() + 1), dd = String(d.getDate());
+    if (mm.length < 2) { mm = "0" + mm; }
+    if (dd.length < 2) { dd = "0" + dd; }
+    return d.getFullYear() + "-" + mm + "-" + dd;
+  }
+
+  el("a-save").addEventListener("click", function () {
+    var what = el("a-what").value.trim();
+    if (!what) { text("a-problem", "What is the routine?"); return; }
+    text("a-problem", "");
+    el("a-save").disabled = true;
+    // The same typed fields the dashboard's own authoring door has
+    // always taken.
+    //
+    // fromSchedule, not fromCompletion. A routine has a rhythm of its
+    // own: the bed wants making every morning and the bins go out every
+    // Thursday, whether or not yesterday's got done. fromCompletion
+    // measures from the last tick, so one late Saturday would move the
+    // bins to Saturdays forever. It is the right rollover for "ninety
+    // days after the filter was last changed" and the wrong one for
+    // anything a week has a fixed place for.
+    var payload = {
+      description: what,
+      about: el("a-who").value,
+      every: el("a-every").value,
+      partOfDay: el("a-part").value,
+      rollover: "fromSchedule",
+      scope: "personal"
+    };
+    // THE ANCHOR IS SENT ONLY WHEN THE SCHEDULE CHANGED. The edit
+    // endpoint leaves the existing anchor alone when none is given, and
+    // re-anchoring a routine whose text was the only thing edited would
+    // silently restart its cycle — a chore that was due today quietly
+    // becoming due next week because somebody fixed a typo.
+    // COMPARED, not inferred from the selector being on screen. The
+    // weekday picker is visible for every weekly routine, so keying on
+    // its visibility made every save a schedule change and re-anchored
+    // a Thursday routine to whatever the picker happened to read.
+    var scheduleChanged = !editing ||
+      editingWas.every !== el("a-every").value ||
+      (el("a-every").value === "1w" && editingWas.dow !== el("a-dow").value);
+    if (scheduleChanged) { payload.anchor = firstDueAnchor(); }
+
+    fetch("/api/v1/home/commitments" + (editing ? "/" + encodeURIComponent(editing) : ""), {
+      method: editing ? "PUT" : "POST",
+      headers: { "content-type": "application/json", accept: "application/json" },
+      body: JSON.stringify(payload)
+    }).then(function (res) {
+      return res.json().then(function (j) { return { ok: res.ok, j: j }; });
+    }).then(function (out) {
+      el("a-save").disabled = false;
+      if (!out.ok) { text("a-problem", out.j.error || "That didn't save."); return; }
+      el("a-what").value = "";
+      el("addform").hidden = true;
+      editing = null;
+      load(el("a-who").value);
+    }).catch(function () {
+      el("a-save").disabled = false;
+      text("a-problem", "That didn't save.");
+    });
+  });
+
+  function paint() {
+    var body = el("body");
+    clear(body);
+    if (!page || !page.available) {
+      clear(el("note"));
+      el("note").appendChild(make("div", "note note-bad",
+        (page && page.problem) || "Can't put together an agenda right now."));
+      return;
+    }
+    clear(el("note"));
+    paintPeople();
+    text("title", page.who);
+    text("sub", "What the house has for " + page.who);
+    text("addfor", "Routines for " + page.who);
+
+    (page.days || []).forEach(function (d) {
+      var wrap = make("div", "day");
+      var head = make("div", "dayhead");
+      head.appendChild(make("span", "when", d.label));
+      head.appendChild(make("span", "fade"));
+      head.appendChild(make("span", "muted", (d.items || []).length
+        ? ((d.items.length === 1) ? "1 thing" : d.items.length + " things") : ""));
+      wrap.appendChild(head);
+      var card = make("section", "wid");
+      if (!d.items || !d.items.length) {
+        card.appendChild(make("div", "empty", "Nothing on."));
+      } else {
+        d.items.forEach(function (it) { card.appendChild(row(it)); });
+      }
+      wrap.appendChild(card);
+      body.appendChild(wrap);
+    });
+  }
+
+  function load(who) {
+    var q = who ? ("?who=" + encodeURIComponent(who)) : "";
+    fetch("/api/v1/home/agenda" + q, { headers: { accept: "application/json" } })
+      .then(function (r) {
+        if (!r.ok) { throw new Error("agenda: " + r.status); }
+        return r.json();
+      })
+      .then(function (j) { page = j; paint(); })
+      .catch(function () {
+        page = { available: false, problem: "Wildstone isn't answering." };
+        paint();
+      });
+  }
+
+  load("");
+})();
+</script>

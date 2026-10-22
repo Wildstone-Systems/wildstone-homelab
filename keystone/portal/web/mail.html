@@ -1,0 +1,1120 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Watch this mailbox</title>
+<link rel="stylesheet" href="/portal/assets/nocturne.css">
+<!--wildstone:theme-->
+<!--
+  Watch this mailbox, for the person whose mailbox it is (epic #326 S07,
+  #460). The Console is an Owner's; this is the same flow for everybody
+  else in the household, on their own Homepage session, through the
+  same handlers under /api/v1/home/.
+
+  THE SERVER IS WHERE THE SETUP IS. Every step is decided from
+  GET /api/v1/home/mail/setup, the read model a refresh resumes from.
+  Nothing about a setup is kept in the browser.
+
+  ONLY YOURS. That read model carries the caller's own connections and
+  nobody else's, and every candidate is the caller's own: another
+  person's is a 404, the same answer as "no such thing". This page never
+  asks for anybody else's.
+
+  TWO APPROVALS, NEVER ONE. "Waiting for Owner approval" and "Authorized
+  by you" are two separate states, side by side, and neither is ever
+  worded as if it covered the other.
+
+  THE PASSWORD GOES ONE WAY. It is typed into a protected field, taken
+  out of it before the request is sent, and never shown back: nothing
+  the server returns contains it.
+
+  WHAT ONLY AN OWNER CAN DO is said, not attempted. Creating the mailbox
+  connection and preparing its adapter are Owner steps; this page says
+  "Ask an Owner to prepare mailbox watching" instead of failing at them.
+
+  Every value from the server is rendered as text, never as markup.
+-->
+<style>
+  #body { display: flex; flex-direction: column; gap: var(--space-4); }
+  .wid h2 { margin: 0; }
+  .fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-4); margin-top: var(--space-4); }
+  .fields .wide { grid-column: 1 / -1; }
+  .fld { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; border: 0; padding: 0; margin: 0; }
+  .fld > label, .fld > legend { font-size: 12.5px; color: var(--muted); padding: 0; }
+  .fld .hinput { width: 100%; box-sizing: border-box; font-size: 14px; }
+  .check { display: flex; align-items: center; gap: var(--space-2); font-size: 13.5px; }
+  .check.off { color: var(--muted); }
+  .actions { display: flex; gap: var(--space-2); margin-top: var(--space-4); flex-wrap: wrap; align-items: center; }
+  .states { display: flex; gap: var(--space-2); flex-wrap: wrap; margin: var(--space-3) 0; }
+  .steps { display: flex; gap: var(--space-2); flex-wrap: wrap; list-style: none; padding: 0; margin: var(--space-3) 0; }
+  .facts { list-style: none; padding: 0; margin: var(--space-3) 0; display: flex; flex-direction: column; gap: var(--space-1); font-size: 13.5px; }
+  .kv { display: grid; grid-template-columns: minmax(0, 180px) minmax(0, 1fr); gap: var(--space-2) var(--space-4); margin: var(--space-4) 0 0; font-size: 13.5px; }
+  .kv dt { color: var(--muted); font-size: 12.5px; }
+  .kv dd { margin: 0; overflow-wrap: anywhere; }
+  .cand { border-top: 1px solid var(--faint); padding: var(--space-4) 0; display: flex; flex-direction: column; gap: var(--space-2); }
+  .cand:first-of-type { border-top: 0; }
+  .cand-title { font-weight: 500; overflow-wrap: anywhere; }
+  .conflicts { margin: var(--space-1) 0 0; padding-left: var(--space-4); }
+  .ask { display: flex; flex-direction: column; gap: var(--space-2); margin-top: var(--space-3); }
+  .blurb { font-size: 13.5px; line-height: 1.55; margin: var(--space-2) 0 0; }
+  @media (max-width: 720px) {
+    .fields { grid-template-columns: minmax(0, 1fr); }
+    .kv { grid-template-columns: minmax(0, 1fr); }
+  }
+</style>
+
+<main class="page">
+  <div class="spread" style="margin-bottom: var(--space-6)">
+    <a class="hbtn hbtn-ghost" href="/home/"><i class="ph ph-arrow-left" aria-hidden="true"></i> Home</a>
+    <span class="fade" aria-hidden="true"></span>
+    <span class="muted" id="member"></span>
+  </div>
+
+  <div class="row-between" style="margin-bottom: var(--space-6)">
+    <div>
+      <h1>Watch this mailbox</h1>
+      <div class="muted">Let an Agent look at mail you choose for possible calendar events — only yours, and only reading</div>
+    </div>
+  </div>
+
+  <div id="note" aria-live="polite"></div>
+
+  <div id="body">
+    <section class="wid" id="setup-wid" aria-labelledby="setup-h">
+      <div class="wid-head">
+        <h2 id="setup-h">Your mailbox</h2>
+        <span class="fade" aria-hidden="true"></span>
+      </div>
+      <p class="blurb">
+        It only reads: it cannot send, delete, move or mark mail, and your webmail and calendars
+        work exactly as before. Nothing is added to a calendar without you.
+      </p>
+      <div id="setup"><div class="muted">Reading your mailbox setup…</div></div>
+    </section>
+
+    <section class="wid" id="health-wid" aria-labelledby="health-h" hidden>
+      <div class="wid-head">
+        <h2 id="health-h">Health</h2>
+        <span id="health-pill"></span>
+        <span class="fade" aria-hidden="true"></span>
+      </div>
+      <div id="health"></div>
+    </section>
+
+    <section class="wid" id="events-wid" aria-labelledby="events-h" hidden>
+      <div class="wid-head">
+        <h2 id="events-h">Events found in your mail</h2>
+        <span class="pill pill-mute tnum" id="events-count"></span>
+        <span class="fade" aria-hidden="true"></span>
+      </div>
+      <div id="events"></div>
+    </section>
+  </div>
+
+  <footer class="muted" style="margin-top: var(--space-8); font-size: 12px">
+    Only you see this page's mailbox and its events. An Owner approves what an Agent may watch; you
+    authorize it yourself, and you can pause or stop it here at any time.
+  </footer>
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  var ASK_OWNER = "Ask an Owner to prepare mailbox watching";
+  var MATCH_KIND = "mail.changes";
+  var CADENCES = ["5m0s", "15m0s", "30m0s", "1h0m0s", "6h0m0s", "24h0m0s"];
+
+  function el(id) { return document.getElementById(id); }
+  function clear(n) { while (n && n.firstChild) { n.removeChild(n.firstChild); } }
+  function make(tag, cls, content) {
+    var n = document.createElement(tag);
+    if (cls) { n.className = cls; }
+    if (content !== undefined && content !== null) { n.textContent = String(content); }
+    return n;
+  }
+  function icon(name) {
+    var i = make("i", "ph ph-" + name);
+    i.setAttribute("aria-hidden", "true");
+    return i;
+  }
+  function button(label, kind, onClick, glyph) {
+    var b = make("button", "hbtn hbtn-" + kind);
+    b.type = "button";
+    if (glyph) { b.appendChild(icon(glyph)); b.appendChild(document.createTextNode(" ")); }
+    b.appendChild(document.createTextNode(label));
+    b.addEventListener("click", onClick);
+    return b;
+  }
+  function pill(kind, label) { return make("span", "pill pill-" + kind, label); }
+  function callout(kind, message) {
+    var n = make("div", "note note-" + kind);
+    n.appendChild(icon(kind === "bad" ? "warning" : kind === "warn" ? "warning-circle" : "check"));
+    n.appendChild(make("div", null, message));
+    return n;
+  }
+  function flash(kind, message) {
+    clear(el("note"));
+    if (!message) { return; }
+    var n = callout(kind, message);
+    n.style.marginBottom = "var(--space-4)";
+    el("note").appendChild(n);
+  }
+  function failed(err) { flash("bad", String((err && err.message) || err)); }
+
+  // api is the one door: /api/v1/home/..., the person's own session.
+  function api(method, path, body) {
+    var init = { method: method, headers: { accept: "application/json" }, cache: "no-store" };
+    if (body !== undefined) {
+      init.headers["content-type"] = "application/json";
+      init.body = JSON.stringify(body);
+    }
+    return fetch("/api/v1/home" + path, init).then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (j) {
+        if (!r.ok) {
+          var e = new Error(j.error || "that did not work");
+          e.status = r.status;
+          throw e;
+        }
+        return j;
+      });
+    });
+  }
+  function connPath(name, rest) { return "/integrations/" + encodeURIComponent(name) + "/" + rest; }
+
+  // ------------------------------------------------------------ time
+
+  function when(iso) {
+    if (!iso) { return ""; }
+    var d = new Date(iso);
+    return isNaN(d.getTime()) ? String(iso) : d.toLocaleString();
+  }
+  function ago(iso) {
+    var d = new Date(iso);
+    if (!iso || isNaN(d.getTime())) { return ""; }
+    var s = Math.round((Date.now() - d.getTime()) / 1000);
+    if (s < 60) { return "just now"; }
+    if (s < 3600) { return Math.round(s / 60) + " min ago"; }
+    if (s < 86400) { return Math.round(s / 3600) + "h ago"; }
+    return Math.round(s / 86400) + "d ago";
+  }
+  // Go's time.Duration.String ("15m0s", "1h30m0s") in milliseconds.
+  function durationMs(d) {
+    var total = 0, re = /([\d.]+)(h|ms|m|s)/g, m;
+    while ((m = re.exec(d || "")) !== null) {
+      var v = Number(m[1]);
+      total += m[2] === "h" ? v * 3600000 : m[2] === "m" ? v * 60000 : m[2] === "s" ? v * 1000 : v;
+    }
+    return total;
+  }
+  function cadenceLabel(d) {
+    var ms = durationMs(d);
+    return ms >= 3600000 ? "every " + (ms / 3600000) + "h" : "every " + (ms / 60000) + " min";
+  }
+  function cadencesWithin(limits, current) {
+    var lo = durationMs(limits && limits.min) || 0, hi = durationMs(limits && limits.max) || Infinity;
+    var out = CADENCES.filter(function (c) { var ms = durationMs(c); return ms >= lo && ms <= hi; });
+    if (current && out.indexOf(current) < 0) { out.push(current); }
+    return out;
+  }
+  function toLocalInput(iso) {
+    if (!iso) { return ""; }
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) { return ""; }
+    function pad(n) { return (n < 10 ? "0" : "") + n; }
+    return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()) + "T" + pad(d.getHours()) + ":" + pad(d.getMinutes());
+  }
+  function fromLocalInput(v) {
+    if (!v) { return undefined; }
+    var d = new Date(v);
+    return isNaN(d.getTime()) ? undefined : d.toISOString();
+  }
+
+  // ------------------------------------------------------------ the setup, read
+
+  // choiceFromMatch reads the choices a subscription was filed with back
+  // out of its match document.
+  function choiceFromMatch(match) {
+    var m = match;
+    if (typeof m === "string") {
+      try { m = JSON.parse(m); } catch (e) { return null; }
+    }
+    if (!m || typeof m !== "object" || typeof m.agent !== "number" || typeof m.targetCalendar !== "string") { return null; }
+    var sc = m.scope || {};
+    function strings(v) { return Array.isArray(v) ? v.filter(function (x) { return typeof x === "string"; }) : []; }
+    return {
+      agent: m.agent,
+      targetCalendar: m.targetCalendar,
+      scope: { folders: strings(sc.folders), senders: strings(sc.senders), subjects: strings(sc.subjects) },
+      processingLocation: m.processingLocation === "cloud" ? "cloud" : "local",
+      conflictCalendars: strings(m.conflictCalendars)
+    };
+  }
+  function matchDigest(sub) {
+    try { var m = JSON.parse(sub.match); return typeof m.authorization === "string" ? m.authorization : ""; } catch (e) { return ""; }
+  }
+  function currentSubscription(mon) {
+    return (mon.subscriptions || [])
+      .filter(function (s) { return s.enabled && s.matchKind === MATCH_KIND; })
+      .sort(function (a, b) { return b.id - a.id; })[0];
+  }
+  // Authorized means the Person's live authorization names this exact
+  // subscription AND the digest it names. Anything less authorizes
+  // something else.
+  function isAuthorized(mon, sub) {
+    var a = mon.authorization;
+    return !!a && !!sub && !a.revokedAt && a.subscription === sub.id && matchDigest(sub) === a.digest;
+  }
+  function stageOf(s, mon) {
+    var base = { stage: "not-installed", owner: "not-requested", personal: "not-given", wasDisabled: false };
+    if (!s.provider) { return base; }
+    if (!mon) { base.stage = "no-connection"; return base; }
+    if (!mon.connection.executable) { base.stage = "not-rendered"; return base; }
+    if (!mon.credential) { base.stage = "credential"; return base; }
+    var sub = currentSubscription(mon);
+    var plans = mon.pendingPlans || [];
+    var pendingSub = plans.filter(function (p) { return p.kind === "subscription"; })[0];
+    var pendingRender = plans.filter(function (p) { return p.kind === "render"; })[0];
+    base.wasDisabled = !sub && (mon.subscriptions || []).some(function (x) { return !x.enabled; });
+    if (!sub) {
+      if (pendingSub) {
+        base.stage = "awaiting-owner";
+        base.owner = "waiting";
+        base.choice = choiceFromMatch(pendingSub.match);
+        return base;
+      }
+      base.stage = "choose";
+      return base;
+    }
+    var out = {
+      stage: "watching", sub: sub, choice: choiceFromMatch(sub.match), wasDisabled: false,
+      owner: sub.awaitingApproval ? "waiting" : "approved",
+      personal: isAuthorized(mon, sub) ? "authorized" : "not-given"
+    };
+    if (out.personal === "not-given") { out.stage = "authorize"; }
+    else if (out.owner === "waiting") { out.stage = "awaiting-owner"; }
+    else if (pendingRender) { out.stage = "awaiting-render"; }
+    return out;
+  }
+
+  // healthOf says, in one state, what the monitor is doing and the next
+  // safe action — the Console's order: an unproven erasure first, then
+  // a refused password, a folder problem, a missing authorization, a
+  // pause, a degraded or unreachable provider, a stalled position.
+  function healthOf(mon, sub) {
+    var sched = sub.schedule || {}, conn = mon.connection, last = sched.lastOutcome;
+    if ((conn.degradedReason || "").indexOf("erasure_unverified") === 0 || (mon.unverifiedErasures || []).length > 0) {
+      return { state: "erasure_unverified", kind: "bad", title: "An old password copy is not proven erased",
+        detail: "A node has not proven it erased a password you replaced or removed. Nothing new is read with it, " +
+          "but an Owner has to retry the erasure or update that node.", recovery: "contact-owner" };
+    }
+    if (sched.hold === "auth_failed" || last === "auth_failed") {
+      return { state: "auth_failed", kind: "bad", title: "Your mail provider refused the password",
+        detail: "Watching stopped rather than retry, so your account is not locked out. Enter a new app password; " +
+          "you will authorize the monitor again with it, then resume.", recovery: "reenter-password" };
+    }
+    if (sched.hold === "config_failed" || last === "config_failed") {
+      return { state: "config_failed", kind: "bad", title: "A folder or filter does not work with this mailbox",
+        detail: sched.holdReason || "Check the folder names and filters, then save them again.", recovery: "edit" };
+    }
+    if (!isAuthorized(mon, sub)) {
+      return { state: "not-authorized", kind: "warn", title: "Not authorized by you",
+        detail: "Nothing is read until you authorize this exact monitor. A change to the password, the settings or " +
+          "the adapter needs your authorization again.", recovery: "reauthorize" };
+    }
+    if (sched.hold === "paused") {
+      return { state: "paused", kind: "mute", title: "Paused",
+        detail: "Paused" + (sched.heldBy ? " by " + sched.heldBy : "") + (sched.heldAt ? " " + ago(sched.heldAt) : "") +
+          ". No mail is read until you resume.", recovery: "resume" };
+    }
+    if (conn.state === "degraded") {
+      return { state: "degraded", kind: "warn", title: "Running in a degraded state",
+        detail: conn.degradedReason || "The adapter is not fully healthy.", recovery: "contact-owner" };
+    }
+    var failures = sched.consecutiveFailures || 0;
+    if (conn.state === "unavailable" || last === "unavailable" || last === "error" || last === "abandoned") {
+      return { state: "unavailable", kind: failures >= 3 ? "bad" : "warn", title: "Your mail provider could not be reached",
+        detail: failures >= 3
+          ? failures + " attempts in a row have failed. It keeps retrying; if it does not recover, an Owner can check the node it runs on."
+          : "It retries on its own with a growing delay. Nothing was skipped: the next run starts where the last good one stopped.",
+        recovery: failures >= 3 ? "contact-owner" : "" };
+    }
+    var cadence = durationMs(sub.cadence) || 900000;
+    var cp = sub.checkpoint || {};
+    var committed = cp.committedAt ? new Date(cp.committedAt).getTime() : 0;
+    var staleCursor = !!sched.lastRunAt && committed > 0 && Date.now() - committed > Math.max(3 * cadence, 3600000);
+    if (last === "stale" || staleCursor) {
+      return { state: "stale", kind: "warn", title: "Behind",
+        detail: last === "stale"
+          ? "The last run saw only an old view of the mailbox, so nothing was committed from it. It retries on its own."
+          : "The mailbox position has not moved since " + when(cp.committedAt) + ". If this persists, an Owner can check the node it runs on.",
+        recovery: last === "stale" ? "" : "contact-owner" };
+    }
+    if (!sched.lastRunAt) {
+      return { state: "waiting-first-run", kind: "mute", title: "Waiting for the first run",
+        detail: sched.nextDueAt ? "First run due " + when(sched.nextDueAt) + "." : "It runs once the adapter is started." };
+    }
+    if (last === "empty") {
+      return { state: "empty", kind: "ok", title: "Watching — nothing new", detail: "The last run found no new mail in scope." };
+    }
+    return { state: "ok", kind: "ok", title: "Watching", detail: "The last run finished and its position is saved." };
+  }
+
+  // ------------------------------------------------------------ state
+
+  var setup = null, rows = [], reviewState = "loading";
+  // What is open on the page. Reset after every action, because every
+  // action is followed by a fresh read of the server's state.
+  var ui = { reentering: false, editing: false, changing: false, confirming: "" };
+
+  function load() {
+    return Promise.all([
+      api("GET", "/mail/setup"),
+      api("GET", "/mail/candidates").then(function (j) { reviewState = "ok"; return j.candidates || []; },
+        function (err) { reviewState = err.status === 404 || err.status === 503 ? "unavailable" : String(err.message); return []; })
+    ]).then(function (both) {
+      setup = both[0];
+      rows = both[1];
+      paint();
+    }).catch(function (err) {
+      clear(el("setup"));
+      el("setup").appendChild(callout("bad", "Your mailbox setup could not be read: " + err.message));
+    });
+  }
+  // after runs one action, says what came of it, and reads everything
+  // again — the server decides what the page shows next.
+  function after(promise, done, keepNote) {
+    return promise.then(function (res) {
+      ui = { reentering: false, editing: false, changing: false, confirming: "" };
+      if (!keepNote) { flash("info", typeof done === "function" ? done(res) : done); }
+      return load();
+    }, failed);
+  }
+
+  function paint() {
+    el("member").textContent = setup.member ? "Signed in as " + setup.member : "";
+    var mon = (setup.monitors || [])[0];
+    var info = stageOf(setup, mon);
+    paintSetup(mon, info);
+    paintHealth(mon, info);
+    paintEvents(mon);
+  }
+
+  // ------------------------------------------------------------ setup
+
+  function approvalStates(info) {
+    var box = make("div", "states");
+    box.setAttribute("aria-label", "approval states");
+    box.appendChild(info.owner === "approved" ? pill("ok", "Approved by an Owner")
+      : info.owner === "waiting" ? pill("warn", "Waiting for Owner approval")
+      : pill("mute", "Owner approval not requested yet"));
+    box.appendChild(info.personal === "authorized" ? pill("ok", "Authorized by you") : pill("mute", "Not yet authorized by you"));
+    return box;
+  }
+
+  var STEP_NAMES = ["Password", "What to watch", "Owner approval", "Your authorization", "Start"];
+  function steps(at) {
+    var ol = make("ol", "steps");
+    ol.setAttribute("aria-label", "setup steps");
+    STEP_NAMES.forEach(function (name, i) {
+      var li = make("li");
+      if (i + 1 === at) { li.setAttribute("aria-current", "step"); }
+      li.appendChild(pill(i + 1 < at ? "ok" : i + 1 === at ? "warn" : "mute", (i + 1) + ". " + name));
+      ol.appendChild(li);
+    });
+    return ol;
+  }
+
+  function askOwner(detail) {
+    var box = make("div", "ask");
+    box.appendChild(callout("warn", ASK_OWNER + "."));
+    if (detail) { box.appendChild(make("div", "muted", detail)); }
+    if (setup.owner) {
+      box.appendChild(make("div", "muted", "You are an Owner: preparing it is done in the Console, not here."));
+    }
+    return box;
+  }
+
+  function paintSetup(mon, info) {
+    var box = el("setup");
+    clear(box);
+    switch (info.stage) {
+      case "not-installed":
+        box.appendChild(callout("warn", "Email is not installed in this household yet."));
+        box.appendChild(askOwner("An Owner installs email and prepares a connection for your mailbox. It reads nothing until you set it up here."));
+        return;
+      case "no-connection":
+        box.appendChild(askOwner("An Owner makes a connection for your mailbox first. It reads nothing; it only makes a place for your password."));
+        return;
+      case "not-rendered":
+        box.appendChild(askOwner("Your mailbox connection (" + mon.connection.name + ") exists, but the mail adapter has not been prepared for it yet."));
+        return;
+      case "credential":
+        box.appendChild(steps(1));
+        box.appendChild(credentialForm(mon, false));
+        return;
+      case "choose":
+        box.appendChild(steps(2));
+        if (info.wasDisabled) {
+          box.appendChild(callout("info", "Your previous monitor was switched off. Choose its settings again to restart it."));
+        }
+        box.appendChild(watchForm(mon, null, false));
+        return;
+      case "awaiting-owner":
+        box.appendChild(steps(3));
+        box.appendChild(approvalStates(info));
+        box.appendChild(callout("info", "An Owner reviews this exact monitor — which mail, which Agent, which calendars. " +
+          "Their approval is not your authorization: once they approve, you authorize it here."));
+        if (info.choice) { box.appendChild(choiceSummary(info.choice)); }
+        if (!info.sub) {
+          if (ui.changing) {
+            box.appendChild(watchForm(mon, info.choice, false, function () { ui.changing = false; paint(); }));
+          } else {
+            box.appendChild(actions([button("Change these settings", "ghost", function () { ui.changing = true; paint(); })]));
+          }
+        }
+        return;
+      case "authorize":
+        box.appendChild(steps(4));
+        box.appendChild(approvalStates(info));
+        box.appendChild(authorizeStep(mon, info));
+        return;
+      case "awaiting-render":
+        box.appendChild(steps(5));
+        box.appendChild(approvalStates(info));
+        box.appendChild(callout("info", "Both approvals are in. An Owner now approves starting the mail adapter for your " +
+          "connection; it begins reading once that is approved."));
+        return;
+      default:
+        box.appendChild(approvalStates(info));
+        if (info.choice) { box.appendChild(choiceSummary(info.choice)); }
+    }
+  }
+
+  function actions(buttons) {
+    var wrap = make("div", "actions");
+    buttons.forEach(function (b) { if (b) { wrap.appendChild(b); } });
+    return wrap;
+  }
+
+  function calendarName(id) {
+    var c = (setup.calendars || []).filter(function (x) { return x.id === id; })[0];
+    return c ? c.name : id;
+  }
+  function agentName(seq) {
+    var a = (setup.agents || []).filter(function (x) { return x.seq === seq; })[0];
+    return a ? a.name : "Agent " + seq;
+  }
+
+  function choiceSummary(choice) {
+    var ul = make("ul", "facts");
+    ul.setAttribute("aria-label", "what this monitor watches");
+    ul.appendChild(make("li", null, "Folders: " + (choice.scope.folders.join(", ") || "INBOX")));
+    if (choice.scope.senders.length) { ul.appendChild(make("li", null, "From: " + choice.scope.senders.join(", "))); }
+    if (choice.scope.subjects.length) { ul.appendChild(make("li", null, "Subject contains: " + choice.scope.subjects.join(", "))); }
+    ul.appendChild(make("li", null, "Read " + (choice.processingLocation === "cloud" ? "by a cloud model" : "on the household's own machines")));
+    ul.appendChild(make("li", null, "Agent: " + agentName(choice.agent)));
+    ul.appendChild(make("li", null, "Adds to: " + calendarName(choice.targetCalendar)));
+    if (choice.conflictCalendars.length) {
+      ul.appendChild(make("li", null, "Checks for conflicts: " + choice.conflictCalendars.map(calendarName).join(", ")));
+    }
+    return ul;
+  }
+
+  // field builds one labelled control inside a .fld.
+  function field(id, label, ctl, wide, hint) {
+    var f = make("div", "fld" + (wide ? " wide" : ""));
+    var l = make("label", null, label);
+    l.htmlFor = id;
+    ctl.id = id;
+    f.appendChild(l);
+    f.appendChild(ctl);
+    if (hint) { f.appendChild(make("div", "muted", hint)); }
+    return f;
+  }
+  function input(type, value) {
+    var i = make("input", "hinput");
+    i.type = type;
+    if (value !== undefined && value !== null) { i.value = value; }
+    i.autocomplete = "off";
+    return i;
+  }
+  function textarea(value) {
+    var t = make("textarea", "hinput");
+    t.rows = 2;
+    t.value = value || "";
+    return t;
+  }
+  function select(options, value) {
+    var s = make("select", "hinput");
+    options.forEach(function (o) {
+      var opt = make("option", null, o.label);
+      opt.value = String(o.value);
+      s.appendChild(opt);
+    });
+    if (value !== undefined && value !== null) { s.value = String(value); }
+    return s;
+  }
+  function lines(v) { return String(v || "").split(/[\n,]/).map(function (x) { return x.trim(); }).filter(Boolean); }
+
+  // The protected intake. The field is a password field that never
+  // spell-checks, autocompletes or autocorrects; it is emptied BEFORE the
+  // request is sent — success or not — so what was typed is on the page
+  // for as short a time as possible, and nothing ever shows it back.
+  // "Show what I typed" shows the typing only, for 30 seconds, and hides
+  // it again when the window loses focus.
+  function credentialForm(mon, replacing, onCancel) {
+    var form = make("form");
+    form.appendChild(callout("info", "Use an app password made just for this — from your mail provider's security " +
+      "settings — not your account password. It is easy to revoke on its own, and Gmail, Outlook and Yahoo refuse " +
+      "an account password here anyway."));
+    var domain = setup.provider && setup.provider.settings ? setup.provider.settings.username_domain : "";
+    var login = input("text", mon.credential && mon.credential.login ? mon.credential.login : "");
+    login.autocomplete = "username";
+    login.spellcheck = false;
+    var pw = make("input", "hinput");
+    pw.type = "password";
+    pw.autocomplete = "new-password";
+    pw.spellcheck = false;
+    pw.setAttribute("autocapitalize", "off");
+    pw.setAttribute("autocorrect", "off");
+    pw.maxLength = 1024;
+    pw.setAttribute("aria-label", "mailbox app password");
+    var reveal = button("Show what I typed", "ghost", function () {
+      if (pw.type === "text") { conceal(); return; }
+      pw.type = "text";
+      reveal.textContent = "Hide";
+      reveal.setAttribute("aria-pressed", "true");
+      clearTimeout(revealTimer);
+      revealTimer = setTimeout(conceal, 30000);
+    });
+    reveal.setAttribute("aria-pressed", "false");
+    var revealTimer = 0;
+    function conceal() {
+      clearTimeout(revealTimer);
+      pw.type = "password";
+      reveal.textContent = "Show what I typed";
+      reveal.setAttribute("aria-pressed", "false");
+    }
+    pw.addEventListener("input", function () { if (!pw.value) { conceal(); } });
+    window.addEventListener("blur", conceal);
+    document.addEventListener("visibilitychange", conceal);
+
+    var fields = make("div", "fields");
+    fields.appendChild(field("mail-login", "Mailbox username", login, true,
+      domain ? "A bare name gets @" + domain + " added, as in webmail." : ""));
+    var pwf = field("mail-app-password", "App password", pw, true,
+      "Sent once to the node that reads your mail. Wildstone does not keep it and cannot show it again.");
+    pwf.appendChild(actions([reveal]));
+    fields.appendChild(pwf);
+    form.appendChild(fields);
+
+    var submit = make("button", "hbtn hbtn-primary", replacing ? "Replace password" : "Save password");
+    submit.type = "submit";
+    form.appendChild(actions([submit, onCancel ? button("Keep the current password", "ghost", onCancel) : null]));
+    form.addEventListener("submit", function (e) {
+      e.preventDefault();
+      conceal();
+      var typed = pw.value;
+      pw.value = "";
+      if (!login.value.trim() || !typed) {
+        flash("bad", "Enter the mailbox username and the app password.");
+        return;
+      }
+      submit.disabled = true;
+      after(api("POST", connPath(mon.connection.name, "credential"), { login: login.value.trim(), password: typed }),
+        replacing ? "Replaced. Authorize the monitor again to use the new password." : "Stored on the node that reads your mail.")
+        .then(function () { submit.disabled = false; });
+      typed = "";
+    });
+    return form;
+  }
+
+  // What to watch, how often, where it is read, which Agent, which
+  // calendars. Filing it is a Plan an Owner approves; the Person then
+  // authorizes it themselves.
+  function watchForm(mon, initial, editing, onCancel) {
+    var form = make("form");
+    var writable = (setup.calendars || []).filter(function (c) { return c.writable; });
+    var agents = setup.agents || [];
+    if (agents.length === 0 || writable.length === 0) {
+      form.appendChild(askOwner(agents.length === 0
+        ? "You have no Agent you may use to watch mail. An Owner gives you one."
+        : "There is no calendar you may add events to. An Owner can give you one."));
+      if (setup.calendarsError) { form.appendChild(callout("bad", "Your calendars could not be read: " + setup.calendarsError)); }
+      return form;
+    }
+    if (editing) {
+      form.appendChild(callout("warn", "Saving a change stops this monitor at once. It starts again only after an Owner " +
+        "approves the new settings and you authorize them."));
+    }
+    var fields = make("div", "fields");
+    var folders = textarea(((initial && initial.scope.folders.length ? initial.scope.folders : ["INBOX"])).join("\n"));
+    var senders = textarea(initial ? initial.scope.senders.join("\n") : "");
+    var subjects = textarea(initial ? initial.scope.subjects.join("\n") : "");
+    fields.appendChild(field("mail-folders", "Folders", folders, true, "One per line. INBOX is the usual one."));
+    fields.appendChild(field("mail-senders", "Only from these senders or domains (optional)", senders, false, "One per line — e.g. school.example.org"));
+    fields.appendChild(field("mail-subjects", "Only with a subject containing (optional)", subjects, false, "One per line"));
+    var cadence = null;
+    if (!editing) {
+      cadence = select(cadencesWithin(setup.cadence).map(function (c) { return { value: c, label: cadenceLabel(c) }; }),
+        setup.cadence && setup.cadence["default"]);
+      fields.appendChild(field("mail-cadence", "How often to check", cadence));
+    }
+    var agent = select(agents.map(function (a) { return { value: a.seq, label: a.name }; }), initial ? initial.agent : agents[0].seq);
+    fields.appendChild(field("mail-agent", "Agent", agent));
+    var target = select(writable.map(function (c) { return { value: c.id, label: c.name }; }),
+      initial ? initial.targetCalendar : writable[0].id);
+    fields.appendChild(field("mail-target", "Add events to", target, false, "Only calendars you may add to are listed."));
+
+    // Where it is read: local is the default, and cloud is only offered
+    // where an Owner allowed it for this connection.
+    var cloudAllowed = !!mon.connection.cloudAllowed;
+    var where = make("fieldset", "fld wide");
+    where.appendChild(make("legend", null, "Where your mail is read"));
+    var local = radio("mail-location", "local", "On this household's own machines (recommended)", true, false);
+    var cloud = radio("mail-location", "cloud", "A cloud model may read it", false, !cloudAllowed);
+    if (initial && initial.processingLocation === "cloud" && cloudAllowed) { cloud.input.checked = true; local.input.checked = false; }
+    where.appendChild(local.label);
+    where.appendChild(cloud.label);
+    where.appendChild(make("div", "muted", "Cloud stays off unless you choose it" +
+      (cloudAllowed ? "" : ", and an Owner has not allowed it for this connection") +
+      ". Without a local model, only calendar invitations are read and other mail is marked as needing details — it never falls back to the cloud."));
+    fields.appendChild(where);
+
+    var conf = make("fieldset", "fld wide");
+    conf.appendChild(make("legend", null, "Check these calendars for conflicts"));
+    var chosen = initial ? initial.conflictCalendars : [writable[0].id];
+    var boxes = (setup.calendars || []).map(function (c) {
+      var r = checkbox("mail-conflict-" + c.id, c.name, chosen.indexOf(c.id) >= 0);
+      r.input.value = c.id;
+      conf.appendChild(r.label);
+      return r.input;
+    });
+    conf.appendChild(make("div", "muted", "Only calendars you can see are offered, and a conflict names only what you could see anyway."));
+    if (setup.calendarsError) { conf.appendChild(callout("bad", "Your calendars could not be read: " + setup.calendarsError)); }
+    fields.appendChild(conf);
+    form.appendChild(fields);
+
+    var submit = make("button", "hbtn hbtn-primary", editing ? "Save and ask for approval" : "Ask an Owner to approve");
+    submit.type = "submit";
+    form.appendChild(actions([submit, onCancel ? button("Keep the current settings", "ghost", onCancel) : null]));
+    form.addEventListener("submit", function (e) {
+      e.preventDefault();
+      var choice = {
+        agent: Number(agent.value),
+        targetCalendar: target.value,
+        scope: { folders: lines(folders.value), senders: lines(senders.value), subjects: lines(subjects.value) },
+        processingLocation: cloud.input.checked ? "cloud" : "local",
+        conflictCalendars: boxes.filter(function (b) { return b.checked; }).map(function (b) { return b.value; })
+      };
+      if (cadence) { choice.cadence = cadence.value; }
+      if (!choice.scope.folders.length) { flash("bad", "Name at least one folder to watch."); return; }
+      submit.disabled = true;
+      after(api("POST", connPath(mon.connection.name, "subscription"), choice),
+        editing ? "Saved. Waiting for an Owner to approve the change." : "Sent for an Owner's approval.")
+        .then(function () { submit.disabled = false; });
+    });
+    return form;
+  }
+  function radio(name, value, label, checked, disabled) {
+    var l = make("label", "check" + (disabled ? " off" : ""));
+    var i = make("input");
+    i.type = "radio";
+    i.name = name;
+    i.value = value;
+    i.checked = checked;
+    i.disabled = disabled;
+    l.appendChild(i);
+    l.appendChild(document.createTextNode(label));
+    return { label: l, input: i };
+  }
+  function checkbox(id, label, checked) {
+    var l = make("label", "check");
+    var i = make("input");
+    i.type = "checkbox";
+    i.id = id;
+    i.checked = checked;
+    l.appendChild(i);
+    l.appendChild(document.createTextNode(label));
+    return { label: l, input: i };
+  }
+
+  function authorizeBody(info) {
+    return {
+      agent: info.choice.agent,
+      targetCalendar: info.choice.targetCalendar,
+      scope: info.choice.scope,
+      processingLocation: info.choice.processingLocation,
+      subscription: info.sub.id
+    };
+  }
+  // The Person's own act: authorize the subscription an Owner approved,
+  // with exactly the choices it names.
+  function authorizeStep(mon, info) {
+    var box = make("div");
+    if (!info.sub || !info.choice) {
+      box.appendChild(callout("bad", "This monitor's settings could not be read back; set them again."));
+      return box;
+    }
+    box.appendChild(make("p", "blurb", info.owner === "approved"
+      ? "An Owner approved this monitor. It reads nothing until you authorize it yourself."
+      : "Your change is waiting for an Owner. You can authorize it now; it runs once both are done."));
+    box.appendChild(choiceSummary(info.choice));
+    box.appendChild(actions([button("Authorize this monitor", "primary", function () {
+      after(api("POST", connPath(mon.connection.name, "authorization"), authorizeBody(info)), "Authorized by you.");
+    }, "seal-check")]));
+    return box;
+  }
+
+  // ------------------------------------------------------------ health
+
+  var OUTCOME_LABEL = {
+    ok: "found mail in scope", empty: "nothing new", unavailable: "provider unreachable", stale: "only an old view",
+    auth_failed: "password refused", config_failed: "folder or filter problem", error: "Wildstone error", abandoned: "did not finish"
+  };
+
+  function control(sub, action, extra, done) {
+    var body = { action: action };
+    Object.keys(extra || {}).forEach(function (k) { body[k] = extra[k]; });
+    return after(api("POST", "/agent-subscriptions/" + sub.id + "/control", body), done);
+  }
+
+  function paintHealth(mon, info) {
+    var wid = el("health-wid"), box = el("health");
+    clear(box);
+    clear(el("health-pill"));
+    if (!mon || !info.sub) { wid.hidden = true; return; }
+    wid.hidden = false;
+    var sub = info.sub, sched = sub.schedule || {}, name = mon.connection.name;
+    var h = healthOf(mon, sub);
+    el("health-pill").appendChild(pill(h.kind, h.title));
+
+    var detail = callout(h.kind === "bad" ? "bad" : h.kind === "warn" ? "warn" : "info", h.detail);
+    box.appendChild(detail);
+    var fix = null;
+    if (h.recovery === "reenter-password") {
+      fix = button("Enter a new app password", "primary", function () { ui.reentering = true; paint(); }, "key");
+    } else if (h.recovery === "resume") {
+      fix = button("Resume", "primary", function () { control(sub, "resume", {}, "Resumed."); });
+    } else if (h.recovery === "reauthorize" && info.choice) {
+      fix = button("Authorize again", "primary", function () {
+        after(api("POST", connPath(name, "authorization"), authorizeBody(info)), "Authorized by you.");
+      }, "seal-check");
+    } else if (h.recovery === "edit") {
+      fix = button("Edit folders and filters", "primary", function () { ui.editing = true; paint(); });
+    } else if (h.recovery === "contact-owner") {
+      box.appendChild(make("div", "muted", "Ask an Owner to look at it" +
+        ((mon.nodes || []).length ? " (it runs on " + mon.nodes.join(", ") + ")" : "") + "."));
+    }
+    if (fix) { box.appendChild(actions([fix])); }
+
+    var paused = sched.hold === "paused" || sched.hold === "auth_failed" || sched.hold === "config_failed";
+    var cp = sub.checkpoint || {};
+    var dl = make("dl", "kv");
+    function fact(k, v) { dl.appendChild(make("dt", null, k)); dl.appendChild(make("dd", "tnum", v)); }
+    fact("Last run", sched.lastRunAt ? ago(sched.lastRunAt) + " — " + (OUTCOME_LABEL[sched.lastOutcome || ""] || sched.lastOutcome || "running") : "not yet");
+    fact("Last success", sched.lastSuccessAt ? ago(sched.lastSuccessAt) : "not yet");
+    fact("Mailbox position saved", cp.committedAt ? ago(cp.committedAt) + " (checkpoint " + cp.version + ")" : "not yet — it starts from new mail");
+    fact("Next check", paused ? "held" : sched.nextDueAt ? when(sched.nextDueAt) : "—");
+    fact("How often", cadenceLabel(sub.cadence || (setup.cadence && setup.cadence["default"])));
+    if ((sched.consecutiveFailures || 0) > 0) { fact("Failures in a row", String(sched.consecutiveFailures)); }
+    if (sched.lastError) { fact("Last error", sched.lastError); }
+    if (mon.credential) {
+      fact("App password", "saved for " + (mon.credential.login || "your mailbox") + " (version " + mon.credential.version + ")");
+    }
+    box.appendChild(dl);
+
+    if (ui.reentering) {
+      box.appendChild(credentialForm(mon, true, function () { ui.reentering = false; paint(); }));
+    }
+    if (ui.editing) {
+      box.appendChild(watchForm(mon, info.choice, true, function () { ui.editing = false; paint(); }));
+    }
+
+    // The controls. Pause and resume, how often, and the two ways out:
+    // stop watching, and remove the password.
+    var cad = select(cadencesWithin(setup.cadence, sub.cadence).map(function (c) { return { value: c, label: cadenceLabel(c) }; }),
+      sub.cadence || (setup.cadence && setup.cadence["default"]));
+    cad.setAttribute("aria-label", "how often to check");
+    var saveCad = button("Save how often", "ghost", function () {
+      control(sub, "cadence", { cadence: cad.value }, "Saved: " + cadenceLabel(cad.value) + ".");
+    });
+    saveCad.hidden = true;
+    cad.addEventListener("change", function () { saveCad.hidden = cad.value === sub.cadence; });
+    var cadWrap = make("span", "check");
+    cadWrap.appendChild(make("span", "muted", "Check"));
+    cadWrap.appendChild(cad);
+    var row2 = actions([
+      paused
+        ? button("Resume", "secondary", function () { control(sub, "resume", {}, "Resumed."); })
+        : button("Pause", "secondary", function () { control(sub, "pause", { reason: "paused by its Person" }, "Paused."); }),
+      cadWrap,
+      saveCad,
+      ui.editing ? null : button("Edit settings…", "ghost", function () { ui.editing = true; paint(); }),
+      ui.reentering || h.recovery === "reenter-password" ? null
+        : button("Replace password…", "ghost", function () { ui.reentering = true; paint(); }, "key"),
+      button("Stop watching…", "ghost", function () { ui.confirming = "disable"; paint(); }, "prohibit"),
+      button("Remove password…", "ghost", function () { ui.confirming = "revoke"; paint(); }, "trash")
+    ]);
+    row2.setAttribute("aria-label", "monitor controls");
+    box.appendChild(row2);
+
+    if (ui.confirming === "disable") {
+      box.appendChild(confirmBox("warn", "Stop watching this mailbox?",
+        "No new mail is read from now on. Your webmail, your calendars, your mail at the provider and anyone else's " +
+        "monitor are not touched. Starting again means setting it up again, with an Owner's approval.",
+        "Stop watching", "Keep watching", function () {
+          control(sub, "disable", { reason: "stopped by its Person" }, "Stopped.");
+        }));
+    }
+    if (ui.confirming === "revoke") {
+      box.appendChild(confirmBox("bad", "Remove your app password?",
+        "Access ends first, then each node that held it proves it erased. Revoke the app password at your mail " +
+        "provider too: only the provider can make it stop working everywhere. Webmail and calendars are not affected.",
+        "Remove password", "Keep it", function () {
+          after(api("POST", connPath(name, "credential/revoke"), {}), "Removed. Revoke it at your provider as well.");
+        }));
+    }
+  }
+
+  // confirmBox asks on the page, and waits for a second, deliberate press.
+  function confirmBox(kind, title, body, yes, no, onYes) {
+    var box = make("div", "note note-" + kind);
+    box.setAttribute("role", "alertdialog");
+    box.style.marginTop = "var(--space-4)";
+    box.appendChild(icon(kind === "bad" ? "trash" : "prohibit"));
+    var inner = make("div");
+    inner.appendChild(make("strong", null, title));
+    inner.appendChild(make("p", "blurb", body));
+    inner.appendChild(actions([
+      button(yes, "primary", function (e) { e.currentTarget.disabled = true; onYes(); }),
+      button(no, "ghost", function () { ui.confirming = ""; paint(); })
+    ]));
+    box.appendChild(inner);
+    return box;
+  }
+
+  // ------------------------------------------------------------ events
+
+  // The review is S06's: every row is the caller's own, every offer
+  // names one revision, and an action is answered with the token the
+  // candidate's GET issued for exactly that action. The page decides
+  // nothing about what may be done — the open review's actions do.
+
+  var FIELD_LABEL = { title: "title", start: "start time", end: "end time", date: "date", time: "time",
+    timezone: "time zone", tz: "time zone", location: "place", duration: "length", recurrence: "repeat" };
+  function fieldList(names) { return (names || []).map(function (n) { return FIELD_LABEL[n] || n; }).join(", "); }
+  function needsDetails(c) {
+    if (c.state === "needs_details") { return true; }
+    return (c.fields.missing || []).concat(c.fields.ambiguous || []).some(function (n) { return n !== "location"; });
+  }
+  function openReview(r) {
+    var rv = r.review;
+    if (!rv || rv.state !== "open" || rv.revision !== r.revision) { return null; }
+    if (rv.expiresAt && new Date(rv.expiresAt).getTime() <= Date.now()) { return null; }
+    return rv;
+  }
+  function awaitsYou(r) { return r.state === "proposed" || r.state === "needs_details" || !!openReview(r); }
+  function actionsFor(r) {
+    var rv = openReview(r);
+    if (rv) { return rv.actions || []; }
+    if (r.state === "proposed") { return ["add", "edit", "dismiss"]; }
+    if (r.state === "needs_details") { return ["edit", "dismiss"]; }
+    return [];
+  }
+  var OUTCOME_NOTE = {
+    added: "Added to your calendar.",
+    updated: "The event on your calendar was changed.",
+    cancelled: "The event was removed from your calendar.",
+    dismissed: "Dismissed. You will not be asked about this message again.",
+    kept: "The event stays on your calendar.",
+    revised: "Saved as a new version. Look it over and decide again.",
+    returned_to_review: "Nothing was changed: something moved since it was offered. Look at it again.",
+    pending_reconciliation: "Your calendar did not answer in time. It is being checked; nothing will be added twice."
+  };
+  var KIND_PILL = { create: "ready to add", update: "change to an added event", cancel: "cancelled by the organizer" };
+
+  function eventWhen(f) {
+    if (!f.start) { return "time not known"; }
+    var start = new Date(f.start);
+    if (f.allDay) { return start.toLocaleDateString() + " (all day)"; }
+    var end = f.end ? new Date(f.end) : f.durationMinutes ? new Date(start.getTime() + f.durationMinutes * 60000) : null;
+    return start.toLocaleString() + (end ? " – " + end.toLocaleTimeString() : "") + (f.tz ? " (" + f.tz + ")" : "");
+  }
+
+  // actOnMail reads the candidate afresh and answers with the token its
+  // review issued for exactly this action; with no review open yet it
+  // names the exact revision instead, which the server checks the same.
+  function actOnMail(r, action, fields) {
+    var path = "/mail/candidates/" + encodeURIComponent(r.id);
+    return api("GET", path).then(function (d) {
+      if (d.candidate.revision !== r.revision) {
+        throw new Error("This event changed since you opened it. Look at the current version and decide again.");
+      }
+      var token = d.review && d.review.revision === r.revision && d.tokens ? d.tokens[action] : "";
+      var body = token ? { token: token } : { revision: r.revision, action: action };
+      if (fields) { body.fields = fields; }
+      return api("POST", path + "/act", body);
+    }).catch(function (err) {
+      if (err.status === 409) { throw new Error("Nothing was changed: " + err.message + ". Look at the current version and decide again."); }
+      if (err.status === 404) { throw new Error("This event is no longer waiting for you."); }
+      if (err.status === 403) { throw new Error("Only you can answer this, from your own session."); }
+      throw err;
+    });
+  }
+
+  function paintEvents(mon) {
+    var wid = el("events-wid"), box = el("events");
+    clear(box);
+    if (!mon) { wid.hidden = true; return; }
+    wid.hidden = false;
+    var open = rows.filter(awaitsYou);
+    el("events-count").textContent = String(open.length);
+    if (reviewState === "unavailable") {
+      box.appendChild(make("div", "muted", "Reviewing found events is not available on this Keystone yet."));
+      return;
+    }
+    if (reviewState !== "ok") {
+      box.appendChild(callout("bad", "Your events could not be read: " + reviewState));
+      return;
+    }
+    if (open.length === 0) {
+      box.appendChild(make("div", "muted", "Nothing waiting. Nothing is ever added to a calendar without you."));
+      return;
+    }
+    open.forEach(function (r) { box.appendChild(candidateCard(r)); });
+  }
+
+  function candidateCard(r) {
+    var f = r.fields, rv = openReview(r);
+    var kind = rv ? rv.kind : r.updatePending === "cancel" ? "cancel" : "create";
+    var can = actionsFor(r);
+    var held = kind !== "cancel" && needsDetails(r);
+    var target = rv ? rv.targetCalendar : r.targetCalendar;
+    var card = make("article", "cand");
+    card.setAttribute("aria-label", "event candidate " + (f.title || "untitled"));
+
+    var head = make("div", "wid-head");
+    head.appendChild(make("span", "cand-title grow", f.title || "Untitled event"));
+    head.appendChild(pill(held ? "warn" : kind === "create" ? "ok" : "warn", held ? "needs details" : KIND_PILL[kind] || kind));
+    card.appendChild(head);
+    card.appendChild(make("div", "tnum", eventWhen(f)));
+    if (f.location) { card.appendChild(make("div", "muted", f.location)); }
+    if (f.notes) { card.appendChild(make("div", "muted", f.notes)); }
+    var decide = rv && rv.expiresAt ? " · decide by " + when(rv.expiresAt) : r.expiresAt ? " · decide by " + when(r.expiresAt) : "";
+    card.appendChild(make("div", "muted",
+      (kind === "cancel" ? "Apply removes it from " + calendarName(target) + "; Dismiss keeps it."
+        : kind === "update" ? "Apply changes the event already on " + calendarName(target)
+        : "Would be added to " + calendarName(target)) +
+      (kind !== "cancel" ? " · confidence " + Math.round((f.confidence || 0) * 100) + "%" : "") + decide));
+
+    if (held) {
+      var why = [fieldList(f.missing) && "missing " + fieldList(f.missing), fieldList(f.ambiguous) && "unclear " + fieldList(f.ambiguous)]
+        .filter(Boolean).join("; ") || r.stateReason || "the time is not certain";
+      card.appendChild(callout("warn", "Needs details: " + why + ". Nothing is added, and no conflicts are checked, until you fill them in."));
+    } else if (kind !== "cancel" && rv) {
+      var conflicts = rv.conflicts || [];
+      if (rv.availability === "unavailable") {
+        card.appendChild(callout("warn", "Your calendars could not be checked for conflicts. They are checked again when you decide."));
+      } else if (conflicts.length === 0) {
+        var checked = (rv.checkedCalendars || []).map(calendarName);
+        card.appendChild(make("div", "muted", "No conflicts on " + (checked.length ? checked.join(", ") : "the calendars you chose") + "."));
+      } else {
+        var warn = make("div", "note note-warn");
+        warn.appendChild(icon("warning-circle"));
+        var inner = make("div");
+        inner.appendChild(make("div", null, "Conflicts:"));
+        var ul = make("ul", "conflicts");
+        conflicts.forEach(function (c) {
+          ul.appendChild(make("li", null, (c.title || "busy") + " on " + calendarName(c.calendar) +
+            (c.start ? " — " + (c.allDay ? new Date(c.start).toLocaleDateString() : when(c.start)) : "")));
+        });
+        inner.appendChild(ul);
+        warn.appendChild(inner);
+        card.appendChild(warn);
+      }
+    }
+
+    // Edit sends the whole event; what it names is what the new
+    // revision holds, and it is offered for review again.
+    var editor = null, draft = null;
+    function openEditor() {
+      draft = {
+        title: input("text", f.title), allDay: checkbox("cand-allday-" + r.id, "All day", !!f.allDay),
+        start: input("datetime-local", toLocalInput(f.start)), end: input("datetime-local", toLocalInput(f.end)),
+        location: input("text", f.location || "")
+      };
+      draft.title.maxLength = 200;
+      draft.location.maxLength = 200;
+      editor = make("div", "fields");
+      editor.appendChild(field("cand-title-" + r.id, "Title", draft.title, true));
+      var ad = make("div", "fld wide");
+      ad.appendChild(draft.allDay.label);
+      editor.appendChild(ad);
+      editor.appendChild(field("cand-start-" + r.id, "Starts", draft.start));
+      editor.appendChild(field("cand-end-" + r.id, "Ends", draft.end));
+      editor.appendChild(field("cand-loc-" + r.id, "Place", draft.location, true));
+      card.insertBefore(editor, buttons);
+      if (editBtn) { editBtn.textContent = "Save details"; }
+    }
+    function edited() {
+      return {
+        title: draft.title.value.trim(), allDay: draft.allDay.input.checked,
+        start: fromLocalInput(draft.start.value), end: fromLocalInput(draft.end.value),
+        tz: f.tz, location: draft.location.value.trim(), notes: f.notes || ""
+      };
+    }
+
+    // Whatever came of it, the page reads the candidates again: a 409
+    // means something moved, and the current version is what to decide.
+    var feedback = make("div");
+    function send(action, fields) {
+      clear(feedback);
+      Array.prototype.forEach.call(buttons.querySelectorAll("button"), function (b) { b.disabled = true; });
+      actOnMail(r, action, fields).then(function (res) {
+        flash(res.outcome === "returned_to_review" || res.outcome === "pending_reconciliation" ? "warn" : "info",
+          OUTCOME_NOTE[res.outcome] || res.message);
+        return load();
+      }, function (err) {
+        return load().then(function () { failed(err); });
+      });
+    }
+
+    var editBtn = null;
+    var list = [];
+    if (can.indexOf("add") >= 0) {
+      var add = button("Add", "primary", function () { send("add"); }, "check");
+      add.disabled = held;
+      list.push(add);
+    } else if (kind === "create" && can.length > 0) {
+      var noAdd = button("Add", "primary", function () {}, "check");
+      noAdd.disabled = true;
+      list.push(noAdd);
+    }
+    if (can.indexOf("apply") >= 0) {
+      var apply = button("Apply", "primary", function () { send("apply"); }, "check");
+      apply.disabled = held;
+      list.push(apply);
+    }
+    if (can.indexOf("edit") >= 0) {
+      editBtn = button("Edit", "secondary", function () {
+        if (!editor) { openEditor(); return; }
+        var fields = edited();
+        if (!fields.title || !fields.start) { clear(feedback); feedback.appendChild(callout("bad", "An event needs a title and a start.")); return; }
+        send("edit", fields);
+      });
+      list.push(editBtn);
+    }
+    if (can.indexOf("dismiss") >= 0) {
+      list.push(button("Dismiss", "ghost", function () { send("dismiss"); }, "x"));
+    }
+    var buttons = actions(list);
+    card.appendChild(buttons);
+    card.appendChild(feedback);
+    if (held && can.indexOf("edit") >= 0) { openEditor(); }
+    return card;
+  }
+
+  load();
+})();
+</script>

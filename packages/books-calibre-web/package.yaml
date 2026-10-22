@@ -1,0 +1,90 @@
+# Books capability, profile "calibre-web": browse, read and send the
+# household's e-book library — a Calibre library, the folder with
+# metadata.db in it — from any browser, with OPDS for reading apps and
+# Kobo sync. books-kavita is the other profile of this capability, for
+# a household without a Calibre library.
+#
+# THE LIBRARY is a read-write host-path mount under the managed prefix
+# (Calibre-Web writes metadata and converted formats into it). Point
+# books_path at a folder that already holds a Calibre metadata.db; on
+# first visit Calibre-Web asks for the library location, which is
+# /books inside the container. The default login is admin / admin123 —
+# change it on that first visit.
+#
+# THE ROUTE. Its own login, plus OPDS and Kobo endpoints that reading
+# apps reach without a browser, so the proxy passes through (auth:
+# none) on the family_private class — the ntfy posture. Calibre-Web's
+# "reverse proxy authentication" (header Remote-User) can be switched
+# on later to sign browser users in through Authelia.
+#
+# Image digest is REAL, resolved 2026-09-07 via the OCI registry API:
+#   ghcr.io/linuxserver/calibre-web:latest -> sha256:b1b9d15e...6ead
+apiVersion: wildstone.dev/v1
+kind: Package
+metadata:
+  name: books-calibre-web
+  version: 1.0.3
+  capability: books
+  profile: calibre-web
+requires:
+  - { trait: ingress, mode: private }
+  - { trait: storage, class: bulk }
+params:
+  - { name: public_domain, required: true, description: "The domain your services are named under, e.g. home.example.com. Under a tailnet this is a label rather than an address you type.", source: domain }
+  - { name: books_subdomain, default: books, description: "The name this service appears under, e.g. books." }
+  - { name: node, required: true, description: "Which machine to install this on.", source: node }
+  - { name: books_path, default: /srv/wildstone/media/books, description: "Folder on this machine holding your Calibre library (the one with metadata.db in it).", source: directory }
+  - { name: timezone, default: UTC, source: timezone, validate: iana_timezone, description: "Your timezone, e.g. Europe/London." }
+policies:
+  classifications: [family_private]
+  dataSensitivity: low
+templates:
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: restic-books, node: "{{ .Params.node }}" }
+    spec: { name: restic-books }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: calibre-web-config, node: "{{ .Params.node }}" }
+    spec: { name: calibre-web-config }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: books-backup-repo, node: "{{ .Params.node }}" }
+    spec: { name: books-backup-repo }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: calibre-web, node: "{{ .Params.node }}" }
+    spec:
+      image: "ghcr.io/linuxserver/calibre-web@sha256:b1b9d15e12561ab4cd7cb01a693000e57925bf1906c69d04d5685891c7376ead"
+      env:
+        PUID: "1000"
+        PGID: "1000"
+        TZ: "{{ .Params.timezone }}"
+      mounts:
+        - { source: calibre-web-config, target: /config }
+        - { source: "{{ .Params.books_path }}", target: /books }
+      restart: unless-stopped
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Route
+    metadata: { name: books, node: "{{ .Params.node }}" }
+    spec:
+      host: "{{ .Params.books_subdomain }}.{{ .Params.public_domain }}"
+      upstream: "container/calibre-web:8083"
+      auth: none
+      classification: family_private
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: BackupPlan
+    metadata: { name: books-calibre-web, node: "{{ .Params.node }}" }
+    spec:
+      volumes: [calibre-web-config]
+      repository: books-backup-repo
+      passwordSecret: secret/restic-books
+      schedule: weekly
+      class: important
+      retention: { keepWeekly: 4 }

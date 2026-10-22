@@ -1,0 +1,360 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lists</title>
+<link rel="stylesheet" href="/portal/assets/nocturne.css">
+<!--wildstone:theme-->
+<!--
+  The household's lists (packages/lists-wildstone), on a page of their
+  own: what the front page's Lists card is a window onto.
+
+  THE SAME LISTS, THE SAME WRITES. Every change goes through the same
+  /api/v1/lists endpoints the card uses, which are the same store the
+  Agents' lists.* tools write — ticking milk here and telling the
+  assistant "I got the milk" are one thing.
+
+  DELETING ASKS FIRST, on the page. The request names the list, and the
+  page first says which list and how much is on it and waits for a
+  second, deliberate press. That is the confirm tier's point made by the
+  person themselves: an Agent's lists.delete_list asks the person, and
+  here the person is the one pressing.
+
+  Every value from the server is rendered as text, never as markup.
+-->
+<style>
+  .lists-grid { display: grid; grid-template-columns: minmax(0, 240px) minmax(0, 1fr);
+                gap: var(--space-6); align-items: start; }
+  .lists-rail { display: flex; flex-direction: column; gap: var(--space-2); }
+  /* The list buttons only — #rail, not the whole column: the New list
+     composer's round + is an .hbtn too, and a column-wide rule stretched
+     it across the field. */
+  #rail { display: flex; flex-direction: column; gap: var(--space-2); }
+  #rail .hbtn { justify-content: space-between; width: 100%; }
+  #rail .hbtn.on { border-color: var(--color-accent); }
+  .lists-panel { display: flex; flex-direction: column; gap: var(--space-4); }
+  .lists-done { text-decoration: line-through; }
+  @media (max-width: 720px) {
+    .lists-grid { grid-template-columns: minmax(0, 1fr); }
+  }
+</style>
+
+<main class="page">
+  <div class="spread" style="margin-bottom: var(--space-6)">
+    <a class="hbtn hbtn-ghost" href="/home/"><i class="ph ph-arrow-left" aria-hidden="true"></i> Home</a>
+    <span class="fade" aria-hidden="true"></span>
+    <span class="muted" id="member"></span>
+  </div>
+
+  <div class="row-between" style="margin-bottom: var(--space-6)">
+    <div>
+      <h1>Lists</h1>
+      <div class="muted">Shared by the whole household — and by the assistant</div>
+    </div>
+    <span class="muted tnum" id="count"></span>
+  </div>
+
+  <div id="note"></div>
+  <div id="pantry"></div>
+
+  <div class="lists-grid">
+    <nav class="lists-rail" aria-label="The household's lists">
+      <div id="rail"></div>
+      <div class="composer">
+        <label class="sr" for="new-name">New list</label>
+        <textarea id="new-name" rows="1" placeholder="New list"></textarea>
+        <button class="hbtn hbtn-primary send" id="new-list" type="button" aria-label="Start a new list">
+          <i class="ph ph-plus" aria-hidden="true"></i>
+        </button>
+      </div>
+    </nav>
+
+    <section class="wid lists-panel" id="panel">
+      <div class="wid-head">
+        <h2 id="list-name" style="margin: 0">&nbsp;</h2>
+        <span class="pill pill-mute tnum" id="left" hidden></span>
+        <span class="fade" aria-hidden="true"></span>
+        <button class="hbtn hbtn-ghost" id="clear" type="button" hidden>Clear ticked</button>
+        <button class="hbtn hbtn-ghost" id="delete" type="button" hidden>
+          <i class="ph ph-trash" aria-hidden="true"></i> Delete list
+        </button>
+      </div>
+      <div id="confirm"></div>
+      <div id="old-groceries"></div>
+      <div id="items"></div>
+      <div class="composer" id="add-box">
+        <label class="sr" for="add-text">Add to the list</label>
+        <textarea id="add-text" rows="1" placeholder="Add items — milk, eggs"></textarea>
+        <button class="hbtn hbtn-primary send" id="add" type="button" aria-label="Add">
+          <i class="ph ph-plus" aria-hidden="true"></i>
+        </button>
+      </div>
+    </section>
+  </div>
+
+  <footer class="muted" style="margin-top: var(--space-8); font-size: 12px">
+    Everyone in the household sees these lists. The assistant can read and change them too.
+  </footer>
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  function el(id) { return document.getElementById(id); }
+  function text(id, v) { var n = el(id); if (n) { n.textContent = v; } }
+  function clear(n) { while (n && n.firstChild) { n.removeChild(n.firstChild); } }
+  function make(tag, cls, content) {
+    var n = document.createElement(tag);
+    if (cls) { n.className = cls; }
+    if (content !== undefined && content !== null) { n.textContent = String(content); }
+    return n;
+  }
+  function icon(name) {
+    var i = make("i", "ph ph-" + name);
+    i.setAttribute("aria-hidden", "true");
+    return i;
+  }
+  function note(kind, message) {
+    clear(el("note"));
+    if (!message) { return; }
+    var n = make("div", "note note-" + kind);
+    n.appendChild(icon(kind === "bad" ? "warning" : "check"));
+    n.appendChild(make("div", null, message));
+    el("note").appendChild(n);
+  }
+
+  var lists = [], current = "";
+  // While PantryOS is installed it keeps the grocery list (ADR-W044 A3): a
+  // grocery-named list here is the old one, to clear out, never to grow.
+  var groceriesInPantryOS = false;
+  var groceryNames = { "groceries": 1, "grocery": 1, "shopping": 1, "grocery list": 1, "shopping list": 1, "groceries list": 1 };
+  function isGroceryList(name) {
+    return !!groceryNames[String(name || "").trim().toLowerCase().split(/\s+/).join(" ")];
+  }
+  function oldGroceries(name) { return groceriesInPantryOS && isGroceryList(name); }
+  // A list the person named with New list exists only once its first
+  // item is added, the same as asking the assistant.
+  var pendingNew = "";
+
+  function post(path, body) {
+    return fetch(path, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body)
+    }).then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (j) {
+        if (!r.ok) { throw new Error(j.error || "that did not work"); }
+        return j;
+      });
+    });
+  }
+  function failed(err) { note("bad", String(err.message || err)); }
+
+  function load() {
+    return fetch("/api/v1/lists", { headers: { accept: "application/json" } })
+      .then(function (r) {
+        return r.json().catch(function () { return {}; }).then(function (j) {
+          if (!r.ok) { throw new Error(j.error || "the lists did not load"); }
+          return j;
+        });
+      })
+      .then(function (j) {
+        lists = j.lists || [];
+        groceriesInPantryOS = !!j.groceriesInPantryOS;
+        var names = lists.map(function (l) { return l.name; });
+        var keep = names.filter(function (n) { return n.toLowerCase() === current.toLowerCase(); })[0];
+        if (keep) {
+          current = keep;
+          if (pendingNew && pendingNew.toLowerCase() === keep.toLowerCase()) { pendingNew = ""; }
+        } else if (!(pendingNew && current === pendingNew)) {
+          current = names[0] || pendingNew || (groceriesInPantryOS ? "" : "Shopping");
+        }
+        paint();
+      })
+      .catch(failed);
+  }
+
+  function paint() {
+    var pantry = el("pantry");
+    clear(pantry);
+    if (groceriesInPantryOS) {
+      var p = make("div", "note note-info");
+      p.style.marginBottom = "var(--space-4)";
+      p.appendChild(icon("package"));
+      p.appendChild(make("div", null, "Your grocery list lives in PantryOS: add and tick groceries there, " +
+        "or ask the assistant. These lists are for everything else."));
+      pantry.appendChild(p);
+    }
+    var rail = el("rail");
+    clear(rail);
+    var shown = lists.slice();
+    if (pendingNew && !lists.some(function (l) { return l.name === pendingNew; })) {
+      shown.push({ name: pendingNew, open: 0, done: 0, items: [], pending: true });
+    }
+    shown.forEach(function (l) {
+      var b = make("button", "hbtn hbtn-secondary" + (l.name === current ? " on" : ""));
+      b.type = "button";
+      b.setAttribute("aria-current", l.name === current ? "true" : "false");
+      b.appendChild(make("span", null, l.name));
+      b.appendChild(make("span", "muted tnum", l.pending ? "new" : (l.open ? l.open + " left" : "done")));
+      b.addEventListener("click", function () {
+        current = l.name;
+        clear(el("confirm"));
+        note("", "");
+        paint();
+      });
+      rail.appendChild(b);
+    });
+    if (!shown.length) {
+      rail.appendChild(make("div", "muted", "No lists yet."));
+    }
+    text("count", lists.length === 1 ? "1 list" : lists.length + " lists");
+
+    var list = shown.filter(function (l) { return l.name === current; })[0] ||
+      { name: current, items: [], open: 0, done: 0, pending: true };
+    text("list-name", list.name);
+    el("left").hidden = !list.open;
+    text("left", list.open ? list.open + " left" : "");
+    el("clear").hidden = !list.done;
+    el("delete").hidden = !!list.pending;
+
+    var old = oldGroceries(list.name);
+    el("add-box").hidden = old;
+    var oldBox = el("old-groceries");
+    clear(oldBox);
+    if (old && !list.pending) {
+      oldBox.appendChild(make("div", "note note-warn", "This is the old grocery list, from before PantryOS. " +
+        "Nothing can be added or ticked here any more; remove what you have moved, or delete the list."));
+    }
+
+    var box = el("items");
+    clear(box);
+    if (!list.items || !list.items.length) {
+      box.appendChild(make("div", "muted", list.pending
+        ? "Add the first thing to " + list.name + " below."
+        : list.name + " is empty. Add something below, or ask the assistant."));
+    }
+    (list.items || []).forEach(function (it) {
+      var row = make("label", "frow");
+      row.style.cursor = "pointer";
+      var tick = document.createElement("input");
+      tick.type = "checkbox";
+      tick.checked = !!it.checked;
+      tick.disabled = old;
+      tick.addEventListener("change", function () {
+        post("/api/v1/lists/check", { list: list.name, items: [it.text], checked: tick.checked })
+          .then(load).catch(function (err) { tick.checked = !tick.checked; failed(err); });
+      });
+      row.appendChild(tick);
+      var name = make("span", "nm" + (it.checked ? " muted lists-done" : ""), it.text);
+      row.appendChild(name);
+      var who = it.checked && it.checkedBy ? "ticked by " + it.checkedBy : (it.addedBy ? "added by " + it.addedBy : "");
+      if (who) { row.appendChild(make("span", "muted", who)); }
+      var rm = make("button", "hbtn hbtn-ghost");
+      rm.type = "button";
+      rm.setAttribute("aria-label", "Remove " + it.text);
+      rm.appendChild(icon("x"));
+      rm.addEventListener("click", function (e) {
+        e.preventDefault();
+        post("/api/v1/lists/remove", { list: list.name, items: [it.text] }).then(load).catch(failed);
+      });
+      row.appendChild(rm);
+      box.appendChild(row);
+    });
+  }
+
+  function add() {
+    var box = el("add-text"), raw = box.value.trim();
+    if (!raw || !current) { return; }
+    var items = raw.split(/[,\n;]+/).map(function (x) { return x.trim(); })
+      .filter(function (x) { return x; });
+    el("add").disabled = true;
+    post("/api/v1/lists/items", { list: current, items: items })
+      .then(function () { box.value = ""; note("", ""); return load(); })
+      .catch(failed)
+      .then(function () { el("add").disabled = false; box.focus(); });
+  }
+  el("add").addEventListener("click", add);
+  el("add-text").addEventListener("keydown", function (e) {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); add(); }
+  });
+
+  function startNew() {
+    var box = el("new-name"), name = box.value.trim().slice(0, 60);
+    if (!name) { box.focus(); return; }
+    if (oldGroceries(name)) {
+      note("bad", "The grocery list lives in PantryOS while it is installed. Add groceries there, or ask the assistant.");
+      box.focus();
+      return;
+    }
+    var existing = lists.filter(function (l) { return l.name.toLowerCase() === name.toLowerCase(); })[0];
+    current = existing ? existing.name : name;
+    pendingNew = existing ? "" : name;
+    box.value = "";
+    clear(el("confirm"));
+    note("", "");
+    paint();
+    el("add-text").focus();
+  }
+  el("new-list").addEventListener("click", startNew);
+  el("new-name").addEventListener("keydown", function (e) {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); startNew(); }
+  });
+
+  el("clear").addEventListener("click", function () {
+    post("/api/v1/lists/clear", { list: current }).then(load).catch(failed);
+  });
+
+  // Deleting a whole list asks first, on the page, naming the list and
+  // how much is on it. Only the second, deliberate press sends it.
+  el("delete").addEventListener("click", function () {
+    var list = lists.filter(function (l) { return l.name === current; })[0];
+    if (!list) { return; }
+    var n = (list.open || 0) + (list.done || 0);
+    var box = el("confirm");
+    clear(box);
+    var ask = make("div", "note note-warn");
+    ask.appendChild(icon("warning"));
+    var body = make("div", "grow");
+    body.appendChild(make("div", null, "Delete " + list.name + " and the " + n +
+      (n === 1 ? " item" : " items") + " on it? This cannot be undone."));
+    var row = make("div", "spread");
+    row.style.marginTop = "var(--space-2)";
+    var yes = make("button", "hbtn hbtn-primary", "Delete " + list.name);
+    yes.type = "button";
+    var no = make("button", "hbtn hbtn-ghost", "Keep it");
+    no.type = "button";
+    no.addEventListener("click", function () { clear(box); });
+    yes.addEventListener("click", function () {
+      yes.disabled = true;
+      post("/api/v1/lists/delete", { list: list.name })
+        .then(function () {
+          clear(box);
+          note("info", "Deleted " + list.name + ".");
+          current = "";
+          return load();
+        })
+        .catch(function (err) { yes.disabled = false; failed(err); });
+    });
+    row.appendChild(yes);
+    row.appendChild(no);
+    body.appendChild(row);
+    ask.appendChild(body);
+    box.appendChild(ask);
+    no.focus();
+  });
+
+  // Opened from the card with a list named (/lists/?list=Shopping).
+  var wanted = new URLSearchParams(location.search).get("list");
+  if (wanted) { current = wanted; }
+  load();
+  // The assistant and other people change these lists too; a quiet
+  // re-read keeps the page honest without redrawing under a typist.
+  setInterval(function () {
+    var active = document.activeElement;
+    if (document.hidden || (active && active.tagName === "TEXTAREA")) { return; }
+    if (el("confirm").firstChild) { return; }
+    load();
+  }, 20000);
+})();
+</script>

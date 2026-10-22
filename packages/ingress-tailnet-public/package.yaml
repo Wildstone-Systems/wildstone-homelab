@@ -1,0 +1,135 @@
+# Ingress capability, tailnet profile with PUBLICLY TRUSTED TLS: Caddy
+# binding a private address only, terminating with a certificate a real
+# CA issued over a DNS-01 challenge.
+#
+# Why this exists next to ingress-tailnet rather than as a flag on it.
+# The caddy-tailnet profile terminates with Caddy's internal CA, which is
+# correct and completely private — and costs every device that will ever
+# open a page a manual root-certificate install. That is a step a
+# household does not complete: the browser says "not secure", someone
+# clicks through, and the value of having TLS at all quietly goes to
+# zero. Nobody trusts an internal CA until they are told to.
+#
+# DNS-01 is what makes a public CA usable for a name that resolves to an
+# address the internet cannot route to. The challenge is answered by
+# writing a TXT record in the zone, so the CA never connects to the
+# listener — it only has to believe the zone. The listener stays bound to
+# the tailnet address and reachable from nowhere else.
+#
+# The cost, stated plainly: this profile needs a real domain in a
+# Cloudflare zone and an API token that can edit it. nip.io and friends
+# cannot work here — a certificate authority will not issue for a name
+# you do not control, which is the whole point of the check.
+#
+# Image is caddy-cloudflare, not caddy: the DNS-01 challenge needs the
+# caddy-dns/cloudflare module compiled in, and stock Caddy has no DNS
+# provider modules at all. A profile that pinned the stock image would
+# fail at startup with an unrecognized global option, not at install.
+#
+# Image digest is REAL, resolved 2026-09-05 via the OCI registry API:
+#   ghcr.io/caddybuilds/caddy-cloudflare:latest
+#     -> sha256:62639363...de96
+apiVersion: wildstone.dev/v1
+kind: Package
+metadata:
+  name: ingress-tailnet-public
+  version: 1.0.1
+  capability: ingress
+  profile: caddy-tailnet-public
+  exclusive: true
+provides:
+  # Private, exactly as caddy-tailnet is. A publicly trusted certificate
+  # is a statement about who signed it, NOT about who can reach the
+  # listener — the bind address is what decides that, and it has not
+  # changed. Declaring ingress:public here would be the lie this
+  # distinction exists to prevent.
+  - { trait: ingress, mode: private }
+params:
+  # The Cloudflare zone Routes are served under, e.g. "example.com".
+  # Same meaning as in packages/ingress: the zone itself, with records
+  # named relative to it.
+  - { name: public_domain, required: true, description: "The domain your services are named under, e.g. home.example.com. Under a tailnet this is a label rather than an address you type.", source: domain }
+  - { name: node, required: true, description: "Which machine to install this on.", source: node }
+  # The node's tailnet address, e.g. `tailscale ip -4`. Every name under
+  # public_domain resolves here, so it is what "reachable over the
+  # tailnet and nowhere else" actually means. Required and undefaulted
+  # for the reason caddy-tailnet gives (#41).
+  - { name: listen_addr, required: true, example: "100.64.0.1", description: "The address the proxy listens on. Normally this machine’s tailnet address." }
+  - { name: listen_port, default: "443", description: "The port the proxy listens on." }
+policies:
+  classifications: [admin_tailscale]
+templates:
+  # ---- The credential. Provided, never generated: a Cloudflare API
+  # token is issued by Cloudflare to a human, and random bytes here are
+  # not a weaker secret but a broken one.
+  #
+  # Scope it to Zone:DNS:Edit on this zone alone. It can write TXT
+  # records in the zone, which is authority to obtain a certificate for
+  # any name in it — treat it accordingly.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: cloudflare-dns-api-token, node: "{{ .Params.node }}" }
+    spec:
+      name: cloudflare-dns-api-token
+      provided: true
+  # ---- How this node's proxy is postured (ADR-W019 A9).
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Ingress
+    metadata: { name: ingress, node: "{{ .Params.node }}" }
+    spec:
+      tls: public
+      acmeDns: cloudflare
+      trustedProxies: [private_ranges]
+  # ---- Resolution. One wildcard A record sends every name under
+  # public_domain to the tailnet address.
+  #
+  # proxied: false is not a default being restated. A proxied record
+  # would publish these names through Cloudflare's edge, which is the
+  # opposite of this profile's entire claim — and the edge cannot reach a
+  # tailnet address anyway, so it would fail loudly after failing
+  # privately. The record is public information; what it points at is
+  # unreachable without being on the tailnet.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: DnsRecord
+    metadata: { name: tailnet-wildcard }
+    spec:
+      zone: "{{ .Params.public_domain }}"
+      name: "*"
+      type: A
+      content: "{{ .Params.listen_addr }}"
+      proxied: false
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: caddy-tailnet-public-data, node: "{{ .Params.node }}" }
+    spec: { name: caddy-tailnet-public-data }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: caddy-tailnet-public, node: "{{ .Params.node }}" }
+    spec:
+      image: "ghcr.io/caddybuilds/caddy-cloudflare@sha256:62639363ceb043393da9c3895d7c97a9a49ccf840bea0cc7e6479465d12ade96"
+      # argv[0] must be the binary: this image sets no ENTRYPOINT, so
+      # spec.command lands in Docker Cmd as the whole argv. Same shape as
+      # packages/ingress and packages/ingress-tailnet; see
+      # TestPackageCommandsNameTheirBinary.
+      command: ["caddy", "run", "--config", "/etc/wildstone/Caddyfile", "--adapter", "caddyfile", "--watch"]
+      env:
+        # The name the rendered `acme_dns cloudflare {env.CF_API_TOKEN}`
+        # global option reads. It travels in the environment rather than
+        # the Caddyfile because managed files under the prefix are
+        # readable by anything that can read the node's config, and this
+        # one edits DNS.
+        CF_API_TOKEN: "secret/cloudflare-dns-api-token"
+      ports:
+        - "{{ .Params.listen_addr }}:{{ .Params.listen_port }}:443"
+      mounts:
+        # /data holds the ACME account key and the issued certificates.
+        # Losing it means re-issuing, and Let's Encrypt rate-limits that
+        # per name per week — so this is a volume, not a scratch dir.
+        - { source: caddy-tailnet-public-data, target: /data }
+        - { source: /etc/wildstone, target: /etc/wildstone, readOnly: true }
+      restart: unless-stopped

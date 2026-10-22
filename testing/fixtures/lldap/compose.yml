@@ -1,0 +1,17 @@
+services:
+  lldap:
+    image: nitnelave/lldap:latest
+    container_name: lldap
+    ports:
+      - "3890:3890"      # LDAP (non-TLS)
+      - "17170:17170"    # Web UI
+    volumes:
+      - "./data:/data"  # Database storage
+    environment:
+      - LLDAP_JWT_SECRET_FILE=/data/jwt_secret.txt
+      - LLDAP_LDAP_USER_PASS_FILE=/data/ldap_user_pass.txt
+      - LLDAP_USER_DN=admin
+      - LLDAP_LDAP_BASE_DN=dc=example,dc=com
+      - LLDAP_HTTP_URL=http://100.64.0.4:17170
+      - LLDAP_IGNORE_USER_OBJECT_CLASS=inetOrgPerson
+    restart: unless-stopped

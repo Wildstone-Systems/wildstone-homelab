@@ -1,0 +1,43 @@
+# Monitoring capability: Uptime Kuma, tailnet-only behind forward-auth —
+# the reference registry's posture (classification admin_tailscale,
+# authelia_forward_auth). Wardstone host metrics feed in later via Kuma's
+# own probes; no agent surface is involved here (ADR-W011 A2).
+#
+# Image digest is REAL, resolved 2026-08-25 via the OCI registry API:
+#   louislam/uptime-kuma:latest -> sha256:3d632903...76f9
+apiVersion: wildstone.dev/v1
+kind: Package
+metadata:
+  name: monitoring
+  version: 1.0.0
+  capability: monitoring
+  profile: uptime-kuma
+params:
+  # The tailnet-facing admin domain (e.g. the MagicDNS name or an
+  # internal zone) that caddy-private serves.
+  - { name: admin_domain, required: true, description: "The domain your admin-only services are named under. Under a tailnet this is a label rather than an address you type.", source: domain }
+  - { name: node, required: true, description: "Which machine to install this on.", source: node }
+templates:
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: uptime-kuma-data, node: "{{ .Params.node }}" }
+    spec: { name: uptime-kuma-data }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: uptime-kuma, node: "{{ .Params.node }}" }
+    spec:
+      image: "louislam/uptime-kuma@sha256:3d632903e6af34139a37f18055c4f1bfd9b7205ae1138f1e5e8940ddc1d176f9"
+      mounts:
+        - { source: uptime-kuma-data, target: /app/data }
+      restart: unless-stopped
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Route
+    metadata: { name: uptime, node: "{{ .Params.node }}" }
+    spec:
+      host: "uptime.{{ .Params.admin_domain }}"
+      upstream: "container/uptime-kuma:3001"
+      auth: authelia_oidc
+      classification: admin_tailscale

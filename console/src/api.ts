@@ -1,0 +1,3350 @@
+// The Console's ONLY fetch path (ADR-W016 A3): same-origin requests that
+// carry the Console session cookie and nothing else — the browser holds
+// no bearer token (ADR-W033 A4.1) — JSON in/out, wire shapes typed by hand against the API (whose tests
+// pin them server-side). Resource specs come typed from the generated
+// schema (ADR-W007 A7).
+
+import type { AutomationSpec, BackupPlanSpec, BackupTargetSpec } from "./generated/resources";
+
+// ---------------------------------------------------------------- wire shapes
+
+export interface Identity {
+  name: string;
+  role: string;
+  actingFor?: string;
+  // When a person signed in to the Console (ADR-W033 A4.1); absent for
+  // a token.
+  authTime?: string;
+}
+
+export interface ResourceView {
+  kind: string;
+  name: string;
+  owner: string;
+  // Which package produced this. Owner names the CAPABILITY, and two
+  // profiles of one capability share it, so this is what tells a
+  // removal which resources are the named package's. Absent on
+  // resources written before the field existed.
+  package?: string;
+  node?: string;
+  yaml: string;
+}
+
+export interface Observed {
+  // Not converged because a plan is waiting for a human, not because
+  // anything failed. Rendered differently from a real problem.
+  awaitingApproval?: boolean;
+  // The container's OWN healthcheck, verbatim from Docker ("starting",
+  // "healthy", "unhealthy"). Absent means the image declares none, which
+  // is no opinion — never a problem.
+  appHealth?: string;
+  kind: string;
+  name: string;
+  node?: string;
+  healthy: boolean;
+  detail?: string;
+  updatedAt: string;
+}
+
+export interface EventRow {
+  seq: number;
+  time: string;
+  type: string;
+  node?: string;
+  kind?: string;
+  name?: string;
+  message?: string;
+  attrs?: Record<string, string>;
+}
+
+export interface ResearchChange {
+  operation: "create" | "update" | "delete";
+  providerId: string;
+  expectedConfigRevision: string;
+  config?: {
+    name: string;
+    kind: string;
+    endpointRef?: string;
+    credentialRef?: string;
+    backends: string[];
+    fallbackOrder: string[];
+    limits: {
+      searchesPerTask: number;
+      fetchesPerTask: number;
+      requestTimeoutSeconds: number;
+      downloadBytes: number;
+      extractedCharacters: number;
+      cacheSeconds: number;
+    };
+  };
+}
+
+export interface PlanRecord {
+  research?: ResearchChange;
+  auditOnly?: boolean;
+  seq: number;
+  id: string;
+  createdAt: string;
+  principal: string;
+  actingFor?: string;
+  summary: string;
+  risk: string;
+  state: string;
+  basedOnHead?: string;
+  plan?: Plan;
+  // A household setting the plan changes instead of desired state: an
+  // Agent's proposal an Owner decides on (ADR-W033 E2).
+  setting?: { timezone?: string; reason?: string };
+  routine?: {assignedButler?:string;proposingAgent?:string;name:string; revision:number; document:string; outputAudience:string; delivery:string; requiredSecrets?:string[]; secretLabels?:Record<string,string>; requiredMemory?:number[]};
+  resolvedBy?: string;
+  resolvedAt?: string;
+}
+
+// Plan mirrors keystone/plan.Plan as the API now serves it: steps with
+// named risk and action, not ordinals, and no JSON-inside-JSON.
+export interface Plan {
+  id?: string;
+  summary?: string;
+  steps?: PlanStep[];
+  overallRisk?: string;
+}
+
+export interface PlanStep {
+  description?: string;
+  kind?: string;
+  name?: string;
+  action?: string;
+  risk?: string;
+  blastRadius?: string;
+}
+
+export interface BackupRun {
+  seq: number;
+  planName: string;
+  runKind: string;
+  planId?: string;
+  startedAt: string;
+  finishedAt?: string;
+  status: string;
+  detail?: string;
+}
+
+export interface BackupPlanView {
+  name: string;
+  node: string;
+  owner: string;
+  spec: BackupPlanSpec;
+  sourceBytes?: number;
+  estimatedMonthlyCostUsd?: number;
+  costNote?: string;
+}
+
+export interface BackupTargetView {
+  name: string;
+  node: string;
+  owner: string;
+  spec: BackupTargetSpec;
+}
+
+export interface BackupsResponse {
+  plans: BackupPlanView[];
+  targets: BackupTargetView[];
+  runs: BackupRun[];
+}
+
+// GET /api/v1/reports/morning (ADR-W017 A5): the deterministic report,
+// built fresh per request from runtime-DB reads.
+export interface MorningBackupVerdict {
+  planName: string;
+  status: string;
+  runKind: string;
+  at: string;
+  detail?: string;
+}
+
+export interface MorningBackupAlert {
+  planName: string;
+  kind: string;
+  runKind?: string;
+  at?: string;
+  detail: string;
+}
+
+export interface MorningReport {
+  generatedAt: string;
+  unhealthy: Observed[] | null;
+  pendingPlans: PlanRecord[] | null;
+  eventCounts24h: Record<string, number> | null;
+  eventTotal24h: number;
+  backups: MorningBackupVerdict[] | null;
+  backupsOk: boolean;
+  backupAlerts?: MorningBackupAlert[];
+  summary: string;
+}
+
+export interface SecretInfo {
+  name: string;
+  version: number;
+  createdUnixSec?: number;
+  updatedUnixSec?: number;
+}
+
+// NodeInfo is one row of the fleet inventory (#30). connected comes from
+// the gateway's live session registry, never from stored state.
+export interface NodeInfo {
+  id: string;
+  connected: boolean;
+  agentVersion?: string;
+  protocolMinor?: number;
+  firstJoinedAt: string;
+  lastSeenAt: string;
+  connectedSince?: string;
+}
+
+export interface BlockDevice {
+  name: string;
+  sizeBytes: number;
+  removable: boolean;
+}
+
+export interface ListeningPort {
+  proto: string;
+  port: number;
+  localIp: string;
+}
+
+// Radio inventory (GET /api/v1/nodes/{node}/probes/radios, #434). `kind`
+// is never guessed from a tty name: a generic USB-serial bridge is
+// "unknown". `id` is the stable identity key — prefix "serial-by-id:"
+// follows the device across ports, "usb:" is a USB serial number,
+// "sysfs:" is bound to the physical port.
+export type RadioKind = "unknown" | "bluetooth" | "zigbee" | "zwave" | "thread";
+
+export interface RadioUsbIdentity {
+  vendorId: string;
+  productId: string;
+  manufacturer?: string;
+  product?: string;
+  serial?: string;
+  port?: string;
+}
+
+export interface Radio {
+  id: string;
+  kind: RadioKind;
+  kindReason: string;
+  kernelName: string;
+  devPath?: string;
+  byIdPaths: string[];
+  sysfsPath?: string;
+  bus?: string;
+  driver?: string;
+  usb?: RadioUsbIdentity;
+}
+
+export interface RadioInventory {
+  node: string;
+  platformSupported: boolean;
+  radios: Radio[];
+}
+
+// Home-automation readiness (GET /api/v1/nodes/{node}/probes/home-automation,
+// #436). A per-interface or per-adapter check repeats `check` once per
+// `subject`; `subject` names the path, interface, unit or adapter that
+// produced `state`.
+export type ReadinessState = "ready" | "missing" | "unsupported" | "unknown";
+
+export type ReadinessCheckName =
+  | "ipv6"
+  | "interface_ipv6"
+  | "ipv6_forwarding"
+  | "multicast"
+  | "dbus_system_bus"
+  | "bluez_service"
+  | "bluetooth_adapter"
+  | "tun";
+
+export interface ReadinessCheck {
+  check: ReadinessCheckName;
+  state: ReadinessState;
+  subject: string;
+  value?: string;
+  detail?: string;
+}
+
+export interface NodeInterface {
+  name: string;
+  addresses: string[];
+  up: boolean;
+  multicast: boolean;
+  defaultRoute: boolean;
+}
+
+export interface HomeAutomationReadiness {
+  node: string;
+  platformSupported: boolean;
+  interfaces: NodeInterface[];
+  checks: ReadinessCheck[];
+}
+
+export interface ProbeResult {
+  reachable: boolean;
+  detail?: string;
+}
+
+// Home-automation aggregate (GET /api/v1/home-automation, #446). The
+// server is the authority for dependencies, radio suitability, blockers
+// and remedies; render these, never re-derive them. Query goals
+// (select/topology/node/bluetooth) shape one answer and are never stored.
+export type HomeAutomationComponentId =
+  | "mqtt"
+  | "home-assistant"
+  | "home-automation"
+  | "zigbee"
+  | "zwave"
+  | "matter"
+  | "thread"
+  | "bluetooth";
+
+export type HomeAutomationState =
+  | "not_selected"
+  | "blocked"
+  | "ready_to_propose"
+  | "awaiting_approval"
+  | "applying"
+  | "external_step"
+  | "ready"
+  | "degraded"
+  | "unavailable";
+
+export type HomeAutomationTopology = "managed" | "external";
+export type HomeAutomationSelection = "installed" | "pending" | "requested" | "dependency" | "none";
+export type BluetoothMode = "host-bluez" | "proxy";
+
+export type HomeAutomationActionKind =
+  | "retry_probe"
+  | "install_package"
+  | "reconfigure_package"
+  | "upgrade_package"
+  | "open_plan"
+  | "open_service"
+  | "select_radio"
+  | "manual_step"
+  | "mint_publisher"
+  | "open_backups"
+  | "choose_node"
+  | "pair_node"
+  | "resolve_dependency"
+  // The orchestration's own remedies (#447): pick a mode component's
+  // mode, or give a package param only the household knows.
+  | "choose_mode"
+  | "provide_option"
+  | "choose_topology";
+
+export interface HomeAutomationEvidence {
+  // node, readiness, radios, observed, plan, catalog, statefile, backup,
+  // principal, component
+  source: string;
+  subject?: string;
+  state?: string;
+  value?: string;
+  detail?: string;
+  observedAt?: string;
+}
+
+export interface HomeAutomationAction {
+  kind: HomeAutomationActionKind;
+  label: string;
+  component?: HomeAutomationComponentId;
+  // choose_topology: the topology to switch to.
+  topology?: "managed" | "external";
+  package?: string;
+  capability?: string;
+  node?: string;
+  planId?: string;
+  radioIds?: string[];
+  params?: Record<string, string>;
+  instructions?: string[];
+}
+
+export interface HomeAutomationBlocker {
+  // Stable codes: package_unavailable, mode_unavailable, catalog_unavailable,
+  // no_node, choose_node, node_offline, agent_plane_unavailable,
+  // agent_outdated, probe_failed, platform_unsupported,
+  // <check>_<missing|unsupported|unknown> (e.g. ipv6_forwarding_missing),
+  // dependency_not_ready, dependency_unavailable, no_radio, radio_in_use,
+  // radio_conflict, radio_missing, unhealthy, app_unhealthy, plan_failed,
+  // stale_package, backup_missing, backup_failed, service_blocker,
+  // requires_managed_home_assistant, dependency_on_other_node,
+  // thread_rcp_firmware_unverified (warning).
+  code: string;
+  severity: "blocking" | "warning";
+  message: string;
+  evidence: HomeAutomationEvidence[];
+  actions: HomeAutomationAction[];
+  // Set on blockers derived from a readiness check: the check and the
+  // row's subject, matching the node's readiness.checks.
+  check?: { check: ReadinessCheckName; subject?: string };
+}
+
+export interface HomeAutomationExternalStep {
+  id: string;
+  title: string;
+  instructions: string[];
+  // unverified: Wildstone cannot observe it; offer a recheck/tick.
+  status: "done" | "pending" | "unverified";
+  evidence?: HomeAutomationEvidence[];
+  action?: HomeAutomationAction;
+}
+
+export interface HomeAutomationResource {
+  kind: string;
+  name: string;
+  node?: string;
+  observed: boolean;
+  healthy: boolean;
+  awaitingApproval?: boolean;
+  appHealth?: string;
+  detail?: string;
+  observedAt?: string;
+}
+
+export interface HomeAutomationPlanRef {
+  id: string;
+  state: string;
+  summary: string;
+  package?: string;
+}
+
+export interface HomeAutomationBackup {
+  plans: string[];
+  volumes: string[];
+  uncovered: string[];
+  lastSuccessAt?: string;
+  lastRunStatus?: string;
+  lastRunFinishedAt?: string;
+}
+
+export interface HomeAutomationRadioOwner {
+  device: string;
+  radioId?: string;
+  container: string;
+  package?: string;
+  capability?: string;
+  component?: HomeAutomationComponentId;
+  source: string;
+}
+
+export interface HomeAutomationComponent {
+  id: HomeAutomationComponentId;
+  title: string;
+  capability: string;
+  topology: "managed" | "external" | "shared";
+  protocol: boolean;
+  requires: HomeAutomationComponentId[];
+  packages: string[];
+  package?: string;
+  version?: string;
+  installedVersion?: string;
+  stale?: boolean;
+  mode?: string;
+  modes?: string[];
+  selection: HomeAutomationSelection;
+  state: HomeAutomationState;
+  reason: string;
+  node?: string;
+  radios?: HomeAutomationRadioOwner[];
+  radioCandidates?: string[];
+  addresses?: ServiceAddress[];
+  resources?: HomeAutomationResource[];
+  pendingPlan?: HomeAutomationPlanRef;
+  failedPlan?: HomeAutomationPlanRef;
+  backup?: HomeAutomationBackup;
+  blockers: HomeAutomationBlocker[];
+  actions: HomeAutomationAction[];
+  externalSteps: HomeAutomationExternalStep[];
+}
+
+export type HomeAutomationProbeState = "ok" | "offline" | "agent_outdated" | "failed" | "not_wired";
+
+export interface HomeAutomationRadio extends Radio {
+  owners: HomeAutomationRadioOwner[];
+  suitableFor: { component: HomeAutomationComponentId; fit: "detected" | "possible" }[];
+}
+
+export interface HomeAutomationNode {
+  id: string;
+  connected: boolean;
+  agentVersion?: string;
+  protocolMinor?: number;
+  lastSeenAt?: string;
+  selected: boolean;
+  hostAddress?: string;
+  readiness?: {
+    probe: HomeAutomationProbeState;
+    detail?: string;
+    platformSupported: boolean;
+    interfaces: NodeInterface[];
+    checks: ReadinessCheck[];
+  };
+  radioInventory?: {
+    probe: HomeAutomationProbeState;
+    detail?: string;
+    platformSupported: boolean;
+    radios: HomeAutomationRadio[];
+    unresolvedClaims: HomeAutomationRadioOwner[];
+  };
+  blockers: HomeAutomationBlocker[];
+}
+
+export interface HomeAutomationStatus {
+  generatedAt: string;
+  topology: "none" | "external" | "managed" | "both";
+  requestedTopology?: HomeAutomationTopology;
+  node?: string;
+  nodes: HomeAutomationNode[];
+  components: HomeAutomationComponent[];
+  blockers: HomeAutomationBlocker[];
+}
+
+export interface HomeAutomationQuery {
+  topology?: HomeAutomationTopology;
+  select?: HomeAutomationComponentId[];
+  node?: string;
+  bluetooth?: BluetoothMode;
+}
+
+function homeAutomationPath(q: HomeAutomationQuery = {}): string {
+  const p = new URLSearchParams();
+  if (q.topology) p.set("topology", q.topology);
+  if (q.select && q.select.length > 0) p.set("select", q.select.join(","));
+  if (q.node) p.set("node", q.node);
+  if (q.bluetooth) p.set("bluetooth", q.bluetooth);
+  const qs = p.toString();
+  return "/api/v1/home-automation" + (qs ? "?" + qs : "");
+}
+
+// Home-automation orchestration (POST /api/v1/home-automation/preview and
+// /propose, #447). The server orders the selected components and names the
+// ONE next safe step; propose files exactly that step as an ordinary plan
+// (approved on the Plans screen, never here). Nothing is stored: send the
+// same goals on every call, and the answer is rebuilt from installed and
+// pending state, so a reload or a restart resumes honestly. A 409 (stale
+// or conflicting radio, a changed next step, nothing to propose) still
+// carries the full fresh answer on ApiError.body.
+export type HomeAutomationStepAction =
+  | "install_package"
+  | "reconfigure_package"
+  | "await_approval"
+  | "await_apply"
+  | "await_observation"
+  | "resolve_blockers"
+  | "external_step"
+  | "done";
+
+export interface HomeAutomationPlanRequest {
+  topology: HomeAutomationTopology;
+  node?: string;
+  select?: HomeAutomationComponentId[];
+  // component -> radio id from the node's inventory; "" asks for none
+  // (Zigbee's network coordinator).
+  radios?: Partial<Record<HomeAutomationComponentId, string>>;
+  modes?: { bluetooth?: BluetoothMode };
+  // component -> further package params (not node, radio, mode or the
+  // settings a dependency decides).
+  options?: Partial<Record<HomeAutomationComponentId, Record<string, string>>>;
+  // "<component>/<step id>" for steps Wildstone cannot observe.
+  confirmedSteps?: string[];
+  // propose only: the next.id the caller previewed.
+  expectStep?: string;
+}
+
+export interface HomeAutomationChecklistStep extends HomeAutomationExternalStep {
+  component: HomeAutomationComponentId;
+  // The component is installed, so the step can be done now.
+  due: boolean;
+  confirmed: boolean;
+}
+
+export interface HomeAutomationPlanStep {
+  // Stable while it is the same step; pass as expectStep.
+  id: string;
+  component?: HomeAutomationComponentId;
+  title: string;
+  action: HomeAutomationStepAction;
+  status: "done" | "current" | "upcoming";
+  state?: HomeAutomationState;
+  reason: string;
+  package?: string;
+  version?: string;
+  node?: string;
+  // Full params of the current package step (installed ones carried).
+  params?: Record<string, string>;
+  radioId?: string;
+  planId?: string;
+  // Adds to the aggregate's codes: radio_choice_needed, mode_needed,
+  // param_needed, dependency_on_other_node, radio_unsupported,
+  // plan_refused, plan_conflict. Action kinds add choose_mode and
+  // provide_option.
+  blockers: HomeAutomationBlocker[];
+  actions: HomeAutomationAction[];
+  externalSteps?: HomeAutomationChecklistStep[];
+}
+
+export interface HomeAutomationPlanAnswer {
+  generatedAt: string;
+  topology: HomeAutomationTopology;
+  node?: string;
+  complete: boolean;
+  next: HomeAutomationPlanStep;
+  sequence: HomeAutomationPlanStep[];
+  externalSteps: HomeAutomationChecklistStep[];
+  // Refused choices (radio_stale, radio_conflict), with a 409.
+  rejected?: HomeAutomationBlocker[];
+  // preview: the capability dry run for next.
+  preview?: EnablePreview & { blockers?: string[] };
+  // propose: the plan record filed.
+  plan?: PlanRecord;
+}
+
+// Home-automation continuity (GET /api/v1/home-automation/continuity,
+// #451): per INSTALLED component, its data and backup class (from the
+// BackupPlans the package rendered), what moving or replacing its radio
+// keeps, and what removing it stops and keeps. Explanations come from
+// here, never from the Console's own guesses.
+export interface HomeAutomationDataVolume {
+  volume: string;
+  // A local backup copy rather than the data itself.
+  repository?: boolean;
+  backupPlan?: string;
+  // critical, important or rebuildable.
+  class?: string;
+  schedule?: string;
+}
+
+export interface HomeAutomationRadioOutcome {
+  // kept: devices keep working; restore: kept by restoring a backup.
+  outcome: "kept" | "restore";
+  summary: string;
+  steps?: string[];
+  // What happens when the restore is not possible.
+  otherwise?: string;
+}
+
+export interface HomeAutomationContinuity {
+  component: HomeAutomationComponentId;
+  package?: string;
+  node?: string;
+  holds?: string;
+  data: HomeAutomationDataVolume[];
+  radio?: {
+    networkOn: "machine" | "radio_and_machine";
+    moved: HomeAutomationRadioOutcome;
+    replaced: HomeAutomationRadioOutcome;
+    // The package param a replacement radio's path goes in, and the free
+    // suitable radios with the path each would be given.
+    param?: string;
+    replacements: { radioId: string; path: string }[];
+  };
+  removal: {
+    // A setting of another package (Bluetooth): turned off, not removed.
+    setting?: boolean;
+    stops: string[];
+    keeps: string[];
+    dependents: HomeAutomationComponentId[];
+    consequence: string;
+  };
+}
+
+export interface HomeAutomationContinuityView {
+  generatedAt: string;
+  components: HomeAutomationContinuity[];
+}
+
+export interface JoinTokenResponse {
+  joinToken: string;
+  caFingerprint?: string;
+  expiresInSec: number;
+  install: string;
+}
+
+// ---------------------------------------------------------------- client
+
+// Where a Console sign-in starts (keystone/api auth_console_session.go).
+// It is a round trip through the identity provider's OpenID Connect
+// sign-in, and comes back to the page it was sent from.
+export const SIGNIN_PATH = "/api/v1/console/signin";
+
+export function signInURL(): string {
+  const here = location.pathname + location.search + location.hash;
+  return `${SIGNIN_PATH}?return=${encodeURIComponent(here)}`;
+}
+
+const SIGNIN_KEY = "wst.console.signin-at";
+
+function recentlySentToSignIn(): boolean {
+  const at = Number(sessionStorage.getItem(SIGNIN_KEY) ?? 0);
+  return Date.now() - at < 30_000;
+}
+
+export class ApiError extends Error {
+  constructor(
+    public status: number,
+    message: string,
+    // The session a failed Butler turn left its work in, when there is
+    // one.
+    //
+    // A failed request normally has nothing but a message. A turn that
+    // failed AFTER running tools is the exception: some of those calls
+    // changed the house, the server keeps the durable task and names
+    // the session holding it, and a caller that drops the name retries
+    // into a fresh task and runs them again. So it travels on the error
+    // rather than being parsed out of the body at each call site, where
+    // one of them would eventually forget.
+    public sessionId?: string,
+    // Proposals the turn tried to make and the queue refused.
+    //
+    // These travel for the same reason sessionId does, and are the more
+    // urgent of the two. A plan that WAS created is visible on the
+    // Plans screen and in the thread; a refused one exists nowhere.
+    // ResourceYAML never reaches the stored transcript, so resuming the
+    // task cannot submit it either — the operator has to ask again, and
+    // will not know to unless this is shown.
+    public proposalErrors?: string[],
+    // The refusal's whole JSON body, for endpoints whose refusals carry a
+    // fresh answer (the home-automation orchestration's 409s).
+    public body?: unknown,
+  ) {
+    super(message);
+  }
+}
+
+// onStepUp is installed by the app shell: a consequential operation
+// refused for want of a fresh sign-in offers one (ADR-W033 A4.1).
+export let onStepUp: (url: string, method: string, path: string) => void = () => {};
+export function setOnStepUp(fn: (url: string, method: string, path: string) => void) {
+  onStepUp = fn;
+}
+
+// The action a step-up interrupted, kept across the round trip to the
+// identity provider so the screen can put the person back at it — its
+// final confirmation open — rather than leave them to find the button
+// again (ADR-W033 A4.1: resumed by one click, never replayed).
+const STEPUP_PENDING_KEY = "wst.console.stepup-pending";
+
+export function rememberStepUp(method: string, path: string) {
+  sessionStorage.setItem(STEPUP_PENDING_KEY, JSON.stringify({ method, path }));
+}
+
+export function pendingStepUp(): { method: string; path: string } | null {
+  try {
+    return JSON.parse(sessionStorage.getItem(STEPUP_PENDING_KEY) ?? "null");
+  } catch {
+    return null;
+  }
+}
+
+// isPendingStepUp is whether this exact action is the one a step-up
+// interrupted.
+export function isPendingStepUp(method: string, path: string): boolean {
+  const p = pendingStepUp();
+  return p !== null && p.method === method && p.path === path;
+}
+
+export function clearStepUp() {
+  sessionStorage.removeItem(STEPUP_PENDING_KEY);
+}
+
+// onUnauthorized is installed by the app shell: a 401 anywhere returns
+// to the sign-in screen (ADR-W016 A3, ADR-W033 A4.1).
+export let onUnauthorized: () => void = () => {};
+export function setOnUnauthorized(fn: () => void) {
+  onUnauthorized = fn;
+}
+
+async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
+  // A Blob body IS the bytes — a theme's wallpaper, on its way to the
+  // one endpoint that takes an image. It goes up unencoded and without
+  // a declared type, because the server decides the media type from the
+  // bytes and never from what the upload claimed; announcing
+  // application/json over a PNG would be a lie in both directions.
+  // Still one fetch path (ADR-W016 A3), which is the point.
+  const raw = body instanceof Blob;
+  const res = await fetch(path, {
+    method,
+    // The Console session cookie is the only credential the browser
+    // sends. No Authorization header, ever: bearer tokens are for `wild`,
+    // the installer and the host, never a browser's way in (ADR-W033
+    // A4.1), and the server lets any Bearer header decide on its own.
+    credentials: "same-origin",
+    headers: {
+      ...(body !== undefined && !raw ? { "Content-Type": "application/json" } : {}),
+    },
+    body: body === undefined ? undefined : raw ? (body as Blob) : JSON.stringify(body),
+  });
+  if (res.status === 401) {
+    const refused = (await res.json().catch(() => ({}))) as { signIn?: string };
+    // Signed in to the household but not (recently enough) to the
+    // Console (ADR-W033 A4.1): go round the sign-in and come back to this
+    // page. Never twice in quick succession, so a sign-in that cannot
+    // succeed ends at the sign-in screen rather than bouncing the browser
+    // forever.
+    if (refused.signIn && !recentlySentToSignIn()) {
+      sessionStorage.setItem(SIGNIN_KEY, String(Date.now()));
+      const here = location.pathname + location.search + location.hash;
+      location.assign(`${refused.signIn}?return=${encodeURIComponent(here)}`);
+      // The page is leaving; nothing after this should render a refusal.
+      return new Promise<T>(() => {});
+    }
+    onUnauthorized();
+    throw new ApiError(401, "unauthenticated");
+  }
+  // A reply read aloud comes back as the audio itself (ADR-W042), the
+  // one body that is not JSON.
+  if (res.ok && (res.headers.get("Content-Type") ?? "").startsWith("audio/")) {
+    return (await res.blob()) as T;
+  }
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const failed = data as { error?: string; sessionId?: string; proposalErrors?: string[]; stepUp?: string };
+    // A consequential operation with a sign-in too old for it (ADR-W033
+    // A4.1). The shell offers the step-up; the caller still gets the
+    // error, so nothing on the screen pretends the operation happened.
+    if (res.status === 403 && failed.stepUp) {
+      onStepUp(failed.stepUp, method, path);
+    }
+    throw new ApiError(
+      res.status,
+      failed.error ?? res.statusText,
+      failed.sessionId,
+      failed.proposalErrors,
+      data,
+    );
+  }
+  // The interrupted action has now been done.
+  if (isPendingStepUp(method, path)) {
+    clearStepUp();
+  }
+  return data as T;
+}
+
+// PackageView is what the catalog serves (ADR-W021 A5). Params travel
+// with required/default because they ARE the install form: a package
+// declares what it needs, and this screen asks for exactly that.
+export interface ParamDecl {
+  name: string;
+  required?: boolean;
+  default?: string;
+  // What the field MEANS, in words someone who does not know the
+  // internals can act on (ADR-W021 A5).
+  description?: string;
+  // What the DEPLOYMENT already knows. options means "these are the
+  // only sensible answers"; suggested means "this is almost certainly
+  // it" — a fact about this deployment, not about the package.
+  options?: string[];
+  suggested?: string;
+  // Which deployment fact this param is sourced from, when it is one.
+  // "directory" makes the form offer a folder picker instead of a blank
+  // box (ADR-W021 A5).
+  source?: string;
+  // What this capability is ACTUALLY running with, when it is already
+  // installed. It wins over suggested and default, because those are
+  // answers for a FIRST install and this is the only one that is true of
+  // the running service. Without it, reconfiguring silently reset every
+  // param the operator did not retype.
+  installed?: string;
+  // A syntactically valid value, written by the package author (ADR-W025
+  // A4). It shows the SHAPE and nothing else — it is not a suggestion for
+  // this deployment and never becomes the field's value, only its
+  // placeholder of last resort. "lint-listen-addr" is what the toolchain
+  // invents without one, and an operator staring at an empty box labelled
+  // listen_addr has the same problem the example exists to solve.
+  example?: string;
+}
+
+export interface ServiceAddress {
+  route: string;
+  url: string;
+  healthy: boolean;
+  detail?: string;
+}
+
+export interface ResourceRef {
+  kind: string;
+  name: string;
+  // A Secret's one-line explanation, when its package declares one.
+  purpose?: string;
+}
+
+export interface PackageView {
+  name: string;
+  version: string;
+  capability: string;
+  profile?: string;
+  params?: ParamDecl[];
+  // The secrets only an operator can supply, as this package declares
+  // them. They are not derivable from a convention — the Telegram
+  // adapter reads <capability>-bot and the Matrix one <capability>-token
+  // — so a form that collects one must ask for these names.
+  providedSecrets?: string[];
+  // The app's own logo, as a dashboard-icons slug. Resolved by Keystone
+  // from the table the household dashboard renders from, so the Console
+  // never keeps its own name-to-slug map — a second copy of that table
+  // is a copy that drifts.
+  icon?: string;
+  provides?: { trait: string; mode?: string }[];
+  requires?: { trait: string; mode?: string }[];
+  enabled: boolean;
+  // Where an installed capability is served, whether it answers, what it
+  // created, and what stands in the way of it working here.
+  // The version this capability is actually running, and whether the
+  // catalog now holds a different one.
+  installedVersion?: string;
+  stale?: boolean;
+  addresses?: ServiceAddress[];
+  resources?: ResourceRef[];
+  blockers?: string[];
+  // How far an installed speech engine's model has got (#408), so the
+  // household can tell when dictation is usable.
+  speech?: SpeechStatus;
+}
+
+export interface SpeechStatus {
+  mode: string;
+  source?: "flag" | "package";
+  url?: string;
+  model?: string;
+  state?: "starting" | "downloading" | "ready" | "failed";
+  detail?: string;
+}
+
+// EnablePreview is a dry run: the plan a proposal WOULD make, and the
+// secrets only the operator can supply. Nothing is recorded.
+export interface EnablePreview {
+  plan: Plan;
+  providedSecrets: string[];
+  // What each provided secret is FOR, in the package's own words, so the
+  // form can ask for the value with the explanation beside it.
+  secretPurposes?: Record<string, string>;
+  // What installing this does to how EVERYONE signs in. Present only
+  // when it raises the requirement for services already installed.
+  authPolicyWarning?: string;
+}
+
+// --- Butler (ADR-W017). The status endpoint says whether a provider is
+// wired and what it resolved to; an unconfigured Butler answers 200 with
+// a reason, so the surface can teach rather than just fail.
+export interface ButlerStatus {
+  configured: boolean;
+  // Set on a per-Butler status: which Butler this describes.
+  butler?: string;
+  provider?: string;
+  model?: string;
+  endpoint?: string;
+  mode?: string;
+  reason?: string;
+  tools?: string[];
+  // Whether the Console's mic works for this Butler, and how long it
+  // may record (ADR-W042). Absent when voice is off or no engine this
+  // Butler's privacy class allows is installed.
+  dictation?: boolean;
+  dictationMaxSeconds?: number;
+  // Whether its replies can be read aloud here (the listen button).
+  readAloud?: boolean;
+}
+
+// --- Agent runtime (ADR-W039 §3.3). What reasons for an Agent, as
+// whom, and how it is doing. One field of the Agent: replacing it
+// replaces nothing else. The credential is a REFERENCE — the secret is
+// shown once, at rotation, and never stored.
+export type RuntimeType = "native" | "hermes" | "openclaw";
+export type RuntimeHealth = "unregistered" | "connected" | "degraded" | "offline" | "revoked";
+// The execution profile (#334, design doc §5): a setting independent of
+// RuntimeType. Choosing Hermes never changes the profile, and choosing
+// a profile never changes what the runtime is.
+export type ExecutionProfileRef = "platform-only" | "sandboxed" | "host-admin";
+export interface RuntimeRecord {
+  type: RuntimeType;
+  // Absent for native; a Route host or container/<name>:<port> for a
+  // packaged runtime.
+  endpoint?: string;
+  credentialRef: string;
+  health: RuntimeHealth;
+  lastHeartbeat?: string;
+  negotiated?: {
+    capabilities?: string[];
+    delivery?: "push" | "pull";
+    // Declared by the Owner at registration, never claimed by the
+    // runtime.
+    processingClass?: "local_only" | "cloud";
+  };
+  executionProfileRef?: string;
+  // The Wildstone package this runtime was installed from, when it was
+  // (GET only). installedVersion is what it runs; availableVersion is the
+  // catalog's current one, and a difference is an upgrade to offer.
+  package?: {
+    name: string;
+    instance: string;
+    installedVersion: string;
+    availableVersion?: string;
+    // Whether upgrading to availableVersion would change what runs. A
+    // release that renders the same resources is not offered.
+    upgradable?: boolean;
+  };
+}
+
+// One row of the runtime inventory across every live Agent (#355,
+// design doc §9 H9): what GET /api/v1/runtimes answers with, an Owner
+// scan of every Agent's runtime without opening each one's drawer.
+export interface RuntimeInventoryRow {
+  butler: string;
+  agentClass: AgentClass;
+  runtime: RuntimeRecord;
+}
+
+// What rotating a runtime credential answers with. `secret` is present
+// exactly once, when it was returned rather than placed on a node; when
+// a node was named, `node` and `secretName` say where it went instead.
+export interface RuntimeCredential {
+  credentialRef: string;
+  secret?: string;
+  node?: string;
+  secretName?: string;
+  expiresAt?: string;
+  plan?: string;
+}
+
+export interface AskResponse {
+  sessionId: string;
+  mode: string;
+  finalText: string;
+  capped?: boolean;
+  // Plans the session proposed. They are in state `proposed` — a human
+  // approves them on the Plans screen, never here.
+  planIds?: string[];
+  proposalErrors?: string[];
+  // Set when a slash command answered instead of the Butler: no model
+  // ran and no turn was recorded, so the reply is not in the thread.
+  command?: string;
+  // /new, /reset, /clear: start the next message as a new conversation.
+  newConversation?: boolean;
+}
+
+export interface ButlerSession {
+  seq: number;
+  id: string;
+  createdAt: string;
+  principal: string;
+  actingFor: string;
+  provider: string;
+  mode: string;
+  // Which butler answered (ADR-W026 A1). Stamped by the endpoint the
+  // session arrived on, never by the caller.
+  surface: ButlerSurface;
+  // Which named Butler held the conversation (ADR-W031 A1). Empty on a
+  // session that ran before Butlers existed, or one the engine phrased
+  // for itself — a real value, not a gap to fill in.
+  butler?: string;
+  // The LAST turn's answer and transcript, kept for every reader that
+  // predates turns. A session is a conversation now (ADR-W027).
+  finalText: string;
+  capped: boolean;
+  transcriptJson?: string;
+  // Set by GET /butler/sessions/{id}, omitted from the list.
+  turns?: ButlerTurn[];
+}
+
+// One message in a session. The tool traffic is not a turn: it is
+// recorded inside the assistant turn it produced, so "which reads
+// produced THIS answer" stays answerable once a session has answered
+// more than once.
+export interface ButlerTurn {
+  ordinal: number;
+  role: "user" | "assistant";
+  text: string;
+  createdAt: string;
+  capped?: boolean;
+  transcriptJson?: string;
+  planIds?: string[];
+  // "voice": the person spoke this turn (ADR-W042); absent when typed.
+  source?: "voice";
+}
+
+// The two surfaces (ADR-W026 A1): the operator's butler reads system
+// state and proposes plans; the household's reads the household timeline
+// and performs domestic actions, with no access to the home lab itself.
+export type ButlerSurface = "admin" | "family";
+
+// What an AGENT may reach (ADR-W033 design §5.2). Not a person's role
+// and not a machine credential's: one Agent serves several people at
+// once, so this says nothing about who is talking to it.
+//
+// It always agrees with the surface — owner is admin, member is family —
+// and the two move together or not at all. The surface is what enforces
+// the ceiling; this is the word the design uses for it.
+export type AgentClass = "owner" | "member";
+
+// agentClassLabel is what a person reads. The stored words are the
+// design's; "Owner agent" is what appears on a screen.
+export function agentClassLabel(c: AgentClass): string {
+  return c === "owner" ? "Owner agent" : "Member agent";
+}
+
+// ---------------------------------------------------------------- audience
+
+// Who a record may be disclosed to (ADR-W033 design §10 layer 3).
+//
+// OPAQUE. It used to be the two words "private" and "shared", and this
+// screen compared against them; slice 7 replaced them with rows in an
+// `audiences` table, because two words cannot say "adults only". A
+// household names its own audiences, so the set is open and no code
+// may enumerate it.
+//
+// AN AUDIENCE IS NOT A PERMISSION. It is disclosure policy and never
+// widens the layers below it: somebody inside a record's audience is
+// still refused if they lack the resource-specific grant.
+export type AudienceID = string;
+
+// The two the migration maps the old words onto, and the only ids any
+// code may compare against a literal.
+export const AUDIENCE_OWNER: AudienceID = "aud_owner";
+export const AUDIENCE_HOUSEHOLD: AudienceID = "aud_household";
+
+// Whether an audience is the whole household.
+//
+// Asked this way round on purpose: "household" is the single widest
+// audience there is, and every other one — the owner alone, a group, a
+// named set — is narrower. Code that listed the narrow ones instead
+// would silently treat a household's own new audience as wide, which
+// is the direction that discloses too much.
+export function audienceIsHousehold(a: AudienceID): boolean {
+  return a === AUDIENCE_HOUSEHOLD;
+}
+
+// The household's word for an audience, for a screen to show.
+//
+// Only the two seeded ids have a word Wildstone chose; anything else
+// is a household's own audience, and showing its id is honest about
+// the Console not yet having asked what it is called.
+export function audienceLabel(a: AudienceID): string {
+  if (a === AUDIENCE_HOUSEHOLD) return "household";
+  if (a === AUDIENCE_OWNER) return "private";
+  return a;
+}
+
+// --- Chat bindings (ADR-W026 A4). A binding is the only way a chat
+// account reaches a Butler, and it exists only because somebody redeemed
+// a claim code.
+export interface ChatBinding {
+  role: string;
+  id: number;
+  connection: number;
+  // The Agent whose bot this account is admitted to, and the transport
+  // that bot speaks. Both come from the Connection rather than being
+  // stored beside it, so they cannot disagree with it.
+  butler: string;
+  transport: string;
+  account: string;
+  identity: string;
+  displayName?: string;
+  createdAt: string;
+  createdBy: string;
+  lastUsedAt?: string;
+  revokedAt?: string;
+}
+
+// The code comes back exactly once: the server stores only its hash.
+export interface ChatClaim {
+  code: string;
+  butler: string;
+  identity: string;
+  transport: string;
+  expiresAt: string;
+  note: string;
+  // The bot to send it to, and a link that opens a chat with it. Both
+  // are known only once that adapter has checked in. On Telegram the
+  // link CARRIES the code, so tapping it is the whole invite.
+  handle?: string;
+  link?: string;
+}
+
+// --- Household members (ADR-W020 A3, ADR-W023 A7). A member IS an
+// `LdapUser` in the Statefile: the household's account list lives in
+// state, in plans, in approval and in audit, rather than in LLDAP's own
+// UI where a restore would bring back every group with nobody in them.
+export interface HouseholdMember {
+  username: string;
+  displayName?: string;
+  email?: string;
+  groups: string[];
+  // "system" for someone an operator added, "capability/<name>" for an
+  // account a package asserts.
+  owner: string;
+  node: string;
+}
+
+// A Keystone principal — a machine credential, never a person. Chat
+// invites deliberately do NOT pick from these: a Connection admits a
+// Person (ADR-W033 A2/B9), and a chat account bound to a credential had
+// nobody behind it.
+export interface Principal {
+  name: string;
+  role: string;
+  actingFor?: string;
+  disabled?: boolean;
+  createdAt: string;
+}
+
+export interface HouseholdGroup {
+  name: string;
+  owner: string;
+  node: string;
+}
+
+// --- The household's own groups and what they reach (ADR-W033 design
+// §4, slice 8).
+//
+// Not to be confused with HouseholdGroup above, which is a DIRECTORY
+// group a package declared. These are Wildstone's own: a directory
+// group is where a membership is projected TO, and a PersonGroup is
+// what the household decided. Blurring them in a screen is how somebody
+// edits one believing they edited the other.
+
+export interface PersonGroup {
+  id: string;
+  name: string;
+  // Set on the three groups the design names, empty on a group the
+  // household made itself. It names the ROLE and does not follow a
+  // rename, which is why code may look a group up by it and may not
+  // look one up by name.
+  seedKey?: string;
+  // Handles of the ACTIVE people in it. Resolved on every read, never
+  // stored, so renaming a Person re-points nothing.
+  members: string[];
+}
+
+// One decision about who may reach a service.
+export interface AccessDecision {
+  // The group_id or person_id a write names.
+  id: string;
+  // The household's word for it, resolved for display only.
+  name: string;
+  effect: "allow" | "restrict";
+}
+
+export interface ServiceAccess {
+  capability: string;
+  // What the package says it is for, which is where the rows came from.
+  declared?: string[];
+  groups: AccessDecision[];
+  people: AccessDecision[];
+  // Who the rules resolve to right now. The ANSWER, not the rules: an
+  // Owner reading "Adults may use this" still has to work out who that
+  // is today, and getting it wrong is the whole cost of a permission
+  // model.
+  reaches: string[];
+  // The service is not installed, so its decisions are inert and kept.
+  dormant?: boolean;
+}
+
+// --- Chat transports (ADR-W026 A3). What an invite may name: the
+// adapters this deployment actually has, not a free-text guess.
+export interface ChatTransport {
+  transport: string;
+  // The Agent this bot answers for, absent until it has been
+  // credentialed and given an address. A bot belongs to exactly one
+  // Agent (ADR-W033 B7); the surface this used to carry named a class
+  // of them and could not tell one from another.
+  butler?: string;
+  capability: string;
+  installed: boolean;
+  // Whether the adapter has its Keystone token. Installed without one
+  // means the bot is running and cannot reach the control plane, so an
+  // invite issued for it can never be redeemed.
+  credentialed: boolean;
+  // The bot itself, as the adapter reported it — a Telegram username, a
+  // Matrix MXID. Empty until one has checked in; nothing else in the
+  // deployment knows it, because the bot token is write-only.
+  handle?: string;
+  seenAt?: string;
+  // Whether that check-in was recent enough to mean the adapter is
+  // running now. A bot nobody has messaged and a bot that is down look
+  // identical without this.
+  online: boolean;
+  // Where an installed adapter runs, from the resources its capability
+  // owns. Rotating its credential or writing its bot token must target
+  // THIS node: doing either on another one revokes the running
+  // adapter's token and places the replacement where nothing reads it.
+  // Empty when the capability's resources span nodes.
+  node?: string;
+}
+
+export interface IdentityNotification {
+  code?: string;
+  // The whole password-reset link, the one field Keystone does not
+  // redact (#463). Present only when the notification holds one.
+  resetLink?: string;
+  // Redacted: a reset link in here has its token replaced.
+  body?: string;
+  note: string;
+}
+
+// A kind of model provider (keystone/butler/provider catalog).
+export interface ProviderKind {
+  name: string;
+  label: string;
+  defaultEndpoint?: string;
+  keyEnv?: string;
+  keyRequired: boolean;
+  hosted: boolean;
+  client: string;
+  keySet: boolean;
+  // Where the key comes from: keystone's environment, the Console
+  // (ADR-W017 A10), or nowhere yet.
+  keySource?: "environment" | "console";
+}
+
+export interface OfferedModel {
+  name: string;
+  sizeBytes?: number;
+  parameters?: string;
+  // Whether this runs on your hardware or is proxied to a hosted
+  // backend — the difference between a question staying in the house
+  // and leaving it.
+  local: boolean;
+}
+
+export interface ButlerConfig {
+  provider: string;
+  model?: string;
+  endpoint?: string;
+  probeMode?: string;
+  probeDetail?: string;
+  updatedAt?: string;
+  updatedBy?: string;
+}
+
+// DirectoryListing is what the folder picker browses. Roots are the only
+// places a service's data can live; a path outside them is refused by
+// the node at apply time, so the picker never offers one.
+export interface DirectoryListing {
+  path?: string;
+  parent?: string;
+  roots: string[];
+  directories: string[];
+}
+
+
+// ---------------------------------------------------------------- durable work
+
+// A Butler task is one unit of durable work: a conversational request,
+// or one occurrence of a routine (ADR-W030 A4). Unlike a session, it
+// survives a restart, so the Console can show what is still running,
+// what is waiting and on what, and what was interrupted.
+export interface ButlerTask {
+  objectiveKind?: "informational" | "effectful";
+  proposalOnly?: boolean;
+  id: string;
+  kind: "conversation" | "routine";
+  state:
+    | "pending"
+    | "running"
+    | "waiting"
+    | "completed"
+    | "failed"
+    | "cancelled"
+    | "paused-offboarded";
+  author: string;
+  owner: string;
+  surface: string;
+  agentClass: string;
+  audience: AudienceID;
+  objective: string;
+  completionCriteria: string;
+  resultSummary?: string;
+  uncertainty?: string;
+  sessionId?: string;
+  createdAt: string;
+  updatedAt: string;
+  deadlineAt?: string;
+  nextWakeupAt?: string;
+  leaseEpoch: number;
+}
+
+// One row of the work trace as the API renders it (ADR-W030 A11).
+// Detail carries counts and flags — never what a source SAID, which
+// belongs to the source and is read from there.
+export interface TimelineEntry {
+  at: string;
+  type: string;
+  step?: number;
+  attempt?: number;
+  actor?: string;
+  sources?: string[];
+  modelEndpoint?: string;
+  manifestVersion?: string;
+  promptVersion?: string;
+  policyVersion?: string;
+  detail?: Record<string, unknown>;
+  traceSeq: number;
+}
+
+export interface TaskStep {
+  seq: number;
+  ordinal: number;
+  kind: string;
+  name: string;
+  state: string;
+}
+
+export interface TaskWait {
+  seq: number;
+  createdAt: string;
+  reason: string;
+  detail?: string;
+  resumeAt?: string;
+  resolvedAt?: string;
+  resolvedBy?: string;
+}
+
+export interface TaskEvidence {
+  receiptId?: number;
+  seq: number;
+  recordedAt: string;
+  kind: string;
+  description: string;
+  sourceId?: string;
+  audience: string;
+}
+
+export interface TaskTransition {
+  at: string;
+  fromState: string;
+  toState: string;
+  reason?: string;
+  actor?: string;
+}
+
+// The labels a person may put on a task. Closed, and the same set the
+// store enforces — the value of a label is that it can be counted.
+export const FEEDBACK_LABELS = [
+  "wrong-answer",
+  "stale-read",
+  "repeated-work",
+  "inappropriate-tool",
+  "permission-refusal",
+  "excessive-interruption",
+  "useful-completion",
+] as const;
+export type FeedbackLabel = (typeof FEEDBACK_LABELS)[number];
+
+export interface TaskFeedback {
+  seq: number;
+  createdAt: string;
+  author: string;
+  label: FeedbackLabel;
+  note?: string;
+  traceSeq?: number;
+}
+
+export interface TaskDetail {
+  task: ButlerTask;
+  conversationWork?: {id:number;toolCalls:number;toolLimit:number;uncertainOutcome:boolean;uncertainTask?:string};
+  timeline: TimelineEntry[];
+  steps: TaskStep[];
+  waits: TaskWait[];
+  evidence: TaskEvidence[];
+  transitions: TaskTransition[];
+  feedback: TaskFeedback[];
+  // How many entries this reader is not shown. Reported rather than
+  // silently dropped: an incomplete story presented as complete is
+  // worse than one that says what is missing.
+  withheld: number;
+  debugActive: boolean;
+}
+
+export interface ButlerEvaluation {
+  seq: number;
+  createdAt: string;
+  author: string;
+  name: string;
+  sourceTaskId?: string;
+  summary: string;
+  expected: string;
+  promptVersion?: string;
+  policyVersion?: string;
+  manifestVersion?: string;
+  modelEndpoint?: string;
+  evaluatorVersion?: string;
+  fixtureJson?: string;
+}
+
+export interface ButlerSettingsView {
+  householdRounds: number;
+  operatorRounds: number;
+  maxToolCalls: number;
+  stallSeconds: number;
+  retryLimit: number;
+  observationTtlSeconds: number;
+  sessionRecencySeconds: number;
+  quietStartMin: number;
+  quietEndMin: number;
+  timezone: string;
+  updatedBy?: string;
+}
+
+
+// ---------------------------------------------------------------- tool authority
+
+// An administrator's switch for one agent class and tool (ADR-W030 A7).
+// A control can turn an existing capability off and on; it can never add
+// one, because the surface's tool map is the structural ceiling.
+export interface ToolControl {
+  agentClass: AgentClass;
+  tool: string;
+  state: "enabled" | "disabled";
+  updatedAt: string;
+  updatedBy: string;
+  reason?: string;
+}
+
+// The Butler asking for something it does not have. A request grants
+// nothing: approving it records a decision, and enabling the tool is a
+// separate act on purpose.
+export interface CapabilityRequest {
+  seq: number;
+  kind: "supported-tool" | "development";
+  requestedBy: string;
+  agentClass: AgentClass;
+  tool?: string;
+  description: string;
+  state: "open" | "approved" | "declined" | "implemented";
+  createdAt: string;
+  decidedAt?: string;
+  decidedBy?: string;
+  decisionNote?: string;
+}
+
+// Butler admission, which is runtime state and not LDAP membership.
+export interface ButlerMemberRecord {
+  personId: string;
+  member: string;
+  role?: "owner" | "member";
+  profile: string;
+  admitted: boolean;
+  generation: number;
+  guardian?: string;
+  disabledAt?: string;
+  offboardedAt?: string;
+}
+
+export interface ButlerIdentityLink {
+  seq: number;
+  linkType: string;
+  externalId: string;
+  member: string;
+  createdBy: string;
+  revokedAt?: string;
+}
+
+
+// ---------------------------------------------------------------- memory
+
+// What the Butler remembers, as owned data with provenance (ADR-W030
+// A3). Every record says where it came from, so it can be corrected at
+// its source and invalidated when that source is deleted.
+export interface MemoryRecord {
+ privacy?: {localOnly: boolean; trustedOnly: boolean};
+  scope: "personal" | "household" | "agent_local";
+  seq: number;
+  kind: "fact" | "preference" | "inference" | "procedure";
+  subject?: string;
+  content: string;
+  audience: AudienceID;
+  owner: string;
+  sourceKind: string;
+  sourceId: string;
+  confidence: string;
+  safetyRelevant?: boolean;
+  createdAt: string;
+  author: string;
+  supersededBy?: number;
+  forgottenAt?: string;
+}
+
+export interface MemoryDigestEntry {
+  seq: number;
+  memory: number;
+  change: "recorded" | "corrected" | "forgotten";
+  summary: string;
+  actor: string;
+  at: string;
+  immediate: boolean;
+}
+
+
+// One recorded retrieval fixture run (ADR-W030 P9). The implementation
+// choice is measured rather than asserted, and this is the measurement.
+export interface IndexMeasurement {
+  seq: number;
+  at: string;
+  fixture: string;
+  strategy: "keyword" | "vector" | "hybrid";
+  queries: number;
+  hits: number;
+  recallPct: number;
+  p95Micros: number;
+  indexBytes: number;
+  note?: string;
+}
+
+
+// ---------------------------------------------------------------- integrations
+
+// A PantryOS pairing (ADR-W044 A6): the address Keystone reaches PantryOS
+// at, and when and by whom it was paired. The agent key is sealed in
+// Keystone and never sent here.
+export const PANTRY_PAIRING_PATH = "/api/v1/pantry/pairing";
+export interface PantryPairing {
+  capability: string;
+  endpoint: string;
+  pairedAt: string;
+  pairedBy: string;
+}
+export type PantryPairingStatus = { paired: false } | { paired: true; pairing: PantryPairing };
+
+// Moving the household's old grocery list into PantryOS (#387): the
+// Wildstone lists that mean groceries and still have open items. A move
+// sends each item to PantryOS and removes the old list once it is empty.
+export const PANTRY_GROCERY_MOVE_PATH = "/api/v1/pantry/grocery-move";
+export interface GroceryMoveList {
+  name: string;
+  items: string[];
+}
+export interface GroceryMoveResult {
+  moved: number;
+  lists: { name: string; moved: string[]; removed: boolean; left: number }[];
+}
+
+// One named connection to an application (ADR-W030 A5). Keystone holds
+// the contract and the leases; the application-specific half lives in an
+// adapter outside it.
+export interface IntegrationConnection {
+  seq: number;
+  name: string;
+  adapter: string;
+  endpoint?: string;
+  ownership: "personal" | "household";
+  owner: string;
+  audience: AudienceID;
+  actionsEnabled: boolean;
+  indexingEnabled: boolean;
+  cloudAllowed: boolean;
+  state: "configured" | "ready" | "degraded" | "unavailable";
+  leaseEpoch: number;
+  degradedReason?: string;
+}
+
+export interface IntegrationCapability {
+  kind: "event" | "query" | "action";
+  name: string;
+  version?: string;
+  available: boolean;
+  detail?: string;
+}
+
+// Where an adapter may run. A node is eligible only once all three
+// facts hold — the container is running, the secret is provisioned, and
+// readiness was verified — because each fails separately.
+export interface Placement {
+  node: string;
+  role: "primary" | "fallback";
+  rank: number;
+  containerRunning: boolean;
+  secretProvisioned: boolean;
+  readinessVerified: boolean;
+  holder: boolean;
+  removing?: boolean;
+  containerRemoved?: boolean;
+  secretErased?: boolean;
+  credentialRevoked?: boolean;
+}
+
+// A reference to a credential, never the credential.
+export interface ConnectionSecret {
+  seq: number;
+  member?: string;
+  secretRef: string;
+  upstreamReadOnly: boolean;
+  disclosure?: string;
+  revokedAt?: string;
+}
+
+
+// ---------------------------------------------------------------- model routes
+
+// Where a question may be sent (ADR-W030 A9). A route's kind is the data
+// boundary: cloud means material sent to it leaves the house, and a
+// route cannot change kind.
+// One named model a Butler can be assigned to: which model, where it
+// runs, and whether asking it something leaves the house.
+//
+// The bundle exists rather than a bare model string on the Butler
+// because none of its parts implies the others. One Ollama endpoint
+// serves gemma4:e4b off local disk and gemma4:31b-cloud from Ollama's
+// own infrastructure, so neither the endpoint nor the provider says
+// where the material goes — kind does.
+export interface Model {
+  name: string;
+  kind: "local" | "cloud";
+  provider: string;
+  providerModel?: string;
+  endpoint?: string;
+  readiness: "unprobed" | "ready" | "qa-only" | "unavailable";
+  readinessDetail?: string;
+  // When something last asked this model to operate a tool. Absent
+  // means nobody ever has, which is not the same as it having failed.
+  probedAt?: string;
+  enabled: boolean;
+}
+
+// A Butler: a named specialist with one assigned model, its own
+// directive, and its own scope (ADR-W031 A1).
+//
+// The model is a property of the Butler rather than a per-call choice.
+// Which model saw a piece of material is therefore answerable by name,
+// which is the whole reason routing was removed (A2).
+export interface Butler {
+  name: string;
+  directive?: string;
+  surface: ButlerSurface;
+  agentClass: AgentClass;
+  // model is the assigned model, by name. providerModel is what the
+  // provider itself calls it, which is a different and often more
+  // specific string: assigned "kitchen-box", answered by "qwen3.5:4b".
+  model: string;
+  modelKind: "local" | "cloud";
+  providerModel?: string;
+  provider?: string;
+  endpoint?: string;
+  readiness: "unprobed" | "ready" | "qa-only" | "unavailable";
+  // The MODEL's switch, not the Butler's: turning a model off has to
+  // stop the Butlers already assigned to it.
+  modelEnabled: boolean;
+  enabled: boolean;
+  createdAt: string;
+  createdBy: string;
+  updatedAt: string;
+  updatedBy?: string;
+  retiredAt?: string;
+}
+
+// The model as a person would name it.
+//
+// A Butler's configured model has a NAME that is a stable key and a
+// providerModel that is what the provider calls it. For anything new
+// they are the same string, because the model's own name is used. They
+// differ on rows configured before that — "kitchen-box" pointing at
+// qwen3.5:4b — and everywhere a screen shows a model to a person it
+// should say the model, not the key.
+export function modelLabel(b: Butler): string {
+  return b.providerModel || b.model;
+}
+
+// One roster row. leavesTheHouse is computed by the server rather than
+// derived here: it is the most consequential fact about a Butler, and a
+// client that derives it is one that can derive it wrongly.
+export interface ButlerRow {
+  butler: Butler;
+  leavesTheHouse: boolean;
+  carriesActions: boolean;
+  reachable: boolean;
+  // How far it reaches, counted by the server. The roster shows one
+  // line per Butler saying who can talk to it and what it may do, and a
+  // client assembling that would make three calls per row — with
+  // nothing to stop one failing and a row quietly reading "no people"
+  // for a Butler two people message.
+  people: number;
+  connections: number;
+  // toolsAvailable is what this deployment actually wired for the
+  // class, NOT the whole ceiling: "5 of 6" is what this Butler can do
+  // here, where "5 of 13" would count tools nobody ever set up.
+  toolsAllowed: number;
+  toolsAvailable: number;
+}
+
+export interface ButlerScope {
+  butler: string;
+  model: string;
+  modelKind: "local" | "cloud";
+  connections: string[] | null;
+  narrowedTools?: Record<string, string> | null;
+  memoryCount: number;
+}
+
+// What retiring a Butler would break (ADR-W031 A8). Every number is
+// counted by the server, because the dialog that shows it is asking
+// somebody to accept a consequence — "some routines may fail" moves the
+// work of finding out back onto the person it was meant to inform.
+export interface ButlerImpact {
+  butler: string;
+  people: string[] | null;
+  routines: { name: string; state: string }[] | null;
+  sessions: number;
+  memoryCount: number;
+  // Other live Butlers on the same surface: what a routine could be
+  // pointed at instead.
+  successors: string[] | null;
+}
+
+// One tool as the gateway reports it (ADR-W030 P2).
+//
+// available is separate from presence on purpose, and the reason is
+// the useful half: a tool this deployment never wired, and one this
+// Butler has been narrowed out of, are both unavailable and only the
+// second is something the screen can undo.
+export interface CapabilityTool {
+  name: string;
+  summary: string;
+  mutating?: boolean;
+  grantRequired?: boolean;
+  untrusted?: boolean;
+  // Opt-in tools are reached only by being named (ADR-W033 §6.2);
+  // assigning one asks for a fresh sign-in.
+  optIn?: boolean;
+  available: boolean;
+  reason?: string;
+  // Wired here, and withheld only because this governed Agent has not
+  // been given it: assigning it is what would make it available.
+  unassigned?: boolean;
+}
+
+// What one Butler may do, as the engine resolves it. The console does
+// not derive any of this: the tool list is the gateway's registry and
+// availability is the effective-authority resolver's answer, so a
+// screen cannot show a tool as on that a dispatch would refuse.
+export interface ButlerTools {
+  butler: string;
+  agentClass: AgentClass;
+  surface: ButlerSurface;
+  modelVerdict: string;
+  tools: CapabilityTool[] | null;
+  actions: { tool: string; tier: string }[] | null;
+  // Tool name to the reason it was narrowed, "" when none was given.
+  narrowedTools: Record<string, string> | null;
+  // Whether assignments decide this Agent's reach at all.
+  governed?: boolean;
+}
+
+export interface ButlerAddress {
+  transport: string;
+  externalId: string;
+  label?: string;
+}
+
+// A routine the household wrote, native to an app or run by Wildstone.
+export interface OffboardingResourceDisposition {
+  kind: string;
+  ref: string;
+  disposition: string;
+  decidedAt: string;
+  decidedBy: string;
+}
+
+export interface HouseholdRoutine {
+ outputAudience?: string;
+ approvedRevision?: number;
+ requiredSecrets?: string[];
+ requiredMemory?: number[];
+  name: string;
+  ownership: "native" | "wildstone";
+  externalId?: string;
+  connection?: string;
+  author: string;
+  revision: number;
+  state: "draft" | "trial" | "enabled" | "disabled";
+  document: string;
+  createdAt: string;
+  updatedAt: string;
+  updatedBy: string;
+  disabledAt?: string;
+  disabledBy?: string;
+  revokedAt?: string;
+  deletedAt?: string;
+  purgedAt?: string;
+  pausedReason?: string;
+}
+
+// One recorded edit to a routine. The document is not carried: a
+// listing of every past version is a lot of bytes for a card that shows
+// three lines each.
+export interface RoutineRevision {
+  revision: number;
+  author: string;
+  at: string;
+  note: string;
+}
+
+// One event on the household stream (ADR-W024 A2). A second stream with
+// its own envelope and its own cursor — not the operational one.
+export interface HouseholdEvent {
+  seq: number;
+  eventId: string;
+  occurredAt: string;
+  recordedAt: string;
+  // Absent is valid: an unmapped subject is a real event that simply
+  // cannot fire a per-member rule (A8).
+  subject?: string;
+  // Stamped from the publisher token, never read off the payload (A10).
+  source: string;
+  type: string;
+  entity?: string;
+  payload?: Record<string, unknown>;
+  correlationId?: string;
+  schemaVersion: number;
+}
+
+// One routine, with what it does and what it has been doing.
+export interface RoutineDetail {
+  routine: HouseholdRoutine;
+  // The name the ENGINE knows this routine by — the document's
+  // metadata.name, which need not be the name it is filed under.
+  rule: string;
+  // The document parsed server-side, by the same path the engine uses.
+  // Null when it will not parse, which is not an error worth hiding —
+  // see specError.
+  spec: AutomationSpec | null;
+  specError?: string;
+  revisions: RoutineRevision[];
+  // The engine's own records for this rule over the last 7 days:
+  // automation.fired / suppressed / acted / action_failed. Not butler
+  // tasks — nothing produces a task of kind "routine".
+  runs: HouseholdEvent[];
+  reviewedRuns?: {id:number;planId:string;triggerEvent:number;state:string;reason?:string;effectState:string;effectSummary?:string;occurredAt:string;subject?:string}[];
+}
+
+// The closed grammar a routine may be written in (ADR-W024 A5), served
+// so a form cannot offer a value the validator or the policy engine will
+// then refuse. Offering free text here would be worse than offering
+// nothing: a routine triggering on an event nothing emits never fires,
+// and nothing tells its author why.
+// Commitments (ADR-W035). A Standing is where one stands right now: the
+// declaration plus the occurrence the engine derived, which is why
+// nothing here is stored and everything is recomputed.
+export interface CommitmentRule {
+  meter: string;
+  calendar: boolean;
+  anchor: number;
+  dueAt: number;
+  leadAt: number;
+  position: number;
+  known: boolean;
+  stale: boolean;
+  remaining: number;
+  progress: number;
+  crossed: boolean;
+  soon: boolean;
+  observedAt?: string;
+  anchorTime?: string;
+  dueTime?: string;
+  leadTime?: string;
+  unresolved?: string;
+}
+
+export interface CommitmentProjection {
+  meter: string;
+  at: string;
+  ratePerDay: number;
+  source: string;
+}
+
+export interface CommitmentOccurrence {
+  cycle: number;
+  state: string;
+  openedAt: string;
+  trigger?: string;
+  rules: CommitmentRule[];
+  pastDue?: boolean;
+  unresolved?: string[];
+  projection?: CommitmentProjection;
+  reason: string;
+}
+
+export interface CommitmentBooking {
+  seq: number;
+  commitment: string;
+  at: string;
+  bookedAt: string;
+  bookedBy: string;
+  note?: string;
+}
+
+export interface CommitmentStanding {
+  name: string;
+  description: string;
+  owner?: string;
+  scope?: string;
+  mayComplete?: string[];
+  notify?: string[];
+  disabled?: boolean;
+  rollover?: string;
+  requiresBooking?: boolean;
+  // The two the Go Standing already carries, so an edit form can open
+  // on what the record says rather than on a default the operator then
+  // has to correct.
+  partOfDay?: string;
+  every?: string;
+  occurrence: CommitmentOccurrence;
+  booking?: CommitmentBooking;
+}
+
+export interface CommitmentCompletion {
+  seq: number;
+  commitment: string;
+  at: string;
+  recordedAt: string;
+  recordedBy: string;
+  waived?: boolean;
+  reason?: string;
+  positions?: Record<string, number>;
+  // The household event that closed this cycle, for a commitment that
+  // declares satisfiedBy. Absent for an answer a person gave.
+  externalId?: string;
+}
+
+export interface MeterReading {
+  seq: number;
+  meter: string;
+  value: number;
+  at: string;
+  recordedAt: string;
+  recordedBy: string;
+  source: string;
+  rebase?: boolean;
+  prior?: number;
+  reason?: string;
+}
+
+export interface MeterView {
+  name: string;
+  description: string;
+  unit?: string;
+  owner?: string;
+  staleAfter?: string;
+  estimate?: string;
+  builtIn?: boolean;
+  latest?: MeterReading;
+  stale?: boolean;
+}
+
+export interface AutomationGrammar {
+  eventTypes: { type: string; package: string; capability?: string; subject?: string; description?: string }[];
+  actions: { tool: string; tier: string; package: string; capability?: string }[];
+  conditionKinds: string[];
+  contextKinds: string[];
+  tiers: string[];
+  weekdays: string[];
+}
+
+// One rule's verdict on one event, from the side-effect-free replay
+// (ADR-W024 A7/H3) — the same code path `wild automation replay` and the
+// Butler's dry_run_automation tool use.
+export interface ReplayDecision {
+  rule: string;
+  eventSeq: number;
+  eventId: string;
+  eventType: string;
+  subject?: string;
+  at: string;
+  fired: boolean;
+  // Why a suppressed decision stopped, naming the condition; for a fired
+  // one, "all conditions held".
+  reason: string;
+  action?: string;
+  tier?: string;
+  escalates?: boolean;
+}
+
+export interface ReplayResult {
+  rule: string;
+  from: string;
+  to: string;
+  draft: boolean;
+  enabled: boolean;
+  fired: number;
+  evaluated: number;
+  decisions: ReplayDecision[] | null;
+  // What a PROPOSAL of this rule would be refused for. Informational: a
+  // replay is not a proposal.
+  violations?: { rule?: string; message?: string; resource?: string }[] | null;
+}
+
+export interface HouseholdSecret {
+  id: string;
+  scope: string;
+  ownerPersonId: string;
+  label: string;
+  state: string;
+  version: number;
+}
+export const api = {
+  householdSecrets: () =>
+    call<{ secrets: HouseholdSecret[] }>("GET", "/api/v1/household/secrets"),
+  householdSecret: (
+    id: string,
+    operation: string,
+    body: Record<string, unknown>,
+  ) =>
+    call<{ value?: string }>(
+      "POST",
+      `/api/v1/household/secrets${id ? "/" + encodeURIComponent(id) + "/" + operation : ""}`,
+      body,
+    ),
+
+  packages: () => call<PackageView[]>("GET", "/api/v1/packages"),
+  // The theme this person reads on, shared with the household portal:
+  // one row, one resolver, so the two surfaces cannot disagree.
+  appearance: () => call<Appearance>("GET", "/api/v1/appearance"),
+  setTheme: (theme: string) => call<Appearance>("PUT", "/api/v1/appearance", { theme }),
+  // An Owner's acts: which themes the household can choose from.
+  importTheme: (name: string, colors: string) =>
+    call<ThemeSummary>("POST", "/api/v1/appearance/themes", { name, colors }),
+  removeTheme: (name: string) =>
+    call<{ removed: string }>("DELETE", `/api/v1/appearance/themes/${encodeURIComponent(name)}`),
+  // A whole theme as its authors publish it: the zipped directory, with
+  // the palette and the backgrounds in it. The body IS the archive, for
+  // the same reason the picture upload is the picture — a multipart
+  // request carries the caller's description of what it sent, and the
+  // server reads the archive regardless. An empty name lets the server
+  // take it from the theme's own folder.
+  importThemePackage: (file: Blob, name?: string) =>
+    call<ThemePackageResult>(
+      "POST",
+      `/api/v1/appearance/themes/package${name ? `?name=${encodeURIComponent(name)}` : ""}`,
+      file,
+    ),
+  // The wallpaper a theme brings. The body IS the image: a multipart
+  // request carries the caller's own description of what it sent, and
+  // the server decides the media type from the bytes regardless.
+  setThemeBackground: (name: string, file: Blob) =>
+    call<ThemeSummary>("PUT", `/api/v1/appearance/themes/${encodeURIComponent(name)}/background`, file),
+  clearThemeBackground: (name: string) =>
+    call<{ cleared: string }>(
+      "DELETE",
+      `/api/v1/appearance/themes/${encodeURIComponent(name)}/background`,
+    ),
+  // What one provider serves. `provider` picks how to ask (Ollama's
+  // /api/tags, an OpenAI-compatible /models, Anthropic's /v1/models);
+  // omitted, it is Ollama, as it always was.
+  offeredModels: (endpoint?: string, provider?: string) => {
+    const q = new URLSearchParams();
+    if (endpoint) q.set("endpoint", endpoint);
+    if (provider) q.set("provider", provider);
+    const qs = q.toString();
+    return call<{ endpoint: string; models: OfferedModel[] }>(
+      "GET",
+      `/api/v1/butler/models/offered${qs ? `?${qs}` : ""}`,
+    );
+  },
+  // Which provider kinds a Butler can think with, and whether keystone
+  // holds each hosted one's key — never the key itself (ADR-W017 A9).
+  providerKinds: () => call<{ providers: ProviderKind[] }>("GET", "/api/v1/butler/providers"),
+  // Write-only (ADR-W017 A10): the key goes in, and only "set, from
+  // where" ever comes back.
+  setProviderKey: (name: string, key: string) =>
+    call<{ keySet: boolean; keySource?: string; note?: string }>(
+      "PUT",
+      `/api/v1/butler/providers/${encodeURIComponent(name)}/key`,
+      { key },
+    ),
+  removeProviderKey: (name: string) =>
+    call<{ keySet: boolean; keySource?: string }>(
+      "DELETE",
+      `/api/v1/butler/providers/${encodeURIComponent(name)}/key`,
+    ),
+  models: () =>
+    call<{ models: { model: Model; carriesActions: boolean; leavesTheHouse: boolean }[] | null }>(
+      "GET",
+      "/api/v1/butler/models",
+    ),
+  // Remove a registered model. The server refuses (409) while a Butler
+  // is assigned to it, and says so.
+  deleteModel: (name: string) =>
+    call<unknown>("DELETE", `/api/v1/butler/models/${encodeURIComponent(name)}`),
+  setModelEnabled: (name: string, enabled: boolean) =>
+    call<{ enabled: boolean }>(
+      "POST",
+      `/api/v1/butler/models/${encodeURIComponent(name)}/enabled`,
+      { enabled },
+    ),
+  butlers: () => call<{ butlers: ButlerRow[] | null }>("GET", "/api/v1/butlers"),
+  createButler: (b: {
+    name: string;
+    directive?: string;
+    // The surface is derived server-side from the class: they are one
+    // fact (design §5.2), and sending both would let a form send a
+    // contradiction.
+    agentClass: AgentClass;
+    // Either an already-configured model by name, or one the provider
+    // offers plus where it comes from. The server decides the kind.
+    model?: string;
+    providerModel?: string;
+    provider?: string;
+    endpoint?: string;
+  }) => call<ButlerRow>("POST", "/api/v1/butlers", b),
+  butlerScope: (name: string) =>
+    call<{ scope: ButlerScope; people: string[] | null; addresses: ButlerAddress[] | null }>(
+      "GET",
+      `/api/v1/butlers/${encodeURIComponent(name)}/scope`,
+    ),
+  // Applies immediately (A8). crossesToCloud is set when this move
+  // sends an open conversation's history out of the house on the next
+  // message, and warning carries the sentence to show.
+  // Assigns a model the provider offers, configuring it here if this
+  // house has not used it before. The kind — whether asking it leaves
+  // the house — is decided by the server from the provider's own
+  // listing, never sent from here.
+  assignProviderModel: (name: string, providerModel: string, provider: string, endpoint: string) =>
+    call<ButlerRow & { crossesToCloud?: boolean; warning?: string; previousModel?: string }>(
+      "PUT",
+      `/api/v1/butlers/${encodeURIComponent(name)}/model`,
+      { providerModel, provider, endpoint },
+    ),
+  setButlerModel: (name: string, model: string) =>
+    call<ButlerRow & { crossesToCloud?: boolean; warning?: string; previousModel?: string }>(
+      "PUT",
+      `/api/v1/butlers/${encodeURIComponent(name)}/model`,
+      { model },
+    ),
+  setButlerAccess: (name: string, member: string, allow: boolean) =>
+    call<{ people: string[] | null }>(
+      "PUT",
+      `/api/v1/butlers/${encodeURIComponent(name)}/access`,
+      { member, allow },
+    ),
+  // A directive instructs and authorises nothing (A9), so rewriting one
+  // is a plain edit rather than a proposal.
+  setButlerDirective: (name: string, directive: string) =>
+    call<ButlerRow>("PUT", `/api/v1/butlers/${encodeURIComponent(name)}/directive`, { directive }),
+  // Where a Butler answers. On chat this is the bot that receives the
+  // message, and it is what decides which Butler replies (A7) — so it
+  // is the one field on this screen that changes who hears what.
+  setButlerAddress: (
+    name: string,
+    a: { transport: string; externalId: string; label?: string; allow: boolean },
+  ) =>
+    call<{ addresses: ButlerAddress[] | null }>(
+      "PUT",
+      `/api/v1/butlers/${encodeURIComponent(name)}/address`,
+      a,
+    ),
+  retireButler: (name: string, transferMemoryTo = "") =>
+    call<{ retired: string }>("DELETE", `/api/v1/butlers/${encodeURIComponent(name)}${transferMemoryTo ? `?transferMemoryTo=${encodeURIComponent(transferMemoryTo)}` : ""}`),
+  agentMemoryRestrictions: (name: string) => call<{restricted: string[]}>("GET", `/api/v1/butlers/${encodeURIComponent(name)}/memory-restrictions`),
+  setAgentMemoryRestriction: (name: string, scope: string, restricted: boolean) => call("PUT", `/api/v1/butlers/${encodeURIComponent(name)}/memory-restrictions`, {scope, restricted}),
+  restoreButler: (name: string) =>
+    call<ButlerRow>("POST", `/api/v1/butlers/${encodeURIComponent(name)}/restore`, {}),
+  // One call, not six. Creating then granting each connection then
+  // re-narrowing each tool can half-fail, and the half that fails is
+  // the narrowing — leaving a copy quietly wider than its original.
+  duplicateButler: (name: string, copyName?: string) =>
+    call<ButlerRow & { note?: string }>(
+      "POST",
+      `/api/v1/butlers/${encodeURIComponent(name)}/duplicate`,
+      copyName ? { name: copyName } : {},
+    ),
+  butlerImpact: (name: string) =>
+    call<ButlerImpact>("GET", `/api/v1/butlers/${encodeURIComponent(name)}/impact`),
+  // Asks a model whether it can actually operate a tool, and stores the
+  // verdict. This is how a model earns the authority to do things — an
+  // unprobed one answers questions and nothing more.
+  // Register one model a provider serves (PUT /butler/models). This is
+  // how a provider comes to exist here: Keystone has no provider row, a
+  // provider is the server behind the models registered from it.
+  upsertModel: (m: { name: string; kind: "local" | "cloud"; provider: string; model: string; endpoint: string; enabled: boolean }) =>
+    call<{ name: string; note?: string }>("PUT", "/api/v1/butler/models", m),
+  probeModel: (name: string) =>
+    call<{ model: Model }>(
+      "POST",
+      `/api/v1/butler/models/${encodeURIComponent(name)}/probe`,
+      {},
+    ),
+  // What is answering for ONE Butler, and what it may do. The
+  // deployment-wide status was one provider, one model, one tool list —
+  // true while there was one Butler, and another Butler's answer the
+  // moment there were several.
+  oneButlerStatus: (name: string) =>
+    call<ButlerStatus>("GET", `/api/v1/butlers/${encodeURIComponent(name)}/status`),
+  // Dictation: the recording goes up as the body, typed by the Blob's
+  // own type, and the words come back for the text box. The Butler is
+  // asked nothing (ADR-W042).
+  transcribeForButler: (name: string, audio: Blob, seconds: number) =>
+    call<{ text: string; engine: string }>(
+      "POST",
+      `/api/v1/butlers/${encodeURIComponent(name)}/transcribe?seconds=${seconds.toFixed(1)}`,
+      audio,
+    ),
+  // A Butler's reply read aloud, as audio (ADR-W042 part two).
+  speakForButler: (name: string, text: string) =>
+    call<Blob>("POST", `/api/v1/butlers/${encodeURIComponent(name)}/speak`, { text }),
+  butlerSessionsFor: (name: string, limit = 20) =>
+    call<ButlerSession[]>(
+      "GET",
+      `/api/v1/butler/sessions?butler=${encodeURIComponent(name)}&limit=${limit}`,
+    ),
+  butlerTools: (name: string) =>
+    call<ButlerTools>("GET", `/api/v1/butlers/${encodeURIComponent(name)}/tools`),
+  // Narrowing only, and the API says so in both directions: allow:false
+  // takes a tool away from this Butler, allow:true gives it back to
+  // whatever its profile allows. Neither can widen past the surface's
+  // ceiling, which is why this is not a state field.
+  setButlerTool: (name: string, tool: string, allow: boolean, reason = "") =>
+    call<{ butler: string; narrowedTools: Record<string, string> | null; note?: string }>(
+      "PUT",
+      `/api/v1/butlers/${encodeURIComponent(name)}/tool`,
+      { tool, allow, reason },
+    ),
+  // Assigning ADDS a tool to a governed Agent, where setButlerTool only
+  // takes one away (#389). A narrowing still subtracts on top.
+  setButlerAssignment: (name: string, tool: string, assign: boolean) =>
+    call<{ butler: string; tool: string; assigned: boolean }>(
+      "PUT",
+      `/api/v1/butlers/${encodeURIComponent(name)}/assignment`,
+      { tool, assign },
+    ),
+  setButlerConnection: (name: string, connection: string, allow: boolean) =>
+    call<{ butler: string; connections: string[] | null }>(
+      "PUT",
+      `/api/v1/butlers/${encodeURIComponent(name)}/connection`,
+      { connection, allow },
+    ),
+  householdRoutines: () =>
+    call<{ routines: HouseholdRoutine[] | null; specs?: Record<string, AutomationSpec> }>(
+      "GET",
+      "/api/v1/household/routines",
+    ),
+  // A routine is born a DRAFT whatever is asked for: activation goes
+  // through the state endpoint and the Plan boundary, which is where a
+  // human is. The form says so rather than letting the server refuse.
+  createHouseholdRoutine: (r: { name: string; document: string; ownership?: string }) =>
+    call<{ seq: number; note?: string }>("POST", "/api/v1/household/routines", {
+      name: r.name,
+      document: r.document,
+      ownership: r.ownership ?? "wildstone",
+      externalId: "",
+      connection: "",
+      state: "",
+    }),
+  householdRoutine: (name: string) =>
+    call<RoutineDetail>("GET", `/api/v1/household/routines/${encodeURIComponent(name)}`),
+  // The household stream (ADR-W024 A2). Its own cursor, and the handler
+  // normalises an empty stream to [] rather than null.
+  householdEvents: (after: number, limit = 100) =>
+    call<HouseholdEvent[]>(
+      "GET",
+      `/api/v1/household/events?after=${after}&limit=${limit}`,
+    ),
+  automationGrammar: () =>
+    call<AutomationGrammar>("GET", "/api/v1/household/automations/grammar"),
+  // Exactly one of: name (an approved rule), rule (a draft document), or
+  // routine+spec (a draft held as a parsed spec, which is what the form
+  // has).
+  commitments: () => call<CommitmentStanding[]>("GET", "/api/v1/household/commitments"),
+  // Managing them, not only reading them. The Console listed every
+  // commitment and could change none: an Owner looking at a duplicate
+  // had to sign in to the family dashboard to remove it. Same handlers
+  // the dashboard calls, on the operator chain.
+  addCommitment: (fields: CommitmentFields) =>
+    call<{ commitment: string }>("POST", "/api/v1/household/commitments", fields),
+  editCommitment: (name: string, fields: CommitmentFields) =>
+    call<{ commitment: string }>(
+      "PUT",
+      `/api/v1/household/commitments/${encodeURIComponent(name)}`,
+      fields,
+    ),
+  removeCommitment: (name: string) =>
+    call<{ removed: string }>(
+      "DELETE",
+      `/api/v1/household/commitments/${encodeURIComponent(name)}`,
+    ),
+  // done and waived close the cycle; booked moves THIS one without
+  // touching the schedule, which is how a holiday week works.
+  answerCommitment: (name: string, answer: "done" | "waived" | "booked", at?: string) =>
+    call<Record<string, unknown>>(
+      "POST",
+      `/api/v1/household/commitments/${encodeURIComponent(name)}/${answer}`,
+      at ? { at } : {},
+    ),
+  commitment: (name: string) =>
+    call<{ standing: CommitmentStanding; completions: CommitmentCompletion[] }>(
+      "GET",
+      `/api/v1/household/commitments/${encodeURIComponent(name)}`,
+    ),
+  meters: () => call<MeterView[]>("GET", "/api/v1/household/meters"),
+  meterReadings: (name: string) =>
+    call<MeterReading[]>("GET", `/api/v1/household/meters/${encodeURIComponent(name)}/readings`),
+  recordReading: (name: string, value: number) =>
+    call<{ seq: number; duplicate: boolean }>(
+      "POST",
+      `/api/v1/household/meters/${encodeURIComponent(name)}/readings`,
+      { value },
+    ),
+
+  replayAutomation: (req: {
+    name?: string;
+    rule?: string;
+    routine?: string;
+    spec?: AutomationSpec;
+    limit?: number;
+  }) => call<ReplayResult>("POST", "/api/v1/household/automations/replay", req),
+  // The spec goes back as the structured form the detail read served,
+  // because the browser has no YAML writer and should not grow one: the
+  // server owns this grammar in both directions.
+  editRoutine: (name: string, spec: AutomationSpec, note: string, basedOnRevision: number) =>
+    call<{ revision: number; state: string; note: string }>(
+      "POST",
+      `/api/v1/household/routines/${encodeURIComponent(name)}/edit`,
+      { spec, note, basedOnRevision },
+    ),
+  setRoutineState: (name: string, state: string) =>
+    call<{ routine: HouseholdRoutine; performsActions: boolean }>(
+      "POST",
+      `/api/v1/household/routines/${encodeURIComponent(name)}/state`,
+      { state },
+    ),
+  controlRoutine: (name:string,action:string) => call<HouseholdRoutine>("POST",`/api/v1/household/routines/${encodeURIComponent(name)}/control`,{action}),
+  purgeRoutine: (name:string) => call<{purged:boolean}>("POST",`/api/v1/household/routines/${encodeURIComponent(name)}/purge`,{}),
+  householdExecutionStop: () => call<{active:boolean;reason?:string;enteredBy?:string}>("GET","/api/v1/household/execution-stop"),
+  setHouseholdExecutionStop: (action:"stop"|"resume",reason="") => call<{active:boolean}>("POST","/api/v1/household/execution-stop",{action,reason}),
+  integrations: () =>
+    call<{
+      connections: { connection: IntegrationConnection; capabilities: IntegrationCapability[] | null }[] | null;
+    }>("GET", "/api/v1/integrations"),
+  integrationPlacement: (name: string) =>
+    call<{ placements: Placement[] | null; secrets: ConnectionSecret[] | null }>(
+      "GET",
+      `/api/v1/integrations/${encodeURIComponent(name)}/placement`,
+    ),
+  placeIntegration: (name: string) =>
+    call<{ holder: string | null; moved?: boolean; waiting?: boolean; note?: string }>(
+      "POST",
+      `/api/v1/integrations/${encodeURIComponent(name)}/placement/place`,
+      {},
+    ),
+  widenIntegration: (name: string, w: { actions: boolean; indexing: boolean; cloud: boolean }) =>
+    call<{ widened: string }>("POST", `/api/v1/integrations/${encodeURIComponent(name)}/widen`, w),
+  // Pairing with PantryOS (ADR-W044 A6). Neither secret ever comes back:
+  // the status says where and when, nothing more.
+  pantryPairing: () => call<PantryPairingStatus>("GET", PANTRY_PAIRING_PATH),
+  pairPantry: (req: { address: string; code: string; keystoneUrl: string }) =>
+    call<PantryPairingStatus>("POST", PANTRY_PAIRING_PATH, req),
+  unpairPantry: () => call<{ paired: false; publisherTokensRevoked: number }>("DELETE", PANTRY_PAIRING_PATH),
+  groceryMovePreview: () => call<{ lists: GroceryMoveList[] }>("GET", PANTRY_GROCERY_MOVE_PATH),
+  moveGroceries: () => call<GroceryMoveResult>("POST", PANTRY_GROCERY_MOVE_PATH),
+  indexMeasurements: () =>
+    call<{ measurements: IndexMeasurement[] | null }>("GET", "/api/v1/butler/index/measurements"),
+  compactButlerIndex: (maxAgeDays: number) =>
+    call<{ prunedForgotten: number; agedOut: number; note: string }>(
+      "POST",
+      "/api/v1/butler/index/compact",
+      { maxAgeDays },
+    ),
+  // butler narrows to one Butler's material; omitting it is every
+  // Butler the reader may see, which is what the endpoint defaults to.
+  setMemoryPrivacy: (seq: number, policy: Partial<{localOnly:boolean;trustedOnly:boolean}>) => call<{localOnly:boolean;trustedOnly:boolean}>("PUT", "/api/v1/butler/memory/privacy", {seq,...policy}),
+  butlerMemory: (q?: { subject?: string; butler?: string }) => {
+    const params = new URLSearchParams();
+    if (q?.subject) params.set("subject", q.subject);
+    if (q?.butler) params.set("butler", q.butler);
+    const qs = params.toString();
+    return call<{ records: MemoryRecord[] | null }>(
+      "GET",
+      `/api/v1/butler/memory${qs ? `?${qs}` : ""}`,
+    );
+  },
+  correctButlerMemory: (seq: number, content: string) =>
+    call<{ seq: number }>("POST", "/api/v1/butler/memory/correct", {
+      seq,
+      content,
+      confidence: "stated",
+    }),
+  forgetButlerMemory: (seq: number) =>
+    call<{ note: string }>("POST", "/api/v1/butler/memory/forget", { seq }),
+  memoryDigest: () =>
+    call<{ entries: MemoryDigestEntry[] | null }>("GET", "/api/v1/butler/memory/digest"),
+  butlerToolControls: (agentClass?: AgentClass) =>
+    call<{ controls: ToolControl[] | null }>(
+      "GET",
+      `/api/v1/butler/tools${agentClass ? `?agentClass=${encodeURIComponent(agentClass)}` : ""}`,
+    ),
+  setButlerToolControl: (c: {
+    agentClass: AgentClass;
+    tool: string;
+    state: string;
+    reason: string;
+  }) => call<{ note?: string }>("PUT", "/api/v1/butler/tools", c),
+  setButlerAgentClass: (name: string, agentClass: AgentClass) =>
+    call<{ butler: string; agentClass: AgentClass; surface: ButlerSurface; grantsRevoked: number }>(
+      "PUT",
+      `/api/v1/butlers/${encodeURIComponent(name)}/class`,
+      { agentClass },
+    ),
+  // The Agent's runtime (ADR-W039 §3.3, §3.7, §4.1). Reading is a read;
+  // the three writes are consequential (ADR-W033 A4.1) and go round the
+  // step-up on a stale sign-in like every other.
+  butlerRuntime: (name: string) =>
+    call<RuntimeRecord>("GET", `/api/v1/butlers/${encodeURIComponent(name)}/runtime`),
+  // Every live Agent's runtime, one call (#355, H9) — the Butlers
+  // screen's Runtimes strip, not a fetch per row.
+  runtimes: () => call<RuntimeInventoryRow[]>("GET", "/api/v1/runtimes"),
+  // Replaces the runtime and nothing else. A type change revokes the
+  // old credential; a config change on the same type does not.
+  setButlerRuntime: (
+    name: string,
+    rt: {
+      type: RuntimeType;
+      endpoint?: string;
+      negotiated?: { delivery?: "push" | "pull"; processingClass?: "local_only" | "cloud" };
+      executionProfileRef?: string;
+    },
+  ) => call<RuntimeRecord>("PUT", `/api/v1/butlers/${encodeURIComponent(name)}/runtime`, rt),
+  // Mints a successor credential and disables the predecessor. The
+  // secret comes back ONCE unless a node is named, in which case it is
+  // placed there as a provided secret and never returned.
+  rotateRuntimeCredential: (name: string, node?: string) =>
+    call<RuntimeCredential>(
+      "POST",
+      `/api/v1/butlers/${encodeURIComponent(name)}/runtime/credential`,
+      node ? { node } : {},
+    ),
+  // Files a Plan re-rendering the Agent's packaged runtime at the
+  // catalog's current version (#389). Nothing restarts until the Plan
+  // is approved.
+  upgradeButlerRuntime: (name: string) =>
+    call<{ plan: string; from: string; to: string }>(
+      "POST",
+      `/api/v1/butlers/${encodeURIComponent(name)}/runtime/upgrade`,
+      {},
+    ),
+  // Every credential the runtime ever held stops working from the next
+  // request; the Agent itself is untouched.
+  revokeRuntime: (name: string) =>
+    call<RuntimeRecord>("POST", `/api/v1/butlers/${encodeURIComponent(name)}/runtime/revoke`, {}),
+  capabilityRequests: (state?: string) =>
+    call<{ requests: CapabilityRequest[] | null }>(
+      "GET",
+      `/api/v1/butler/requests${state ? `?state=${encodeURIComponent(state)}` : ""}`,
+    ),
+  decideCapabilityRequest: (seq: number, state: string, note: string) =>
+    call<{ note: string }>("POST", "/api/v1/butler/requests/decide", { seq, state, note }),
+  butlerMembers: () =>
+    call<{ members: { member: ButlerMemberRecord; links: ButlerIdentityLink[] | null; active: boolean }[] | null }>(
+      "GET",
+      "/api/v1/butler/members",
+    ),
+  // Recording and admitting are separate acts on purpose: existing and
+  // being allowed to use the Butler are different facts, and the panel
+  // says so. This is the first half, which had no control at all.
+  recordButlerMember: (member: string, profile: string, guardian?: string) =>
+    call<{ recorded: string }>("POST", "/api/v1/butler/members", {
+      member,
+      profile,
+      guardian: guardian ?? "",
+    }),
+  admitButlerMember: (member: string) =>
+    call<unknown>("POST", `/api/v1/butler/members/${encodeURIComponent(member)}/admit`, {}),
+  demoteButlerMember: (member: string) =>
+    call<unknown>("POST", `/api/v1/butler/members/${encodeURIComponent(member)}/demote`, {}),
+  disableButlerMember: (member: string) =>
+    call<unknown>("POST", `/api/v1/butler/members/${encodeURIComponent(member)}/disable`, {}),
+  offboardButlerMember: (member: string) =>
+    call<{ result: { stores: Record<string, number> }; records: unknown[]; resources: OffboardingResourceDisposition[] }>(
+      "POST",
+      `/api/v1/butler/members/${encodeURIComponent(member)}/offboarding`,
+      {},
+    ),
+  offboardingResources: (member: string) => call<{resources: OffboardingResourceDisposition[]}>("GET",`/api/v1/butler/members/${encodeURIComponent(member)}/offboarding`),
+  butlerConfig: () => call<{ stored: boolean; config: ButlerConfig }>("GET", "/api/v1/butler/config"),
+  butlerSettings: () =>
+    call<{ stored: boolean; settings: ButlerSettingsView }>("GET", "/api/v1/butler/settings"),
+  setButlerSettings: (s: Partial<ButlerSettingsView>) =>
+    call<{ stored: boolean; settings: ButlerSettingsView }>("PUT", "/api/v1/butler/settings", s),
+  butlerTasks: () => call<{ tasks: ButlerTask[] | null }>("GET", "/api/v1/butler/tasks"),
+  butlerTask: (id: string) =>
+    call<TaskDetail>("GET", `/api/v1/butler/tasks/${encodeURIComponent(id)}`),
+  reviewConversationWork:(id:string,action:"resolve-outcome"|"extend-budget",note:string)=>call("POST",`/api/v1/butler/tasks/${encodeURIComponent(id)}/work-review`,{action,note}),
+  labelButlerTask: (id: string, label: FeedbackLabel, note: string, traceSeq?: number) =>
+    call<{ recorded: boolean }>("POST", `/api/v1/butler/tasks/${encodeURIComponent(id)}/feedback`, {
+      label,
+      note,
+      traceSeq: traceSeq ?? 0,
+    }),
+  exportButlerEvaluation: (
+    id: string,
+    body: { name: string; expected: string; summary: string; evaluatorVersion: string },
+  ) =>
+    call<{ seq: number; name: string }>(
+      "POST",
+      `/api/v1/butler/tasks/${encodeURIComponent(id)}/evaluation`,
+      body,
+    ),
+  butlerEvaluations: () =>
+    call<{ evaluations: ButlerEvaluation[] | null }>("GET", "/api/v1/butler/evaluations"),
+  setButlerConfig: (c: { provider: string; model: string; endpoint: string }) =>
+    call<{ stored: boolean; config: ButlerConfig }>("PUT", "/api/v1/butler/config", c),
+  // The install form's folder picker. Read-only, and the node answers
+  // only for the prefixes a bind mount may name — so what it offers is
+  // exactly what will actually work.
+  directories: (node: string, path?: string) =>
+    call<DirectoryListing>(
+      "GET",
+      `/api/v1/nodes/${encodeURIComponent(node)}/directories${path ? `?path=${encodeURIComponent(path)}` : ""}`,
+    ),
+  identityCode: (node: string) =>
+    call<IdentityNotification>("GET", `/api/v1/nodes/${encodeURIComponent(node)}/identity/code`),
+  previewCapability: (pkg: string, params: Record<string, string>) =>
+    call<EnablePreview>("POST", "/api/v1/capabilities", {
+      package: pkg,
+      params,
+      dryRun: true,
+    }),
+  enableCapability: (pkg: string, params: Record<string, string>) =>
+    call<PlanRecord>("POST", "/api/v1/capabilities", { package: pkg, params }),
+  whoami: () => call<Identity>("GET", "/api/v1/whoami"),
+  // Ends the Console session; signOut is the identity provider's logout,
+  // where the browser goes next to finish signing out.
+  consoleSignout: () => call<{ signOut?: string }>("POST", "/api/v1/console/signout"),
+  resources: () => call<ResourceView[]>("GET", "/api/v1/resources"),
+  observed: () => call<Observed[]>("GET", "/api/v1/observed"),
+  events: (after: number, limit = 100) =>
+    call<EventRow[]>("GET", `/api/v1/events?after=${after}&limit=${limit}`),
+  routineAudiences: () => call<{id:string;label?:string;kind:string}[]>("GET", "/api/v1/household/routine-audiences"),
+  ownerReviewPreference: () => call<{bindingId:number;consoleUrl:string}>("GET", "/api/v1/owner-review/preference"),
+  setOwnerReviewPreference: (bindingId:number,consoleUrl:string) => call("PUT", "/api/v1/owner-review/preference", {bindingId,consoleUrl}),
+  ownerReviewQueue: () => call<PlanRecord[]>("GET", "/api/v1/owner-review"),
+  submitRoutinePlan: (name:string, outputAudience:string, secretIds:string[] = [], memoryIds:number[] = []) => call<{planId:string}>("POST", `/api/v1/household/routines/${encodeURIComponent(name)}/submit`, {outputAudience,secretIds,memoryIds}),
+  plans: () => call<PlanRecord[]>("GET", "/api/v1/plans"),
+  // Removing a capability is an ordinary plan proposing the deletion of
+  // everything it owns. There is no disable endpoint and there should
+  // not be one: a side door around the human gate is what ground rule 4
+  // exists to prevent. `wild capability disable` builds this same body
+  // from the same two calls.
+  // Removal names a PACKAGE and Keystone decides what that means.
+  //
+  // This used to build the delete list here, from every resource owned
+  // by `capability/<name>`. With two profiles of one capability
+  // installed that took the sibling's containers and routes with it —
+  // and `Secret/restic-books`, the repository password the surviving app
+  // still needs. Every protection added server-side was bypassed by the
+  // screen most people use. The catalog and the recorded install params
+  // are what answer "what would the sibling still need", and only the
+  // control plane has them.
+  disablePackage: (pkg: string, instance?: string) =>
+    call<PlanRecord>("POST", "/api/v1/capabilities/disable", {
+      package: pkg,
+      ...(instance ? { instance } : {}),
+    }),
+  // The same computation without proposing anything, so the preview is
+  // the plan rather than a second guess at it. Filtering by package
+  // stamp here still disagreed with the server: the surviving sibling's
+  // needs are excluded there and cannot be known from the stamps alone,
+  // so Secret/restic-books was listed as deletable and then wasn't
+  // deleted.
+  previewDisablePackage: (pkg: string, instance?: string) =>
+    call<PlanRecord>("POST", "/api/v1/capabilities/disable", {
+      package: pkg,
+      ...(instance ? { instance } : {}),
+      dryRun: true,
+    }),
+  plan: (id: string) => call<PlanRecord>("GET", `/api/v1/plans/${encodeURIComponent(id)}`),
+  approvePlan: (id: string) =>
+    call<unknown>("POST", `/api/v1/plans/${encodeURIComponent(id)}/approve`),
+  rejectPlan: (id: string) =>
+    call<unknown>("POST", `/api/v1/plans/${encodeURIComponent(id)}/reject`),
+  // Each surface has its own endpoint rather than a mode flag, so the
+  // Console cannot accidentally send a household question to the
+  // operator's butler or the reverse.
+  butlerStatus: (surface: ButlerSurface = "admin") =>
+    call<ButlerStatus>("GET", surface === "family" ? "/api/v1/household/butler" : "/api/v1/butler"),
+  askButler: (message: string, surface: ButlerSurface = "admin") =>
+    call<AskResponse>(
+      "POST",
+      surface === "family" ? "/api/v1/household/butler/ask" : "/api/v1/butler/ask",
+      { message },
+    ),
+  // Asks ONE named Butler, on whichever surface it lives.
+  //
+  // Deliberately its own route rather than askButler with a butler
+  // field: the surface endpoints are doors that pin a ceiling, so
+  // /butler/ask refuses a household Butler and says "no butler answers
+  // there for you". This one takes the ceiling from the Butler's own
+  // record, which is the only correct answer for a caller who holds
+  // both surfaces (ADR-W031 A10).
+  // voice marks a dictated message, so its stored turn shows a 🎙️.
+  askOneButler: (name: string, message: string, voice = false) =>
+    call<AskResponse>("POST", `/api/v1/butlers/${encodeURIComponent(name)}/ask`, voice ? { message, voice } : { message }),
+  butlerSessions: (limit = 20, surface?: ButlerSurface, butler?: string) =>
+    call<ButlerSession[]>(
+      "GET",
+      `/api/v1/butler/sessions?limit=${limit}${surface ? `&surface=${surface}` : ""}` +
+        (butler ? `&butler=${encodeURIComponent(butler)}` : ""),
+    ),
+  butlerSession: (id: string) =>
+    call<ButlerSession>("GET", `/api/v1/butler/sessions/${encodeURIComponent(id)}`),
+  // A follow-up. There is one endpoint rather than one per surface
+  // because the surface comes from the stored session — continuing a
+  // household conversation cannot move it onto the operator's Butler.
+  continueButlerSession: (id: string, message: string, voice = false) =>
+    call<AskResponse>(
+      "POST",
+      `/api/v1/butler/sessions/${encodeURIComponent(id)}/ask`,
+      voice ? { message, voice } : { message },
+    ),
+  chatBindings: (withRevoked = false) =>
+    call<ChatBinding[]>("GET", `/api/v1/chat/bindings${withRevoked ? "?revoked=true" : ""}`),
+  // An invite admits one Person to one Agent's bot (ADR-W033 B7). It
+  // used to name a surface, which is a class of Agents: an invite to
+  // `admin` admitted somebody to every Owner Agent at once.
+  // connection is the bot's capability name. It is always sent, not
+  // only when it is needed: an agent may hold several bots on one
+  // transport (ADR-W033 B7), and this screen already knows which row
+  // the operator picked, so there is nothing for the server to guess.
+  issueChatClaim: (butler: string, identity: string, transport: string, connection: string) =>
+    call<ChatClaim>("POST", "/api/v1/chat/claims", { butler, identity, transport, connection }),
+  revokeChatBinding: (id: number) =>
+    call<unknown>("POST", `/api/v1/chat/bindings/${id}/revoke`),
+  chatTransports: () => call<ChatTransport[]>("GET", "/api/v1/chat/transports"),
+  // Gives a chat capability its Keystone token, places it on the node
+  // as the secret the adapter container reads, and assigns the bot to
+  // an Agent — one act, because two would leave a credentialed bot
+  // answering for nobody. A bot already serving another Agent is
+  // refused rather than repointed. Minting again is rotation.
+  mintChatAdapter: (capability: string, node: string, butler: string) =>
+    call<{ principal: string; secret: string; node: string; butler: string }>(
+      "POST",
+      `/api/v1/chat/adapters/${encodeURIComponent(capability)}`,
+      { node, butler },
+    ),
+  principals: () => call<Principal[]>("GET", "/api/v1/principals"),
+  householdMembers: () => call<HouseholdMember[]>("GET", "/api/v1/household/members"),
+  // Chat Connections in one step (ADR-W033 B7.1).
+  chatPlatforms: () => call<{ platforms: ChatPlatform[] }>("GET", "/api/v1/connections/platforms"),
+  createConnection: (req: {
+    platform: string;
+    butler: string;
+    person: string;
+    credentials: Record<string, string>;
+    node?: string;
+    bot?: string;
+    local?: boolean;
+  }) => call<ConnectionCreated>("POST", "/api/v1/connections", req),
+  chatBots: () => call<{ bots: ChatBot[] }>("GET", "/api/v1/connections"),
+  removeChatBot: (capability: string) =>
+    call<{ capability: string; plan: string }>("POST", `/api/v1/connections/${encodeURIComponent(capability)}/remove`),
+  myInvites: () => call<{ invites: ConnectionInvite[] }>("GET", "/api/v1/connections/invites"),
+  myInviteKey: (seq: number) => call<InviteKey>("POST", `/api/v1/connections/invites/${seq}/key`),
+  householdGroups: () => call<HouseholdGroup[]>("GET", "/api/v1/household/groups"),
+  // The household's own groups (slice 8). Membership grants nothing by
+  // itself — what a group reaches is whatever the entitlement rows say.
+  personGroups: () => call<PersonGroup[]>("GET", "/api/v1/household/person-groups"),
+  setPersonGroup: (group: string, member: string, inGroup: boolean) =>
+    call<PersonGroup[]>(
+      "POST",
+      `/api/v1/household/person-groups/${encodeURIComponent(group)}/members`,
+      { member, in: inGroup },
+    ),
+  // Consequential (step-up gated). A delete is refused while an
+  // entitlement, audience or secret grant still names the group, and for
+  // the seeded groups.
+  createPersonGroup: (name: string) =>
+    call<PersonGroup[]>("POST", "/api/v1/household/person-groups", { name }),
+  deletePersonGroup: (group: string) =>
+    call<PersonGroup[]>("DELETE", `/api/v1/household/person-groups/${encodeURIComponent(group)}`),
+  // Who may reach a service. Not a proposal: an entitlement changes no
+  // node, so there is nothing for a plan to apply, and the reconcile
+  // loop projects it on its next tick.
+  serviceAccess: (capability: string) =>
+    call<ServiceAccess>("GET", `/api/v1/services/${encodeURIComponent(capability)}/access`),
+  // effect "" removes the decision, which returns the subject to
+  // whatever their groups say — not the same as refusing them.
+  setServiceAccess: (capability: string, d: { subjectKind: "group" | "person"; subject: string; effect: "" | "allow" | "restrict" }) =>
+    call<ServiceAccess>("POST", `/api/v1/services/${encodeURIComponent(capability)}/access`, d),
+  // Adding a member proposes a plan; the account exists once a human
+  // approves it on the Plans screen.
+  addHouseholdMember: (m: {
+    username: string;
+    displayName: string;
+    email: string;
+    groups: string[];
+    node?: string;
+  }) => call<PlanRecord>("POST", "/api/v1/household/members", m),
+  // Editing is a proposal like adding is: the account list belongs in
+  // state, in plans, in approval and in audit. Groups may only be ADDED
+  // — the provisioning job never removes a membership, so a plan that
+  // dropped one would apply and change nothing in the directory.
+  updateHouseholdMember: (
+    username: string,
+    m: { displayName?: string; email?: string; groups: string[] },
+  ) => call<PlanRecord>("PUT", `/api/v1/household/members/${encodeURIComponent(username)}`, m),
+  backups: () => call<BackupsResponse>("GET", "/api/v1/backups"),
+  morningReport: () => call<MorningReport>("GET", "/api/v1/reports/morning"),
+  proposeBackupTarget: (target: { name: string; node: string; spec: BackupTargetSpec }) =>
+    call<PlanRecord>("POST", "/api/v1/backups/targets", target),
+  testBackupTarget: (target: string) =>
+    call<{ target: string; result: string }>("POST", `/api/v1/backups/targets/${encodeURIComponent(target)}/test`),
+  proposeBackupPlan: (plan: string, node: string, spec: BackupPlanSpec) =>
+    call<PlanRecord>("PUT", `/api/v1/backups/plans/${encodeURIComponent(plan)}`, { node, spec }),
+  estimateBackupPlan: (plan: string, node: string, spec: BackupPlanSpec) =>
+    call<{ sourceBytes: number; diskCheck: string; estimatedMonthlyCostUsd?: number; costNote?: string }>("POST", `/api/v1/backups/plans/${encodeURIComponent(plan)}/estimate`, { node, spec }),
+  runBackup: (plan: string) =>
+    call<unknown>("POST", `/api/v1/backups/${encodeURIComponent(plan)}/run`),
+  restoreBackup: (plan: string) =>
+    call<unknown>("POST", `/api/v1/backups/${encodeURIComponent(plan)}/restore`),
+  probeBlockDevices: (node: string) =>
+    call<{ devices: BlockDevice[] }>(
+      "GET",
+      `/api/v1/nodes/${encodeURIComponent(node)}/probes/blockdevices`,
+    ),
+  probePorts: (node: string) =>
+    call<{ ports: ListeningPort[] }>(
+      "GET",
+      `/api/v1/nodes/${encodeURIComponent(node)}/probes/ports`,
+    ),
+  probeRadios: (node: string) =>
+    call<RadioInventory>(
+      "GET",
+      `/api/v1/nodes/${encodeURIComponent(node)}/probes/radios`,
+    ),
+  probeHomeAutomation: (node: string) =>
+    call<HomeAutomationReadiness>(
+      "GET",
+      `/api/v1/nodes/${encodeURIComponent(node)}/probes/home-automation`,
+    ),
+  homeAutomation: (q?: HomeAutomationQuery) =>
+    call<HomeAutomationStatus>("GET", homeAutomationPath(q)),
+  homeAutomationPreview: (req: HomeAutomationPlanRequest) =>
+    call<HomeAutomationPlanAnswer>("POST", "/api/v1/home-automation/preview", req),
+  homeAutomationPropose: (req: HomeAutomationPlanRequest) =>
+    call<HomeAutomationPlanAnswer>("POST", "/api/v1/home-automation/propose", req),
+  homeAutomationContinuity: () =>
+    call<HomeAutomationContinuityView>("GET", "/api/v1/home-automation/continuity"),
+  probeHttp: (node: string, url: string) =>
+    call<ProbeResult>(
+      "GET",
+      `/api/v1/nodes/${encodeURIComponent(node)}/probes/http?url=${encodeURIComponent(url)}`,
+    ),
+  probeDial: (node: string, kind: "nfs" | "smb", host: string) =>
+    call<ProbeResult>(
+      "GET",
+      `/api/v1/nodes/${encodeURIComponent(node)}/probes/${kind}?host=${encodeURIComponent(host)}`,
+    ),
+  nodes: () => call<{ nodes: NodeInfo[] }>("GET", "/api/v1/nodes"),
+  mintJoinToken: (ttlSeconds?: number) =>
+    call<JoinTokenResponse>("POST", "/api/v1/join-tokens", ttlSeconds ? { ttlSeconds } : {}),
+  nodeSecrets: (node: string) =>
+    call<{ node: string; secrets: SecretInfo[] }>(
+      "GET",
+      `/api/v1/nodes/${encodeURIComponent(node)}/secrets`,
+    ),
+  setSecret: (node: string, name: string, value?: string) =>
+    call<unknown>(
+      "POST",
+      `/api/v1/nodes/${encodeURIComponent(node)}/secrets/${encodeURIComponent(name)}`,
+      value ? { value } : {},
+    ),
+  rotateSecret: (node: string, name: string) =>
+    call<unknown>(
+      "POST",
+      `/api/v1/nodes/${encodeURIComponent(node)}/secrets/${encodeURIComponent(name)}/rotate`,
+    ),
+};
+
+// A chat platform, and what the Owner gives it (ADR-W033 B7.1).
+export interface ChatPlatform {
+  name: string;
+  label: string;
+  fields: { key: string; label: string; hint: string; prefix?: string }[];
+  // Offered only for Matrix, and only while the household runs its own
+  // homeserver: a bot made there with nothing to paste (ADR-W033 B7.2).
+  local?: { label: string; hint: string; node: string };
+}
+
+// One installed chat bot and the Agent it answers for.
+export interface ChatBot {
+  capability: string;
+  platform: string;
+  label: string;
+  butler: string;
+}
+
+export interface ConnectionCreated {
+  capability: string;
+  reused?: boolean;
+  instance?: string;
+  platform: string;
+  butler: string;
+  person: string;
+  node?: string;
+  plan?: string;
+  invite: number;
+  note: string;
+}
+
+// ------------------------------------------------------------ appearance
+
+// One theme, as the picker draws it. The swatch is the DERIVED
+// palette — what the surfaces will actually render, contrast repair
+// included — not the colours the theme's author typed.
+// What an imported package came to. pictureProblem is a note rather
+// than a failure: the palette is the theme, and a picture that could
+// not be read is worth saying without throwing the import away.
+// What the Console sends to author a commitment. The same typed fields
+// the dashboard's form sends: this door parses no documents either.
+export interface CommitmentFields {
+  description: string;
+  every?: string;
+  anchor?: string;
+  lead?: string;
+  // Optional: an edit preserves what it does not send.
+  rollover?: string;
+  scope?: string;
+  partOfDay?: string;
+  about?: string;
+}
+
+export interface ThemePackageResult {
+  theme: string;
+  label: string;
+  picture?: string;
+  pictureProblem?: string;
+}
+
+export interface ThemeSummary {
+  name: string;
+  label: string;
+  imported: boolean;
+  dark: boolean;
+  swatch: { background: string; surface: string; text: string; accent: string };
+  // Whether the theme brings a wallpaper, and which version of it. The
+  // Console never draws one — it is the screen you open when the house
+  // is broken, and its density is drawn on a flat ground on purpose —
+  // so this is a fact the picker reports, not an image it fetches. The
+  // picture appears on the household dashboard.
+  background?: boolean;
+  backgroundVersion?: number;
+}
+
+// What this person is on, and what else there is.
+//
+// `tokens` is the themed block, derived server-side. There is no second
+// copy of that derivation here on purpose: the contrast floors it
+// enforces are the same floors scripts/contrast-check.mjs holds the
+// shipped sheet to, and two implementations of a rule is one of them
+// being wrong.
+export interface Appearance {
+  theme: string;
+  tokens?: Record<string, string>;
+  dark: boolean;
+  background?: boolean;
+  backgroundVersion?: number;
+  themes: ThemeSummary[];
+}
+
+// An open invite, as its own Person sees it.
+export interface ConnectionInvite {
+  seq: number;
+  butler: string;
+  platform: string;
+  label: string;
+  invitedBy: string;
+}
+
+// A single-use key, minted for the Person who asked for it.
+export interface InviteKey {
+  code: string;
+  link?: string;
+  handle?: string;
+  carriesCode: boolean;
+  butler: string;
+  platform: string;
+  expiresAt: string;
+  note: string;
+}
+
+// ---------------------------------------------------------------- watch this mailbox
+
+// "Watch this mailbox" (epic #326 S07). The Console's half of a Person's
+// mailbox monitor: the setup read model a screen resumes from, the
+// protected credential intake, the Person's authorization, the
+// subscription an Owner approves, its health and controls, and the
+// private event candidates it produces. Every path is the Console's
+// (/api/v1/integrations/...); the Homepage serves the same handlers
+// under /api/v1/home/..., so one API, two doors.
+//
+// Nothing here carries a stored credential value back: the intake is
+// write-only, and the read model has no field that could hold one.
+
+export const MAIL_MATCH_KIND = "mail.changes";
+
+export interface MailScope {
+  folders: string[];
+  senders?: string[];
+  subjects?: string[];
+}
+
+// What a Person authorizes, and (with cadence and the conflict
+// calendars) what the subscription an Owner approves names.
+export interface MailWatchChoice {
+  agent: number;
+  targetCalendar: string;
+  scope: MailScope;
+  processingLocation: "local" | "cloud";
+  cadence?: string;
+  conflictCalendars?: string[];
+}
+
+export interface CredentialCopy {
+  node: string;
+  provisionState: string;
+  eraseState?: string;
+  erasedAt?: string;
+  eraseDetail?: string;
+}
+
+// One version of a Personal credential. The login is shown to its owner;
+// the password never leaves the node it was sent to.
+export interface PersonalCredential {
+  seq: number;
+  connection: string;
+  member: string;
+  need: string;
+  version: number;
+  login?: string;
+  secretRef: string;
+  state: string;
+  createdAt: string;
+  revokedAt?: string;
+  copies: CredentialCopy[] | null;
+}
+
+export interface BackgroundAuthorization {
+  seq: number;
+  connection: string;
+  person: string;
+  credentialVersion: number;
+  scope: MailScope;
+  processingLocation: string;
+  agent: number;
+  targetCalendar: string;
+  executable: string;
+  subscription: number;
+  digest: string;
+  createdAt: string;
+  revokedAt?: string;
+}
+
+export interface SubscriptionSchedule {
+  nextDueAt?: string;
+  hold?: "" | "paused" | "auth_failed" | "config_failed";
+  holdReason?: string;
+  heldAt?: string;
+  heldBy?: string;
+  consecutiveFailures: number;
+  lastRunAt?: string;
+  lastSuccessAt?: string;
+  lastFailureAt?: string;
+  lastOutcome?: string;
+  lastError?: string;
+  blockedAt?: string;
+  blockedReason?: string;
+}
+
+export interface SubscriptionCheckpoint {
+  version: number;
+  cursor?: unknown;
+  committedAt?: string;
+  committedByRun?: number;
+}
+
+export interface SubscriptionRun {
+  id: number;
+  state: string;
+  outcome?: string;
+  error?: string;
+  startedAt: string;
+  finishedAt?: string;
+}
+
+// GET /api/v1/agent-subscriptions[/{id}]: a Person sees only their own;
+// an Owner sees every one.
+export interface AgentSubscription {
+  id: number;
+  agent: string;
+  trigger: string;
+  matchKind: string;
+  match: string;
+  audience?: string;
+  capabilities: string[] | null;
+  cadence?: string;
+  source?: string;
+  person?: string;
+  version: number;
+  approvedVersion: number;
+  awaitingApproval: boolean;
+  enabled: boolean;
+  schedule?: SubscriptionSchedule;
+  checkpoint?: SubscriptionCheckpoint;
+  runs?: SubscriptionRun[] | null;
+}
+
+export interface MailPendingPlan {
+  id: string;
+  kind: "subscription" | "render";
+  summary: string;
+  // A pending subscription's match: the choices it was filed with.
+  match?: Record<string, unknown>;
+}
+
+export interface MailMonitor {
+  connection: IntegrationConnection & { executable?: string };
+  nodes: string[];
+  credential?: PersonalCredential;
+  authorization?: BackgroundAuthorization;
+  subscriptions: AgentSubscription[];
+  pendingPlans: MailPendingPlan[];
+  unverifiedErasures?: CredentialCopy[];
+}
+
+export interface MailSetup {
+  member: string;
+  owner: boolean;
+  provider?: { package: string; version: string; settings: Record<string, string> };
+  monitors: MailMonitor[];
+  agents: { seq: number; name: string }[];
+  calendars: { id: string; name: string; writable: boolean }[];
+  cadence: { default: string; min: string; max: string };
+  calendarsError?: string;
+}
+
+// An event candidate, as the Person-scoped review API serves it (S06,
+// ADR-W030 A5.7). Everything here is the caller's own: another Person's
+// candidate is a 404, the same answer as "no such candidate".
+
+// One event already on a calendar the Person can read that overlaps
+// the candidate. Only calendars the Person may see are ever checked.
+export interface MailCandidateConflict {
+  calendar: string;
+  title: string;
+  start: string;
+  end?: string;
+  allDay?: boolean;
+}
+
+export interface MailCandidateFields {
+  title: string;
+  start?: string;
+  end?: string;
+  durationMinutes?: number;
+  allDay: boolean;
+  tz?: string;
+  location?: string;
+  notes?: string;
+  confidence: number;
+  missing: string[] | null;
+  ambiguous: string[] | null;
+}
+
+export interface MailCandidate {
+  id: string;
+  revision: number;
+  connection: string;
+  source?: string;
+  targetCalendar: string;
+  // proposed, needs_details, accepted, created, dismissed, superseded,
+  // expired or cancelled.
+  state: string;
+  stateReason?: string;
+  fields: MailCandidateFields;
+  supersedes?: string;
+  supersededBy?: string;
+  // "update" or "cancel": the event this candidate created has a
+  // correction or a cancellation waiting for the Person.
+  updatePending?: "" | "update" | "cancel";
+  createdAt: string;
+  updatedAt?: string;
+  expiresAt?: string;
+  resolvedAt?: string;
+}
+
+export type MailReviewKind = "create" | "update" | "cancel";
+export type MailCandidateAction = "add" | "edit" | "dismiss" | "apply";
+
+// One offer to the Person: exactly one revision, one kind, one target
+// calendar, and the actions it allows. Only "open" can change, once.
+export interface MailReview {
+  id: string;
+  candidate: string;
+  revision: number;
+  kind: MailReviewKind;
+  targetCalendar: string;
+  eventUid?: string;
+  fieldsDigest: string;
+  route: string;
+  // free, busy, unavailable or not_checked.
+  availability: string;
+  conflicts: MailCandidateConflict[] | null;
+  checkedCalendars: string[] | null;
+  issuedAt: string;
+  expiresAt: string;
+  // open, used, revoked or expired.
+  state: string;
+  stateReason?: string;
+  usedAction?: string;
+  closedAt?: string;
+  actions: MailCandidateAction[] | null;
+}
+
+// A calendar write a review authorized, and what became of it.
+export interface MailEffect {
+  seq: number;
+  candidate: string;
+  revision: number;
+  review: string;
+  kind: MailReviewKind;
+  // dispatching, confirmed, reconciled, returned or failed.
+  state: string;
+  calendar: string;
+  attempts: number;
+  startedAt: string;
+  finishedAt?: string;
+  detail?: string;
+}
+
+// GET /mail/candidates: each candidate with its latest review, if any.
+export type MailCandidateRow = MailCandidate & { review?: MailReview };
+
+// GET /mail/candidates/{id}. tokens are returned only to the Person's
+// own Console, CLI or Homepage session, one per action the open review
+// offers; each approves exactly that action on exactly that revision.
+export interface MailCandidateDetail {
+  candidate: MailCandidate;
+  review?: MailReview;
+  tokens?: Partial<Record<MailCandidateAction, string>>;
+  excerpt?: string;
+  effects: MailEffect[] | null;
+}
+
+export type MailActOutcome =
+  | "added"
+  | "updated"
+  | "cancelled"
+  | "dismissed"
+  | "kept"
+  | "revised"
+  | "returned_to_review"
+  | "pending_reconciliation";
+
+export interface MailActResult {
+  outcome: MailActOutcome;
+  candidate: MailCandidate;
+  // The fresh review an Edit or a returned Add opened.
+  review?: MailReview;
+  effect?: MailEffect;
+  message: string;
+}
+
+// The edits a Person may make to a candidate. Edit sends the whole
+// event: what it names is what the new revision holds.
+export type MailCandidateEdit = Pick<
+  MailCandidateFields,
+  "title" | "start" | "end" | "allDay" | "location" | "notes" | "tz"
+>;
+
+// How an action names what it approves: the review's token for that
+// action (preferred), or the exact revision the Person was shown.
+export type MailActBy = { token: string } | { revision: number };
+
+const integrationPath = (name: string, rest: string) =>
+  `/api/v1/integrations/${encodeURIComponent(name)}/${rest}`;
+
+export const MAIL_CANDIDATES_PATH = "/api/v1/mail/candidates";
+
+export const mailApi = {
+  setup: () => call<MailSetup>("GET", "/api/v1/mail/setup"),
+
+  // An Owner prepares a Personal connection: it exists, has a node to
+  // run on, and its adapter is rendered (executable and node tokens).
+  // None of that reads any mail.
+  createConnection: (name: string) =>
+    call<{ seq: number }>("POST", "/api/v1/integrations", {
+      name,
+      adapter: "wild-mail-adapter",
+      ownership: "personal",
+    }),
+  addPlacement: (name: string, node: string, role: "primary" | "fallback", rank: number) =>
+    call<{ declared: string }>("POST", integrationPath(name, "placement"), { node, role, rank }),
+  renderAdapter: (name: string, rotateTokens = false) =>
+    call<{ eligible: boolean; reason?: string; executable?: string }>(
+      "POST",
+      integrationPath(name, "adapter/render"),
+      { dryRun: false, rotateTokens },
+    ),
+
+  // The protected intake. The password is in this one request body and
+  // nowhere else; the caller clears its field once this resolves.
+  submitCredential: (name: string, login: string, password: string) =>
+    call<{ note: string }>("POST", integrationPath(name, "credential"), { login, password }),
+  revokeCredential: (name: string) =>
+    call<{ revoked: number; note: string; state: string; degradedReason?: string }>(
+      "POST",
+      integrationPath(name, "credential/revoke"),
+      {},
+    ),
+  // An Owner's retry of an unproven erasure.
+  eraseCredential: (name: string) =>
+    call<{ state: string; degradedReason?: string }>("POST", integrationPath(name, "credential/erase"), {}),
+
+  fileSubscription: (name: string, choice: MailWatchChoice) =>
+    call<{ plan: PlanRecord; subscription?: number; note: string }>(
+      "POST",
+      integrationPath(name, "subscription"),
+      choice,
+    ),
+  // The Person's own authorization, naming the subscription an Owner
+  // approved. cadence and the conflict calendars are the subscription's,
+  // not the authorization's, so they are not sent.
+  authorize: (name: string, choice: MailWatchChoice, subscription: number) =>
+    call<{ authorization: BackgroundAuthorization; note: string }>(
+      "POST",
+      integrationPath(name, "authorization"),
+      {
+        agent: choice.agent,
+        targetCalendar: choice.targetCalendar,
+        scope: choice.scope,
+        processingLocation: choice.processingLocation,
+        subscription,
+      },
+    ),
+  revokeAuthorization: (name: string) =>
+    call<{ revoked: boolean; note: string }>("POST", integrationPath(name, "authorization/revoke"), {}),
+
+  subscriptions: () =>
+    call<{ subscriptions: AgentSubscription[] | null }>("GET", "/api/v1/agent-subscriptions"),
+  controlSubscription: (
+    id: number,
+    action: "pause" | "resume" | "disable" | "enable" | "cadence",
+    extra: { reason?: string; cadence?: string } = {},
+  ) => call<AgentSubscription>("POST", `/api/v1/agent-subscriptions/${id}/control`, { action, ...extra }),
+
+  // S06's Person-scoped review. Kept to these calls so the contract is
+  // adjusted in one place. 404: not yours (or no such candidate); 409:
+  // stale or refused, and nothing changed; 403: an Agent never acts.
+  candidates: () => call<{ candidates: MailCandidateRow[] | null }>("GET", MAIL_CANDIDATES_PATH),
+  candidate: (id: string) =>
+    call<MailCandidateDetail>("GET", `${MAIL_CANDIDATES_PATH}/${encodeURIComponent(id)}`),
+  actOnCandidate: (id: string, by: MailActBy, action: MailCandidateAction, fields?: MailCandidateEdit) =>
+    call<MailActResult>("POST", `${MAIL_CANDIDATES_PATH}/${encodeURIComponent(id)}/act`, {
+      ...("token" in by ? { token: by.token } : { revision: by.revision, action }),
+      ...(fields ? { fields } : {}),
+    }),
+};

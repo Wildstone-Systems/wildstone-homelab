@@ -1,0 +1,229 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Activity</title>
+<link rel="stylesheet" href="/portal/assets/nocturne.css">
+<!--wildstone:theme-->
+<!--
+  The household record: what the front page's "Today at home" card is a
+  window onto, over a longer window.
+
+  IT IS THE SAME PROJECTION, not a second one. The sentences, the tones
+  and the ordering all come from the same portal.Sentence the card uses,
+  because the design's most-repeated review finding was two surfaces
+  telling different stories about one event.
+
+  THE FILTERS PARTITION THE SET. Home, Files and The assistant own
+  disjoint families of verbs; "Asked for a decision" cuts across them by
+  tone. A set of filters that overlapped would make the counts lies, and
+  a row in none of them would be a row a member can only find by
+  turning every filter off.
+
+  A REFUSAL IS NOT AN ALERT. It carries a neutral dot: nothing broke and
+  nothing is waiting, so colouring it red would send somebody looking
+  for a problem that does not exist. Amber is waiting, red is failing
+  now, and every amber or red row has a matching item in Needs you —
+  this page reports, it does not ask.
+-->
+<style>
+  .daygroup { margin-bottom: var(--space-8); }
+  .daybody { padding: var(--space-4) var(--space-6); }
+  .dayhead { display: flex; align-items: baseline; gap: var(--space-3); margin-bottom: var(--space-3); }
+  .arow { display: flex; gap: var(--space-4); align-items: baseline; padding: var(--space-3) 0;
+          border-bottom: 1px solid var(--faint); }
+  .arow:last-child { border-bottom: 0; }
+  .arow .dot { transform: translateY(-2px); }
+  .arow .when { margin-left: auto; color: var(--muted); font-size: 12.5px; white-space: nowrap;
+                font-variant-numeric: tabular-nums; }
+  @media (max-width: 720px) {
+    .arow { flex-wrap: wrap; }
+    .arow .when { margin-left: 0; width: 100%; padding-left: 19px; }
+  }
+</style>
+
+<main class="page">
+  <div class="spread" style="margin-bottom: var(--space-6)">
+    <a class="hbtn hbtn-ghost" href="/home/"><i class="ph ph-arrow-left" aria-hidden="true"></i> Home</a>
+    <span class="fade" aria-hidden="true"></span>
+    <span class="muted" id="member"></span>
+  </div>
+
+  <div class="row-between" style="margin-bottom: var(--space-6)">
+    <div>
+      <h1>Activity</h1>
+      <div class="muted">What the house did</div>
+    </div>
+    <span class="muted" id="count"></span>
+  </div>
+
+  <div class="seg" id="filters" role="tablist" style="margin-bottom: var(--space-6)">
+    <button type="button" class="on" data-f="">Everything</button>
+    <button type="button" data-f="waiting">Asked for a decision</button>
+    <button type="button" data-f="home">Home</button>
+    <button type="button" data-f="files">Files</button>
+    <button type="button" data-f="assistant">The assistant</button>
+  </div>
+
+  <div id="note"></div>
+  <section id="list"></section>
+
+  <div class="spread" style="margin-top: var(--space-6)">
+    <button class="hbtn hbtn-secondary" id="earlier" type="button" hidden>Load earlier</button>
+    <span class="fade" aria-hidden="true"></span>
+  </div>
+
+  <!-- The rule, stated once at the foot, because the alternative is a
+       member wondering why their partner's afternoon is not here. -->
+  <footer class="muted" style="margin-top: var(--space-8); font-size: 12px">
+    You see what your household shares with you. Things about one person are theirs.
+  </footer>
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  function el(id) { return document.getElementById(id); }
+  function text(id, v) { var n = el(id); if (n) { n.textContent = v; } }
+  function clear(n) { while (n && n.firstChild) { n.removeChild(n.firstChild); } }
+  function make(tag, cls, content) {
+    var n = document.createElement(tag);
+    if (cls) { n.className = cls; }
+    if (content !== undefined && content !== null) { n.textContent = String(content); }
+    return n;
+  }
+  function icon(name) {
+    var i = make("i", "ph ph-" + name);
+    i.setAttribute("aria-hidden", "true");
+    return i;
+  }
+  function toneColour(t) {
+    if (t === "failed") { return "var(--st-bad)"; }
+    if (t === "waiting") { return "var(--st-warn)"; }
+    if (t === "refused") { return "var(--muted)"; }
+    return "var(--st-ok)";
+  }
+
+  var filter = "", next = 0, shown = 0, today = "";
+
+  function dayLabel(key) {
+    if (key === today) { return "Today"; }
+    // Yesterday is computed from the household's own "today" rather
+    // than the browser's, so a tablet an hour out of step does not
+    // relabel a whole day's rows.
+    var d = new Date(today + "T12:00:00");
+    d.setDate(d.getDate() - 1);
+    var y = d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") +
+            "-" + String(d.getDate()).padStart(2, "0");
+    if (key === y) { return "Yesterday"; }
+    return new Date(key + "T12:00:00").toLocaleDateString([], {
+      weekday: "long", month: "long", day: "numeric"
+    });
+  }
+
+  function load(append) {
+    var url = "/api/v1/activity?filter=" + encodeURIComponent(filter);
+    if (append && next) { url += "&before=" + encodeURIComponent(next); }
+    el("earlier").disabled = true;
+    fetch(url, { headers: { accept: "application/json" } })
+      .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+      .then(function (res) {
+        if (!res.ok) { throw new Error(res.j.error || "Can't load the household's record."); }
+        clear(el("note"));
+        today = res.j.today || today;
+        next = res.j.next || 0;
+        if (!append) { clear(el("list")); shown = 0; }
+        paint(res.j.rows || []);
+        el("earlier").hidden = !next;
+        el("earlier").disabled = false;
+      })
+      .catch(function (err) {
+        // Never an empty list, which reads as a quiet house.
+        var box = el("note");
+        clear(box);
+        var n = make("div", "note note-bad");
+        n.appendChild(icon("warning-circle"));
+        n.appendChild(make("span", null, String(err.message || err)));
+        box.appendChild(n);
+        el("earlier").disabled = false;
+      });
+  }
+
+  function paint(rows) {
+    var list = el("list");
+    if (!rows.length && shown === 0) {
+      // A filter with no rows says so rather than showing an empty
+      // list, and a quiet day is a normal day.
+      list.appendChild(make("p", "muted", filter
+        ? "Nothing here under this filter."
+        : "Nothing yet today."));
+      text("count", "");
+      return;
+    }
+    shown += rows.length;
+    text("count", shown === 1 ? "1 thing" : shown + " things");
+
+    // Group by the household's day, preserving the server's order.
+    var order = [], byDay = {};
+    rows.forEach(function (r) {
+      if (!byDay[r.day]) { byDay[r.day] = []; order.push(r.day); }
+      byDay[r.day].push(r);
+    });
+    order.forEach(function (day) {
+      // Append into an existing group when "load earlier" returns more
+      // of a day already on the page, rather than starting a second
+      // heading for the same date.
+      var existing = list.querySelector('[data-day="' + day + '"]');
+      var body;
+      if (existing) {
+        body = existing.querySelector(".daybody");
+      } else {
+        var sec = make("section", "daygroup");
+        sec.dataset.day = day;
+        var head = make("div", "dayhead");
+        head.appendChild(make("h3", null, dayLabel(day)));
+        head.appendChild(make("span", "fade"));
+        var n = byDay[day].length;
+        head.appendChild(make("span", "muted", n === 1 ? "1 thing" : n + " things"));
+        sec.appendChild(head);
+        body = make("div", "daybody surface");
+        sec.appendChild(body);
+        list.appendChild(sec);
+      }
+      byDay[day].forEach(function (r) {
+        var row = make("div", "arow");
+        var dot = make("span", "dot");
+        dot.style.background = toneColour(r.tone);
+        row.appendChild(dot);
+        row.appendChild(make("span", "grow", r.sentence));
+        // A row still waiting carries a pill that links to where the
+        // decision lives: this page reports, it does not ask.
+        if (r.tone === "waiting") {
+          var link = make("a", "pill pill-warn", "needs a decision");
+          link.href = "/home/";
+          row.appendChild(link);
+        }
+        row.appendChild(make("span", "when", new Date(r.at).toLocaleTimeString([], {
+          hour: "numeric", minute: "2-digit"
+        })));
+        body.appendChild(row);
+      });
+    });
+  }
+
+  Array.prototype.forEach.call(el("filters").children, function (b) {
+    b.addEventListener("click", function () {
+      Array.prototype.forEach.call(el("filters").children, function (o) {
+        o.className = o === b ? "on" : "";
+        o.setAttribute("aria-selected", o === b ? "true" : "false");
+      });
+      filter = b.dataset.f;
+      next = 0;
+      load(false);
+    });
+  });
+  el("earlier").addEventListener("click", function () { load(true); });
+
+  load(false);
+})();
+</script>

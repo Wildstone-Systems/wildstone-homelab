@@ -1,0 +1,773 @@
+# Identity capability: LLDAP (directory) + Authelia (SSO/OIDC provider),
+# profile "authelia-lldap". Provides trait identity:oidc, which is what
+# lets other packages (e.g. photos-immich) `require: [{trait: identity,
+# mode: oidc}]` and receive .Resolved.IssuerURL / .Resolved.OidcSecretRef.
+#
+# Image digests are REAL, resolved at authoring time (2026-07-30) from the
+# public registries — not placeholders:
+#   lldap/lldap:stable                    -> sha256:2a8454b6...11ca8
+#   authelia/authelia:latest              -> sha256:1b363e92...ff51b
+# See packages/README.md for how these were resolved and how to refresh
+# them.
+#
+# All domains below are example.com placeholders (public_domain is a
+# required param); no secret values appear anywhere — LLDAP's admin
+# password and Authelia's JWT/session/storage secrets are referenced as
+# secret/<name>, resolved only by Wardstone at materialization time
+# (ADR-W005 A2), never carried as literals here.
+apiVersion: wildstone.dev/v1
+kind: Package
+metadata:
+  name: identity
+  version: 1.2.0
+  capability: identity
+  profile: authelia-lldap
+  exclusive: true
+provides:
+  # WHAT THIS PACKAGE HANDS TO ITS CONSUMERS (ADR-W025 A2). These three
+  # values were computed inside the Capability Engine, from a hardcoded
+  # lookup of "identity"/"oidc" — which made every new integration a
+  # patch to Go rather than a package someone wrote. They live here now,
+  # and the engine no longer knows what identity is.
+  #
+  # `origin` and `sessionDomain` answer where a host is actually SERVED
+  # under this deployment's ingress posture, which is a different
+  # question from where its Route was declared (ADR-W019 A10). Do not
+  # rebuild these by concatenating strings: an OIDC issuer is compared
+  # byte for byte against what the browser saw, and under the tailnet
+  # posture that is the node's one certified name plus a port — not the
+  # host below.
+  #
+  # `with` rather than a bare expression on purpose. Before anyone has
+  # supplied public_domain the export renders empty and is therefore NOT
+  # published, so a consumer fails on a missing .Resolved key — which
+  # names the problem — instead of receiving "https://auth." and looping
+  # forever at a login screen, which names nothing.
+  - trait: identity
+    mode: oidc
+    exports:
+      IssuerURL: '{{ with .Params.public_domain }}{{ origin (printf "auth.%s" .) }}{{ end }}'
+      SessionDomain: '{{ with .Params.public_domain }}{{ sessionDomain . }}{{ end }}'
+      # Where a sign-in with nowhere particular to return to should land.
+      # The dashboard, because it is the page the household thinks of as
+      # home — and under the tailnet posture it is the one address with
+      # no port in it.
+      DashboardURL: '{{ with .Params.public_domain }}{{ origin (printf "home.%s" .) }}{{ end }}'
+  # The package deploys LLDAP itself, so the directory is equally its
+  # provision — media-jellyfin's LDAP-Auth posture requires it
+  # (ADR-W013 A2). No exports: a consumer names the directory container
+  # and its base DN through its own params, because those are deployment
+  # facts rather than provider-derived ones.
+  - { trait: identity, mode: ldap }
+params:
+  - { name: public_domain, required: true, description: "The domain your services are named under, e.g. home.example.com. Under a tailnet this is a label rather than an address you type.", source: domain }
+  - { name: node, required: true, description: "Which machine to install this on.", source: node }
+  # The directory's base DN. It now appears in two places that MUST
+  # agree — LLDAP's own env and Authelia's authentication_backend — so it
+  # is a param rather than a literal repeated twice.
+  - { name: ldap_base_dn, default: "dc=wildstone,dc=internal", description: "The directory’s root name. The default is fine unless you know you need otherwise." }
+  # How long a family sign-in lasts (ADR-W033 A4.1): the household SSO
+  # session behind Homepage and every service. The Console does NOT
+  # inherit it — Keystone holds the Console to its own 12-hour window and
+  # asks Authelia to authenticate again when that passes — so this can be
+  # long without making the control plane any easier to walk into.
+  - { name: session_days, default: "30", description: "How many days a family sign-in lasts before asking for the password again." }
+policies:
+  classifications: [family_public, admin_tailscale]
+  dataSensitivity: high
+templates:
+  # ---- The secrets this capability needs, declared so the node
+  # generates them before anything references one.
+  #
+  # Declared here rather than created by hand because the merged
+  # clients file Keystone writes carries references to the two OIDC
+  # provider secrets, and that file is written before any plan step
+  # runs: a secret that does not exist yet fails the write, and a
+  # failed prereq aborts the tick before the plan that would create it.
+  # The reconciler ensures declared secrets ahead of that write, which
+  # is what makes this list the mechanism rather than documentation.
+  #
+  # Only the jwks key has a kind. An OIDC provider signs ID tokens with
+  # an RSA key and cannot invent one at startup; everything else here
+  # wants random bytes, which is the default, so it says nothing.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: authelia-oidc-jwks, node: "{{ .Params.node }}" }
+    spec: { name: authelia-oidc-jwks, kind: rsa_private_key }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: authelia-oidc-hmac-secret, node: "{{ .Params.node }}" }
+    # Authelia hashes this to SHA256, and strongly recommends 64+
+    # characters. 48 random bytes is 64 base64url characters.
+    spec: { name: authelia-oidc-hmac-secret, lengthBytes: 48 }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: authelia-jwt-secret, node: "{{ .Params.node }}" }
+    spec: { name: authelia-jwt-secret }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: authelia-session-secret, node: "{{ .Params.node }}" }
+    spec: { name: authelia-session-secret }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: authelia-storage-encryption-key, node: "{{ .Params.node }}" }
+    spec: { name: authelia-storage-encryption-key }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: lldap-admin-password, node: "{{ .Params.node }}" }
+    spec: { name: lldap-admin-password }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: lldap-jwt-secret, node: "{{ .Params.node }}" }
+    spec: { name: lldap-jwt-secret }
+  # ---- LLDAP: the directory Authelia authenticates users against.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: lldap-data, node: "{{ .Params.node }}" }
+    spec: { name: lldap-data }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: lldap, node: "{{ .Params.node }}" }
+    spec:
+      image: "lldap/lldap@sha256:2a8454b668c1aba7157e832eab0e242e1e7eb5fb7591d7e7774ba05286511ca8"
+      env:
+        LLDAP_LDAP_BASE_DN: "{{ .Params.ldap_base_dn }}"
+        # LLDAP creates its bootstrap admin from these, and without an
+        # email it creates one that CANNOT SIGN IN TO ANYTHING.
+        #
+        # Authelia emits an email claim only when the directory has one,
+        # and an app that needs it rejects the login with no useful
+        # message. Three shipped apps do: Open WebUI answers "The email
+        # or password provided is incorrect", Homarr's Auth.js throws
+        # OAuthProfileParseError and bounces to ?error=Configuration, and
+        # Immich rejects it the same way. Each reads as a broken app,
+        # and each is one missing field on one account.
+        #
+        # It need not be deliverable — Authelia's notifier writes to a
+        # file (ADR-W020 A6), and this address is an identifier, not a
+        # mailbox.
+        LLDAP_LDAP_USER_EMAIL: "admin@{{ .Params.public_domain }}"
+        LLDAP_LDAP_USER_PASS: "secret/lldap-admin-password"
+        # The secret is the source of truth for this password, and LLDAP
+        # otherwise reads it only when it first creates `admin`. The
+        # installer rotates the secret after the directory exists, so
+        # without this LLDAP keeps the old one and Authelia and the
+        # provisioning job are locked out.
+        LLDAP_FORCE_LDAP_USER_PASS_RESET: "always"
+        LLDAP_JWT_SECRET: "secret/lldap-jwt-secret"
+      mounts:
+        - { source: lldap-data, target: /data }
+      restart: unless-stopped
+  # ---- Authelia: the SSO/OIDC provider. It registers OidcClient resources
+  # on behalf of consuming packages (ADR-W005 A3): the reconciler renders
+  # each OidcClient into this capability's managed Authelia config fragment
+  # and batches the reload, independent of which package's template
+  # produced the OidcClient resource.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: authelia-config, node: "{{ .Params.node }}" }
+    spec: { name: authelia-config }
+  # ---- Authelia's own configuration. The PACKAGE owns this, not the
+  # control plane: an LDAP base DN, a storage backend and a notifier are
+  # this profile's facts, and putting them in Keystone would be the
+  # layering ADR-W005 exists to prevent (ADR-W019 / the ConfigFile kind).
+  #
+  # identity_providers is deliberately ABSENT here. Authelia REPLACES a
+  # list across config files rather than merging it, so the OIDC block
+  # lives entirely in the clients.yml Keystone renders: the clients
+  # themselves, the hmac_secret, the jwks signing key and the policies.
+  # One file owns that key; this one never mentions it.
+  #
+  # secret/<name> references are resolved on the node at write time. This
+  # file never contains a secret value, and Keystone never sees one.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: ConfigFile
+    metadata: { name: authelia-configuration, node: "{{ .Params.node }}" }
+    spec:
+      filename: configuration.yml
+      content: |
+        # managed by wildstone — do not edit
+        theme: light
+        # Authelia's read buffer, raised from its 4096-byte default.
+        #
+        # Under the tailnet posture every service is ONE HOSTNAME on a
+        # different port, and cookies ignore ports (RFC 6265 §8.5: "cookies
+        # do not provide isolation by port"). So every app on this
+        # deployment shares one cookie jar, and the browser sends all of
+        # them to Authelia on every forward-auth check and every visit to
+        # the portal. With nineteen services that header passed 4KB and
+        # Authelia answered 431 to requests that were otherwise fine:
+        #
+        #   Request from client exceeded the server read buffer.
+        #   Buffer size=4096 ... status_code=431
+        #
+        # 64KB is chosen against what the jar can plausibly reach rather
+        # than against what it holds today — the whole point is that it
+        # grows by one entry every time a household installs anything.
+        # It is a buffer size, not an allocation: fasthttp grows into it.
+        server:
+          buffers:
+            read: 65536
+            write: 65536
+        log:
+          level: info
+
+        # 4.38 moved this out of the top-level jwt_secret.
+        identity_validation:
+          reset_password:
+            jwt_secret: secret/authelia-jwt-secret
+
+        authentication_backend:
+          # Password reset is ENABLED, and it is how anybody gets their
+          # first password — the first Owner at install time included
+          # (design §2.4, ADR-W020 A4).
+          #
+          # Authelia binds to LLDAP as the service account below and
+          # performs the modify itself, which is what makes this work at
+          # all: LLDAP sets passwords through an OPAQUE exchange that
+          # neither a shell script nor Keystone can perform, so the
+          # directory's own client is the only thing positioned to do it.
+          #
+          # Delivery is the file notifier, not mail: there is no relay
+          # and there will not be one (ADR-W020 A6). Authelia writes the
+          # one-time code, and an Owner reads it back through
+          # `GET /nodes/{node}/identity/code` — the surface that already
+          # exists for 2FA enrolment, doing the same job for the first
+          # password.
+          #
+          # Turning this off again would leave a household with no way
+          # to give anybody a first credential except through LLDAP's
+          # own UI, which is the step this package exists to remove.
+          password_reset:
+            disable: false
+          ldap:
+            implementation: lldap
+            address: ldap://lldap:3890
+            base_dn: {{ .Params.ldap_base_dn }}
+            # LLDAP puts people under ou=people and calls the login
+            # attribute uid; cn is the DISPLAY name, so binding on it
+            # makes people log in as "Alice Example".
+            users_filter: "(&({username_attribute}={input})(objectClass=person))"
+            groups_filter: "(member={dn})"
+            user: uid=admin,ou=people,{{ .Params.ldap_base_dn }}
+            password: secret/lldap-admin-password
+
+        session:
+          name: authelia_session
+          secret: secret/authelia-session-secret
+          # A family sign-in lasts session_days whether or not "remember
+          # me" was ticked, and survives that long idle (ADR-W033 A4.1).
+          # Authelia's own defaults — an hour, five minutes idle — asked
+          # a household for passwords all day long.
+          expiration: {{ .Params.session_days }}d
+          inactivity: {{ .Params.session_days }}d
+          remember_me: {{ .Params.session_days }}d
+          # Sessions live in Redis, not in Authelia's memory. This is not
+          # about scale — one homelab has one Authelia — it is about what
+          # a restart costs. A managed config change now replaces this
+          # container by design (the config digest rides the container
+          # spec hash), so installing an app restarts the provider. With
+          # in-memory sessions that signs every family member out; with
+          # this, they never notice.
+          redis:
+            host: authelia-redis
+            port: 6379
+          cookies:
+            # All three come from .Resolved rather than being assembled
+            # from public_domain, because they are BROWSER-VISIBLE and a
+            # Route is not always served at the host it declares
+            # (ADR-W019 A10). Under the tailnet posture every service is
+            # one host on different ports, and a value built from the
+            # domain here would send the browser somewhere nothing
+            # answers — while every check still passed, because nothing
+            # compares these against what is actually served.
+            #
+            # Under a hostname posture they resolve to exactly the
+            # strings this used to hardcode.
+            - domain: {{ .Resolved.SessionDomain }}
+              # MUST be https. 4.39 refuses a non-secure scheme here, and
+              # this is the browser-visible URL — never the reverse
+              # proxy's own listener scheme, which is plain http behind
+              # the tunnel.
+              authelia_url: {{ .Resolved.IssuerURL }}
+              default_redirection_url: {{ .Resolved.DashboardURL }}
+
+        storage:
+          encryption_key: secret/authelia-storage-encryption-key
+          local:
+            path: /config/db.sqlite3
+
+        # A homelab has no mail relay to depend on, and an identity
+        # provider that will not start because SMTP is unreachable is a
+        # worse failure than one that writes notifications to a file.
+        notifier:
+          disable_startup_check: true
+          filesystem:
+            # Under the managed prefix, NOT in the container's own volume
+            # (F78). Authelia has no mail relay and will not get one
+            # (ADR-W020 A6), so a one-time code is delivered to a file —
+            # and a file inside a named volume is reachable only by
+            # someone with root and docker on the host. That made
+            # two-factor impossible to enrol for the person it protects,
+            # which is a lockout, not an inconvenience.
+            #
+            # /srv/wildstone is a Wardstone managed prefix, so the agent
+            # can read it with the op it already has, and the admin can
+            # be shown the code in the Console — ADR-W020 A6's
+            # out-of-band human delivery, with a surface to deliver from.
+            filename: /srv/wildstone/identity/notification.txt
+
+        regulation:
+          max_retries: 4
+          find_time: 2m
+          ban_time: 10m
+  # ---- The session store. Same image digest the paperless and immich
+  # packages already pin, so the node has one redis layer set rather than
+  # three, and keystone/pkgtool's image-set check keeps them agreeing.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: authelia-redis-data, node: "{{ .Params.node }}" }
+    spec: { name: authelia-redis-data }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: authelia-redis, node: "{{ .Params.node }}" }
+    spec:
+      image: "redis@sha256:e7723ff73d963f5cc6d9c4643ea3d989527a402a319239054e9472a7fb9219a2"
+      mounts:
+        - { source: authelia-redis-data, target: /data }
+      restart: unless-stopped
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: authelia, node: "{{ .Params.node }}" }
+    spec:
+      image: "authelia/authelia@sha256:1b363e9279e742397966333f364e0876ae02bf5c876de73e83af6d48c57ff51b"
+      # Point Authelia at BOTH managed files. Without this it reads
+      # X_AUTHELIA_CONFIG's default, /config/configuration.yml — the
+      # config it seeds for itself on first start — which is why every
+      # rendered client was invisible no matter how correct clients.yml
+      # was. Passing --config replaces that default outright, so the
+      # self-seeded file stops mattering.
+      #
+      # Flags only, no binary: the image's ENTRYPOINT is
+      # ["/app/entrypoint.sh"], which execs `authelia "$@"`. Wildstone
+      # maps command to Docker's Cmd, and Cmd is the WHOLE argv only
+      # when an image has no entrypoint — the mistake that killed every
+      # Caddy container in the v0.1.1-alpha validation (F23), which is
+      # why keystone/pkgtool's imageArgv0 table demands evidence per
+      # image before a command may be added. That entrypoint has a
+      # branch for exactly this shape: it execs its arguments directly
+      # UNLESS the first is --config, in which case authelia gets them.
+      #
+      # Order matters, and so does the split. Authelia merges these
+      # last-wins per key and does NOT merge lists — its own docs call
+      # splitting access control rules or OIDC clients across files
+      # "asking for trouble", and the hand-build confirmed it by having
+      # one file's clients silently replace another's. So each list-
+      # valued section lives in exactly one file: identity_providers in
+      # clients.yml, access_control in access.yml. Both are generated by
+      # Keystone from desired state, because both are per-Route facts
+      # this package cannot know at authoring time.
+      command:
+        - "--config"
+        - "/etc/wildstone/identity/configuration.yml"
+        - "--config"
+        - "/etc/wildstone/authelia/clients.yml"
+        - "--config"
+        - "/etc/wildstone/authelia/access.yml"
+      # NO env secrets. These four were AUTHELIA_*_SECRET_FILE vars
+      # carrying secret/<name> references, and every one of them broke
+      # Authelia's boot:
+      #
+      #   error loading secret path <the actual secret value>
+      #     into key 'jwt_secret': file does not exist
+      #
+      # A *_FILE variable names a PATH. The agent resolves a secret
+      # reference in env to the secret's VALUE (materializeEnv), which
+      # is correct for every other package and exactly wrong here, so
+      # Authelia took the value as a filename and tried to open it.
+      #
+      # Three of the four were also redundant: session.secret,
+      # jwt_secret and storage.encryption_key are already in
+      # configuration.yml above as secret/<name> references, resolved in
+      # FILE CONTENT on the node — the path that works. The fourth,
+      # the OIDC hmac_secret, belongs in the OIDC block and so belongs
+      # in clients.yml; see the note there.
+      #
+      # Passing values through env at all would be the worse fix: the
+      # process environment of a container is readable by anything that
+      # can inspect it, and materialized file content is not.
+      mounts:
+        - { source: authelia-config, target: /config }
+        # Writable, unlike the other managed mounts: this is the one
+        # place Authelia produces something a human needs to read back.
+        - { source: /srv/wildstone/identity, target: /srv/wildstone/identity }
+        # Two read-only subtrees of the managed prefix, because the two
+        # managed files are named by two different rules and both rules
+        # are right:
+        #
+        #   <prefix>/identity/    a ConfigFile's directory comes from its
+        #                         owning capability, uniformly for every
+        #                         package that ships one — this is where
+        #                         configuration.yml above lands.
+        #   <prefix>/authelia/    the reconciler's Authelia-specific
+        #                         renderings, named for the provider that
+        #                         reads them (ADR-W005 A3/B1): clients.yml,
+        #                         merged from every OidcClient in the
+        #                         deployment, and the per-client fragments
+        #                         it is merged from.
+        #
+        # Subtrees rather than the whole prefix: this container has no
+        # business reading the ingress capability's files, and the
+        # narrowest mount that works is the one to ship (ADR-W018, and
+        # the lesson of the agent data directory).
+        - { source: /etc/wildstone/identity, target: /etc/wildstone/identity, readOnly: true }
+        - { source: /etc/wildstone/authelia, target: /etc/wildstone/authelia, readOnly: true }
+      restart: unless-stopped
+  # ---- Group provisioning.
+  #
+  # LLDAP starts with no groups, so an app whose OIDC client requires
+  # one refuses every login until somebody creates it by hand. This is
+  # the piece that stops that being a manual step.
+  #
+  # It does NOT create people. Wildstone declares the groups an app
+  # needs; members are added in LLDAP's own UI, by whoever knows who
+  # lives here. The script therefore only ever CREATES a missing group
+  # and never deletes or empties one — see LdapGroupSpec.
+  #
+  # Why a script here rather than lldap's own bootstrap.sh, which does
+  # all this and more:
+  #
+  #   1. It cannot be run. The lldap image's ENTRYPOINT is
+  #      docker-entrypoint.sh, which unconditionally ends in
+  #      `exec gosu "$UID:$GID" /app/lldap "$@"` — the `exec "$@"` after
+  #      it is dead code. Wildstone sets Docker's Cmd, not Entrypoint,
+  #      so anything passed becomes an ARGUMENT TO lldap. Upstream's own
+  #      recipes are `docker exec` into the running container, or a
+  #      Kubernetes `command:` — which overrides ENTRYPOINT and does not
+  #      translate.
+  #   2. It apk-adds curl, jq and jo at runtime, as root. A container
+  #      holding the directory's admin password should not be fetching
+  #      binaries from a package mirror to do its job.
+  #
+  # So: a plain alpine image, whose ENTRYPOINT is empty, and busybox
+  # wget, which Alpine builds with FEATURE_WGET_LONG_OPTIONS=y so
+  # --post-data and --header both exist. No package installs, nothing
+  # unpinned, and about thirty lines instead of two thousand.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: ConfigFile
+    metadata: { name: provision-groups, node: "{{ .Params.node }}" }
+    spec:
+      filename: provision-groups.sh
+      content: |
+        #!/bin/sh
+        # managed by wildstone — do not edit
+        #
+        # Create every group in the rendered list that the directory does
+        # not already have. Idempotent by construction: it reads what
+        # exists first and only adds. It never deletes a group and never
+        # touches membership.
+        set -eu
+
+        # Both default to what ships; the overrides exist so the test in
+        # keystone/pkgtool can run this exact script — the one the
+        # package renders, not a copy — against a fake directory.
+        LIST="${GROUPS_FILE:-/etc/wildstone/lldap/groups}"
+        API="${LLDAP_URL:-http://lldap:17170}"
+
+        # LLDAP_ADMIN_PASSWORD arrives as a secret reference the agent
+        # resolves at container-create time; it is never in this file.
+        [ -n "${LLDAP_ADMIN_PASSWORD:-}" ] || {
+          echo "provision-groups: LLDAP_ADMIN_PASSWORD is empty" >&2; exit 1; }
+
+        post() { # post <path> <extra-header-or-empty> <body>
+          if [ -n "$2" ]; then
+            wget -q -O- --header='Content-Type: application/json' \
+              --header="$2" --post-data="$3" "$API$1"
+          else
+            wget -q -O- --header='Content-Type: application/json' \
+              --post-data="$3" "$API$1"
+          fi
+        }
+
+        # A restart can leave this job racing the directory's own
+        # startup, so retry the login briefly rather than failing at
+        # once. Briefly is the operative word, and the bound is not
+        # arbitrary: the reconciler's job gate gives this container 60s
+        # to finish, so a script that spends 60s retrying gets killed at
+        # exactly the moment it was about to say something useful, and
+        # the step reports a timeout instead of a reason.
+        #
+        # 20s also bounds the wrong-password case, which is
+        # indistinguishable from "not up yet" here — wget's exit codes
+        # for a 401 and a refused connection are not portable between
+        # busybox and GNU. So both are retried, and the message names
+        # both. Retrying a permanent failure for a whole minute on every
+        # tick is the thing worth avoiding.
+        i=1
+        while [ "$i" -le "${LOGIN_ATTEMPTS:-10}" ]; do
+          LOGIN=$(post /auth/simple/login "" \
+            "{\"username\":\"admin\",\"password\":\"$LLDAP_ADMIN_PASSWORD\"}") && break
+          echo "provision-groups: directory not answering yet (attempt $i)" >&2
+          i=$((i + 1))
+          sleep 2
+        done
+        [ -n "${LOGIN:-}" ] || {
+          echo "provision-groups: could not log in to $API as admin — either the directory is not" >&2
+          echo "  running, or secret/lldap-admin-password is not the password it was created with" >&2
+          exit 1; }
+
+        # No jq in this image, so the two reads below are textual. Both
+        # first strip whitespace: LLDAP serialises compactly today, but
+        # {"token": "x"} with a space is equally valid JSON, and a script
+        # that silently finds no token because a future version or a
+        # proxy reformatted the body is a bad way to learn that. Group
+        # names are validated to [a-z0-9_] before they reach here
+        # (LdapGroupSpec), so squeezing whitespace cannot merge two of
+        # them.
+        squeeze() { tr -d ' \011\012\015'; }
+
+        TOKEN=$(printf '%s' "$LOGIN" | squeeze | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
+        [ -n "$TOKEN" ] || { echo "provision-groups: no token in login response" >&2; exit 1; }
+        AUTH="Authorization: Bearer $TOKEN"
+
+        EXISTING=$(post /api/graphql "$AUTH" \
+          '{"query":"{groups {id displayName}}"}' | squeeze)
+
+        rc=0
+        while IFS= read -r group; do
+          case "$group" in ''|'#'*) continue ;; esac
+
+          # Exact match on the quoted JSON value, so "photos" cannot be
+          # satisfied by an existing "photos_admins".
+          case "$EXISTING" in
+            *"\"displayName\":\"$group\""*)
+              echo "group $group: already present"
+              continue ;;
+          esac
+
+          RESP=$(post /api/graphql "$AUTH" \
+            "{\"query\":\"mutation CreateGroup(\$name: String!) {createGroup(name: \$name) {id}}\",\"operationName\":\"CreateGroup\",\"variables\":{\"name\":\"$group\"}}") || {
+              echo "group $group: request failed" >&2; rc=1; continue; }
+          case "$RESP" in
+            *'"errors"'*)
+              echo "group $group: $RESP" >&2; rc=1 ;;
+            *)
+              echo "group $group: created" ;;
+          esac
+        done < "$LIST"
+
+        # ---- Users.
+        #
+        # Created WITHOUT a password, deliberately. LLDAP sets passwords
+        # through an OPAQUE exchange this shell cannot perform, and
+        # ADR-W020 A4 says the credential is never Wildstone's anyway:
+        # the person sets their own through the claim flow. A user
+        # created here exists and is in their groups, and cannot log in
+        # until they claim.
+        #
+        # Never deletes a USER. Memberships are a different matter
+        # since slice 8: the fifth field names ones to remove, and
+        # every name in it is a membership Wildstone placed itself and
+        # no longer wants (projected_memberships records which).
+        #
+        # That bound is the whole reason this is safe to do at all.
+        # The objection to a control plane removing memberships is that
+        # it removes the ones a person added themselves in LLDAP's own
+        # UI — your sister in photos_users, who no YAML file mentions.
+        # She can never appear
+        # in this field, because Wildstone never claimed her. So this
+        # file is still not a roster of who is in a group: it is what
+        # Wildstone asserted, plus what it is taking back.
+        USERS="${USERS_FILE:-/etc/wildstone/lldap/users}"
+        if [ -f "$USERS" ]; then
+          # Re-read groups: the ids needed below include any created a
+          # moment ago in the loop above.
+          GROUPS_NOW=$(post /api/graphql "$AUTH" '{"query":"{groups {id displayName}}"}' | squeeze)
+          USERS_NOW=$(post /api/graphql "$AUTH" '{"query":"{users {id}}"}' | squeeze)
+
+          # Tab-separated; see keystone/reconcile/lldapusers.go. Fields
+          # are validated to a closed charset before they reach here
+          # (LdapUserSpec), which is what makes this interpolation safe.
+          while IFS="$(printf '\t')" read -r uname udisplay uemail ugroups urevoke; do
+            case "$uname" in ''|'#'*) continue ;; esac
+
+            case "$USERS_NOW" in
+              *"\"id\":\"$uname\""*)
+                echo "user $uname: already present" ;;
+              *)
+                RESP=$(post /api/graphql "$AUTH" \
+                  "{\"query\":\"mutation CreateUser(\$u: CreateUserInput!) {createUser(user: \$u) {id}}\",\"operationName\":\"CreateUser\",\"variables\":{\"u\":{\"id\":\"$uname\",\"email\":\"$uemail\",\"displayName\":\"$udisplay\"}}}") || {
+                    echo "user $uname: request failed" >&2; rc=1; continue; }
+                case "$RESP" in
+                  *'"errors"'*)
+                    echo "user $uname: $RESP" >&2; rc=1; continue ;;
+                  *)
+                    echo "user $uname: created (no password yet; it is set through the claim flow)" ;;
+                esac ;;
+            esac
+
+            # Not `[ -n "$ugroups" ] || continue`: a user with nothing
+            # to ADD may still have something to revoke, and skipping
+            # here is how a withdrawn entitlement would never be acted
+            # on for the person who lost their last one.
+            # "-" is an empty list. It is written as a character rather
+            # than as an empty field because tab is IFS whitespace: two
+            # tabs in a row are ONE separator to `read`, so an empty
+            # groups column would shift the revocations into it and this
+            # script would ADD every membership it was told to remove.
+            if [ "$ugroups" = "-" ]; then ugroups=""; fi
+            if [ "$urevoke" = "-" ]; then urevoke=""; fi
+            { [ -n "$ugroups" ] || [ -n "$urevoke" ]; } || continue
+            MEMBER_OF=$(post /api/graphql "$AUTH" \
+              "{\"query\":\"{user(userId: \\\"$uname\\\") {groups {displayName}}}\"}" | squeeze)
+
+            OLDIFS=$IFS; IFS=,
+            for g in $ugroups; do
+              IFS=$OLDIFS
+              [ -n "$g" ] || continue
+              case "$MEMBER_OF" in
+                *"\"displayName\":\"$g\""*)
+                  echo "user $uname: already in $g"; IFS=,; continue ;;
+              esac
+              # Split into one object per line, find the one carrying
+              # this exact name, then read its id — rather than matching
+              # id and displayName as an adjacent pair, which assumes a
+              # key ORDER no JSON encoder promises. The first version did
+              # assume it and found nothing the moment the encoder sorted
+              # its keys. The closing quote in the pattern is what stops
+              # "photos_users" matching "photos_users_extra".
+              gid=$(printf '%s' "$GROUPS_NOW" | tr '{' '\n' \
+                | grep "\"displayName\":\"$g\"" \
+                | sed -n 's/.*"id":\([0-9]*\).*/\1/p' | head -1)
+              if [ -z "$gid" ]; then
+                echo "user $uname: group $g does not exist in the directory" >&2; rc=1; IFS=,; continue
+              fi
+              RESP=$(post /api/graphql "$AUTH" \
+                "{\"query\":\"mutation AddUserToGroup(\$u: String!, \$g: Int!) {addUserToGroup(userId: \$u, groupId: \$g) {ok}}\",\"operationName\":\"AddUserToGroup\",\"variables\":{\"u\":\"$uname\",\"g\":$gid}}") || {
+                  echo "user $uname: adding to $g failed" >&2; rc=1; IFS=,; continue; }
+              case "$RESP" in
+                *'"errors"'*) echo "user $uname -> $g: $RESP" >&2; rc=1 ;;
+                *)            echo "user $uname: added to $g" ;;
+              esac
+              IFS=,
+            done
+            IFS=$OLDIFS
+            # ---- Revocations (slice 8).
+            #
+            # Only names Wildstone placed itself reach this field; the
+            # projection subtracts everything else before writing the
+            # file. So this loop cannot remove a membership somebody
+            # created directly in the directory, however it looks.
+            #
+            # MEMBER_OF was read before the additions above, so a group
+            # just added is not in it — which is correct and not a
+            # staleness bug: a name cannot be in both columns at once
+            # (LdapUserSpec refuses that outright), so nothing added
+            # this pass can also be revoked this pass.
+            OLDIFS=$IFS; IFS=,
+            for g in $urevoke; do
+              IFS=$OLDIFS
+              [ -n "$g" ] || continue
+              case "$MEMBER_OF" in
+                *"\"displayName\":\"$g\""*) ;;
+                *) echo "user $uname: not in $g, nothing to revoke"; IFS=,; continue ;;
+              esac
+              gid=$(printf '%s' "$GROUPS_NOW" | tr '{' '\n' \
+                | grep "\"displayName\":\"$g\"" \
+                | sed -n 's/.*"id":\([0-9]*\).*/\1/p' | head -1)
+              if [ -z "$gid" ]; then
+                echo "user $uname: group $g does not exist in the directory" >&2; rc=1; IFS=,; continue
+              fi
+              RESP=$(post /api/graphql "$AUTH" \
+                "{\"query\":\"mutation RemoveUserFromGroup(\$u: String!, \$g: Int!) {removeUserFromGroup(userId: \$u, groupId: \$g) {ok}}\",\"operationName\":\"RemoveUserFromGroup\",\"variables\":{\"u\":\"$uname\",\"g\":$gid}}") || {
+                  echo "user $uname: revoking $g failed" >&2; rc=1; IFS=,; continue; }
+              case "$RESP" in
+                *'"errors"'*) echo "user $uname -x $g: $RESP" >&2; rc=1 ;;
+                *)            echo "user $uname: revoked $g" ;;
+              esac
+              IFS=,
+            done
+            IFS=$OLDIFS
+
+            # ---- Report what Wildstone did not place.
+            #
+            # A membership in neither column was created by a person
+            # directly in LLDAP. It is NOT removed — that is the whole
+            # boundary this slice keeps — but it is said out loud, so a
+            # household can see that the directory holds access
+            # Wildstone does not know about and did not grant.
+            # `|| [ -n "$have" ]` below because the last line carries
+            # no trailing newline: `read` sets the variable and still
+            # returns non-zero at EOF, so a plain `while read` drops it.
+            # The group it drops is whichever LLDAP returned last, which
+            # is exactly the kind of omission nobody notices — the first
+            # version of this reported one of two hand-made memberships
+            # and looked like it worked.
+            #
+            # No comments inside the pipeline: a line continuation
+            # cannot be followed by one, and the shell reports it as
+            # `Syntax error: "|" unexpected` forty lines further down.
+            printf '%s' "$MEMBER_OF" | tr '{' '\n' \
+              | sed -n 's/.*"displayName":"\([^"]*\)".*/\1/p' \
+              | while read -r have || [ -n "$have" ]; do
+                [ -n "$have" ] || continue
+                case ",$ugroups,$urevoke," in
+                  *",$have,"*) continue ;;
+                esac
+                echo "user $uname: in $have, which wildstone did not place — left alone"
+              done
+          done < "$USERS"
+        fi
+
+        # Exit non-zero if ANY group or user failed. A partially
+        # provisioned directory must not look like a finished job: the
+        # reconciler reads this exit code to decide whether to run us
+        # again.
+        exit $rc
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Job
+    metadata: { name: lldap-provision-groups, node: "{{ .Params.node }}" }
+    spec:
+      run:
+        image: "alpine@sha256:48b0309ca019d89d40f670aa1bc06e426dc0931948452e8491e3d65087abc07d"
+        # alpine declares no ENTRYPOINT, so this is the whole argv.
+        command: ["/bin/sh", "/etc/wildstone/identity/provision-groups.sh"]
+        env:
+          LLDAP_ADMIN_PASSWORD: "secret/lldap-admin-password"
+        mounts:
+          # The script, and the group list Keystone renders from every
+          # LdapGroup in the deployment. Read-only: a provisioning job
+          # has no business writing to the managed prefix.
+          - { source: /etc/wildstone/identity, target: /etc/wildstone/identity, readOnly: true }
+          - { source: /etc/wildstone/lldap, target: /etc/wildstone/lldap, readOnly: true }
+  # ---- Route: auth.<public_domain> — no auth on the auth Route itself
+  # (Authelia IS the auth; gating logins behind Authelia's own login page
+  # would be circular).
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Route
+    metadata: { name: auth, node: "{{ .Params.node }}" }
+    spec:
+      host: "auth.{{ .Params.public_domain }}"
+      upstream: "container/authelia:9091"
+      # portal: this route IS the identity provider's own login surface —
+      # public by necessity (a login page cannot sit behind itself), and
+      # policy-distinct from auth: none (ADR-W009/E5).
+      auth: portal
+      classification: family_public

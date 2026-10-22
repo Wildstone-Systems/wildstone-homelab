@@ -1,0 +1,80 @@
+# Host monitoring capability, profile "beszel": CPU, memory, disk,
+# network and per-container graphs for every machine that reports in,
+# with alerts. Complements monitoring (Uptime Kuma), which asks "is it
+# up?" — this asks "how is it doing?".
+#
+# THIS IS THE HUB ONLY. Beszel's agent reports from each machine, and
+# its container-level statistics come from the Docker socket — a path
+# Wardstone will not bind-mount, by design (ADR-W003 A1: managed
+# prefixes only). So the agent runs on the host, installed once per
+# machine from the hub's own "Add system" dialog, which prints the
+# exact command. The hub's own login: create the first account on
+# first visit; it also offers OIDC from its settings page.
+#
+# Data (systems, history, accounts) is one volume, backed up weekly.
+#
+# Image digest is REAL, resolved 2026-09-07 via the OCI registry API:
+#   henrygd/beszel:latest -> sha256:fefb2716...fd5c
+apiVersion: wildstone.dev/v1
+kind: Package
+metadata:
+  name: monitoring-beszel
+  version: 1.0.2
+  capability: host-monitoring
+  profile: beszel
+requires:
+  - { trait: identity, mode: oidc }
+  - { trait: ingress, mode: private }
+params:
+  - { name: admin_domain, required: true, description: "The domain your admin-only services are named under. Under a tailnet this is a label rather than an address you type.", source: domain }
+  - { name: node, required: true, description: "Which machine to install this on.", source: node }
+policies:
+  classifications: [admin_tailscale]
+  dataSensitivity: medium
+templates:
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: restic-host-monitoring, node: "{{ .Params.node }}" }
+    spec: { name: restic-host-monitoring }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: beszel-data, node: "{{ .Params.node }}" }
+    spec: { name: beszel-data }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: host-monitoring-backup-repo, node: "{{ .Params.node }}" }
+    spec: { name: host-monitoring-backup-repo }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: beszel, node: "{{ .Params.node }}" }
+    spec:
+      image: "henrygd/beszel@sha256:fefb27166f5e1611ebf67f8697ea928a23f44efdb00af922e2ac3b5faa2efd5c"
+      env:
+        APP_URL: '{{ origin (printf "beszel.%s" .Params.admin_domain) }}'
+      mounts:
+        - { source: beszel-data, target: /beszel_data }
+      restart: unless-stopped
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Route
+    metadata: { name: beszel, node: "{{ .Params.node }}" }
+    spec:
+      host: "beszel.{{ .Params.admin_domain }}"
+      upstream: "container/beszel:8090"
+      auth: authelia_oidc
+      classification: admin_tailscale
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: BackupPlan
+    metadata: { name: host-monitoring, node: "{{ .Params.node }}" }
+    spec:
+      volumes: [beszel-data]
+      repository: host-monitoring-backup-repo
+      passwordSecret: secret/restic-host-monitoring
+      schedule: weekly
+      class: rebuildable
+      retention: { keepWeekly: 4 }

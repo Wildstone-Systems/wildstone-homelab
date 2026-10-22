@@ -1,0 +1,702 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Files</title>
+<link rel="stylesheet" href="/portal/assets/nocturne.css">
+<!--wildstone:theme-->
+<!-- Shared and Mine support directory trees (#275). Photos remains flat. Deletion is immediate; only empty folders can be removed. -->
+<style>
+  .drop { background: transparent; color: var(--color-text); font: inherit; cursor: pointer; }
+  #folder-value { padding: var(--space-3); color: var(--color-text); background: var(--faint); border: 1px solid var(--hair); border-radius: var(--radius-sm); font: inherit; }
+  #breadcrumbs { display: flex; flex-wrap: wrap; gap: var(--space-2); overflow-wrap: anywhere; margin-bottom: var(--space-4); }
+  #breadcrumbs a { overflow-wrap: anywhere; min-width: 0; }
+  .crumb { display: flex; align-items: center; gap: var(--space-3); margin-bottom: var(--space-6); }
+  /* FIXED, not auto. An auto-layout table sizes its columns to fit
+     their content, so one long filename widens the name column, the
+     table exceeds its 100%, and the page scrolls sideways — and
+     text-overflow never engages, because nothing has constrained the
+     width it would ellipsise against. The widths live in a <colgroup>
+     rather than on the header cells because the header is display:none
+     on a phone, and a width on a hidden element is not a width. */
+  table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+  col.pick { width: 34px; }
+  col.size { width: 92px; }
+  col.when { width: 116px; }
+  col.acts { width: 84px; }
+  thead th {
+    text-align: left; font-size: 11px; font-weight: 600; letter-spacing: .13em;
+    text-transform: uppercase; color: var(--muted); padding: 0 var(--space-3) var(--space-3);
+    border-bottom: 1px solid var(--hair); white-space: nowrap;
+  }
+  tbody td { padding: var(--space-3); border-bottom: 1px solid var(--faint); font-size: 13px; vertical-align: middle; }
+  tbody tr:last-child td { border-bottom: 0; }
+  tbody tr.sel { background: color-mix(in srgb, var(--color-accent) 12%, transparent); }
+  td.num { text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  td.name { min-width: 0; overflow: hidden; }
+  .nmcell a { min-width: 0; }
+  .nmcell { display: flex; align-items: center; gap: var(--space-3); min-width: 0; }
+  .rowacts { display: flex; gap: 2px; justify-content: flex-end; opacity: 0; }
+  tr:hover .rowacts, tr:focus-within .rowacts { opacity: 1; }
+  .selbar {
+    position: sticky; bottom: var(--space-4); z-index: 2;
+    display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap;
+    padding: var(--space-3) var(--space-4); border-radius: var(--radius-md);
+    background: color-mix(in srgb, var(--color-surface) 96%, transparent);
+    box-shadow: var(--shadow-md); backdrop-filter: blur(10px);
+    margin-top: var(--space-4);
+  }
+  dialog {
+    border: 0; border-radius: var(--radius-lg); padding: var(--space-8);
+    background: var(--color-surface); color: var(--color-text);
+    /* min(), because 440px is wider than a 390px phone and a modal
+       that overflows the viewport cannot be read or dismissed. */
+    max-width: min(440px, calc(100vw - 2 * var(--space-6)));
+    box-shadow: var(--shadow-lg);
+  }
+  dialog::backdrop { background: rgba(0,0,0,.55); }
+  .grid-photos { display: grid; grid-template-columns: repeat(auto-fill, minmax(116px, 1fr)); gap: var(--space-3); }
+  .thumb {
+    aspect-ratio: 1; border-radius: var(--radius-md); background: var(--faint);
+    display: grid; place-items: center; color: var(--muted); overflow: hidden;
+    box-shadow: inset 0 0 0 1px var(--hair);
+  }
+  @media (max-width: 720px) {
+    /* Rows go two-line — filename above, size and when beneath — and
+       only the two actions a thumb can hit stay exposed.
+       
+       The row stops being a table row and becomes a flex row. Hiding
+       two columns is not enough on its own: their <col> widths would
+       still be reserved under a fixed layout, leaving 200px of empty
+       column beside a truncated name. Laying the row out directly is
+       both simpler and what the design describes. */
+    table, tbody, tr, td { display: block; }
+    thead { display: none; }
+    tbody tr {
+      display: flex; align-items: center; gap: var(--space-3);
+      padding: var(--space-3) 0; border-bottom: 1px solid var(--faint);
+    }
+    tbody tr:last-child { border-bottom: 0; }
+    tbody td { padding: 0; border: 0; }
+    tbody td.name { flex: 1; min-width: 0; }
+    tbody td.num, tbody td.when { display: none; }
+    .sub2 { display: block !important; color: var(--muted); font-size: 11.5px; }
+    /* The two-line half must wrap rather than push the row wide: a
+       filename with no spaces in it has nowhere to break otherwise. */
+    .sub2 { overflow-wrap: anywhere; }
+    .rowacts { opacity: 1; }
+  }
+  .sub2 { display: none; }
+</style>
+
+<main class="page">
+  <div class="crumb">
+    <a class="hbtn hbtn-ghost" href="/home/"><i class="ph ph-arrow-left" aria-hidden="true"></i> Home</a>
+    <span class="fade" aria-hidden="true"></span>
+    <span class="muted" id="member"></span>
+  </div>
+
+  <div class="row-between" style="margin-bottom: var(--space-6)">
+    <div>
+      <h1>Files</h1>
+      <div class="muted">Everything the household keeps</div>
+    </div>
+    <div style="text-align: right">
+      <div class="eyebrow">Household storage</div>
+      <div class="muted tnum" id="used">not measured yet</div>
+    </div>
+  </div>
+
+  <!-- The namespace tabs, with the logical destination of the current
+       one beside them. Switching clears the selection with it, so an
+       action can never carry across a boundary. -->
+  <div class="spread" style="margin-bottom: var(--space-4); flex-wrap: wrap">
+    <div class="seg" id="tabs" role="tablist"></div>
+    <span class="pill pill-mute tnum" id="nspath">&nbsp;</span>
+    <span class="muted" id="nsnote"></span>
+    <span class="fade" aria-hidden="true"></span>
+    <button class="hbtn hbtn-secondary" id="new-folder" type="button" hidden><i class="ph ph-folder-plus" aria-hidden="true"></i> New folder</button>
+    <button class="hbtn hbtn-primary" id="upload" type="button">
+      <i class="ph ph-upload-simple" aria-hidden="true"></i> Upload
+    </button>
+    <input id="file-input" type="file" multiple hidden>
+  </div>
+
+  <nav id="breadcrumbs" aria-label="Folder navigation"></nav>
+  <div id="note" role="status" aria-live="polite"></div>
+
+  <section class="surface" style="padding: var(--space-6); margin-bottom: var(--space-4)">
+    <div id="listing"></div>
+  </section>
+
+  <button class="drop" id="drop" type="button" style="width: 100%">
+    <i class="ph ph-upload-simple" style="font-size: 22px; color: var(--muted)" aria-hidden="true"></i>
+    <span id="dropmsg">Drop files here</span>
+    <span class="muted" id="limit"></span>
+  </button>
+
+  <!-- Appears only with a selection. -->
+  <div class="selbar" id="selbar" hidden>
+    <span id="selcount"></span>
+    <span class="fade" aria-hidden="true"></span>
+    <button class="hbtn hbtn-secondary" id="sel-download" type="button">
+      <i class="ph ph-download-simple" aria-hidden="true"></i> Download
+    </button>
+    <button class="hbtn hbtn-secondary" id="sel-rename" type="button">
+      <i class="ph ph-textbox" aria-hidden="true"></i> Rename
+    </button>
+    <button class="hbtn hbtn-secondary" id="sel-move" type="button" hidden><i class="ph ph-folder" aria-hidden="true"></i> Move</button>
+    <button class="hbtn hbtn-secondary" id="sel-delete" type="button">
+      <i class="ph ph-trash" aria-hidden="true"></i> Delete
+    </button>
+    <button class="hbtn hbtn-ghost" id="sel-clear" type="button">Clear</button>
+  </div>
+
+  <!-- Sharing is File Browser's job. A member looking for a share link
+       is told where it lives instead of finding a control that
+       half-works. -->
+  <footer class="spread" style="margin-top: var(--space-8); color: var(--muted); font-size: 12px">
+    <span class="grow">Public links are made in the full files app, which owns sharing.</span>
+    <a class="hbtn hbtn-ghost" id="filebrowser" href="#" hidden target="_blank" rel="noopener">
+      Open File Browser <i class="ph ph-arrow-square-out" aria-hidden="true"></i>
+    </a>
+  </footer>
+</main>
+
+<dialog id="confirm">
+  <h2 id="confirm-title"></h2>
+  <p class="muted" id="confirm-body"></p>
+  <div class="asks" style="justify-content: flex-end">
+    <button class="hbtn hbtn-secondary" id="confirm-no" type="button">Keep it</button>
+    <button class="hbtn hbtn-primary" id="confirm-yes" type="button">Delete</button>
+  </div>
+</dialog>
+
+<dialog id="renamer">
+  <h2>Rename</h2>
+  <div class="composer" style="margin-bottom: var(--space-4)">
+    <label class="sr" for="newname">New name</label>
+    <textarea id="newname" rows="1"></textarea>
+  </div>
+  <p class="muted" id="rename-note"></p>
+  <div class="asks" style="justify-content: flex-end">
+    <button class="hbtn hbtn-secondary" id="rename-no" type="button">Cancel</button>
+    <button class="hbtn hbtn-primary" id="rename-yes" type="button">Rename</button>
+  </div>
+</dialog>
+
+<dialog id="folder-dialog">
+  <h2 id="folder-title">New folder</h2>
+  <label for="folder-value" id="folder-label">Folder name</label>
+  <input id="folder-value" type="text" style="width: 100%; box-sizing: border-box">
+  <p id="folder-note" class="muted" role="status"></p>
+  <div class="asks" style="justify-content: flex-end">
+    <button class="hbtn hbtn-secondary" id="folder-no" type="button">Cancel</button>
+    <button class="hbtn hbtn-primary" id="folder-yes" type="button">Create</button>
+  </div>
+</dialog>
+
+<script>
+(function () {
+  "use strict";
+
+  function el(id) { return document.getElementById(id); }
+  function text(id, v) { var n = el(id); if (n) { n.textContent = v; } }
+  function clear(n) { while (n && n.firstChild) { n.removeChild(n.firstChild); } }
+  function make(tag, cls, content) {
+    var n = document.createElement(tag);
+    if (cls) { n.className = cls; }
+    if (content !== undefined && content !== null) { n.textContent = String(content); }
+    return n;
+  }
+  function icon(name) {
+    var i = make("i", "ph ph-" + name);
+    i.setAttribute("aria-hidden", "true");
+    return i;
+  }
+  function bytes(n) {
+    if (n === null || n === undefined) { return ""; }
+    var u = ["B", "KB", "MB", "GB", "TB"], i = 0;
+    while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+    return (i === 0 ? n : n.toFixed(n < 10 ? 1 : 0)) + " " + u[i];
+  }
+  function ago(iso) {
+    if (!iso) { return ""; }
+    var d = (Date.now() - new Date(iso)) / 1000;
+    if (d < 60) { return "just now"; }
+    if (d < 3600) { var m = Math.round(d / 60); return m + (m === 1 ? " min ago" : " mins ago"); }
+    if (d < 86400) { var h = Math.round(d / 3600); return h + (h === 1 ? " hour ago" : " hours ago"); }
+    var y = Math.round(d / 86400); return y === 1 ? "yesterday" : y + " days ago";
+  }
+  function fileGlyph(name) {
+    var n = String(name).toLowerCase();
+    if (/\.(jpe?g|png|heic|gif|webp|avif)$/.test(n)) { return "image"; }
+    if (/\.(mp4|mov|mkv|webm)$/.test(n)) { return "video"; }
+    if (/\.pdf$/.test(n)) { return "file-pdf"; }
+    return "file-text";
+  }
+  function isImage(name) { return fileGlyph(name) === "image"; }
+  function note(box, cls, message) {
+    clear(box);
+    var n = make("div", "note " + cls);
+    n.appendChild(icon(cls === "note-bad" ? "warning-circle" : "warning"));
+    n.appendChild(make("span", null, message));
+    box.appendChild(n);
+  }
+
+  var caps = null, ns = "", directory = "", items = [], selected = Object.create(null), listingVersion = 0;
+
+  function selectedNames() { return Object.keys(selected).filter(function (k) { return selected[k]; }); }
+
+  function start() {
+    fetch("/api/v1/filedrop/capabilities", { headers: { accept: "application/json" } })
+      .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+      .then(function (res) {
+        if (!res.ok) { throw new Error(res.j.error || "can't read the files setup"); }
+        caps = res.j;
+        text("member", caps.member || "");
+        text("limit", caps.maxUploadBytes ? bytes(caps.maxUploadBytes) + " per file" : "");
+        if (caps.browse && caps.browse !== "/filedrop/") {
+          el("filebrowser").href = caps.browse;
+          el("filebrowser").hidden = false;
+        }
+        if (!caps.ready) {
+          el("upload").disabled = true;
+          el("drop").disabled = true;
+          note(el("note"), "note-warn",
+            "Files are unavailable. Check the configured storage folder and its required mount.");
+        }
+        buildTabs();
+        // A namespace the member has no grant for is never rendered, so
+        // the first one the server offered is the one to open.
+        restoreLocation();
+      })
+      .catch(function (err) { note(el("note"), "note-bad", String(err.message || err)); });
+  }
+
+  function buildTabs() {
+    var box = el("tabs");
+    clear(box);
+    (caps.namespaces || []).forEach(function (n) {
+      var b = make("button", "", n.title);
+      b.type = "button";
+      b.setAttribute("role", "tab");
+      b.addEventListener("click", function () { pick(n.key); });
+      b.dataset.key = n.key;
+      box.appendChild(b);
+    });
+  }
+
+  function browseURL(key, dir) {
+    var query = new URLSearchParams({ namespace: key, path: dir });
+    return "/filedrop/?" + query.toString();
+  }
+  function entryPath(name) { return directory ? directory + "/" + name : name; }
+  function downloadURL(name) {
+    return "/api/v1/filedrop/file?namespace=" + encodeURIComponent(ns) + "&path=" + encodeURIComponent(entryPath(name));
+  }
+  function restoreLocation() {
+    var query = new URLSearchParams(window.location.search);
+    var key = query.get("namespace") || "shared";
+    if (!(caps.namespaces || []).some(function (n) { return n.key === key; })) {
+      key = (caps.namespaces || [{ key: "shared" }])[0].key;
+    }
+    pick(key, query.get("path") || "", false);
+  }
+  window.addEventListener("popstate", function () { if (caps) { restoreLocation(); } });
+
+  function isTree(key) { return key === "shared" || key === "me"; }
+
+  function paintBreadcrumbs() {
+    var box = el("breadcrumbs"); clear(box);
+    if (!isTree(ns)) { return; }
+    var parts = directory ? directory.split("/") : [];
+    [ns === "me" ? "Mine" : "Shared"].concat(parts).forEach(function (part, i) {
+      var dir = parts.slice(0, i).join("/");
+      var link = make("a", "hbtn hbtn-ghost", part);
+      link.href = browseURL(ns, dir);
+      if (i === parts.length) { link.setAttribute("aria-current", "page"); }
+      link.addEventListener("click", function (e) {
+        if (e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) { return; }
+        e.preventDefault(); pick(ns, dir);
+      });
+      box.appendChild(link);
+    });
+  }
+
+  function pick(key, dir, push) {
+    ns = key;
+    directory = isTree(key) ? (dir || "") : "";
+    if (push !== false) { window.history.pushState(null, "", browseURL(ns, directory)); }
+    items = [];
+    clear(el("listing"));
+    el("listing").appendChild(make("p", "muted", "Loading folder…"));
+    el("new-folder").hidden = !isTree(ns);
+    el("new-folder").disabled = !caps.ready;
+    el("sel-move").hidden = !isTree(ns);
+    paintBreadcrumbs();
+    // The selection clears with the namespace, so an action can never
+    // carry across a boundary.
+    selected = Object.create(null);
+    paintSelection();
+    Array.prototype.forEach.call(el("tabs").children, function (b) {
+      b.className = b.dataset.key === key ? "on" : "";
+      b.setAttribute("aria-selected", b.dataset.key === key ? "true" : "false");
+    });
+    text("nspath", "/files/" + key + (directory ? "/" + directory : ""));
+    // What this destination MEANS, from the server rather than from a
+    // table here: the personal one says who can see it, because "Mine"
+    // on its own would be read as a promise the machine's administrator
+    // can break.
+    var chosen = (caps.namespaces || []).filter(function (n) { return n.key === key; })[0];
+    text("nsnote", (chosen && chosen.note) || "");
+    text("dropmsg", "Drop files here to add them to " + (directory || key));
+    list();
+  }
+
+  function list() {
+    var version = ++listingVersion;
+    fetch("/api/v1/filedrop/list?namespace=" + encodeURIComponent(ns) + "&path=" + encodeURIComponent(directory),
+          { headers: { accept: "application/json" } })
+      .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+      .then(function (res) {
+        if (!res.ok) { throw new Error(res.j.error || "Can't reach the files right now"); }
+        if (version !== listingVersion) { return; }
+        items = res.j.items || [];
+        paint();
+      })
+      .catch(function (err) {
+        if (version !== listingVersion) { return; }
+        // Never an empty table, which reads as "you have no files".
+        items = [];
+        note(el("listing"), "note-bad", String(err.message || err));
+      });
+  }
+
+  function paint() {
+    var box = el("listing");
+    clear(box);
+    if (!items.length) {
+      box.appendChild(make("p", "muted", ns === "me"
+        ? "Nothing here yet. Anything dropped here is yours — nobody else sees it on the dashboard."
+        : "This folder is empty. Upload a file to get started."));
+      return;
+    }
+    // Photos get the grid; everything else gets the table. The grid is
+    // placeholders and says so: thumbnails need a thumbnailing service,
+    // and albums, faces and search stay the Photos app's job.
+    if (ns === "photos" && items.every(function (f) { return isImage(f.name); })) {
+      var meta = make("div", "spread");
+      meta.style.marginBottom = "var(--space-4)";
+      meta.appendChild(make("span", "eyebrow", items.length + (items.length === 1 ? " photo" : " photos")));
+      box.appendChild(meta);
+      var grid = make("div", "grid-photos");
+      items.forEach(function (f) {
+        var cell = make("div", "thumb");
+        cell.appendChild(icon("image"));
+        cell.title = f.name;
+        var a = make("a");
+        a.href = downloadURL(f.name);
+        a.appendChild(cell);
+        grid.appendChild(a);
+      });
+      box.appendChild(grid);
+      box.appendChild(make("p", "muted",
+        "Thumbnails are placeholders — nothing generates them yet. Albums, faces and " +
+        "search live in the Photos app; this page uploads, browses and hands off."));
+      return;
+    }
+
+    var table = make("table");
+    // The widths the fixed layout uses. Name has none, so it takes
+    // whatever is left over.
+    var cols = make("colgroup");
+    ["pick", "name", "size", "when", "acts"].forEach(function (c) {
+      cols.appendChild(make("col", c));
+    });
+    table.appendChild(cols);
+    var thead = make("thead");
+    var hr = make("tr");
+    ["", "Name", "Size", "Modified", ""].forEach(function (h) { hr.appendChild(make("th", null, h)); });
+    thead.appendChild(hr);
+    table.appendChild(thead);
+    var tbody = make("tbody");
+    items.forEach(function (f) { tbody.appendChild(row(f)); });
+    table.appendChild(tbody);
+    box.appendChild(table);
+  }
+
+  function row(f) {
+    var tr = make("tr");
+    if (selected[f.name]) { tr.className = "sel"; }
+
+    var check = make("td");
+    var cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.checked = !!selected[f.name];
+    cb.setAttribute("aria-label", "Select " + f.name);
+    cb.addEventListener("change", function () {
+      selected[f.name] = cb.checked;
+      tr.className = cb.checked ? "sel" : "";
+      paintSelection();
+    });
+    check.appendChild(cb);
+    tr.appendChild(check);
+
+    var name = make("td", "name");
+    var cell = make("div", "nmcell");
+    cell.appendChild(icon(f.type === "directory" ? "folder" : fileGlyph(f.name)));
+    var link = make("a", "truncate", f.name);
+    link.href = f.type === "directory" ? browseURL(ns, entryPath(f.name)) : downloadURL(f.name);
+    if (f.type === "directory") {
+      link.addEventListener("click", function (e) {
+        if (e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) { return; }
+        e.preventDefault(); pick(ns, entryPath(f.name));
+      });
+    }
+    cell.appendChild(link);
+    name.appendChild(cell);
+    // On a phone the size and time move under the filename, because the
+    // columns do not fit and a horizontal scroll on a table of photos is
+    // not a layout.
+    name.appendChild(make("span", "sub2", (f.type === "directory" ? "Folder" : bytes(f.size)) + " · " + ago(f.modTime)));
+    tr.appendChild(name);
+
+    tr.appendChild(make("td", "num", f.type === "directory" ? "Folder" : bytes(f.size)));
+    tr.appendChild(make("td", "num when", ago(f.modTime)));
+
+    var acts = make("td");
+    var wrap = make("div", "rowacts");
+    var dl = make("a", "hbtn hbtn-ghost");
+    dl.href = link.href;
+    dl.title = "Download";
+    dl.setAttribute("aria-label", "Download " + f.name);
+    dl.appendChild(icon("download-simple"));
+    if (f.type !== "directory") { wrap.appendChild(dl); }
+    var del = make("button", "hbtn hbtn-ghost");
+    del.type = "button";
+    del.title = "Delete";
+    del.setAttribute("aria-label", "Delete " + f.name);
+    del.appendChild(icon("trash"));
+    del.addEventListener("click", function () { askDelete([f.name]); });
+    wrap.appendChild(del);
+    acts.appendChild(wrap);
+    tr.appendChild(acts);
+    return tr;
+  }
+
+  function paintSelection() {
+    var names = selectedNames();
+    el("selbar").hidden = names.length === 0;
+    text("selcount", names.length + " selected");
+    // Rename is disabled on a multi-select, with the reason in the
+    // tooltip rather than hidden.
+    var rn = el("sel-rename");
+    rn.disabled = names.length !== 1;
+    el("sel-move").disabled = names.length !== 1;
+    el("sel-download").disabled = !names.length || items.some(function (f) { return selected[f.name] && f.type === "directory"; });
+    rn.title = names.length === 1 ? "Rename this file" : "Pick one file to rename it";
+  }
+
+  el("sel-clear").addEventListener("click", function () {
+    selected = Object.create(null);
+    paint();
+    paintSelection();
+  });
+  el("sel-download").addEventListener("click", function () {
+    // One navigation per file: the portal serves each as an attachment,
+    // and a zip would need a server-side archiver nothing here has.
+    selectedNames().forEach(function (n) {
+      var a = document.createElement("a");
+      a.href = downloadURL(n);
+      a.download = n;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    });
+  });
+  el("sel-delete").addEventListener("click", function () { askDelete(selectedNames()); });
+  el("sel-rename").addEventListener("click", function () {
+    var names = selectedNames();
+    if (names.length === 1) { askRename(names[0]); }
+  });
+
+  // ---- delete, which states its consequence before the fact rather
+  // than offering an undo after it.
+  var pendingDelete = [], deleteContext = null;
+  function askDelete(names) {
+    if (!names.length) { return; }
+    pendingDelete = names;
+    deleteContext = { namespace: ns, directory: directory };
+    text("confirm-title", names.length === 1 ? "Delete " + names[0] + "?"
+                                             : "Delete " + names.length + " files?");
+    // The truth about this implementation, not the design's kinder
+    // sentence: there is no trash behind this button.
+    text("confirm-body", "This happens straight away and cannot be undone — " +
+      "there is no recycle bin. The household's backups are the only way back, " +
+      "so anything added since the last one would be gone. Folders must be empty before they can be deleted.");
+    el("confirm").showModal();
+  }
+  el("confirm-no").addEventListener("click", function () { el("confirm").close(); });
+  el("confirm-yes").addEventListener("click", function () {
+    var names = pendingDelete.slice();
+    el("confirm").close();
+    var done = 0, failed = [];
+    names.forEach(function (n) {
+      mutate("delete", { namespace: deleteContext.namespace, path: deleteContext.directory ? deleteContext.directory + "/" + n : n })
+        .catch(function (err) { failed.push(n + ": " + err.message); })
+        .then(function () {
+          done++;
+          if (done !== names.length) { return; }
+          selected = Object.create(null);
+          paintSelection();
+          if (failed.length) {
+            note(el("note"), "note-bad",
+              failed.length === 1 ? failed[0]
+                                  : failed.length + " files could not be deleted");
+          } else {
+            clear(el("note"));
+          }
+          list();
+        });
+    });
+  });
+
+  // ---- rename.
+  var renaming = "", renameContext = null;
+  function askRename(name) {
+    renaming = name;
+    renameContext = { namespace: ns, path: entryPath(name) };
+    el("newname").value = name;
+    text("rename-note", isTree(ns) ? "Enter one name, without slashes. Existing entries will not be replaced." : "Letters, digits, spaces, dots and dashes. Anything else is replaced.");
+    el("renamer").showModal();
+    el("newname").focus();
+  }
+  el("rename-no").addEventListener("click", function () { el("renamer").close(); });
+  el("rename-yes").addEventListener("click", function () {
+    var to = el("newname").value.trim();
+    if (!to || !renaming) { return; }
+    var request;
+    if (isTree(renameContext.namespace)) {
+      request = mutate("rename", { namespace: renameContext.namespace, path: renameContext.path, name: to });
+    } else {
+      request = fetch("/api/v1/filedrop/rename?namespace=" + encodeURIComponent(renameContext.namespace) +
+        "&name=" + encodeURIComponent(renaming) + "&to=" + encodeURIComponent(to), { method: "POST" })
+        .then(readResponse);
+    }
+    el("rename-yes").disabled = true;
+    request.then(function (result) {
+        var res = { j: result };
+        el("renamer").close();
+        selected = Object.create(null);
+        paintSelection();
+        // A person who typed one thing and got another should see that
+        // rather than wonder.
+        if (res.j.renamed) {
+          note(el("note"), "note-warn", "Saved as " + res.j.name + " — some characters aren't allowed in a name.");
+        } else {
+          clear(el("note"));
+        }
+        list();
+      })
+      .catch(function (err) { text("rename-note", String(err.message || err)); })
+      .then(function () { el("rename-yes").disabled = false; });
+  });
+  el("newname").addEventListener("keydown", function (e) {
+    if (e.key === "Enter") { e.preventDefault(); el("rename-yes").click(); }
+  });
+
+  // ---- upload. The toolbar button and the drop zone are one path.
+  var drop = el("drop"), fileInput = el("file-input");
+  el("upload").addEventListener("click", function () { fileInput.click(); });
+  drop.addEventListener("click", function () { fileInput.click(); });
+  fileInput.addEventListener("change", function () { upload(fileInput.files); fileInput.value = ""; });
+  ["dragenter", "dragover"].forEach(function (ev) {
+    drop.addEventListener(ev, function (e) { e.preventDefault(); drop.style.borderColor = "var(--color-accent)"; });
+  });
+  ["dragleave", "drop"].forEach(function (ev) {
+    drop.addEventListener(ev, function (e) { e.preventDefault(); drop.style.borderColor = ""; });
+  });
+  drop.addEventListener("drop", function (e) {
+    if (e.dataTransfer && e.dataTransfer.files) { upload(e.dataTransfer.files); }
+  });
+
+  function upload(files) {
+    if (!files || !files.length || !caps || !caps.ready) { return; }
+    var pending = files.length, uploadNamespace = ns, uploadDirectory = directory;
+    Array.prototype.forEach.call(files, function (file) {
+      var xhr = new XMLHttpRequest();
+      xhr.open("POST", "/api/v1/filedrop/upload?namespace=" + encodeURIComponent(uploadNamespace) +
+                       (isTree(uploadNamespace) ? "&path=" + encodeURIComponent(uploadDirectory) : "") +
+                       "&name=" + encodeURIComponent(file.name));
+      xhr.setRequestHeader("Content-Type", "application/octet-stream");
+      xhr.upload.addEventListener("progress", function (e) {
+        if (e.lengthComputable) {
+          text("dropmsg", file.name + " — " + Math.round((e.loaded / e.total) * 100) + "%");
+        }
+      });
+      xhr.addEventListener("loadend", function () {
+        if (xhr.status < 200 || xhr.status >= 300) {
+          var why = "That didn't upload";
+          try { why = JSON.parse(xhr.responseText).error || why; } catch (e) {}
+          note(el("note"), "note-bad", file.name + " — " + why);
+        }
+        if (--pending === 0) {
+          text("dropmsg", "Drop files here to add them to " + (directory || ns));
+          list();
+        }
+      });
+      xhr.send(file);
+    });
+  }
+
+  function readResponse(response) {
+    return response.json().then(function (body) {
+      if (!response.ok) { throw new Error(body.error || "The file operation failed"); }
+      return body;
+    });
+  }
+  function mutate(operation, body) {
+    return fetch("/api/v1/filedrop/" + operation, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body)
+    }).then(readResponse);
+  }
+  var folderAction = "mkdir", folderContext = null;
+  function askFolder(action) {
+    folderAction = action;
+    var names = selectedNames();
+    folderContext = { namespace: ns, directory: directory, path: action === "move" ? entryPath(names[0]) : "" };
+    text("folder-title", action === "move" ? "Move " + names[0] : "New folder");
+    text("folder-label", action === "move" ? "Destination folder in " + (ns === "me" ? "Mine" : "Shared") + " (empty means its root)" : "Folder name");
+    text("folder-yes", action === "move" ? "Move" : "Create");
+    text("folder-note", "Existing entries will not be replaced.");
+    el("folder-value").value = "";
+    el("folder-dialog").showModal(); el("folder-value").focus();
+  }
+  el("new-folder").addEventListener("click", function () { askFolder("mkdir"); });
+  el("sel-move").addEventListener("click", function () { if (selectedNames().length === 1) { askFolder("move"); } });
+  el("folder-no").addEventListener("click", function () { el("folder-dialog").close(); });
+  el("folder-yes").addEventListener("click", function () {
+    var value = el("folder-value").value;
+    var body = { namespace: folderContext.namespace, path: folderContext.path };
+    if (folderAction === "move") {
+      var leaf = folderContext.path.split("/").pop();
+      body.to = value ? value + "/" + leaf : leaf;
+    } else {
+      if (!value || value.indexOf("/") !== -1 || value.indexOf("\\") !== -1) {
+        text("folder-note", "Enter a single folder name without slashes."); return;
+      }
+      body.path = folderContext.directory ? folderContext.directory + "/" + value : value;
+    }
+    el("folder-yes").disabled = true;
+    mutate(folderAction, body).then(function () {
+      el("folder-dialog").close(); selected = Object.create(null); paintSelection(); clear(el("note")); list();
+    }).catch(function (err) { text("folder-note", err.message); })
+      .then(function () { el("folder-yes").disabled = false; });
+  });
+  el("folder-value").addEventListener("keydown", function (e) {
+    if (e.key === "Enter") { e.preventDefault(); el("folder-yes").click(); }
+  });
+
+  start();
+})();
+</script>

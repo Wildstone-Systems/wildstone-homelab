@@ -1,0 +1,257 @@
+package main
+
+// The Keystone half of the adapter: three calls, and not one of them
+// reads homelab state (ADR-W026 A8).
+//
+// This client holds a token whose role decides which surface it serves.
+// It deliberately never sends a `surface` field: the server derives it,
+// and an adapter that could name one would be an adapter that could be
+// talked into naming the other.
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"mime/multipart"
+	"net/http"
+	"net/textproto"
+	"net/url"
+	"strconv"
+	"strings"
+	"time"
+)
+
+type keystoneClient struct {
+	Base  string
+	Token string
+	HTTP  *http.Client
+}
+
+func (k *keystoneClient) client() *http.Client {
+	if k.HTTP != nil {
+		return k.HTTP
+	}
+	// Generous: the inbound call runs a model session server-side.
+	return &http.Client{Timeout: 5 * time.Minute}
+}
+
+type keystoneInbound struct {
+	Transport    string `json:"transport"`
+	Account      string `json:"account"`
+	Conversation string `json:"conversation,omitempty"`
+	Group        bool   `json:"group,omitempty"`
+	Addressed    bool   `json:"addressed,omitempty"`
+	Text         string `json:"text"`
+	MessageID    string `json:"messageId,omitempty"`
+	DisplayName  string `json:"displayName,omitempty"`
+}
+
+// keystoneVoice is the "message" part of a voice upload: the same
+// fields as text, the duration the vendor reported, and whether the
+// recording was left unfetched for being too large.
+type keystoneVoice struct {
+	keystoneInbound
+	AudioSeconds float64 `json:"audioSeconds,omitempty"`
+	TooLarge     bool    `json:"tooLarge,omitempty"`
+}
+
+// outboundMessage is one queued reply, as the adapter needs it. The
+// queue carries more (surface, binding, correlation id); an adapter has
+// no use for any of it, so it reads only what it delivers.
+type outboundMessage struct {
+	Seq    int64  `json:"seq"`
+	Target string `json:"target"`
+	Body   string `json:"body"`
+	// Speak: once Body is delivered, ask Keystone for it read aloud and
+	// send that as a voice message (ADR-W042 part two).
+	Speak bool `json:"speak,omitempty"`
+}
+
+// send relays one message and reports whether Keystone knows the
+// account: bound is false for somebody the household never introduced.
+func (k *keystoneClient) send(ctx context.Context, msg keystoneInbound) (bound bool, err error) {
+	data, err := k.call(ctx, http.MethodPost, "/api/v1/chat/messages", msg)
+	if err != nil {
+		return false, err
+	}
+	var out struct {
+		Bound bool `json:"bound"`
+	}
+	if json.Unmarshal(data, &out) != nil {
+		return false, nil
+	}
+	return out.Bound, nil
+}
+
+// sendVoice posts a recording to /api/v1/chat/voice as
+// multipart/form-data: a "message" part carrying msg, and an "audio"
+// part carrying the bytes with their content type. It reports bound as
+// send does.
+func (k *keystoneClient) sendVoice(ctx context.Context, msg keystoneVoice, audio []byte, mimeType string) (bool, error) {
+	meta, err := json.Marshal(msg)
+	if err != nil {
+		return false, err
+	}
+	var body bytes.Buffer
+	w := multipart.NewWriter(&body)
+	if err := w.WriteField("message", string(meta)); err != nil {
+		return false, err
+	}
+	if mimeType == "" {
+		mimeType = "application/octet-stream"
+	}
+	part, err := w.CreatePart(textproto.MIMEHeader{
+		"Content-Disposition": {`form-data; name="audio"; filename="voice"`},
+		"Content-Type":        {mimeType},
+	})
+	if err != nil {
+		return false, err
+	}
+	if _, err := part.Write(audio); err != nil {
+		return false, err
+	}
+	if err := w.Close(); err != nil {
+		return false, err
+	}
+	data, err := k.do(ctx, http.MethodPost, "/api/v1/chat/voice", w.FormDataContentType(), &body)
+	if err != nil {
+		return false, err
+	}
+	var out struct {
+		Bound bool `json:"bound"`
+	}
+	if json.Unmarshal(data, &out) != nil {
+		return false, nil
+	}
+	return out.Bound, nil
+}
+
+// redeem exchanges a claim code for a binding. It reports the DIRECT
+// conversation the code arrived in as well as the account: on Matrix
+// they are different values and only the conversation can be sent to,
+// so a rule that wants to reach this person later needs it recorded now
+// (ADR-W026 A8).
+func (k *keystoneClient) redeem(ctx context.Context, transport, account, displayName, conversation, code string) error {
+	_, err := k.call(ctx, http.MethodPost, "/api/v1/chat/bindings/redeem", map[string]string{
+		"transport": transport, "account": account, "displayName": displayName,
+		"conversation": conversation, "code": code,
+	})
+	return err
+}
+
+// register tells Keystone which bot this adapter is. Which CAPABILITY
+// that is comes from this credential's own principal, server-side, so
+// nothing sent here can claim to be a different adapter.
+// register tells Keystone which bot this adapter is, and gets back the
+// commands this adapter's SURFACE offers. The surface is not sent: it
+// comes from the credential, so an adapter cannot ask for another
+// surface's menu.
+func (k *keystoneClient) register(ctx context.Context, transport, handle, displayName string) ([]Command, error) {
+	data, err := k.call(ctx, http.MethodPost, "/api/v1/chat/adapters/self", map[string]string{
+		"transport": transport, "handle": handle, "displayName": displayName,
+	})
+	if err != nil {
+		return nil, err
+	}
+	var out struct {
+		Commands []Command `json:"commands"`
+	}
+	if err := json.Unmarshal(data, &out); err != nil {
+		// The registration itself succeeded; a body we cannot read
+		// costs the menu, not the adapter.
+		return nil, nil
+	}
+	return out.Commands, nil
+}
+
+// poll long-polls this adapter's outbound queue. The cursor is always 0:
+// the queue returns undelivered messages only, so "everything not yet
+// acked" is the correct read after a restart, a crash, or a redeploy —
+// there is no cursor to persist and lose.
+func (k *keystoneClient) poll(ctx context.Context, transport string, wait time.Duration) ([]outboundMessage, error) {
+	q := url.Values{
+		"transport": {transport},
+		"after":     {"0"},
+		"waitMs":    {strconv.Itoa(int(wait.Milliseconds()))},
+	}
+	body, err := k.call(ctx, http.MethodGet, "/api/v1/chat/outbound?"+q.Encode(), nil)
+	if err != nil {
+		return nil, err
+	}
+	var msgs []outboundMessage
+	if err := json.Unmarshal(body, &msgs); err != nil {
+		return nil, fmt.Errorf("decoding outbound: %w", err)
+	}
+	return msgs, nil
+}
+
+// ready fetches a fresh, authority-checked copy just before sending.
+// The earlier poll only identified work to try; its payload may have
+// become undeliverable while the adapter processed the batch.
+func (k *keystoneClient) ready(ctx context.Context, transport string, seq int64) (outboundMessage, error) {
+	path := fmt.Sprintf("/api/v1/chat/outbound/%d/ready?transport=%s", seq, url.QueryEscape(transport))
+	body, err := k.call(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return outboundMessage{}, err
+	}
+	var message outboundMessage
+	if err := json.Unmarshal(body, &message); err != nil {
+		return outboundMessage{}, fmt.Errorf("decoding prepared outbound: %w", err)
+	}
+	if message.Seq != seq {
+		return outboundMessage{}, fmt.Errorf("prepared outbound sequence mismatch")
+	}
+	return message, nil
+}
+
+func (k *keystoneClient) ack(ctx context.Context, seq int64) error {
+	_, err := k.call(ctx, http.MethodPost, fmt.Sprintf("/api/v1/chat/outbound/%d/ack", seq), nil)
+	return err
+}
+
+func (k *keystoneClient) call(ctx context.Context, method, path string, body any) ([]byte, error) {
+	if body == nil {
+		return k.do(ctx, method, path, "", nil)
+	}
+	data, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	return k.do(ctx, method, path, "application/json", bytes.NewReader(data))
+}
+
+func (k *keystoneClient) do(ctx context.Context, method, path, contentType string, body io.Reader) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, method, strings.TrimRight(k.Base, "/")+path, body)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+k.Token)
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
+	}
+	res, err := k.client().Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Body.Close()
+	data, err := io.ReadAll(io.LimitReader(res.Body, 1<<20))
+	if err != nil {
+		return nil, err
+	}
+	if res.StatusCode >= 300 {
+		return nil, &statusError{Code: res.StatusCode, text: fmt.Sprintf("%s %s: %s: %s", method, path, res.Status, strings.TrimSpace(string(data)))}
+	}
+	return data, nil
+}
+
+// statusError is a non-2xx answer from Keystone. Its text is the same
+// as it always was; the code lets a caller tell an outage (5xx) from a
+// refusal (4xx) with errors.As.
+type statusError struct {
+	Code int
+	text string
+}
+
+func (e *statusError) Error() string { return e.text }

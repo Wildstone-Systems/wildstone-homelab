@@ -1,0 +1,685 @@
+package main
+
+// The Matrix driver (ADR-W026 G5): the second transport, written
+// against the same three methods as the first.
+//
+// It exists to prove the contract is a contract rather than a
+// Telegram-shaped hole. Nothing in keystone changed to add it, nothing
+// in adapter.go knows it exists beyond one line in newTransport, and it
+// makes no call this file does not contain.
+//
+// WHY MATRIX and not Discord or Slack. Both of those receive over a
+// gateway websocket (Slack's alternative is an inbound webhook, which
+// wants a public endpoint) — so either would trade away the property
+// that makes the sidecar shape safe: the adapter dials OUT, and the
+// deployment gains no inbound port. Matrix's /sync is a long poll over
+// plain HTTPS, the same shape as Telegram's getUpdates, and a household
+// can self-host the homeserver. Adding Discord later is this file again
+// with a websocket library; the contract above it does not move.
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+)
+
+type matrix struct {
+	homeserver string
+	token      string
+	timeout    time.Duration
+	http       *http.Client
+
+	// userID is this bot's own MXID, read from the homeserver at
+	// startup. Without it the bot answers its own messages, forever.
+	userID string
+	// since is Matrix's own cursor.
+	since string
+	// encryptedWarned bounds diagnostics to one per room per process. The
+	// adapter cannot decrypt the event, but it must not fail silently either.
+	encryptedWarned map[string]bool
+	// Invitation joins run away from the /sync hot path. A slow or broken
+	// remote room must never delay messages already fetched from joined rooms.
+	inviteOnce     sync.Once
+	inviteMu       sync.Mutex
+	inviteQueue    chan string
+	pendingInvites map[string]struct{}
+	joiningInvites map[string]struct{}
+	inviteWarned   map[string]bool
+	inviteProblems []Incoming
+	// txn numbers outgoing messages: Matrix deduplicates on the
+	// transaction id, so a retried send is not a second message.
+	txn atomic.Int64
+
+	// members is each joined room's last reported member count. The
+	// homeserver reports it only when it changes, so a room's count has
+	// to outlive the sync that carried it; a room never reported is
+	// unknown, and unknown is treated as a group.
+	members map[string]int
+
+	// appserviceLocalpart is set when this bot is an application service
+	// of the household's own homeserver (ADR-W033 B7.2). Its token then
+	// acts as that user, which the adapter registers once, before first
+	// use; displayName is what that user is called in rooms. Both are
+	// empty for a bot on anyone else's homeserver, whose account already
+	// exists and is named by whoever made it.
+	appserviceLocalpart string
+	displayName         string
+	// asUser is the bot's full user ID once known, added to every request
+	// as user_id. The registration's token on its own acts as the
+	// registration's sender, which Synapse does not let /sync; with
+	// user_id it acts as the bot, a user in the registration's namespace.
+	asUser string
+}
+
+func newMatrix(homeserver, token string, pollWait time.Duration) (Transport, error) {
+	if homeserver == "" || token == "" {
+		return nil, fmt.Errorf("MATRIX_HOMESERVER and MATRIX_ACCESS_TOKEN must be set: %w", errNotConfigured)
+	}
+	if pollWait <= 0 {
+		pollWait = 25 * time.Second
+	}
+	m := &matrix{homeserver: strings.TrimRight(homeserver, "/"), token: token, timeout: pollWait}
+	return m, nil
+}
+
+// Advertise is a no-op: Matrix has no command-menu concept, and
+// inventing one — posting a list into the room, say — would be this
+// adapter deciding to send an unasked-for message. Commands still work;
+// /help is how they are discovered here.
+func (m *matrix) Advertise(context.Context, []Command) error { return nil }
+
+func (m *matrix) Name() string { return "matrix" }
+
+func (m *matrix) client() *http.Client {
+	if m.http != nil {
+		return m.http
+	}
+	return &http.Client{Timeout: m.timeout + 30*time.Second}
+}
+
+// syncResponse is the slice of Matrix's /sync this adapter reads.
+type syncResponse struct {
+	NextBatch string `json:"next_batch"`
+	Rooms     struct {
+		Invite map[string]struct{} `json:"invite"`
+		Leave  map[string]struct{} `json:"leave"`
+		Join   map[string]struct {
+			Summary struct {
+				// Absent more often than present: Synapse sends a
+				// summary only to a lazy-loading client, and only when
+				// membership changed. A pointer tells "absent" from 0.
+				JoinedMemberCount *int `json:"m.joined_member_count"`
+			} `json:"summary"`
+			Timeline struct {
+				Events []struct {
+					Type    string `json:"type"`
+					EventID string `json:"event_id"`
+					Sender  string `json:"sender"`
+					Content struct {
+						MsgType       string `json:"msgtype"`
+						Body          string `json:"body"`
+						FormattedBody string `json:"formatted_body"`
+						Mentions      struct {
+							UserIDs []string `json:"user_ids"`
+						} `json:"m.mentions"`
+						// A recording (msgtype m.audio, ADR-W042): where
+						// the homeserver keeps it, and what it says it
+						// is. An encrypted room sends File instead of
+						// URL, which this bot cannot decrypt.
+						URL  string    `json:"url"`
+						File *struct{} `json:"file"`
+						Info struct {
+							MimeType string `json:"mimetype"`
+							Size     int64  `json:"size"`
+							Duration int64  `json:"duration"` // milliseconds
+						} `json:"info"`
+					} `json:"content"`
+				} `json:"events"`
+			} `json:"timeline"`
+		} `json:"join"`
+	} `json:"rooms"`
+}
+
+// matrixSyncFilter asks for lazy-loaded members, which is what makes the
+// homeserver send a room summary (m.joined_member_count) at all.
+const matrixSyncFilter = `{"room":{"state":{"lazy_load_members":true}}}`
+
+// recordMembers keeps the member counts a sync reported, and forgets the
+// rooms the bot has left.
+func (m *matrix) recordMembers(sync syncResponse) {
+	if m.members == nil {
+		m.members = map[string]int{}
+	}
+	for roomID, room := range sync.Rooms.Join {
+		if n := room.Summary.JoinedMemberCount; n != nil {
+			m.members[roomID] = *n
+		}
+	}
+	for roomID := range sync.Rooms.Leave {
+		delete(m.members, roomID)
+	}
+}
+
+// Identify reports this bot's MXID. Matrix has no invite payload, so
+// the link it produces only opens the conversation — the code is still
+// sent by hand — but naming the right bot is most of the problem when a
+// household runs two.
+func (m *matrix) Identify(ctx context.Context) (string, string, error) {
+	if m.userID == "" {
+		if err := m.whoami(ctx); err != nil {
+			return "", "", err
+		}
+	}
+	return m.userID, "", nil
+}
+
+func (m *matrix) Receive(ctx context.Context) ([]Incoming, error) {
+	if m.userID == "" {
+		if err := m.whoami(ctx); err != nil {
+			return nil, err
+		}
+	}
+	q := url.Values{
+		"timeout": {strconv.Itoa(int(m.timeout.Milliseconds()))},
+		// Without lazy-loaded members Synapse sends no room summary at
+		// all, so every room would count as a group and a private chat
+		// would go unanswered unless the bot were mentioned.
+		"filter": {matrixSyncFilter},
+	}
+	if m.since != "" {
+		q.Set("since", m.since)
+	} else {
+		// First sync: take the cursor and none of the backlog. A bot
+		// that starts up and answers a week of history is a bot nobody
+		// invites back.
+		q.Set("full_state", "false")
+		q.Set("timeout", "0")
+	}
+	var sync syncResponse
+	if err := m.call(ctx, http.MethodGet, "/_matrix/client/v3/sync?"+q.Encode(), nil, &sync); err != nil {
+		return nil, err
+	}
+	first := m.since == ""
+	// Before the first-sync return below: the first sync's messages are
+	// skipped, but its summaries are the only count some rooms will get
+	// until somebody joins or leaves them.
+	m.recordMembers(sync)
+	m.scheduleInvitedRooms(ctx, sync.Rooms.Invite, sync.Rooms.Leave)
+	problems := m.takeInviteProblems()
+	m.since = sync.NextBatch
+	if first {
+		return problems, nil
+	}
+
+	out := problems
+	for roomID, room := range sync.Rooms.Join {
+		for _, ev := range room.Timeline.Events {
+			if ev.Type == "m.room.encrypted" {
+				if m.encryptedWarned == nil {
+					m.encryptedWarned = map[string]bool{}
+				}
+				if !m.encryptedWarned[roomID] {
+					m.encryptedWarned[roomID] = true
+					out = append(out, Incoming{
+						Conversation: roomID,
+						MessageID:    ev.EventID,
+						Problem: "Matrix end-to-end encryption is not supported by this Agent adapter; " +
+							"create a new room with encryption disabled",
+					})
+				}
+				continue
+			}
+			if ev.Type != "m.room.message" {
+				continue // a reaction, a membership change
+			}
+			if ev.Sender == m.userID {
+				continue // our own reply, echoed back by the homeserver
+			}
+			var voice *VoiceNote
+			switch ev.Content.MsgType {
+			case "m.text":
+				if strings.TrimSpace(ev.Content.Body) == "" {
+					continue
+				}
+			case "m.audio":
+				c := ev.Content
+				if c.File != nil || c.URL == "" {
+					continue // encrypted media this bot cannot read
+				}
+				voice = m.voiceIn(c.URL, c.Info.MimeType, c.Info.Size, c.Info.Duration)
+				if voice == nil {
+					continue
+				}
+			default:
+				continue // an image, a file, a location
+			}
+			group := m.members[roomID] != 2
+			text, addressed := ev.Content.Body, !group
+			if voice != nil {
+				// The body of an audio event is its file name, not
+				// something said; the recording is the message.
+				text = ""
+			}
+			if group {
+				// Addressed by the m.mentions list, a pill link to the
+				// bot, or its user id in the text (ADR-W033 B9.1).
+				for _, id := range ev.Content.Mentions.UserIDs {
+					if id == m.userID {
+						addressed = true
+					}
+				}
+				if strings.Contains(ev.Content.FormattedBody, "matrix.to/#/"+m.userID) {
+					addressed = true
+				}
+				var hit bool
+				if text, hit = stripMention(text, m.userID); hit {
+					addressed = true
+				}
+			}
+			if voice != nil {
+				text = ""
+			}
+			out = append(out, Incoming{
+				Account:      ev.Sender,
+				Conversation: roomID,
+				Addressed:    addressed,
+				// Matrix has no flag for "this is a DM": a room is one by
+				// convention when it holds two people. Erring toward
+				// GROUP is the safe direction — the group rules are more
+				// careful, not less (ADR-W026 A7) — so a room whose
+				// membership we cannot read is treated as shared.
+				Group:       group,
+				Text:        text,
+				MessageID:   ev.EventID,
+				DisplayName: ev.Sender,
+				Voice:       voice,
+			})
+		}
+	}
+	return out, nil
+}
+
+// scheduleInvitedRooms queues rooms the bot account was explicitly invited to.
+// Joining does not admit the sender to an Agent: messages still pass through
+// Keystone's invite-key and binding checks after the room becomes readable.
+// The bounded worker is deliberately independent of Receive: remote joins can
+// be slow, and no invitation may hold up traffic from already-joined rooms.
+func (m *matrix) scheduleInvitedRooms(ctx context.Context, invited, left map[string]struct{}) {
+	m.inviteMu.Lock()
+	if m.pendingInvites == nil {
+		m.pendingInvites = map[string]struct{}{}
+	}
+	if m.joiningInvites == nil {
+		m.joiningInvites = map[string]struct{}{}
+	}
+	if m.inviteWarned == nil {
+		m.inviteWarned = map[string]bool{}
+	}
+	for roomID := range left {
+		delete(m.pendingInvites, roomID)
+		delete(m.inviteWarned, roomID)
+	}
+	for roomID := range invited {
+		m.pendingInvites[roomID] = struct{}{}
+	}
+
+	rooms := make([]string, 0, len(m.pendingInvites))
+	for roomID := range m.pendingInvites {
+		if _, joining := m.joiningInvites[roomID]; joining {
+			continue
+		}
+		m.joiningInvites[roomID] = struct{}{}
+		rooms = append(rooms, roomID)
+	}
+	m.inviteMu.Unlock()
+	if len(rooms) == 0 {
+		return
+	}
+	m.inviteOnce.Do(func() {
+		m.inviteQueue = make(chan string, 16)
+		go m.inviteWorker(ctx)
+	})
+	sort.Strings(rooms)
+	for _, roomID := range rooms {
+		select {
+		case m.inviteQueue <- roomID:
+		default:
+			// Never block /sync on a full retry queue. Removing this marker
+			// makes the room eligible to be queued on the next poll.
+			m.inviteMu.Lock()
+			delete(m.joiningInvites, roomID)
+			m.inviteMu.Unlock()
+		}
+	}
+}
+
+func (m *matrix) inviteWorker(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case roomID := <-m.inviteQueue:
+			m.joinInvitedRoom(ctx, roomID)
+		}
+	}
+}
+
+func (m *matrix) joinInvitedRoom(ctx context.Context, roomID string) {
+	m.inviteMu.Lock()
+	_, pending := m.pendingInvites[roomID]
+	m.inviteMu.Unlock()
+	if !pending { // the invitation was withdrawn while queued
+		m.inviteMu.Lock()
+		delete(m.joiningInvites, roomID)
+		m.inviteMu.Unlock()
+		return
+	}
+
+	joinCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	path := "/_matrix/client/v3/join/" + url.PathEscape(roomID)
+	var joined struct {
+		RoomID string `json:"room_id"`
+	}
+	err := m.call(joinCtx, http.MethodPost, path, map[string]any{}, &joined)
+	if err == nil && joined.RoomID != "" && joined.RoomID != roomID {
+		err = fmt.Errorf("joined room %q instead", joined.RoomID)
+	}
+
+	m.inviteMu.Lock()
+	defer m.inviteMu.Unlock()
+	delete(m.joiningInvites, roomID)
+	if _, stillPending := m.pendingInvites[roomID]; !stillPending {
+		return // withdrawn while the request was in flight
+	}
+	if err == nil {
+		delete(m.pendingInvites, roomID)
+		delete(m.inviteWarned, roomID)
+		return
+	}
+	if permanentMatrixError(err) {
+		delete(m.pendingInvites, roomID)
+		delete(m.inviteWarned, roomID)
+		m.inviteProblems = append(m.inviteProblems, Incoming{
+			Conversation: roomID,
+			Problem:      "Matrix room invitation was rejected and will not be retried: " + err.Error(),
+		})
+		return
+	}
+	if !m.inviteWarned[roomID] {
+		m.inviteWarned[roomID] = true
+		m.inviteProblems = append(m.inviteProblems, Incoming{
+			Conversation: roomID,
+			Problem:      "Matrix room invitation could not be accepted; the adapter will retry: " + err.Error(),
+		})
+	}
+}
+
+func (m *matrix) takeInviteProblems() []Incoming {
+	m.inviteMu.Lock()
+	defer m.inviteMu.Unlock()
+	problems := m.inviteProblems
+	m.inviteProblems = nil
+	return problems
+}
+
+// voiceIn turns an m.audio event into a VoiceNote, or nil when its
+// media URI is not one this adapter will fetch. Matrix reports duration
+// in milliseconds; voice messages from Element are Ogg/Opus.
+func (m *matrix) voiceIn(mxc, mimeType string, size, durationMS int64) *VoiceNote {
+	server, media, ok := parseMXC(mxc)
+	if !ok {
+		return nil
+	}
+	if mimeType == "" {
+		mimeType = "audio/ogg"
+	}
+	return &VoiceNote{
+		MIME: mimeType, Seconds: float64(durationMS) / 1000, Size: size,
+		Fetch: func(ctx context.Context, limit int64) ([]byte, error) {
+			return m.fetchMedia(ctx, server, media, limit)
+		},
+	}
+}
+
+// parseMXC splits mxc://<server-name>/<media-id>, refusing anything
+// else: the two parts become a URL path, so each must be exactly one
+// segment of the characters the spec allows.
+func parseMXC(uri string) (server, media string, ok bool) {
+	rest, found := strings.CutPrefix(uri, "mxc://")
+	if !found {
+		return "", "", false
+	}
+	server, media, found = strings.Cut(rest, "/")
+	if !found || server == "" || media == "" || strings.Contains(media, "/") {
+		return "", "", false
+	}
+	for _, r := range server {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune(".-:[]", r)) {
+			return "", "", false
+		}
+	}
+	if strings.Contains(server, "..") {
+		return "", "", false
+	}
+	for _, r := range media {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' || r == '-') {
+			return "", "", false
+		}
+	}
+	return server, media, true
+}
+
+// fetchMedia downloads a recording from this bot's own homeserver.
+// Authenticated media (Matrix v1.11) first, with the bot's token; an
+// older homeserver that does not know that endpoint is asked on the
+// legacy one.
+func (m *matrix) fetchMedia(ctx context.Context, server, media string, limit int64) ([]byte, error) {
+	paths := []string{
+		"/_matrix/client/v1/media/download/" + url.PathEscape(server) + "/" + url.PathEscape(media),
+		"/_matrix/media/v3/download/" + url.PathEscape(server) + "/" + url.PathEscape(media),
+	}
+	for i, path := range paths {
+		data, status, err := m.download(ctx, path, limit)
+		// Only "this endpoint does not exist here" moves on to the
+		// legacy one; any other answer is the answer.
+		if i == 0 && (status == http.StatusNotFound || status == http.StatusMethodNotAllowed || status == http.StatusBadRequest) && errors.Is(err, errMediaUnrecognized) {
+			continue
+		}
+		return data, err
+	}
+	return nil, errors.New("matrix media download: no endpoint answered")
+}
+
+var errMediaUnrecognized = errors.New("matrix: the homeserver does not recognise this media endpoint")
+
+func (m *matrix) download(ctx context.Context, path string, limit int64) ([]byte, int, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, m.homeserver+m.actingAs(path), nil)
+	if err != nil {
+		return nil, 0, err
+	}
+	req.Header.Set("Authorization", "Bearer "+m.token)
+	res, err := m.client().Do(req)
+	if err != nil {
+		return nil, 0, withoutURL("matrix media download", err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(res.Body, 4<<10))
+		if strings.Contains(string(body), "M_UNRECOGNIZED") {
+			return nil, res.StatusCode, errMediaUnrecognized
+		}
+		if res.StatusCode == http.StatusRequestEntityTooLarge || strings.Contains(string(body), "M_TOO_LARGE") {
+			return nil, res.StatusCode, errVoiceTooLarge
+		}
+		return nil, res.StatusCode, fmt.Errorf("matrix media download: %s", res.Status)
+	}
+	if res.ContentLength > limit {
+		return nil, res.StatusCode, errVoiceTooLarge
+	}
+	data, err := io.ReadAll(io.LimitReader(res.Body, limit+1))
+	if err != nil {
+		return nil, res.StatusCode, withoutURL("matrix media download", err)
+	}
+	if int64(len(data)) > limit {
+		return nil, res.StatusCode, errVoiceTooLarge
+	}
+	return data, res.StatusCode, nil
+}
+
+// whoami reads this bot's own MXID. It is not optional: without it the
+// adapter cannot tell its own replies from somebody's questions.
+//
+// An application-service bot makes sure its user exists first, and then
+// that it is called what the household calls its Agent.
+func (m *matrix) whoami(ctx context.Context) error {
+	if m.appserviceLocalpart != "" {
+		if err := m.registerAppserviceUser(ctx); err != nil {
+			return err
+		}
+	}
+	var who struct {
+		UserID string `json:"user_id"`
+	}
+	if err := m.call(ctx, http.MethodGet, "/_matrix/client/v3/account/whoami", nil, &who); err != nil {
+		return fmt.Errorf("matrix whoami: %w", err)
+	}
+	if who.UserID == "" {
+		return fmt.Errorf("matrix whoami returned no user id")
+	}
+	m.userID = who.UserID
+	if m.appserviceLocalpart != "" {
+		// That was the sender, "@<bot>-as:<server>". The bot is the same
+		// server's "@<bot>", and every request from here on is its.
+		_, server, ok := strings.Cut(who.UserID, ":")
+		if !ok || server == "" {
+			return fmt.Errorf("matrix whoami: %q has no server name", who.UserID)
+		}
+		m.userID = "@" + m.appserviceLocalpart + ":" + server
+		m.asUser = m.userID
+	}
+	if m.displayName != "" {
+		// Cosmetic, so never fatal: a bot with its localpart for a name
+		// still answers.
+		m.ensureDisplayName(ctx)
+	}
+	return nil
+}
+
+// actingAs adds the application service's user_id to a request path, and
+// leaves every other bot's requests as they were.
+func (m *matrix) actingAs(path string) string {
+	if m.asUser == "" {
+		return path
+	}
+	sep := "?"
+	if strings.Contains(path, "?") {
+		sep = "&"
+	}
+	return path + sep + "user_id=" + url.QueryEscape(m.asUser)
+}
+
+// registerAppserviceUser creates this bot's user through its application
+// service registration. Idempotent: every start asks, and a user that
+// already exists is the expected answer after the first.
+func (m *matrix) registerAppserviceUser(ctx context.Context) error {
+	err := m.call(ctx, http.MethodPost, "/_matrix/client/v3/register", map[string]any{
+		"type":     "m.login.application_service",
+		"username": m.appserviceLocalpart,
+		// The registration's token already acts as this user; a second
+		// access token would be one more credential to leak.
+		"inhibit_login": true,
+	}, nil)
+	var httpErr *matrixHTTPError
+	if err == nil || (errors.As(err, &httpErr) && strings.Contains(httpErr.text, "M_USER_IN_USE")) {
+		return nil
+	}
+	return fmt.Errorf("matrix: registering application-service user %s: %w", m.appserviceLocalpart, err)
+}
+
+// ensureDisplayName sets the bot's name only when it differs. Setting it
+// unconditionally would post a membership change into every room the bot
+// is in, on every restart.
+func (m *matrix) ensureDisplayName(ctx context.Context) {
+	path := "/_matrix/client/v3/profile/" + url.PathEscape(m.userID) + "/displayname"
+	var current struct {
+		DisplayName string `json:"displayname"`
+	}
+	if err := m.call(ctx, http.MethodGet, path, nil, &current); err == nil && current.DisplayName == m.displayName {
+		return
+	}
+	_ = m.call(ctx, http.MethodPut, path, map[string]string{"displayname": m.displayName}, nil)
+}
+
+func (m *matrix) Send(ctx context.Context, conversation, body string) error {
+	txn := m.txn.Add(1)
+	path := fmt.Sprintf("/_matrix/client/v3/rooms/%s/send/m.room.message/%d-%d",
+		url.PathEscape(conversation), time.Now().UnixNano(), txn)
+	payload := map[string]string{"msgtype": "m.text", "body": body}
+	var out struct {
+		EventID string `json:"event_id"`
+	}
+	return m.call(ctx, http.MethodPut, path, payload, &out)
+}
+
+type matrixHTTPError struct {
+	status int
+	text   string
+}
+
+func (e *matrixHTTPError) Error() string { return e.text }
+
+func permanentMatrixError(err error) bool {
+	var httpErr *matrixHTTPError
+	if !errors.As(err, &httpErr) {
+		return false
+	}
+	return httpErr.status >= 400 && httpErr.status < 500 &&
+		httpErr.status != http.StatusRequestTimeout && httpErr.status != http.StatusTooManyRequests
+}
+
+func (m *matrix) call(ctx context.Context, method, path string, body, out any) error {
+	var reader io.Reader
+	if body != nil {
+		data, err := json.Marshal(body)
+		if err != nil {
+			return err
+		}
+		reader = strings.NewReader(string(data))
+	}
+	req, err := http.NewRequestWithContext(ctx, method, m.homeserver+m.actingAs(path), reader)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+m.token)
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	res, err := m.client().Do(req)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+	data, err := io.ReadAll(io.LimitReader(res.Body, 8<<20))
+	if err != nil {
+		return err
+	}
+	if res.StatusCode >= 300 {
+		return &matrixHTTPError{status: res.StatusCode,
+			text: fmt.Sprintf("matrix %s: %s: %s", path, res.Status, strings.TrimSpace(string(data)))}
+	}
+	if out == nil {
+		return nil
+	}
+	return json.Unmarshal(data, out)
+}

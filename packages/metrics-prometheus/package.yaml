@@ -1,0 +1,67 @@
+# Time series capability, profile "prometheus": the store that
+# metrics-grafana draws its graphs from. Scrapes itself and Grafana by
+# container name as shipped; add more targets to the managed config
+# below as the household grows things that expose /metrics.
+#
+# NO ROUTE. Prometheus has no login of its own and its web page is a
+# query console, not something a person needs — Grafana is the page,
+# reaching this as http://prometheus:9090 by container-name DNS. A
+# Route would be an unauthenticated query surface on the proxy.
+#
+# The image's ENTRYPOINT is the prometheus binary, so the command
+# below carries flags only (see imageArgv0 in keystone/pkgtool).
+# Thirty days of retention; the volume is rebuilt by time, so it is
+# outside any BackupPlan.
+#
+# Image digest is REAL, resolved 2026-09-07 via the OCI registry API:
+#   prom/prometheus:latest -> sha256:5ce7540c...cbb0
+apiVersion: wildstone.dev/v1
+kind: Package
+metadata:
+  name: metrics-prometheus
+  version: 1.0.0
+  capability: timeseries
+  profile: prometheus
+params:
+  - { name: node, required: true, description: "Which machine to install this on.", source: node }
+  - { name: retention, default: "30d", description: "How long to keep metrics, e.g. 30d or 90d." }
+policies:
+  classifications: [internal_only]
+  dataSensitivity: low
+templates:
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: prometheus-data, node: "{{ .Params.node }}" }
+    spec: { name: prometheus-data }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: ConfigFile
+    metadata: { name: prometheus-config, node: "{{ .Params.node }}" }
+    spec:
+      filename: prometheus.yml
+      content: |
+        # Managed by Wildstone — do not edit.
+        global:
+          scrape_interval: 30s
+        scrape_configs:
+          - job_name: prometheus
+            static_configs:
+              - targets: ["localhost:9090"]
+          - job_name: grafana
+            static_configs:
+              - targets: ["grafana:3000"]
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: prometheus, node: "{{ .Params.node }}" }
+    spec:
+      image: "prom/prometheus@sha256:5ce7540c3c00ef4ab0c9d2c995c6a5b9c421f44b4a115d97a2c7af3b1c21cbb0"
+      command:
+        - "--config.file=/etc/wildstone/timeseries/prometheus.yml"
+        - "--storage.tsdb.path=/prometheus"
+        - "--storage.tsdb.retention.time={{ .Params.retention }}"
+      mounts:
+        - { source: prometheus-data, target: /prometheus }
+        - { source: /etc/wildstone/timeseries, target: /etc/wildstone/timeseries, readOnly: true }
+      restart: unless-stopped

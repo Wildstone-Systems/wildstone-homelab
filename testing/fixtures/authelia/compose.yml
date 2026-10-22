@@ -1,0 +1,10 @@
+services:
+  authelia:
+    image: authelia/authelia:4.38.16
+    container_name: authelia
+    env_file: .env
+    volumes:
+      - ./config:/config
+    ports:
+      - "9091:9091"
+    restart: unless-stopped

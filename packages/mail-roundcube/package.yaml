@@ -1,0 +1,406 @@
+# Mail capability, profile "roundcube": the household's email and
+# calendars, from a browser and from every phone, against mailboxes that
+# already exist somewhere else.
+#
+# WHAT THIS IS NOT. It is not a mail SERVER. Nothing here accepts mail
+# from the internet, holds an MX record, or has a deliverability
+# reputation to lose. The household keeps whatever provider it already
+# has — Fastmail, Migadu, mailbox.org, an employer's Exchange, a mail
+# server on another machine — and this package is the CLIENT for it:
+# Roundcube speaks IMAP and SMTP to that provider, and Davis serves the
+# calendars and contacts that provider either does not offer or does not
+# let you keep.
+#
+# ONE LOGIN, TWO SURFACES. Both containers authenticate against the SAME
+# IMAP server, so a person has exactly one credential — their mail
+# password — and it is checked by the provider, never stored here:
+#
+#   mail.<domain>      Roundcube  webmail: IMAP in, SMTP out
+#   calendar.<domain>  Davis      CalDAV/CardDAV: calendars and contacts
+#
+# Davis is configured with AUTH_METHOD=IMAP and
+# IMAP_AUTH_USER_AUTOCREATE, so a household member's first sign-in from
+# their phone's calendar app creates their account against the same IMAP
+# check Roundcube makes. Nobody provisions people, and there is no second
+# password to reset.
+#
+# SIGNING IN, AND THE THING NOBODY IS TOLD. Both surfaces ask for a
+# username and a password, and NEITHER is a credential Wildstone
+# generates. It is the person's own mailbox: their email address, and
+# the password their provider checks. That is the whole design — no
+# account to provision, no second password to reset — and it is also a
+# question the household meets at a login box with no answer on it.
+#
+# For the big providers the answer is not their normal password:
+#
+#   Gmail / Google Workspace   an App Password (Google account -> Security
+#                              -> 2-Step Verification -> App passwords).
+#                              A normal password is refused outright:
+#                              "Application-specific password required".
+#   Outlook / Microsoft 365    an App Password, once 2-step is on.
+#   Yahoo, AOL                 an App Password.
+#   Fastmail, mailbox.org,     an app-specific password is recommended
+#   Migadu, Proton Bridge      and the account password usually works.
+#
+# This is not a limitation of this package and there is nothing here to
+# configure around it: those providers stopped accepting an account
+# password over IMAP. Roundcube can speak OAuth instead, but the image
+# wires only oauth_client_secret from the environment — the client id,
+# provider URI and scopes need a config override — so it is not a path
+# this package can offer without one.
+#
+# SIGN-IN POSTURE: the app's own login, auth: none on family_private —
+# the ntfy posture. Neither surface can be put behind Authelia. Roundcube's
+# login IS the IMAP credential (a portal in front of it would be two
+# logins for one mailbox), and a CalDAV client on a phone authenticates
+# per request with HTTP Basic and cannot follow a login redirect at all.
+#
+# STATE, AND WHY IT IS BACKED UP DAILY. Mail itself lives at the
+# provider and is not backed up here. What is here is the household's
+# own: Roundcube's settings, identities, signatures and address book
+# (sqlite, roundcube-db), and every calendar and contact Davis holds
+# (sqlite, davis-data). The calendars are the ONLY copy — a phone that
+# resyncs after a loss gets whatever this volume says — so the plan is
+# daily rather than the weekly a replaceable library gets.
+#
+# WHAT IS NOT IN THAT REPOSITORY, AND WHY IT MATTERS. Roundcube keeps
+# sessions in its database, and a live session holds the person's IMAP
+# password encrypted with des_key. So the backed-up set must not also
+# carry that key, or one snapshot is enough to recover a working mail
+# credential. It does not, and neither volume holding the key is in the
+# plan: the image writes both generated config files into /var/www/html
+# (roundcube-www, excluded), and with ROUNDCUBEMAIL_DES_KEY set what it
+# writes is `getenv('ROUNDCUBEMAIL_DES_KEY')` — a reference, not the
+# value. The key exists in the node's sealed secret store and in the
+# container's environment, and nowhere a restic snapshot reaches.
+#
+# roundcube-config is excluded from the plan for the same reason rather
+# than for its contents. Nothing writes to it: the image only reads
+# *.php from it, as includes an operator may drop in, and an override
+# an operator writes by hand is the one place a credential could
+# plausibly land next to the sessions. It holds nothing of the
+# household's, so excluding it costs nothing and closes that.
+#
+# THE MIGRATION JOB. Davis is a Symfony application: its schema is
+# created by doctrine migrations, and the standalone image runs none at
+# startup (its CMD is supervisord). kind: Job is the mechanism for
+# exactly this — a run whose completion is observable — and it does one
+# thing more: it hands /data to www-data. A fresh Docker volume is
+# root-owned 0755 and php-fpm's workers are not root, so without that
+# chown the very first request fails trying to create the database file.
+# The job re-runs when its spec hash changes, which is what an image
+# upgrade with new migrations is.
+#
+# THE MAILBOX ADAPTER, AND WHY INSTALLING THIS READS NO MAIL. The
+# package carries a dormant, read-only mailbox adapter (epic #326): the
+# `integrates:` block below. It is a DECLARATION, not a template —
+# nothing in it is rendered when this package is installed or upgraded,
+# so an install creates no container, no connection, no credential and
+# no mailbox read. The adapter program (keystone/cmd/wild-mail-adapter)
+# ships with every release and the installer puts it on each node at
+# /srv/wildstone/bin, exactly as the chat adapter is shipped. It runs
+# only once a Person chooses "Watch this mailbox": their Personal
+# connection's approved placement renders one adapter container per
+# prepared node (capability.Engine.ExpandAdapter), inheriting the IMAP
+# endpoint configured here and never a password from these params.
+#
+# Its surface is read-only by construction: the mail domain in
+# keystone/integration declares no action, the four queries below are
+# the whole of what it answers, and the adapter refuses every action.
+# No send, reply, draft, mark-read, move, archive, delete or rule.
+#
+# Roundcube's own message cache must stay off (see
+# docs/catalog-integration-contract.md §7.1): roundcube-db is backed up,
+# and the adapter keeps mail at the provider on purpose.
+#
+# Image digests are REAL, resolved 2026-09-08 via the OCI registry API:
+#   roundcube/roundcubemail:latest        -> sha256:8a4f8884...fb89 (1.7.4-apache)
+#   ghcr.io/tchapi/davis-standalone:latest -> sha256:18c38a54...ce8b (Caddy + php-fpm, port 9000)
+apiVersion: wildstone.dev/v1
+kind: Package
+metadata:
+  name: mail-roundcube
+  version: 1.1.1
+  capability: mail
+  profile: roundcube
+requires:
+  - { trait: ingress, mode: private }
+params:
+  - { name: public_domain, required: true, description: "The domain your services are named under, e.g. home.example.com. Under a tailnet this is a label rather than an address you type.", source: domain }
+  - { name: mail_subdomain, default: mail, description: "The name webmail appears under, e.g. mail." }
+  - { name: calendar_subdomain, default: calendar, description: "The name calendars and contacts appear under, e.g. calendar." }
+  - { name: node, required: true, description: "Which machine to install this on.", source: node }
+  # The provider's servers. Both containers are told the same IMAP
+  # server, because the calendar service authenticates against it.
+  - { name: imap_host, required: true, validate: hostname, description: "Your mail provider's IMAP server, e.g. imap.fastmail.com. Everyone signs in to webmail and calendars with their own email address and the password this server checks — Wildstone generates no login. Gmail, Outlook and Yahoo refuse an account password here and need an App Password from the provider's security settings.", example: "imap.example.com" }
+  - { name: imap_port, default: "993", description: "IMAP port. 993 for ssl, 143 for tls (STARTTLS)." }
+  - { name: imap_encryption, default: ssl, description: "How the IMAP connection is encrypted: ssl (implicit TLS, port 993) or tls (STARTTLS, port 143)." }
+  - { name: smtp_host, required: true, validate: hostname, description: "Your mail provider's SMTP server, e.g. smtp.fastmail.com. Sending uses the same address and password as receiving.", example: "smtp.example.com" }
+  - { name: smtp_port, default: "587", description: "SMTP port. 587 for tls (STARTTLS), 465 for ssl." }
+  - { name: smtp_encryption, default: tls, description: "How the SMTP connection is encrypted: tls (STARTTLS, port 587) or ssl (implicit TLS, port 465)." }
+  - { name: username_domain, default: "", description: "Added to a bare username at sign-in, e.g. example.com lets someone type ada instead of ada@example.com. Leave empty if people sign in with a full address." }
+  - { name: calendar_admin_login, default: admin, description: "The username for the calendar service's own admin page. Household members never need it — their calendars work from their mail password alone. Its password is generated and write-only, so nobody can read it back: to open that page, first give it a value you know with `wild secret set davis-admin-password -node <node>`." }
+  - { name: timezone, default: UTC, source: timezone, validate: iana_timezone, description: "Your timezone, e.g. Europe/London." }
+  - { name: upload_max_filesize, default: 25M, description: "Largest attachment someone can add to a message, e.g. 25M." }
+policies:
+  classifications: [family_private]
+  dataSensitivity: high
+# The dormant mailbox adapter; see "THE MAILBOX ADAPTER" in the header.
+# connection-only because the mailbox is the provider's, not Wildstone's;
+# the adapter runtime is still Wildstone-managed (ADR-W030 A5.1).
+integrates:
+  - domain: mail
+    shape: connection-only
+    adapter:
+      contract: 1
+      # Google's distroless static base, the same pin the chat packages
+      # use: CA certificates for IMAPS, no shell, non-root.
+      image: "gcr.io/distroless/static-debian12@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab"
+      program: wild-mail-adapter
+      # The provider endpoint this install already knows. V1 has one
+      # provider per installation; several Persons, several accounts.
+      inherits: [imap_host, imap_port, imap_encryption, username_domain]
+      needs:
+        secrets:
+          - name: mailbox-app-password
+            scope: member
+            purpose: "Reads this Person's own selected mail, read-only. Onboarded by that Person through the protected secret input, never chat; an app password they can revoke is strongly preferred, because the provider grants it full mailbox power."
+          - name: mailbox-fingerprint-key
+            scope: member
+            purpose: "This connection's own random key (at least 32 bytes) for message fingerprints and references, so two Persons on the same provider cannot compare or trade them. Not a provider credential; generated for the connection when it is onboarded, never shown to anyone."
+    answers:
+      - { query: mail.capabilities, deadline: 5s }
+      - { query: mail.changes, deadline: 30s, supports: [folder, cursor, limit] }
+      - { query: mail.message, deadline: 30s, supports: [ref] }
+      - { query: mail.search, deadline: 30s, supports: [folders, from, subject, since, before, limit] }
+templates:
+  # ---- Secrets (ADR-W020 / F37). All three are generated on the node;
+  # none of them is a person's password, and no mail credential is ever
+  # stored by this capability.
+  #
+  # roundcube-des-key encrypts the IMAP password held in a browser
+  # session. Roundcube wants at least 24 characters and the node's
+  # default is 32 random bytes base64'd, which is 43.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: roundcube-des-key, node: "{{ .Params.node }}" }
+    spec:
+      name: roundcube-des-key
+      purpose: "Encrypts the mail password held in a browser session. Nobody types this."
+  # Symfony's APP_SECRET: signs Davis's session cookies and CSRF tokens.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: davis-app-secret, node: "{{ .Params.node }}" }
+    spec:
+      name: davis-app-secret
+      purpose: "Signs the calendar service's session cookies. Nobody types this."
+  # The calendar service's admin page. Generated rather than `provided`
+  # so that installing needs no human step: household members never see
+  # this page — their calendars work from the moment they sign in — and
+  # an operator who wants it rotates this secret to a value they know.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: davis-admin-password, node: "{{ .Params.node }}" }
+    spec:
+      name: davis-admin-password
+      purpose: "The calendar service's admin page, at the Calendars address — sign in as 'admin'. Generated, so it cannot be read back: set it here to a value you choose. Household members never need it; their calendars work from their mail password."
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: restic-mail, node: "{{ .Params.node }}" }
+    spec:
+      name: restic-mail
+      purpose: "Encrypts the mail backup repository. Keep a copy somewhere else: without it a restore is impossible."
+  # ---- Volumes.
+  #
+  # roundcube-www is the installed application: the image populates it on
+  # first start and skins and plugins land there. Not backed up — an
+  # image can rebuild it.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: roundcube-www, node: "{{ .Params.node }}" }
+    spec: { name: roundcube-www }
+  # A mount point for operator-written *.php overrides, which the image
+  # includes if it finds any. Wildstone writes nothing here — every
+  # setting this package has is an environment variable — and it is
+  # deliberately outside the backup plan; see the header.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: roundcube-config, node: "{{ .Params.node }}" }
+    spec: { name: roundcube-config }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: roundcube-db, node: "{{ .Params.node }}" }
+    spec: { name: roundcube-db }
+  # Attachments in flight. Separate from the database so a large message
+  # being composed cannot fill the volume the address book lives in.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: roundcube-temp, node: "{{ .Params.node }}" }
+    spec: { name: roundcube-temp }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: davis-data, node: "{{ .Params.node }}" }
+    spec: { name: davis-data }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: mail-db-backup, node: "{{ .Params.node }}" }
+    spec: { name: mail-db-backup }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: mail-backup-repo, node: "{{ .Params.node }}" }
+    spec: { name: mail-backup-repo }
+  # ---- Webmail.
+  #
+  # sqlite rather than a dedicated postgres: this database holds one
+  # household's settings and address book, the image creates and
+  # migrates it unattended, and a second container plus a database
+  # password would be two more things to lose for a table nobody queries.
+  # Upstream ships sqlite as the image default for exactly this size.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: roundcube, node: "{{ .Params.node }}" }
+    spec:
+      image: "roundcube/roundcubemail@sha256:8a4f88846145c6c8801654d9c3b330071e162f0110b64d08af8e94aca50ffb89"
+      env:
+        TZ: "{{ .Params.timezone }}"
+        ROUNDCUBEMAIL_DEFAULT_HOST: "{{ .Params.imap_encryption }}://{{ .Params.imap_host }}"
+        ROUNDCUBEMAIL_DEFAULT_PORT: "{{ .Params.imap_port }}"
+        ROUNDCUBEMAIL_SMTP_SERVER: "{{ .Params.smtp_encryption }}://{{ .Params.smtp_host }}"
+        ROUNDCUBEMAIL_SMTP_PORT: "{{ .Params.smtp_port }}"
+        ROUNDCUBEMAIL_USERNAME_DOMAIN: "{{ .Params.username_domain }}"
+        ROUNDCUBEMAIL_DB_TYPE: sqlite
+        ROUNDCUBEMAIL_SKIN: elastic
+        ROUNDCUBEMAIL_PLUGINS: "archive,zipdownload"
+        ROUNDCUBEMAIL_UPLOAD_MAX_FILESIZE: "{{ .Params.upload_max_filesize }}"
+        ROUNDCUBEMAIL_REQUEST_PATH: "/"
+        ROUNDCUBEMAIL_DES_KEY: "secret/roundcube-des-key"
+      mounts:
+        - { source: roundcube-www, target: /var/www/html }
+        - { source: roundcube-config, target: /var/roundcube/config }
+        - { source: roundcube-db, target: /var/roundcube/db }
+        - { source: roundcube-temp, target: /tmp/roundcube-temp }
+      restart: unless-stopped
+  # ---- Calendars and contacts.
+  #
+  # Davis is sabre/dav with an admin page. Every setting it has is an
+  # environment variable, which is what makes it fit here: the one secret
+  # it needs is a whole env value, so the node materializes it and no
+  # config file on disk ever holds a credential.
+  #
+  # PUBLIC_CALENDARS_ENABLED and WEBDAV_ENABLED are off. A public
+  # calendar link is unauthenticated by design, and WebDAV would turn a
+  # calendar server into file storage the backup plan was not sized for;
+  # both are opt-in decisions a household should make deliberately rather
+  # than inherit from a default.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: davis, node: "{{ .Params.node }}" }
+    spec:
+      image: "ghcr.io/tchapi/davis-standalone@sha256:18c38a54b86d15fc6f7f51c7cc68ab45c958da3175f68bc5e4ebe69b1da4ce8b"
+      env:
+        APP_ENV: prod
+        APP_SECRET: "secret/davis-app-secret"
+        APP_TIMEZONE: "{{ .Params.timezone }}"
+        DATABASE_DRIVER: sqlite
+        DATABASE_URL: "sqlite:////data/davis.db"
+        AUTH_METHOD: IMAP
+        AUTH_REALM: SabreDAV
+        IMAP_AUTH_URL: "{{ .Params.imap_host }}:{{ .Params.imap_port }}"
+        IMAP_ENCRYPTION_METHOD: "{{ .Params.imap_encryption }}"
+        IMAP_CERTIFICATE_VALIDATION: "true"
+        IMAP_AUTH_USER_AUTOCREATE: "true"
+        ADMIN_LOGIN: "{{ .Params.calendar_admin_login }}"
+        ADMIN_PASSWORD: "secret/davis-admin-password"
+        CALDAV_ENABLED: "true"
+        CARDDAV_ENABLED: "true"
+        WEBDAV_ENABLED: "false"
+        PUBLIC_CALENDARS_ENABLED: "false"
+        # Symfony builds absolute URLs from the forwarded headers, and
+        # will only trust them from a peer on this list. Spelled out
+        # rather than taken from .Resolved.ProxyTrustCIDRs because that
+        # key renders a YAML flow sequence and this variable is a
+        # comma-separated string.
+        SYMFONY_TRUSTED_PROXIES: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+      mounts:
+        - { source: davis-data, target: /data }
+      restart: unless-stopped
+  # The schema, and the ownership the schema needs. Runs in the Davis
+  # image itself, which declares no ENTRYPOINT, so the command is the
+  # whole argv (see keystone/pkgtool's imageArgv0 table). Migrating is
+  # idempotent, and --allow-no-migration makes "already current" an exit
+  # 0 rather than a failed job on every re-run.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Job
+    metadata: { name: davis-migrate, node: "{{ .Params.node }}" }
+    spec:
+      run:
+        image: "ghcr.io/tchapi/davis-standalone@sha256:18c38a54b86d15fc6f7f51c7cc68ab45c958da3175f68bc5e4ebe69b1da4ce8b"
+        command:
+          - /bin/sh
+          - -ec
+          - |
+            chown www-data:www-data /data
+            php bin/console doctrine:migrations:migrate --no-interaction --allow-no-migration
+            chown www-data:www-data /data/davis.db
+        env:
+          APP_ENV: prod
+          APP_SECRET: "secret/davis-app-secret"
+          DATABASE_DRIVER: sqlite
+          DATABASE_URL: "sqlite:////data/davis.db"
+        mounts:
+          - { source: davis-data, target: /data }
+  # ---- Routes. Both are the app's own login on the private class: see
+  # the sign-in note in the header.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Route
+    metadata: { name: mail, node: "{{ .Params.node }}" }
+    spec:
+      host: "{{ .Params.mail_subdomain }}.{{ .Params.public_domain }}"
+      upstream: "container/roundcube:80"
+      auth: none
+      classification: family_private
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Route
+    metadata: { name: calendar, node: "{{ .Params.node }}" }
+    spec:
+      host: "{{ .Params.calendar_subdomain }}.{{ .Params.public_domain }}"
+      upstream: "container/davis:9000"
+      auth: none
+      classification: family_private
+  # ---- Backups (ADR-W013 A4): consistent exports of both sqlite databases,
+  # daily. The live database files are excluded. Not
+  # roundcube-www or roundcube-config (the image rebuilds one and reads
+  # the other; keeping des_key out of the snapshot that holds sessions
+  # is the point — see the header) and not the mail itself, which lives
+  # at the provider.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: BackupPlan
+    metadata: { name: mail, node: "{{ .Params.node }}" }
+    spec:
+      volumes: [roundcube-db, davis-data, mail-db-backup]
+      exclude: [sqlite.db, sqlite.db-wal, sqlite.db-shm, davis.db, davis.db-wal, davis.db-shm]
+      preBackup:
+        - { kind: sqlite, container: roundcube, database: /var/roundcube/db/sqlite.db, outputVolume: mail-db-backup }
+        - { kind: sqlite, container: davis, database: /data/davis.db, outputVolume: mail-db-backup }
+      repository: mail-backup-repo
+      passwordSecret: secret/restic-mail
+      schedule: daily
+      class: important
+      retention: { keepDaily: 7, keepWeekly: 4, keepMonthly: 6 }

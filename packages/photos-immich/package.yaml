@@ -1,0 +1,250 @@
+# Photos capability, profile "immich": Immich server + machine-learning
+# workers, a dedicated postgres + redis (proposal §5.1's "dedicated-per-
+# capability infra" posture — Immich's DB/cache are not shared with any
+# other capability, so they fail/back up/upgrade independently), an upload
+# Volume, a public Route, and the OidcClient registration that wires Immich
+# into whatever package provides identity:oidc (packages/identity in this
+# repo).
+#
+# Image digests are REAL, resolved at authoring time (2026-07-30) — not
+# placeholders. See packages/README.md for how these were resolved.
+#
+# public_domain/photos_subdomain are example.com-class placeholders (no
+# real domains). No secret literal appears anywhere: DB/redis credentials
+# and the OIDC client secret are all secret/<name> references, resolved
+# only by Wardstone at materialization (ADR-W005 A2).
+apiVersion: wildstone.dev/v1
+kind: Package
+metadata:
+  name: photos-immich
+  version: 1.0.3
+  capability: photos
+  profile: immich
+requires:
+  - { trait: identity, mode: oidc }
+  - { trait: ingress, mode: public }
+  - { trait: storage, class: bulk }
+params:
+  - { name: public_domain, required: true, description: "The domain your services are named under, e.g. home.example.com. Under a tailnet this is a label rather than an address you type.", source: domain }
+  - { name: photos_subdomain, default: photos }
+  - { name: node, required: true, description: "Which machine to install this on.", source: node }
+  # Node running the identity provider, whose managed config the
+  # OidcClient/LdapGroup resources are rendered into. Defaults to this
+  # package's own node, which is right for a single-node homelab; set it
+  # explicitly when identity runs elsewhere.
+  - { name: identity_node, default: "", description: "Which machine runs the login service. Leave empty to use the same machine." }
+policies:
+  classifications: [family_public]
+  dataSensitivity: high
+# These two pins are not independent: immich-server supports a fixed set of
+# postgres vector extensions and the postgres image is what provides one.
+# `wild pkg refresh-digests` refuses to move either alone.
+imageSets:
+  - name: immich
+    images:
+      - ghcr.io/immich-app/immich-server
+      - ghcr.io/immich-app/postgres
+    reason: >-
+      immich-server accepts only the vectorchord and pgvector extensions;
+      the postgres image supplies one. A version skew between them fails at
+      startup with "No vector extension found", not at refresh time.
+templates:
+  # ---- The secrets this capability needs, declared so the node
+  # generates them before anything references one (ADR-W020 / F37).
+  # The OIDC client secret is NOT here: the capability engine
+  # synthesises secret/<capability>-oidc from `requires identity:oidc`,
+  # and one owner for that convention is the point of it.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: immich-postgres-password, node: "{{ .Params.node }}" }
+    spec: { name: immich-postgres-password }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: restic-photos, node: "{{ .Params.node }}" }
+    spec: { name: restic-photos }
+  # ---- Storage: the upload volume plus dedicated postgres/redis data
+  # volumes (dedicated infra keeps Immich's data on its own backup/upgrade
+  # domain — proposal §5.1).
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: immich-upload, node: "{{ .Params.node }}" }
+    spec: { name: immich-upload }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: immich-pgdata, node: "{{ .Params.node }}" }
+    spec: { name: immich-pgdata }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: immich-db-backup, node: "{{ .Params.node }}" }
+    spec: { name: immich-db-backup }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: immich-redis-data, node: "{{ .Params.node }}" }
+    spec: { name: immich-redis-data }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: photos-backup-repo, node: "{{ .Params.node }}" }
+    spec: { name: photos-backup-repo }
+  # ---- Dedicated postgres + redis.
+  #
+  # The postgres image and immich-server are a MATCHED PAIR, not two
+  # independent pins. immich-server supports only the "vectorchord" and
+  # "pgvector" extensions; the previous pin (tensorchord/pgvecto-rs)
+  # provides pgvecto.rs, which it dropped support for, so the pair could
+  # not start at all:
+  #
+  #   Error: No vector extension found. Available extensions: vchord, vector
+  #
+  # Refreshing one of these without the other reproduces that. See
+  # imageSet below and packages/README.md.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: immich-postgres, node: "{{ .Params.node }}" }
+    spec:
+      image: "ghcr.io/immich-app/postgres@sha256:6f3e9d2c2177af16c2988ff71425d79d89ca630ec2f9c8db03209ab716542338"
+      env:
+        POSTGRES_USER: immich
+        POSTGRES_PASSWORD: "secret/immich-postgres-password"
+        POSTGRES_DB: immich
+      mounts:
+        - { source: immich-pgdata, target: /var/lib/postgresql/data }
+      restart: unless-stopped
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: immich-redis, node: "{{ .Params.node }}" }
+    spec:
+      image: "redis@sha256:e7723ff73d963f5cc6d9c4643ea3d989527a402a319239054e9472a7fb9219a2"
+      mounts:
+        - { source: immich-redis-data, target: /data }
+      restart: unless-stopped
+  # ---- Immich's system config, as a file.
+  #
+  # OAuth is NOT configurable through the environment. Immich moved these
+  # settings into its system config years ago; OAUTH_ENABLED and the eight
+  # variables that used to sit beside it here reconciled cleanly, appeared
+  # in `docker inspect`, and did nothing at all. The way to see it is
+  # Immich's own startup log, which prints the config it actually holds:
+  # "oauth": false, on a deployment whose Authelia client was registered,
+  # reachable, and answering discovery. The login page simply had no
+  # button on it, and nothing anywhere reported a fault.
+  #
+  # A config FILE is Immich's supported answer, and it suits a managed
+  # deployment better than the admin UI does: the settings become
+  # Wildstone's to state, and the UI renders them read-only rather than
+  # offering an edit the next reconcile would revert.
+  #
+  # Only the keys named here are set — Immich merges this over its own
+  # defaults, so this is the OAuth block and nothing else.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: ConfigFile
+    metadata: { name: immich-config, node: "{{ .Params.node }}" }
+    spec:
+      filename: immich.json
+      content: |
+        {
+          "oauth": {
+            "enabled": true,
+            "issuerUrl": "{{ .Resolved.IssuerURL }}",
+            "clientId": "immich",
+            "clientSecret": "{{ .Resolved.OidcSecretRef }}",
+            "scope": "openid email profile",
+            "buttonText": "Login with Authelia",
+            "autoLaunch": false,
+            "autoRegister": true,
+            "mobileOverrideEnabled": true,
+            "mobileRedirectUri": "{{ origin (printf "%s.%s" .Params.photos_subdomain .Params.public_domain) }}/api/oauth/mobile-redirect",
+            "storageLabelClaim": "preferred_username"
+          },
+          "passwordLogin": {
+            "enabled": true
+          }
+        }
+  # ---- Immich server + machine-learning workers.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: immich-server, node: "{{ .Params.node }}" }
+    spec:
+      image: "ghcr.io/immich-app/immich-server@sha256:b434cb9287eea1471c9974845914d4dd328c9c2d652e446ed4930f99944f0ceb"
+      env:
+        DB_HOSTNAME: immich-postgres
+        DB_USERNAME: immich
+        DB_PASSWORD: "secret/immich-postgres-password"
+        DB_DATABASE_NAME: immich
+        # Immich's own name for the extension, NOT the extension's name.
+        # "vchord" is what postgres calls it and what the error above
+        # lists, but it fails env validation before the server starts.
+        DB_VECTOR_EXTENSION: vectorchord
+        REDIS_HOSTNAME: immich-redis
+        PUBLIC_IMMICH_SERVER_URL: '{{ origin (printf "%s.%s" .Params.photos_subdomain .Params.public_domain) }}'
+        # The one OAuth-adjacent variable Immich DOES read: where its
+        # system config lives. Everything else is in that file.
+        IMMICH_CONFIG_FILE: /etc/wildstone/photos/immich.json
+      mounts:
+        - { source: immich-upload, target: /usr/src/app/upload }
+        - { source: /etc/wildstone/photos, target: /etc/wildstone/photos, readOnly: true }
+      restart: unless-stopped
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: immich-machine-learning, node: "{{ .Params.node }}" }
+    spec:
+      image: "ghcr.io/immich-app/immich-machine-learning@sha256:5a0839dc5303cd7215bcd2180a26aed3af41675aefb3e75e5157e9f10ad16e6e"
+      restart: unless-stopped
+  # ---- Public route: Immich runs its own OIDC login flow against the
+  # identity provider (see the OidcClient below), so the proxy passes
+  # through — auth: app_oidc, the policy-distinct "app authenticates
+  # itself" value (ADR-W009/E5), not auth: none.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Route
+    metadata: { name: photos, node: "{{ .Params.node }}" }
+    spec:
+      host: "{{ .Params.photos_subdomain }}.{{ .Params.public_domain }}"
+      upstream: "container/immich-server:2283"
+      auth: app_oidc
+      classification: family_public
+  # ---- OidcClient registration (ADR-W005 A3): the identity capability's
+  # controller renders this into the Authelia identity_providers.oidc.
+  # clients fragment and batches the reload. Metadata.name == clientId
+  # (S3a convention: the fragment path/observe identity is keyed off
+  # Metadata.Name, and by convention packages set it equal to ClientId).
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: OidcClient
+    metadata: { name: immich, node: "{{ or .Params.identity_node .Params.node }}" }
+    spec:
+      clientId: immich
+      clientName: Immich
+      redirectUris:
+        - "https://{{ .Params.photos_subdomain }}.{{ .Params.public_domain }}/auth/login"
+        - "app.immich:///oauth-callback"
+      scopes: [openid, profile, email, groups]
+      authPolicy: two_factor
+      secretRef: "{{ .Resolved.OidcSecretRef }}"
+  # ---- Backup hook (ADR-W013 A4): uploads + a transactionally consistent
+  # pg_dump, daily. The live pgdata directory and rebuildable Redis cache are
+  # deliberately not copied.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: BackupPlan
+    metadata: { name: photos, node: "{{ .Params.node }}" }
+    spec:
+      volumes: [immich-upload, immich-db-backup]
+      preBackup:
+        - { kind: pg_dump, container: immich-postgres, database: immich, outputVolume: immich-db-backup }
+      repository: photos-backup-repo
+      passwordSecret: secret/restic-photos
+      schedule: daily
+      class: critical
+      retention: { keepDaily: 7, keepWeekly: 4, keepMonthly: 6 }

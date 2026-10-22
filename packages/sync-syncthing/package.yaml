@@ -1,0 +1,101 @@
+# File sync capability, profile "syncthing": keeps folders in step
+# between the household's laptops, phones and this machine, with no
+# cloud in between. This node is the always-on copy the others sync
+# against.
+#
+# THE SYNCED FOLDERS live under a host path on the managed prefix, so
+# they are ordinary files the operator can see and back up; Syncthing's
+# own database and keys are the config volume, backed up weekly.
+#
+# PORT 22000 is published over TCP and UDP (QUIC) for other devices to
+# connect directly, and 21027/udp for local discovery, so devices on
+# the LAN find this machine on their own; add remote ones by device ID.
+# The web interface is behind Authelia forward-auth on the admin
+# surface, and Syncthing's own GUI password can stay unset behind it.
+#
+# Image digest is REAL, resolved 2026-09-07 via the OCI registry API:
+#   syncthing/syncthing:latest -> sha256:8c8ff37a...aec0
+apiVersion: wildstone.dev/v1
+kind: Package
+metadata:
+  name: sync-syncthing
+  version: 1.0.3
+  capability: file-sync
+  profile: syncthing
+requires:
+  - { trait: identity, mode: oidc }
+  - { trait: ingress, mode: private }
+  - { trait: storage, class: bulk }
+params:
+  - { name: admin_domain, required: true, description: "The domain your admin-only services are named under. Under a tailnet this is a label rather than an address you type.", source: domain }
+  - { name: node, required: true, description: "Which machine to install this on.", source: node }
+  - { name: sync_path, default: /srv/wildstone/sync, description: "Folder on this machine that holds the synced folders.", source: directory }
+policies:
+  classifications: [admin_tailscale]
+  dataSensitivity: high
+templates:
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: restic-file-sync, node: "{{ .Params.node }}" }
+    spec: { name: restic-file-sync }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: syncthing-config, node: "{{ .Params.node }}" }
+    spec: { name: syncthing-config }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: file-sync-backup-repo, node: "{{ .Params.node }}" }
+    spec: { name: file-sync-backup-repo }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: syncthing, node: "{{ .Params.node }}" }
+    spec:
+      image: "syncthing/syncthing@sha256:8c8ff37ab6aa8be23b700648a90fa9412e214852e9fd6ea8477c8334792daec0"
+      env:
+        PUID: "1000"
+        PGID: "1000"
+        # The GUI is reached through the proxy, so it must listen on every
+        # interface of its own container, not only loopback.
+        STGUIADDRESS: "0.0.0.0:8384"
+      ports:
+        - "22000:22000"
+        - "22000:22000/udp"
+        - "21027:21027/udp"
+      mounts:
+        # /var/syncthing, not /var/syncthing/config — the image's HOME.
+        #
+        # The entrypoint runs `chown "$PUID:$PGID" "$HOME"` and drops to
+        # that uid, and that chown is NOT recursive. Mounted one level
+        # deeper, Docker creates /var/syncthing/config root-owned, the
+        # chown above it never reaches inside, and Syncthing exits on its
+        # first write: "save cert: open /var/syncthing/config/cert.pem:
+        # permission denied". Mounted at HOME the same chown lands on the
+        # volume root, and config/ is created inside it by a process that
+        # owns the directory.
+        - { source: syncthing-config, target: /var/syncthing }
+        - { source: "{{ .Params.sync_path }}", target: /var/syncthing/data }
+      restart: unless-stopped
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Route
+    metadata: { name: sync, node: "{{ .Params.node }}" }
+    spec:
+      host: "sync.{{ .Params.admin_domain }}"
+      upstream: "container/syncthing:8384"
+      auth: authelia_oidc
+      classification: admin_tailscale
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: BackupPlan
+    metadata: { name: file-sync, node: "{{ .Params.node }}" }
+    spec:
+      volumes: [syncthing-config]
+      repository: file-sync-backup-repo
+      passwordSecret: secret/restic-file-sync
+      schedule: weekly
+      class: important
+      retention: { keepWeekly: 4 }

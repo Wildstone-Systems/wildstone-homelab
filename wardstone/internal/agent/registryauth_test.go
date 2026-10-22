@@ -1,0 +1,208 @@
+package agent
+
+import (
+	"context"
+	"encoding/base64"
+	"encoding/json"
+	"strings"
+	"testing"
+
+	wsv1 "github.com/Wildstone-Systems/wildstone-homelab/proto/gen/wardstone/v1"
+)
+
+const testDigest = "@sha256:" + "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+// Which registry a reference names is Docker's rule, not a guess: the
+// first component is a host only if it looks like one. Reading
+// "library/redis" as a registry called "library" would send that
+// registry's credential nowhere useful — or, worse, send another
+// registry's credential to a host the operator never authorized.
+func TestRegistryHostOf(t *testing.T) {
+	for image, want := range map[string]string{
+		"ghcr.io/you/chat-adapter" + testDigest:      "ghcr.io",
+		"registry.example.com:5000/x/y" + testDigest: "registry.example.com:5000",
+		"localhost:5000/x" + testDigest:              "localhost:5000",
+		"localhost/x" + testDigest:                   "localhost",
+		"library/redis" + testDigest:                 "docker.io",
+		"redis" + testDigest:                         "docker.io",
+		"docker.io/library/redis" + testDigest:       "docker.io",
+	} {
+		if got := registryHostOf(image); got != want {
+			t.Fatalf("registryHostOf(%q) = %q, want %q", image, got, want)
+		}
+	}
+}
+
+// A host's credential lives in a secret named after it, with the port
+// separator rewritten — a secret name is a file name and may not carry a
+// colon.
+func TestRegistrySecretName(t *testing.T) {
+	for host, want := range map[string]string{
+		"ghcr.io":                   "registry.ghcr.io",
+		"registry.example.com:5000": "registry.registry.example.com_5000",
+		"docker.io":                 "registry.docker.io",
+	} {
+		if got := registrySecretName(host); got != want {
+			t.Fatalf("registrySecretName(%q) = %q, want %q", host, got, want)
+		}
+		if oerr := validSecretName(want); oerr != nil {
+			t.Fatalf("%q is not a storable secret name: %v", want, oerr.GetMessage())
+		}
+	}
+}
+
+// Two DIFFERENT hosts must never name one secret. Flattening the port
+// separator to a hyphen did exactly that: "example.com:5000" and the
+// unrelated (and perfectly legal) host "example.com-5000" collapsed
+// together, so a package pulling from the second would have been handed
+// the credential for the first.
+func TestRegistrySecretNamesDoNotCollide(t *testing.T) {
+	withPort := registrySecretName("example.com:5000")
+	lookalike := registrySecretName("example.com-5000")
+	if withPort == "" || lookalike == "" {
+		t.Fatalf("both are valid hosts: %q %q", withPort, lookalike)
+	}
+	if withPort == lookalike {
+		t.Fatalf("distinct hosts share the secret %q", withPort)
+	}
+
+	// The property, not just the example: no two of these agree.
+	seen := map[string]string{}
+	for _, host := range []string{
+		"example.com:5000", "example.com-5000", "example.com_5000",
+		"example.com", "example.com:80", "sub.example.com:5000",
+		"localhost:5000", "localhost-5000", "ghcr.io", "docker.io",
+	} {
+		name := registrySecretName(host)
+		if name == "" {
+			continue // refused, which is the safe answer
+		}
+		if other, dup := seen[name]; dup {
+			t.Fatalf("hosts %q and %q both name secret %q", other, host, name)
+		}
+		seen[name] = host
+	}
+}
+
+// A host this agent cannot name a secret for gets no credential at all —
+// an anonymous pull, which fails at the registry, rather than a lookup
+// under some flattened name that could belong to another host.
+func TestUnnameableHostsGetNoCredential(t *testing.T) {
+	for _, host := range []string{
+		"example.com_5000",       // underscore: the port rewrite's escape
+		"-example.com",           // not a hostname
+		"..",                     // a relative path, not a host
+		"example.com:notaport",   // a port that is not a number
+		strings.Repeat("a", 300), // longer than any secret name
+		"example.com:5000:6000",  // two ports
+	} {
+		if got := registrySecretName(host); got != "" {
+			t.Fatalf("registrySecretName(%q) = %q, want no name", host, got)
+		}
+	}
+
+	// And the whole path refuses rather than erroring: the pull simply
+	// carries no credential.
+	a := storeOnlyAgent(t)
+	auth, err := a.registryAuthFor("example.com_5000/x/y" + testDigest)
+	if err != nil || auth != "" {
+		t.Fatalf("auth = %q, err = %v; want an anonymous pull", auth, err)
+	}
+}
+
+// The credential a node holds is used for the registry it names, and for
+// no other. This is the property the whole file exists to protect: a
+// package naming an image on another host must not cause ghcr.io's token
+// to be sent there.
+func TestRegistryCredentialIsScopedToItsRegistry(t *testing.T) {
+	a := storeOnlyAgent(t)
+	putSecret(t, a, "registry.ghcr.io", "mika:ghp_exampletoken")
+
+	auth, err := a.registryAuthFor("ghcr.io/you/chat-adapter" + testDigest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := base64.URLEncoding.DecodeString(auth)
+	if err != nil {
+		t.Fatalf("header is not base64url: %v", err)
+	}
+	var got registryAuth
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Username != "mika" || got.Password != "ghp_exampletoken" || got.ServerAddress != "ghcr.io" {
+		t.Fatalf("auth = %+v", got)
+	}
+
+	// Another registry, same node: no credential, so an anonymous pull.
+	for _, other := range []string{
+		"registry.example.com/x/y" + testDigest,
+		"library/redis" + testDigest,
+		"ghcr.io.evil.example.com/x" + testDigest,
+	} {
+		auth, err := a.registryAuthFor(other)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if auth != "" {
+			t.Fatalf("%s got a credential meant for ghcr.io", other)
+		}
+	}
+}
+
+// A credential that exists and cannot be used is an error, not a silent
+// anonymous pull: against a private registry that would come back as
+// "not found", and send the operator looking for the wrong problem.
+func TestUnusableRegistryCredentialIsAnError(t *testing.T) {
+	a := storeOnlyAgent(t)
+	putSecret(t, a, "registry.ghcr.io", "just-a-token-with-no-username")
+
+	_, err := a.registryAuthFor("ghcr.io/you/x" + testDigest)
+	if err == nil {
+		t.Fatal("a malformed credential was accepted")
+	}
+	if !strings.Contains(err.Error(), "username:password") {
+		t.Fatalf("error = %v, want it to say what the value should look like", err)
+	}
+	// And it must not quote the value back.
+	if strings.Contains(err.Error(), "just-a-token") {
+		t.Fatalf("the error leaked the credential: %v", err)
+	}
+}
+
+// End to end through the op: the header reaches Docker on a pull, and
+// carries nothing when the node holds no credential for that registry.
+func TestPullSendsTheRegistryHeader(t *testing.T) {
+	fake := newFakeDocker(t)
+	a := storeOnlyAgent(t)
+	dc, err := newDockerClient(fake.URL())
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.docker = dc
+	putSecret(t, a, "registry.ghcr.io", "mika:ghp_exampletoken")
+
+	if _, oerr := a.pullImage(context.Background(), &wsv1.PullImage{
+		Image: "ghcr.io/you/chat-adapter" + testDigest,
+	}); oerr != nil {
+		t.Fatalf("pull: %s", oerr.GetMessage())
+	}
+	fake.mu.Lock()
+	authed := fake.pullAuth
+	fake.mu.Unlock()
+	if authed == "" {
+		t.Fatal("the pull carried no X-Registry-Auth")
+	}
+
+	if _, oerr := a.pullImage(context.Background(), &wsv1.PullImage{
+		Image: "registry.example.com/x/y" + testDigest,
+	}); oerr != nil {
+		t.Fatalf("pull: %s", oerr.GetMessage())
+	}
+	fake.mu.Lock()
+	anon := fake.pullAuth
+	fake.mu.Unlock()
+	if anon != "" {
+		t.Fatalf("an unrelated registry got a credential: %q", anon)
+	}
+}

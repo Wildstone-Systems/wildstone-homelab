@@ -1,0 +1,679 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Assistant</title>
+<script>
+  // The palette comes from the URL, not from prefers-color-scheme.
+  //
+  // Homepage frames a widget inside a container it marks scheme-light,
+  // so an embedded page that asks the browser which scheme it is in is
+  // told "light" while it is drawn on a dark card — dark text on a dark
+  // panel, which is how this first went out. Keystone knows the
+  // dashboard's theme (it writes settings.yaml) and puts it in the src.
+  //
+  // Inline and first, so the attribute is set before anything paints.
+  (() => {
+    const asked = new URLSearchParams(location.search).get("theme");
+    document.documentElement.dataset.theme = asked === "light" ? "light" : "dark";
+  })();
+</script>
+<style>
+  /* Two palettes, chosen by the data-theme the script above sets. No
+     media query anywhere: what this page sits on is decided by the
+     dashboard, and the browser's own preference is not that. */
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --ink: #f8fafc; --dim: #cbd5e1; --line: rgba(226,232,240,.28);
+    --surface: rgba(15,23,42,.55); --control: rgba(226,232,240,.14);
+    --accent: #7dd3fc; --bad: #fca5a5; --good: #86efac; --me: rgba(125,211,252,.22);
+  }
+  :root[data-theme="light"] {
+    color-scheme: light;
+    --ink: #0f172a; --dim: #475569; --line: rgba(15,23,42,.22);
+    --surface: rgba(255,255,255,.7); --control: rgba(15,23,42,.07);
+    --accent: #0369a1; --bad: #b91c1c; --good: #15803d; --me: rgba(3,105,161,.14);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    /* See the Files widget: an own surface, because Homepage's card is
+       translucent and gave the text nothing to sit on. */
+    background: var(--surface); color: var(--ink); padding: 11px 13px;
+    font: 14px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    display: flex; flex-direction: column; gap: 9px; text-align: left;
+  }
+  header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  h1 { font-size: 14px; font-weight: 700; margin: 0; letter-spacing: .01em; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  select, button, input {
+    font: inherit; color: var(--ink); background: var(--control);
+    border: 1px solid var(--line); border-radius: 7px; padding: 6px 9px;
+  }
+  select { max-width: 45%; cursor: pointer; }
+  button { cursor: pointer; padding: 5px 12px; }
+  button:hover, select:hover { border-color: var(--accent); }
+  button[disabled], input[disabled] { opacity: .55; cursor: default; }
+  #log { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; min-height: 40px; }
+  .msg { padding: 7px 10px; border-radius: 9px; background: var(--control); white-space: pre-wrap;
+         overflow-wrap: anywhere; max-width: 92%; }
+  .msg.me { align-self: flex-end; background: var(--me); }
+  .msg .voice { margin-right: 6px; }
+  .msg .listen { display: inline-flex; margin-left: 8px; padding: 1px 7px; font-size: 12px;
+                 background: none; vertical-align: baseline; }
+  .msg.pending { color: var(--dim); font-style: italic; }
+  #prompt { color: var(--dim); }
+  form { display: flex; gap: 6px; }
+  #text { flex: 1; min-width: 0; }
+  #suggestions { display: flex; flex-wrap: wrap; gap: 5px; }
+  #suggestions button { background: none; border: 1px solid var(--line); color: var(--dim);
+                        border-radius: 999px; padding: 4px 10px; font-size: 12px; }
+  #suggestions button:hover { color: var(--ink); border-color: var(--accent); }
+  footer { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+  #note { color: var(--dim); font-size: 12px; }
+  ::placeholder { color: var(--dim); opacity: 1; }
+  #note.bad { color: var(--bad); }
+  .cloud { color: var(--dim); font-size: 11px; }
+  #mic { display: inline-flex; align-items: center; padding: 5px 8px; }
+  /* Red while it is listening (ADR-W042). */
+  #mic[data-state="recording"] { color: var(--bad); border-color: var(--bad); }
+  [hidden] { display: none !important; }
+</style>
+
+<header>
+  <h1>Assistant</h1>
+  <select id="agent" aria-label="Which assistant"></select>
+</header>
+
+<div id="prompt">What can I help with?</div>
+<div id="log"></div>
+
+<div id="suggestions"></div>
+
+<form id="ask">
+  <input id="text" aria-label="Ask the assistant" placeholder="Ask something…" autocomplete="off" maxlength="4000">
+  <button id="mic" type="button" aria-label="Dictate" hidden>
+    <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor"
+         stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="9" y="3" width="6" height="11" rx="3"></rect><path d="M5 11a7 7 0 0 0 14 0M12 18v3"></path>
+    </svg>
+  </button>
+  <button id="send" type="submit">Send</button>
+</form>
+
+<footer>
+  <span id="note"></span>
+  <a id="open" href="/assistant/" target="_blank" rel="noreferrer">Open conversation</a>
+</footer>
+
+<script>
+(() => {
+  const el = (id) => document.getElementById(id);
+  const log = el("log"), note = el("note");
+  // fresh: the next message starts a new conversation rather than
+  // continuing a recent one (set by /new, cleared once it has one).
+  let session = "", agents = [], fresh = false;
+
+  const say = (text, bad) => { note.textContent = text || ""; note.className = bad ? "bad" : ""; };
+
+  // ---- which conversation this widget is in, across reloads.
+  //
+  // Keystone continues a conversation on its own only when exactly one
+  // recent one could be meant, and otherwise asks (design §7, "Ambiguous
+  // continuation"). Remembering the one this widget was in keeps a
+  // reload from turning into a question: sending to it is not a guess.
+  // Only for as long as a conversation counts as recent. The same code is in home.html and
+  // assistant.html; change one, change all three.
+  //
+  // Keyed by the signed-in member as well as the assistant, so two
+  // people sharing a browser keep their own. recentMs is the server's
+  // own window (sessionRecencySeconds).
+  let recentMs = 30 * 60 * 1000, whose = "";
+  const memoryKey = (name) => "wildstone.assistant.session." + whose + "." + name;
+  const remembered = (name) => {
+    if (!whose) return "";
+    try {
+      const v = JSON.parse(localStorage.getItem(memoryKey(name)) || "null");
+      if (v && v.session && Date.now() - v.at < recentMs) return v.session;
+    } catch (e) {}
+    return "";
+  };
+  const remember = (name, id) => {
+    if (!whose) return;
+    try { localStorage.setItem(memoryKey(name), JSON.stringify({ session: id, at: Date.now() })); } catch (e) {}
+  };
+  const forget = (name) => { try { localStorage.removeItem(memoryKey(name)); } catch (e) {} };
+
+  // ============================================================ dictation
+  // The mic button (ADR-W042). It records in the browser, posts the clip
+  // to Keystone, and puts the words it gets back into the text box. It
+  // never sends anything to the assistant: the person reads what was
+  // heard, fixes it, and presses Send like always.
+  //
+  // The same code is in assistant.html, home.html and
+  // assistant-widget.html, because these pages carry their own script
+  // (see portal/web.go's policy); change one, change all three.
+  //
+  // o.button  the mic button          o.input  the text box
+  // o.agent() the chosen assistant    o.max()  seconds before it stops itself
+  // o.say(message, bad)               where status and errors are shown
+  function dictation(o) {
+    var rec = null, chunks = [], stream = null, started = 0, timer = null, state = "idle", discard = false;
+    // generation counts assistant changes. A transcript that comes back after
+    // the assistant changed belongs to the old one, so it is dropped
+    // rather than typed into a conversation with the new one.
+    var generation = 0;
+    // recGeneration and recAgent are fixed when the mic is asked for,
+    // before the browser's permission prompt: a switch while the prompt
+    // is open must not send one assistant's audio to another.
+    var recGeneration = 0, recAgent = "";
+    // No microphone API, a page not on HTTPS, or a frame the parent did
+    // not allow the microphone: the button is never shown, rather than
+    // shown and failing when pressed.
+    var framedWithout = document.featurePolicy && document.featurePolicy.allowsFeature &&
+      !document.featurePolicy.allowsFeature("microphone");
+    var supported = !!(window.isSecureContext && window.MediaRecorder && navigator.mediaDevices &&
+      navigator.mediaDevices.getUserMedia) && !framedWithout;
+
+    function set(next) {
+      state = next;
+      var b = o.button;
+      b.setAttribute("data-state", next);
+      b.setAttribute("aria-pressed", next === "recording" ? "true" : "false");
+      b.setAttribute("aria-label", next === "recording" ? "Stop dictating" : "Dictate");
+      b.title = next === "recording" ? "Stop and write down what you said" : "Dictate instead of typing";
+      b.disabled = next === "working" || next === "starting";
+    }
+    function release() {
+      if (stream) { stream.getTracks().forEach(function (t) { t.stop(); }); stream = null; }
+    }
+    // The first of these the browser can record: Chrome, Edge and
+    // Firefox take WebM/Opus, Safari takes MP4. Keystone accepts all of
+    // them.
+    function pickType() {
+      var types = ["audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus", "audio/mp4"];
+      for (var i = 0; i < types.length; i++) {
+        if (MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(types[i])) { return types[i]; }
+      }
+      return "";
+    }
+    function micError(err) {
+      var n = err && err.name;
+      if (n === "NotAllowedError" || n === "SecurityError") {
+        return "The microphone is blocked. Allow it for this site in your browser to dictate, or type instead.";
+      }
+      if (n === "NotFoundError" || n === "OverconstrainedError") { return "No microphone was found on this device."; }
+      return "The microphone couldn't start. You can still type.";
+    }
+    function start() {
+      recGeneration = generation;
+      recAgent = o.agent();
+      set("starting");
+      navigator.mediaDevices.getUserMedia({ audio: true }).then(function (s) {
+        if (recGeneration !== generation) {
+          // The assistant changed while the prompt was open.
+          s.getTracks().forEach(function (t) { t.stop(); });
+          set("idle");
+          return;
+        }
+        stream = s;
+        chunks = [];
+        var type = pickType();
+        rec = type ? new MediaRecorder(s, { mimeType: type }) : new MediaRecorder(s);
+        rec.ondataavailable = function (e) { if (e.data && e.data.size) { chunks.push(e.data); } };
+        rec.onstop = finish;
+        rec.start();
+        started = Date.now();
+        set("recording");
+        var max = o.max() || 120;
+        o.say("Listening… press the mic again when you're done (up to " +
+          (max % 60 ? max + " seconds" : max / 60 + (max === 60 ? " minute" : " minutes")) + ").");
+        // Stop just short of the server's limit, so a full-length
+        // recording is never refused for a fraction of a second.
+        timer = setTimeout(stop, Math.max(1, max - 1) * 1000);
+      }).catch(function (err) {
+        release();
+        set("idle");
+        if (recGeneration === generation) { o.say(micError(err), true); }
+      });
+    }
+    function stop() {
+      clearTimeout(timer);
+      if (rec && rec.state !== "inactive") { rec.stop(); }
+    }
+    function finish() {
+      release();
+      var seconds = (Date.now() - started) / 1000;
+      var blob = new Blob(chunks, { type: (rec && rec.mimeType) || "audio/webm" });
+      rec = null;
+      chunks = [];
+      if (discard || recGeneration !== generation) { discard = false; set("idle"); o.say(""); return; }
+      if (!blob.size) { set("idle"); o.say("Nothing was recorded. Try again.", true); return; }
+      set("working");
+      o.say("Writing down what you said…");
+      var mine = recGeneration;
+      var form = new FormData();
+      form.append("agent", recAgent);
+      form.append("seconds", seconds.toFixed(1));
+      form.append("audio", blob, "dictation");
+      fetch("/api/v1/assistant/transcribe", { method: "POST", body: form, headers: { accept: "application/json" } })
+        .then(function (r) { return r.json().catch(function () { return {}; }).then(function (j) { return { ok: r.ok, j: j }; }); })
+        .then(function (res) {
+          if (mine !== generation) { o.say(""); return; }
+          if (!res.ok) { throw new Error(res.j.error || "I couldn't make that out. Try again, or type."); }
+          var words = String(res.j.text || "").trim();
+          var had = o.input.value.trim();
+          o.input.value = had ? had + " " + words : words;
+          // Sent with the message, so the stored turn shows a 🎙️.
+          o.input.dataset.spoken = "1";
+          o.input.dispatchEvent(new Event("input", { bubbles: true }));
+          o.input.focus();
+          o.say("Check what I heard, then send.");
+        })
+        .catch(function (err) { if (mine === generation) { o.say(String(err.message || err), true); } })
+        .then(function () { set("idle"); });
+    }
+    o.button.addEventListener("click", function () {
+      if (state === "recording") { stop(); } else if (state === "idle") { start(); }
+    });
+    // A box emptied by hand is no longer dictated.
+    o.input.addEventListener("input", function () {
+      if (!o.input.value.trim()) { delete o.input.dataset.spoken; }
+    });
+    set("idle");
+    o.button.hidden = true;
+    return {
+      // show is called whenever the assistant changes: it puts the
+      // button up for one that can take dictation, and throws away a
+      // recording in progress or one still being written down — words
+      // meant for one assistant are not typed into a conversation with
+      // another.
+      show: function (on) {
+        generation++;
+        o.button.hidden = !(supported && on);
+        if (state === "recording") { discard = true; stop(); }
+      }
+    };
+  }
+
+  // ============================================================ read aloud
+  // The listen button (ADR-W042 part two). It posts one reply's text to
+  // Keystone, which reads it with the voice the assistant's privacy
+  // class allows, and plays what comes back. One reply plays at a time;
+  // pressing again, starting another, or changing assistant stops it.
+  //
+  // The same code is in assistant.html, home.html and
+  // assistant-widget.html, like the dictation code above; change one,
+  // change all three.
+  //
+  // o.say(message, bad)   where errors are shown
+  function readAloud(o) {
+    var playing = null;
+    // ticket counts starts and stops: audio that arrives after the person
+    // stopped it, or started another, is dropped rather than played.
+    var ticket = 0;
+    // The icon is drawn here rather than taken from the icon font, which
+    // carries only the glyphs the pages already used.
+    // (The slashes are escaped only so no line here reads as a comment.)
+    var SVG = "http:\/\/www.w3.org/2000/svg";
+    function listenIcon(state) {
+      var svg = document.createElementNS(SVG, "svg");
+      svg.setAttribute("viewBox", "0 0 16 16");
+      svg.setAttribute("width", "15");
+      svg.setAttribute("height", "15");
+      svg.setAttribute("aria-hidden", "true");
+      function shape(tag, attrs) {
+        var n = document.createElementNS(SVG, tag);
+        Object.keys(attrs).forEach(function (k) { n.setAttribute(k, attrs[k]); });
+        svg.appendChild(n);
+      }
+      if (state === "playing") {
+        shape("rect", { x: "4", y: "4", width: "8", height: "8", rx: "1.5", fill: "currentColor" });
+      } else if (state === "working") {
+        [4, 8, 12].forEach(function (x) { shape("circle", { cx: String(x), cy: "8", r: "1.4", fill: "currentColor" }); });
+      } else {
+        shape("path", { d: "M2.5 6h2.6L8.5 3.2v9.6L5.1 10H2.5z", fill: "currentColor" });
+        shape("path", { d: "M10.6 5.6a3.4 3.4 0 0 1 0 4.8M12.4 3.8a6 6 0 0 1 0 8.4", fill: "none",
+          stroke: "currentColor", "stroke-width": "1.4", "stroke-linecap": "round" });
+      }
+      return svg;
+    }
+    function showListen(b, state) {
+      b.setAttribute("data-state", state);
+      b.setAttribute("aria-pressed", state === "idle" ? "false" : "true");
+      b.setAttribute("aria-label", state === "idle" ? "Listen" : "Stop reading");
+      b.title = state === "idle" ? "Read this reply aloud" : "Stop reading";
+      while (b.firstChild) { b.removeChild(b.firstChild); }
+      b.appendChild(listenIcon(state));
+    }
+    function stop() {
+      ticket++;
+      if (!playing) { return; }
+      if (playing.audio) { playing.audio.pause(); }
+      if (playing.url) { URL.revokeObjectURL(playing.url); }
+      showListen(playing.button, "idle");
+      playing = null;
+    }
+    function play(b, agentName, words) {
+      stop();
+      var mine = ticket;
+      playing = { button: b };
+      showListen(b, "working");
+      fetch("/api/v1/assistant/speak", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ agent: agentName, text: words })
+      })
+        .then(function (r) {
+          if (!r.ok) {
+            return r.json().catch(function () { return {}; }).then(function (j) {
+              throw new Error(j.error || "That reply couldn't be read aloud just now.");
+            });
+          }
+          return r.blob();
+        })
+        .then(function (blob) {
+          if (mine !== ticket) { return; }
+          var url = URL.createObjectURL(blob);
+          var audio = new Audio(url);
+          playing.audio = audio;
+          playing.url = url;
+          audio.onended = function () { if (mine === ticket) { stop(); } };
+          // "playing" only once sound has started: a browser may refuse
+          // to start it at all.
+          return audio.play().then(function () { if (mine === ticket) { showListen(b, "playing"); } });
+        })
+        .catch(function (err) {
+          if (mine !== ticket) { return; }
+          stop();
+          // A browser that will not start sound without a tap says so;
+          // the button is there to tap.
+          o.say(err && err.name === "NotAllowedError" ? "Press the speaker to hear the reply."
+            : String((err && err.message) || err), !(err && err.name === "NotAllowedError"));
+        });
+    }
+    return {
+      // button makes the listen button for one reply, read by the
+      // assistant that wrote it.
+      button: function (words, agentName) {
+        var b = document.createElement("button");
+        b.type = "button";
+        b.className = "listen";
+        showListen(b, "idle");
+        b.addEventListener("click", function () {
+          if (playing && playing.button === b) { stop(); } else { play(b, agentName, words); }
+        });
+        return b;
+      },
+      // start reads a reply straight away: the answer to a question
+      // the person spoke.
+      start: function (b) { b.click(); },
+      stop: stop
+    };
+  }
+
+  let maxDictation = 0;
+  const canDictate = (name) => agents.some((a) => a.name === name && a.dictation);
+  const dict = dictation({
+    button: el("mic"), input: el("text"),
+    agent: () => el("agent").value,
+    max: () => maxDictation,
+    say,
+  });
+
+  const canListen = (name) => agents.some((a) => a.name === name && a.readAloud);
+  const listen = readAloud({ say });
+  // Whether the last question was spoken: its answer, and one still to
+  // come, is read aloud at once.
+  let lastSpoken = false;
+  // listenTo puts a listen button on one reply, for the chosen
+  // assistant, and reads it at once when now is set.
+  const listenTo = (div, text, now) => {
+    const agent = el("agent").value;
+    if (!text || !canListen(agent)) return;
+    const b = listen.button(text, agent);
+    div.append(b);
+    if (now) listen.start(b);
+  };
+
+  // textContent, never innerHTML: what comes back is a model's output,
+  // and it is displayed as text whatever it contains.
+  const add = (role, text, pending, voice) => {
+    const div = document.createElement("div");
+    div.className = "msg" + (role === "user" ? " me" : "") + (pending ? " pending" : "");
+    div.textContent = text;
+    if (voice) {
+      // Spoken, not typed: a 🎙️, so a mis-hearing reads as one.
+      const m = document.createElement("span");
+      m.className = "voice";
+      m.textContent = "🎙️";
+      m.title = "Spoken";
+      m.setAttribute("role", "img");
+      m.setAttribute("aria-label", "Spoken: ");
+      div.prepend(m);
+    }
+    log.append(div);
+    log.scrollTop = log.scrollHeight;
+    el("prompt").hidden = true;
+    return div;
+  };
+
+  const suggestions = ["Turn on the kitchen lights", "What's for dinner?", "Add milk to the shopping list"];
+  const offerSuggestions = () => {
+    const box = el("suggestions");
+    box.replaceChildren();
+    for (const s of suggestions) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.textContent = s;
+      b.onclick = () => { el("text").value = s; el("ask").requestSubmit(); };
+      box.append(b);
+    }
+  };
+
+  const load = async () => {
+    const r = await fetch("/api/v1/assistant/agents", { headers: { accept: "application/json" } });
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.statusText);
+    const body = await r.json();
+    agents = body.agents || [];
+    const select = el("agent");
+    select.replaceChildren();
+    for (const a of agents) {
+      const option = document.createElement("option");
+      option.value = a.name;
+      option.textContent = a.leavesTheHouse ? a.name + " · cloud" : a.name;
+      select.append(option);
+    }
+    if (!agents.length) {
+      el("text").disabled = el("send").disabled = true;
+      // What is missing, and — to somebody who can fix it — where. A
+      // fresh install arrives here: the widget is installed and no
+      // Butler has a model yet.
+      const setup = body.setup || {};
+      say(setup.message || "No assistant has been shared with you yet", true);
+      el("prompt").textContent = "";
+      if (setup.console) {
+        const a = document.createElement("a");
+        a.href = setup.console;
+        a.target = "_top";
+        a.textContent = "Open the Console → Butlers";
+        a.className = "setup-link";
+        el("prompt").append(a);
+      }
+      return;
+    }
+    const chosen = agents[0];
+    whose = body.member || "";
+    if (body.sessionRecencySeconds > 0) recentMs = body.sessionRecencySeconds * 1000;
+    session = remembered(chosen.name);
+    maxDictation = body.dictationMaxSeconds || 0;
+    dict.show(canDictate(chosen.name));
+    listen.stop();
+    if (!chosen.reachable) say(chosen.name + " is not answering right now", true);
+    else if (chosen.leavesTheHouse) say("This assistant runs outside the house");
+    offerSuggestions();
+  };
+
+  el("agent").onchange = () => {
+    // A different assistant is a different conversation: continuing one
+    // under another name would put one model's words in front of
+    // another.
+    session = "";
+    log.replaceChildren();
+    el("prompt").hidden = false;
+    const chosen = agents.find((a) => a.name === el("agent").value);
+    dict.show(canDictate(el("agent").value));
+    listen.stop();
+    if (chosen && !chosen.reachable) say(chosen.name + " is not answering right now", true);
+    else say(chosen && chosen.leavesTheHouse ? "This assistant runs outside the house" : "");
+  };
+
+  // chooser asks which conversation a message is for, when Keystone
+  // answered that several could be: each by its subject and last
+  // activity, most recent first, and a new one. pick(id) gets the chosen
+  // conversation, or "" for a new one.
+  const chooser = (choices, pick) => {
+    const box = el("suggestions");
+    box.replaceChildren();
+    say("Which conversation is this for?");
+    for (const c of choices) {
+      const b = document.createElement("button");
+      b.type = "button";
+      let label = c.subject || "Recent conversation";
+      if (c.at) {
+        try { label += " · " + new Date(c.at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }); } catch (e) {}
+      }
+      b.textContent = label;
+      b.onclick = () => { box.replaceChildren(); say(""); pick(c.session); };
+      box.append(b);
+    }
+    const fresh = document.createElement("button");
+    fresh.type = "button";
+    fresh.textContent = "New conversation";
+    fresh.onclick = () => { box.replaceChildren(); say(""); pick(""); };
+    box.append(fresh);
+  };
+
+  // A reply that stands in for an answer still to come (#389): the
+  // answer is added to the conversation as a new turn when it arrives,
+  // so look for it for a while and show it. seen is how many messages
+  // the conversation already had. Sending again, or moving to another
+  // conversation, stops the wait.
+  let awaiting = 0;
+  const awaitAnswer = (id, seen) => {
+    const mine = ++awaiting;
+    let tries = 0;
+    const poll = async () => {
+      if (mine !== awaiting || id !== session || ++tries > 60) return;
+      try {
+        const r = await fetch("/api/v1/assistant/conversations/" + encodeURIComponent(id),
+          { headers: { accept: "application/json" } });
+        const j = r.ok ? await r.json() : null;
+        if (mine !== awaiting || id !== session) return;
+        const messages = (j && j.messages) || [];
+        if (messages.length > seen) {
+          messages.slice(seen).forEach((m) => {
+            if (m.role !== "user") listenTo(add(m.role, m.text), m.text, lastSpoken);
+          });
+          return;
+        }
+      } catch (_) { /* try again below */ }
+      setTimeout(poll, 10000);
+    };
+    setTimeout(poll, 10000);
+  };
+
+  el("ask").onsubmit = async (e) => {
+    e.preventDefault();
+    const text = el("text").value.trim();
+    if (!text) return;
+    awaiting++;
+    const spoken = el("text").dataset.spoken === "1";
+    lastSpoken = spoken;
+    listen.stop();
+    el("text").value = "";
+    delete el("text").dataset.spoken;
+    el("suggestions").replaceChildren();
+    const mine = add("user", text, false, spoken);
+    const waiting = add("assistant", "thinking…", true);
+    el("send").disabled = true;
+    say("");
+    try {
+      const r = await fetch("/api/v1/assistant/ask", {
+        method: "POST",
+        headers: { "content-type": "application/json", accept: "application/json" },
+        body: JSON.stringify({ agent: el("agent").value, session, text, new: fresh, voice: spoken }),
+      });
+      const body = await r.json().catch(() => ({}));
+      const agent = el("agent").value;
+      if (r.status === 404 && session && session === remembered(agent)) {
+        // The conversation this widget remembered is gone: forget it and
+        // send the message again, as a message with none named.
+        forget(agent);
+        session = "";
+        mine.remove();
+        waiting.remove();
+        el("text").value = text;
+        if (spoken) el("text").dataset.spoken = "1";
+        setTimeout(() => el("ask").requestSubmit(), 0);
+        return;
+      }
+      if (r.status === 409 && body.choose && body.choose.length) {
+        // Several recent conversations could be meant. Ask here, put what
+        // was typed back, and send it to the one picked.
+        mine.remove();
+        waiting.remove();
+        el("text").value = text;
+        if (spoken) el("text").dataset.spoken = "1";
+        chooser(body.choose, (id) => {
+          if (id) { session = id; fresh = false; } else { session = ""; fresh = true; }
+          el("ask").requestSubmit();
+        });
+        return;
+      }
+      if (!r.ok) throw new Error(body.error || r.statusText);
+      if (body.command) {
+        // A slash command: answered without the assistant. /new and
+        // /resume move which conversation the next message belongs to.
+        if (body.newConversation) {
+          session = "";
+          fresh = true;
+          forget(agent);
+          log.replaceChildren();
+          add("assistant", body.reply || "");
+        } else {
+          if (body.session) {
+            session = body.session;
+            fresh = false;
+            remember(agent, session);
+          }
+          waiting.classList.remove("pending");
+          waiting.textContent = body.reply || "";
+        }
+        return;
+      }
+      session = body.session || session;
+      fresh = false;
+      if (session) remember(agent, session);
+      waiting.classList.remove("pending");
+      waiting.textContent = body.reply || "(no answer)";
+      listenTo(waiting, body.reply, spoken && !body.pending);
+      if (body.pending) awaitAnswer(session, body.seen || 0);
+      if (body.proposals) {
+        say(body.proposals + " change" + (body.proposals === 1 ? "" : "s") + " proposed — an adult has to approve");
+      }
+    } catch (err) {
+      waiting.remove();
+      say(String(err.message || err), true);
+    } finally {
+      el("send").disabled = false;
+      el("text").focus();
+    }
+  };
+
+  load().catch((e) => {
+    el("text").disabled = el("send").disabled = true;
+    say(String(e.message || e), true);
+  });
+})();
+</script>

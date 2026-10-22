@@ -1,0 +1,118 @@
+# The Console's own package: the group that grants access to it, and the
+# route that puts it behind the identity provider.
+#
+# WHY THE CONSOLE IS A PACKAGE. It is the only surface in the house that
+# was not one, and that is exactly why it was the only surface a
+# household member could not be given. Every other service declares an
+# LdapGroup, the identity capability's provisioning job creates it, and
+# an operator ticks a box when they add a person. The Console had
+# nowhere to declare a group and no Route resource, so "put giulia in
+# the console group" was a sentence with nothing behind it.
+#
+# IT INSTALLS NOTHING. There is no Container and no Volume here: the
+# Console is served by Keystone itself, from -console-dir, and this
+# package does not change that. What it adds is the two declarations
+# that were missing — who may reach it, and how a browser gets there.
+#
+# THE GROUP IS ENFORCED BY KEYSTONE, NOT BY AUTHELIA. Authelia's
+# access_control is rendered one rule per HOSTNAME (see
+# keystone/reconcile/autheliaaccess.go), and under the tailnet posture
+# every route shares one hostname and differs by port — so a rule here
+# could not distinguish the Console from any other service. The proxy
+# therefore answers "who is this", and Keystone answers "and what may
+# they do", by reading the forwarded group list. That is the right split
+# regardless of the posture: the control plane should not delegate its
+# own authorisation.
+#
+# AND AN OIDC CLIENT, FOR WHEN (1.1.0; ADR-W033 A4.1). Forward-auth says
+# who is asking but not when they signed in, and the Console needs both:
+# entering it needs a sign-in no older than 12 hours, and consequential
+# operations a fresh one. So the Console also signs in as an OpenID
+# Connect client of Authelia, and Keystone reads auth_time from the ID
+# token after verifying Authelia's signature. The client is PUBLIC with
+# PKCE because Keystone holds no secret values.
+apiVersion: wildstone.dev/v1
+kind: Package
+metadata:
+  name: wildstone-console
+  version: 1.1.0
+  capability: console
+  profile: wildstone
+  exclusive: true
+requires:
+  # The group is created by the identity capability's provisioning job,
+  # and the route is only worth rendering if something enforces auth in
+  # front of it.
+  - { trait: identity, mode: oidc }
+  - { trait: ingress, mode: private }
+params:
+  - { name: admin_domain, required: true, description: "The domain your admin-only services are named under. Under a tailnet this is a label rather than an address you type.", source: domain }
+  - { name: node, required: true, description: "Which machine runs the control plane.", source: node }
+  - { name: keystone_addr, required: true, example: "192.168.1.10:9441", description: "Where Keystone's API and Console listener answers, as address:port. This is what the proxy forwards to." }
+  # Node running the identity provider, whose managed config the
+  # LdapGroup is rendered into. Defaults to this package's own node,
+  # which is right for a single-node homelab; set it explicitly when
+  # identity runs elsewhere.
+  - { name: identity_node, default: "", description: "Which machine runs the login service. Leave empty to use the same machine." }
+policies:
+  # The Console administers the house. It is the operator's surface even
+  # when a household member is admitted to it, and it does not belong on
+  # a family_public hostname.
+  classifications: [admin_tailscale]
+  dataSensitivity: high
+templates:
+  # The group that grants a person the Console.
+  #
+  # Membership is the whole permission. A directory account without it
+  # signs in at the proxy and Keystone still refuses, which is the
+  # behaviour that makes the checkbox in "Add member" mean something.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: LdapGroup
+    metadata: { name: console-users, node: "{{ or .Params.identity_node .Params.node }}" }
+    spec:
+      name: console_users
+  # The Console's sign-in client (ADR-W033 A4.1). Keystone reads it from
+  # desired state — the public client this capability declares — and
+  # derives the issuer and callback from what is served, so nothing here
+  # is repeated as a Keystone flag and the client id cannot disagree.
+  #
+  # two_factor is what the Console asks for; under the tailnet posture
+  # the renderer relaxes every policy to one_factor, as it does for the
+  # Console route itself. implicit consent: this is the household's own
+  # control plane, and a consent screen for it would ask the Owner
+  # whether they trust themselves. preferred_username in the ID token is
+  # what binds the session to the account the proxy forwards.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: OidcClient
+    metadata: { name: wildstone-console, node: "{{ or .Params.identity_node .Params.node }}" }
+    spec:
+      clientId: wildstone-console
+      clientName: Wildstone Console
+      public: true
+      requirePkce: true
+      consentMode: implicit
+      redirectUris:
+        - "https://console.{{ .Params.admin_domain }}/api/v1/console/callback"
+      scopes: [openid, profile]
+      idTokenClaims: [preferred_username]
+      authPolicy: two_factor
+      requireGroups: [console_users]
+  # The route.
+  #
+  # auth: authelia_oidc is what makes the proxy emit forward_auth and
+  # copy Remote-User and Remote-Groups. Those headers are the ONLY thing
+  # that carries an identity here — which is why Keystone must refuse
+  # them from anywhere but the proxy, and why the listener this points
+  # at must not also be reachable directly. A trusted header on an open
+  # port is not authentication.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Route
+    metadata: { name: wildstone-console, node: "{{ .Params.node }}" }
+    spec:
+      host: "console.{{ .Params.admin_domain }}"
+      upstream: "{{ .Params.keystone_addr }}"
+      auth: authelia_oidc
+      classification: admin_tailscale

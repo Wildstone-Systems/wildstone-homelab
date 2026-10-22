@@ -1,0 +1,83 @@
+# What each shipped package's version currently contains (F91).
+#
+# An installed capability records the package version it was expanded
+# from, so a version that does not move when content does makes a stale
+# install indistinguishable from a current one.
+#
+# Regenerate:
+#   UPDATE_PACKAGE_LOCK=1 go test ./pkgtool/ -run PackageContentMatchesItsVersion
+#
+# name  version  sha256(package.yaml)[:16]
+agent-hermes 0.1.7 79ba84623554562e
+ai-ollama 1.0.0 f6b24b7aed67c8ea
+ai-open-webui 1.0.2 96ab7372c86f62ad
+assistant-wildstone 1.0.1 75fe068a57dbe4c9
+audiobooks-audiobookshelf 1.0.3 403e534e727e7974
+bookmarks-linkding 1.0.2 244e8d7f8885964f
+books-calibre-web 1.0.3 c3bdac664deed86b
+books-kavita 1.0.3 6c6fe6006484fde9
+budget-actual 1.1.1 3bcb0569c996b8f4
+calendar-radicale 2.2.2 57a39ba301022a9e
+cameras-frigate 2.0.0 41ebd29eadcdd2f7
+captcha-flaresolverr 1.0.1 6420402a747e2ee5
+chat-discord 2.0.0 f18460627b32cd15
+chat-matrix 2.1.1 94161d2dc154aea0
+chat-slack 2.0.2 cf78429005a88e11
+chat-telegram 2.0.0 84b38bec04e10fc1
+code-gitea 1.0.3 7f235031587c2e35
+dashboard 1.0.2 043c053ef14808f7
+dashboard-homarr 1.0.3 d6ad61a6afaacde0
+dns-adguard 1.0.1 64b38a3352ca358e
+dns-pihole 1.0.1 580d2adc5d34c138
+documents-paperless 1.0.7 d559e9835fbbc458
+downloads-qbittorrent 1.0.2 663381e9d95edce0
+feeds-freshrss 1.0.2 d1e80a90969a95cc
+filedrop-wildstone 1.2.0 8e69efa33ff62a5b
+files-filebrowser 1.0.2 266e96f7d1c1a945
+home-assistant 2.1.0 3b9e945b6ea291fd
+home-automation 1.0.4 2fd54d982fc388be
+homepage-wildstone 1.0.2 59496b8434204c43
+identity 1.2.0 a0464ffe5909a85a
+indexers-prowlarr 1.0.3 7cd42be5106f7470
+ingress 1.0.2 4bbd2bd5e6db1d92
+ingress-tailnet 1.0.1 59e7276e5bb0a51c
+ingress-tailnet-public 1.0.1 16dea82d8a073bdf
+ingress-tailnet-ts 1.1.3 a07c8110f42cfe09
+inventory-homebox 1.1.1 e41d648d88be7ac2
+knowledge-wildstone 1.0.0 b5a489b55e24c813
+lists-wildstone 1.0.0 0d908ac2d2b01860
+mail-roundcube 1.1.1 352ea787b61ac3da
+matrix-element 1.0.0 38ed3c2159679e0e
+matrix-synapse 1.0.11 da584120c8dda562
+matter-matterjs 1.0.0 3efe9d28f03c6a34
+media-jellyfin 1.0.4 80043d9f2536a2b7
+media-plex 1.0.3 64b6f1bb6b33e856
+metrics-grafana 1.0.2 a6451806df20268c
+metrics-prometheus 1.0.0 9a93297824a6b973
+monitoring 1.0.0 69713ab679cfdbd7
+monitoring-beszel 1.0.2 31d82ffe44cc7ec9
+movies-radarr 1.0.3 db51c7b2106e8f62
+mqtt-mosquitto 2.0.0 fd4a0f86ced1b1c0
+music-lidarr 1.0.3 b656f45aa361283a
+music-navidrome 1.0.2 b7f6ae0e347c9a99
+notes-silverbullet 1.0.0 c12937ca3ca144d0
+notifications 1.0.1 3a33ed5c22f13118
+pantry-pantryos 0.3.0 da4284bf373553e0
+passwords-vaultwarden 1.0.2 c4f9be5c8e875544
+pdf-stirling 1.0.0 406324d4385b76a0
+photos-immich 1.0.3 191b622d6f412e93
+podcasts-podgrab 1.0.1 78ee6dedc9e9cf38
+recipes-mealie 1.0.3 8bd7162243571b43
+requests-seerr 1.0.1 d4c08d771b164c6b
+research-ddgs 0.1.0 55377af3e09d44a1
+speech-speaches 1.0.2 e4a5172260b4e520
+subtitles-bazarr 1.0.3 fb747504dc364268
+sync-syncthing 1.0.3 41d171cebcdc92b0
+thread-otbr 1.0.1 68cbff0c7b827029
+tools-it-tools 1.0.0 08d30d25834cb937
+tv-sonarr 1.0.3 6ceff474d5acd38f
+vpn-gluetun 1.0.1 6e37d2b00dace21f
+wildstone-console 1.1.0 cb9c6f5dad6d36e7
+workspace-wildstone 1.0.1 8a7faf242aa621b4
+zigbee-zigbee2mqtt 2.0.3 5c4925fb028c1d88
+zwave-zwave-js-ui 1.0.1 18bbe1eaa857a29e

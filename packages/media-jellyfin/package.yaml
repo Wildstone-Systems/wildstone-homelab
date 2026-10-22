@@ -1,0 +1,119 @@
+# Media capability, profile "jellyfin" (ADR-W013 A2): transcribed from
+# the reference deployment's media-services/jellyfin. Jellyfin runs its
+# OWN login backed by the official LDAP-Auth plugin against LLDAP —
+# auth: app_ldap, the closed-set value this package motivated. The
+# plugin's XML config (the reference fixture) is app-side state inside
+# the config volume; installing it is a documented manual step at MVP.
+#
+# The media LIBRARY is a read-only host-path mount under a managed
+# prefix (the agent's mount guard requires that), and it is deliberately
+# NOT in the BackupPlan: bulk replaceable content stays on the storage
+# layer; the config volume is what hurts to lose (ADR-W013 A4).
+#
+# Hardware transcode (/dev/dri) needs a ContainerSpec.devices field that
+# does not exist yet — out of E7 scope, per the ADR.
+#
+# Image digest is REAL, resolved 2026-08-25 via the OCI registry API:
+#   jellyfin/jellyfin:latest -> sha256:aefb67e6...35db
+apiVersion: wildstone.dev/v1
+kind: Package
+metadata:
+  name: media-jellyfin
+  version: 1.0.4
+  capability: media
+  profile: jellyfin
+requires:
+  - { trait: identity, mode: ldap }
+  - { trait: ingress, mode: public }
+  - { trait: storage, class: bulk }
+params:
+  - { name: public_domain, required: true, description: "The domain your services are named under, e.g. home.example.com. Under a tailnet this is a label rather than an address you type.", source: domain }
+  - { name: media_subdomain, default: jellyfin, description: "The name this service appears under, e.g. jellyfin." }
+  - { name: node, required: true, description: "Which machine to install this on.", source: node }
+  # Node running the identity provider, whose managed config the
+  # OidcClient/LdapGroup resources are rendered into. Defaults to this
+  # package's own node, which is right for a single-node homelab; set it
+  # explicitly when identity runs elsewhere.
+  - { name: identity_node, default: "", description: "Which machine runs the login service. Leave empty to use the same machine." }
+  # Host path of the media library; must resolve under a Wardstone
+  # managed prefix (default prefixes: /etc/wildstone, /srv/wildstone).
+  - { name: media_path, default: /srv/wildstone/media, description: "Folder on this machine holding your films and television.", source: directory }
+  - { name: timezone, default: UTC, source: timezone, validate: iana_timezone, description: "Your timezone, e.g. Europe/London." }
+# The household group this service is for (ADR-W033 design §4).
+#
+# `family` faithfully restates what the app's existing directory group
+# already means: it names household members with no distinction among
+# them. Narrowing it to `adults` would be a new restriction on a
+# household that never asked for one, and that decision is theirs to
+# make in the Console rather than a package author's to ship.
+accessGroups: [family]
+policies:
+  classifications: [family_public]
+  dataSensitivity: medium
+templates:
+  # ---- The secrets this capability needs (ADR-W020 / F37). Jellyfin
+  # authenticates against LDAP rather than OIDC, so the only secret it
+  # owns is its backup repository password.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Secret
+    metadata: { name: restic-media, node: "{{ .Params.node }}" }
+    spec: { name: restic-media }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: jellyfin-config, node: "{{ .Params.node }}" }
+    spec: { name: jellyfin-config }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: jellyfin-cache, node: "{{ .Params.node }}" }
+    spec: { name: jellyfin-cache }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Volume
+    metadata: { name: media-backup-repo, node: "{{ .Params.node }}" }
+    spec: { name: media-backup-repo }
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Container
+    metadata: { name: jellyfin, node: "{{ .Params.node }}" }
+    spec:
+      image: "jellyfin/jellyfin@sha256:aefb67e6a7ff1debdd154a78a7bbb780fd0c873d8639210a7f6a2016ad2b35db"
+      env:
+        TZ: "{{ .Params.timezone }}"
+      mounts:
+        - { source: jellyfin-config, target: /config }
+        - { source: jellyfin-cache, target: /cache }
+        - { source: "{{ .Params.media_path }}", target: /media, readOnly: true }
+      restart: unless-stopped
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: Route
+    metadata: { name: jellyfin, node: "{{ .Params.node }}" }
+    spec:
+      host: "{{ .Params.media_subdomain }}.{{ .Params.public_domain }}"
+      upstream: "container/jellyfin:8096"
+      auth: app_ldap
+      classification: family_public
+  # The reference registry's required group for media access; membership
+  # is managed through the identity capability.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: LdapGroup
+    metadata: { name: media-users, node: "{{ or .Params.identity_node .Params.node }}" }
+    spec:
+      name: media_users
+  # Backup hook (ADR-W013 A4): config only, weekly — the library is
+  # deliberately outside restic.
+  - |
+    apiVersion: wildstone.dev/v1
+    kind: BackupPlan
+    metadata: { name: media-jellyfin, node: "{{ .Params.node }}" }
+    spec:
+      volumes: [jellyfin-config]
+      repository: media-backup-repo
+      passwordSecret: secret/restic-media
+      schedule: weekly
+      class: important
+      retention: { keepWeekly: 4 }
