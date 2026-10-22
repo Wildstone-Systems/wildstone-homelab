@@ -15,7 +15,7 @@
 # port for Hermes's own MCP calls. No shell, no package manager, and
 # nothing to read if somebody does get into it — its two credentials
 # arrive as environment variables from Wildstone's own secret store.
-FROM golang:1.25-alpine AS build
+FROM golang:1.26-alpine AS build
 WORKDIR /src
 COPY go.work go.work.sum ./
 COPY keystone/ keystone/
