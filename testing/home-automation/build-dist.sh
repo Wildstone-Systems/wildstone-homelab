@@ -19,7 +19,7 @@
 # install.sh skips what checksums.txt does not list.
 set -euo pipefail
 
-GO_IMAGE="golang:1.25"
+GO_IMAGE="golang:1.26"
 NODE_IMAGE="node:22"
 
 repo="$(cd "$(dirname "$0")/../.." && pwd)"
