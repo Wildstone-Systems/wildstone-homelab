@@ -74,7 +74,7 @@ when it is.
 
 ## Building
 
-Go 1.25+. `go build ./...` from `wardstone/`, `keystone/`, or `cli/`
+Go 1.26+. `go build ./...` from `wardstone/`, `keystone/`, or `cli/`
 (workspace via `go.work` at the root); `npm ci && npm run build` in
 `console/`. The full verification loop is what CI runs: `gofmt -l`,
 `go vet ./...`, `go test -race ./...` per module.
