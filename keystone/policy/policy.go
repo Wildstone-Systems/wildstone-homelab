@@ -472,7 +472,7 @@ func routeRules(r resource.Resource, currentRoutes map[string]*resource.RouteSpe
 	// Per-principal scoping: the butler never touches admin surfaces.
 	if role == "butler" {
 		touchesAdmin := spec.Classification == classAdmin || (cur != nil && cur.Classification == classAdmin)
-		changed := cur == nil || *cur != *spec
+		changed := cur == nil || !reflect.DeepEqual(cur, spec)
 		if touchesAdmin && changed {
 			out = append(out, Violation{
 				Rule: RuleButlerAdminScope, Kind: string(r.Kind), Name: name,

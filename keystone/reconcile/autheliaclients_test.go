@@ -322,3 +322,30 @@ func TestAPublicClientRendersWithNoSecret(t *testing.T) {
 		t.Errorf("public client rendered a secret:\n%s", block)
 	}
 }
+
+func TestExternalEnrollmentClientRendersAsConsentOnlyPublicPKCE(t *testing.T) {
+	got := string(renderAutheliaClients([]resource.Resource{
+		oidcClient("wildstone-external-enrollment", func(s *resource.OidcClientSpec) {
+			s.Public = true
+			s.RequirePkce = true
+			s.SecretRef = ""
+			s.ConsentMode = "explicit"
+			s.Scopes = []string{"openid", "profile"}
+			s.IdTokenClaims = []string{"preferred_username"}
+		}),
+	}))
+	block := clientBlock(t, got, "wildstone-external-enrollment")
+	for _, want := range []string{
+		"public: true", "token_endpoint_auth_method: 'none'", "consent_mode: 'explicit'",
+		"require_pkce: true", "pkce_challenge_method: 'S256'", "- 'openid'", "- 'profile'",
+	} {
+		if !strings.Contains(block, want) {
+			t.Errorf("enrollment client lacks %q:\n%s", want, block)
+		}
+	}
+	for _, forbidden := range []string{"client_secret", "wildstone.agent", "agent"} {
+		if strings.Contains(block, forbidden) {
+			t.Errorf("enrollment client contains forbidden %q:\n%s", forbidden, block)
+		}
+	}
+}

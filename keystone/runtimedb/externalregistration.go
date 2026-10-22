@@ -1,11 +1,10 @@
 package runtimedb
 
-// Inert external-client registration storage (ADR-W049, #586).
-//
-// This file deliberately has no activation setter and is not consulted by
-// authentication, the Agent API, MCP, task admission, delivery, or ack paths.
-// The caller is the existing trusted Owner configuration service: actor
-// authentication and step-up remain that boundary's responsibility.
+// External-client registration storage and atomic activation (ADR-W049,
+// #586, #603). Pending configuration remains inert. Activation is the one
+// transaction that captures issuer identity, consumes Person proof, selects
+// the OAuth profile, and retires static runtime credentials. OAuth resource
+// authentication, task admission, MCP, delivery, and ack remain later slices.
 
 import (
 	"crypto/rand"
@@ -21,12 +20,14 @@ type ExternalRegistrationState string
 
 const (
 	ExternalRegistrationPendingConsent ExternalRegistrationState = "pending_consent"
+	ExternalRegistrationActive         ExternalRegistrationState = "active"
 	ExternalRegistrationRevoked        ExternalRegistrationState = "revoked"
 )
 
 // ExternalClientRegistration is immutable identity configuration plus its
-// terminal revocation record. It intentionally contains no OAuth subject,
-// consent flag, secret, bearer, refresh token, or enrollment proof.
+// activation and terminal revocation record. Subject is deliberately excluded
+// from JSON; secrets, bearers, refresh tokens, and enrollment proofs are never
+// fields on this record.
 type ExternalClientRegistration struct {
 	ID               string                    `json:"id"`
 	PersonID         string                    `json:"personId"`
@@ -35,11 +36,39 @@ type ExternalClientRegistration struct {
 	Issuer           string                    `json:"issuer"`
 	ClientID         string                    `json:"clientId"`
 	RuntimePrincipal string                    `json:"runtimePrincipal"`
+	Subject          string                    `json:"-"`
 	State            ExternalRegistrationState `json:"state"`
 	ConfiguredAt     time.Time                 `json:"configuredAt"`
 	ConfiguredBy     string                    `json:"configuredBy"`
+	ActivatedAt      time.Time                 `json:"activatedAt,omitzero"`
+	ActivatedBy      string                    `json:"activatedBy,omitempty"`
+	CredentialEpoch  int64                     `json:"credentialEpoch"`
 	RevokedAt        time.Time                 `json:"revokedAt,omitzero"`
 	RevokedBy        string                    `json:"revokedBy,omitempty"`
+}
+
+// ExternalRegistrationConfirmation is the registration-specific consequence
+// summary a verified Person confirms. It deliberately excludes the issuer
+// subject, enrollment proof, runtime principal, and every browser credential.
+type ExternalRegistrationConfirmation struct {
+	RegistrationID  string `json:"registrationId"`
+	PersonID        string `json:"personId"`
+	Agent           string `json:"agent"`
+	Connection      string `json:"connection"`
+	ClientID        string `json:"clientId"`
+	Disclosure      string `json:"disclosure"`
+	AcceptsFallback bool   `json:"acceptsFallback"`
+	Processing      string `json:"processingClass"`
+	Execution       string `json:"executionProfile"`
+}
+
+type ActivateExternalRegistration struct {
+	RegistrationID string
+	PersonID       string
+	Issuer         string
+	Subject        string
+	Proof          string
+	ActivatedBy    string
 }
 
 type CreatePendingExternalRegistration struct {
@@ -179,18 +208,27 @@ func (db *DB) CreatePendingExternalRegistration(in CreatePendingExternalRegistra
 	if err := tx.Commit(); err != nil {
 		return ExternalClientRegistration{}, fmt.Errorf("runtimedb: committing pending external registration: %w", err)
 	}
-	return db.ExternalClientRegistration(id)
+	configuredAt, err := time.Parse(time.RFC3339Nano, stamp)
+	if err != nil {
+		return ExternalClientRegistration{}, fmt.Errorf("runtimedb: parsing pending registration timestamp: %w", err)
+	}
+	return ExternalClientRegistration{ID: id, PersonID: in.PersonID, Butler: in.Butler,
+		Connection: in.Connection, Issuer: in.Issuer, ClientID: in.ClientID,
+		RuntimePrincipal: in.RuntimePrincipal, State: ExternalRegistrationPendingConsent,
+		ConfiguredAt: configuredAt, ConfiguredBy: in.ConfiguredBy}, nil
 }
 
 const externalRegistrationColumns = `SELECT id,person_id,butler,connection,issuer,client_id,
-	runtime_principal,state,configured_at,configured_by,revoked_at,revoked_by
+	runtime_principal,subject,state,configured_at,configured_by,activated_at,activated_by,
+	credential_epoch,revoked_at,revoked_by
 	FROM external_client_registrations`
 
 func scanExternalRegistration(row rowScanner) (ExternalClientRegistration, error) {
 	var r ExternalClientRegistration
-	var state, configured, revoked string
+	var state, configured, activated, revoked string
 	err := row.Scan(&r.ID, &r.PersonID, &r.Butler, &r.Connection, &r.Issuer, &r.ClientID,
-		&r.RuntimePrincipal, &state, &configured, &r.ConfiguredBy, &revoked, &r.RevokedBy)
+		&r.RuntimePrincipal, &r.Subject, &state, &configured, &r.ConfiguredBy,
+		&activated, &r.ActivatedBy, &r.CredentialEpoch, &revoked, &r.RevokedBy)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ExternalClientRegistration{}, ErrNotFound
 	}
@@ -200,6 +238,11 @@ func scanExternalRegistration(row rowScanner) (ExternalClientRegistration, error
 	r.State = ExternalRegistrationState(state)
 	if r.ConfiguredAt, err = time.Parse(time.RFC3339Nano, configured); err != nil {
 		return ExternalClientRegistration{}, fmt.Errorf("runtimedb: bad registration timestamp %q: %w", configured, err)
+	}
+	if activated != "" {
+		if r.ActivatedAt, err = time.Parse(time.RFC3339Nano, activated); err != nil {
+			return ExternalClientRegistration{}, fmt.Errorf("runtimedb: bad registration timestamp %q: %w", activated, err)
+		}
 	}
 	if revoked != "" {
 		if r.RevokedAt, err = time.Parse(time.RFC3339Nano, revoked); err != nil {
@@ -211,6 +254,108 @@ func scanExternalRegistration(row rowScanner) (ExternalClientRegistration, error
 
 func (db *DB) ExternalClientRegistration(id string) (ExternalClientRegistration, error) {
 	return scanExternalRegistration(db.sql.QueryRow(externalRegistrationColumns+` WHERE id=?`, id))
+}
+
+// ExternalRegistrationConfirmation rechecks every live authority input before
+// producing the bounded facts shown to the Person. The returned value is safe
+// to render; callers bind a digest of it into their short-lived confirmation.
+func (db *DB) ExternalRegistrationConfirmation(id, personID string) (ExternalRegistrationConfirmation, error) {
+	tx, err := db.sql.Begin()
+	if err != nil {
+		return ExternalRegistrationConfirmation{}, err
+	}
+	defer tx.Rollback()
+	if err := gateTx(tx, GateDispatch); err != nil {
+		return ExternalRegistrationConfirmation{}, err
+	}
+	r, err := externalRegistrationForChallenge(tx, strings.TrimSpace(id), strings.TrimSpace(personID))
+	if err != nil {
+		return ExternalRegistrationConfirmation{}, err
+	}
+	if err := validateExternalRegistrationAuthority(tx, r); err != nil {
+		return ExternalRegistrationConfirmation{}, err
+	}
+	var out ExternalRegistrationConfirmation
+	var transport, externalID, reach, encryption, retention, surface string
+	var acceptsFallback int
+	err = tx.QueryRow(`
+		SELECT b.name,a.transport,a.external_id,cd.reach,cd.encryption,cd.retention,cd.surface,cd.accepts_fallback,
+		       rt.processing_class,rt.execution_profile
+		  FROM butlers b
+		  JOIN butler_addresses a ON a.seq=? AND a.butler=b.seq AND a.revoked_at=''
+		  JOIN connection_disclosure cd ON cd.connection=a.seq
+		  JOIN butler_runtimes rt ON rt.butler=b.seq AND rt.principal=?
+		 WHERE b.seq=?`, r.Connection, r.RuntimePrincipal, r.Butler).
+		Scan(&out.Agent, &transport, &externalID, &reach, &encryption, &retention, &surface, &acceptsFallback,
+			&out.Processing, &out.Execution)
+	if err != nil {
+		return ExternalRegistrationConfirmation{}, fmt.Errorf("runtimedb: reading external registration consequences: %w", err)
+	}
+	out.RegistrationID, out.PersonID, out.ClientID = r.ID, r.PersonID, r.ClientID
+	out.Connection = transport + ":" + externalID
+	out.Disclosure = strings.Join([]string{reach, encryption, retention, surface}, "/")
+	out.AcceptsFallback = acceptsFallback != 0
+	return out, nil
+}
+
+// ActivateExternalClientRegistration owns the complete transition from inert
+// configuration to the mutually-exclusive OAuth profile. Every failure rolls
+// back subject capture, proof consumption, token retirement, and state.
+func (db *DB) ActivateExternalClientRegistration(in ActivateExternalRegistration) (ExternalClientRegistration, error) {
+	in.RegistrationID = strings.TrimSpace(in.RegistrationID)
+	in.PersonID = strings.TrimSpace(in.PersonID)
+	in.Issuer = strings.TrimSpace(in.Issuer)
+	in.ActivatedBy = strings.TrimSpace(in.ActivatedBy)
+	// Subject is intentionally not trimmed or normalized. A non-empty string
+	// is the complete accepted vocabulary and byte equality is its identity.
+	if in.RegistrationID == "" || in.PersonID == "" || in.Issuer == "" ||
+		in.Subject == "" || in.Proof == "" || in.ActivatedBy == "" {
+		return ExternalClientRegistration{}, fmt.Errorf("runtimedb: activating an external registration needs registration, Person, issuer subject, proof, and actor")
+	}
+	tx, err := db.sql.Begin()
+	if err != nil {
+		return ExternalClientRegistration{}, err
+	}
+	defer tx.Rollback()
+	if err := gateTx(tx, GateDispatch); err != nil {
+		return ExternalClientRegistration{}, err
+	}
+	r, err := externalRegistrationForChallenge(tx, in.RegistrationID, in.PersonID)
+	if err != nil {
+		return ExternalClientRegistration{}, err
+	}
+	if err := validateExternalRegistrationAuthority(tx, r); err != nil {
+		return ExternalClientRegistration{}, err
+	}
+	if r.Issuer != in.Issuer {
+		return ExternalClientRegistration{}, ErrNotAdmitted
+	}
+	proof := ConsumeExternalEnrollmentChallenge{RegistrationID: r.ID, PersonID: r.PersonID,
+		Secret: in.Proof, ConsumedBy: in.ActivatedBy}
+	if _, err := db.verifyExternalEnrollmentChallengeTx(tx, proof); err != nil {
+		return ExternalClientRegistration{}, err
+	}
+	stamp := db.challengeNow().Format(time.RFC3339Nano)
+	if _, err := tx.Exec(`UPDATE tokens SET revoked_at=? WHERE principal=? AND revoked_at=''`,
+		stamp, r.RuntimePrincipal); err != nil {
+		return ExternalClientRegistration{}, fmt.Errorf("runtimedb: retiring external runtime tokens: %w", err)
+	}
+	if _, err := db.consumeExternalEnrollmentChallengeTx(tx, proof); err != nil {
+		return ExternalClientRegistration{}, err
+	}
+	res, err := tx.Exec(`UPDATE external_client_registrations
+		SET subject=?,state='active',activated_at=?,activated_by=?,credential_epoch=credential_epoch+1
+		WHERE id=? AND state='pending_consent'`, in.Subject, stamp, in.ActivatedBy, r.ID)
+	if err != nil {
+		return ExternalClientRegistration{}, fmt.Errorf("runtimedb: activating external registration: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		return ExternalClientRegistration{}, ErrNotAdmitted
+	}
+	if err := tx.Commit(); err != nil {
+		return ExternalClientRegistration{}, fmt.Errorf("runtimedb: committing external registration activation: %w", err)
+	}
+	return db.ExternalClientRegistration(r.ID)
 }
 
 // RevokeExternalClientRegistration is terminal and idempotent. It retains all
@@ -238,7 +383,7 @@ func (db *DB) RevokeExternalClientRegistration(id, by string) (ExternalClientReg
 		return ExternalClientRegistration{}, err
 	}
 	if _, err := tx.Exec(`UPDATE external_client_registrations
-		SET state='revoked',revoked_at=?,revoked_by=? WHERE id=? AND state='pending_consent'`, stamp, by, id); err != nil {
+		SET state='revoked',revoked_at=?,revoked_by=? WHERE id=? AND state IN ('pending_consent','active')`, stamp, by, id); err != nil {
 		return ExternalClientRegistration{}, fmt.Errorf("runtimedb: revoking external registration: %w", err)
 	}
 	if err := tx.Commit(); err != nil {

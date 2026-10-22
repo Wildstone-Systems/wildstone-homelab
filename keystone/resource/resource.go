@@ -309,6 +309,10 @@ type RouteSpec struct {
 	Upstream string `yaml:"upstream"`
 	// Auth is one of routeAuthValues: none, authelia_oidc, app_oidc, app_ldap, portal.
 	Auth string `yaml:"auth"`
+	// RequireGroups overrides the owning capability's directory groups for
+	// forward-auth. Nil inherits them; an explicit empty list admits any
+	// authenticated account and leaves authorization to the upstream.
+	RequireGroups []string `yaml:"requireGroups,omitempty"`
 	// Classification is a mandatory policy input, e.g. "family_public".
 	Classification string `yaml:"classification"`
 }
@@ -1728,6 +1732,12 @@ func validateRoute(r *Resource) error {
 	}
 	if !routeAuthValues[r.Route.Auth] {
 		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.auth", Msg: "must be one of none, authelia_oidc, app_oidc, app_ldap, portal"}
+	}
+	for i, g := range r.Route.RequireGroups {
+		if !ldapGroupNameRegexp.MatchString(g) {
+			return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: fmt.Sprintf("spec.requireGroups[%d]", i),
+				Msg: "must be an LLDAP group name (lowercase alphanumerics and '_'; start/end alphanumeric; ≤ 63 chars)"}
+		}
 	}
 	if err := validateRouteUpstream(r.Route.Upstream); err != nil {
 		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.upstream", Msg: err.Error()}

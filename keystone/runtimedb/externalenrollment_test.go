@@ -362,18 +362,36 @@ func TestExternalEnrollmentChallengeMigrationPreservesRegistrationHistory(t *tes
 	if err := db.migrateThrough("migrations/0106_external_enrollment_challenges.sql"); err != nil {
 		t.Fatal(err)
 	}
+	// Current accessors include activation columns added by 0107. Verify the
+	// 0106 boundary with raw historical columns, then let Open apply 0107 and
+	// verify through the typed accessor below.
+	var preservedPerson, preservedState string
+	if err := db.sql.QueryRow(`SELECT person_id,state FROM external_client_registrations WHERE id=?`, registration.ID).
+		Scan(&preservedPerson, &preservedState); err != nil || preservedPerson != registration.PersonID || preservedState != "pending_consent" {
+		t.Fatalf("after 0106 registration person=%q state=%q err=%v", preservedPerson, preservedState, err)
+	}
+	const challengeID = "xchal_preserved_history"
+	if _, err := db.sql.Exec(`INSERT INTO external_enrollment_challenges
+		(id,registration_id,person_id,secret_hash,issued_at,expires_at,issued_by)
+		VALUES(?,?,?,?,?,?,?)`, challengeID, registration.ID, registration.PersonID,
+		strings.Repeat("a", 64), now(), time.Now().UTC().Add(time.Hour).Format(time.RFC3339Nano), "person-service:sam"); err != nil {
+		t.Fatal(err)
+	}
+	var challenges int
+	if err := db.sql.QueryRow(`SELECT COUNT(*) FROM external_enrollment_challenges`).Scan(&challenges); err != nil || challenges != 1 {
+		t.Fatalf("after 0106 challenge history = %d: %v", challenges, err)
+	}
 	verify := func(stage string, db *DB) {
 		t.Helper()
 		got, err := db.ExternalClientRegistration(registration.ID)
-		if err != nil || got.PersonID != registration.PersonID || got.State != ExternalRegistrationPendingConsent {
+		if err != nil || got.PersonID != registration.PersonID || got.State != ExternalRegistrationPendingConsent || got.Subject != "" {
 			t.Fatalf("%s registration = %+v, %v", stage, got, err)
 		}
 		var challenges int
-		if err := db.sql.QueryRow(`SELECT COUNT(*) FROM external_enrollment_challenges`).Scan(&challenges); err != nil || challenges != 0 {
-			t.Fatalf("%s inferred %d challenges: %v", stage, challenges, err)
+		if err := db.sql.QueryRow(`SELECT COUNT(*) FROM external_enrollment_challenges WHERE id=?`, challengeID).Scan(&challenges); err != nil || challenges != 1 {
+			t.Fatalf("%s challenge history = %d: %v", stage, challenges, err)
 		}
 	}
-	verify("after migration", db)
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}

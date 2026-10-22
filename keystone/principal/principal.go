@@ -106,7 +106,9 @@ func (s *Store) Authenticate(secret string) (Identity, error) {
 	if err != nil || p.Disabled {
 		return Identity{}, ErrUnauthenticated
 	}
-	if err := s.DB.TouchToken(tok.Hash); err != nil {
+	if err := s.DB.TouchUsableStaticToken(tok.Hash, tok.Principal); errors.Is(err, runtimedb.ErrNotFound) {
+		return Identity{}, ErrUnauthenticated
+	} else if err != nil {
 		return Identity{}, fmt.Errorf("principal: touching token: %w", err)
 	}
 	acting := tok.ActingFor

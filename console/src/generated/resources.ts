@@ -74,6 +74,7 @@ export interface RouteSpec {
   host: string;
   upstream: string;
   auth: string;
+  requireGroups?: string[];
   classification: string;
 }
 

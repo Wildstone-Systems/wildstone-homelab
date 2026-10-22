@@ -183,6 +183,11 @@ var wellKnown = map[string]int{
 	// household out.
 	"element": 53443,
 
+	// The external enrollment ceremony is a distinct authenticated surface
+	// from the Owner-only Console. Its callback origin is registered with the
+	// issuer, so it must remain stable under the tailnet port posture.
+	"enroll": 54443, // wildstone-console enrollment route
+
 	// notes-silverbullet. Its service worker keeps a copy of the space in
 	// browser storage for its origin, so a moved port leaves every device
 	// syncing an orphaned copy.
