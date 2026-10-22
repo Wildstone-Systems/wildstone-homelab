@@ -1,0 +1,36 @@
+name: Bug report
+description: Something Wildstone does is wrong, or it broke.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before pasting anything, remove what is yours: hostnames, IP
+        addresses, usernames, household names, and every secret. Logs
+        from `wild` and the Console redact secret values, but not names
+        or addresses.
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: "`wild --version`, or the release tag you installed."
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce it
+      description: The smallest set of steps that shows the problem, if you know them.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or output
+      description: Redacted, as above.
+      render: text

@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/Wildstone-Systems/wildstone-homelab/security/advisories/new
+    about: Privately, please. Never in a public issue (SECURITY.md).
+  - name: Ask a question or share an idea
+    url: https://github.com/Wildstone-Systems/wildstone-homelab/discussions
+    about: Installing, configuring, or "would this work for my setup?"
