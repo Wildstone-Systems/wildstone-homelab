@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/gateway"
-	wsv1 "github.com/chickenrat17/wildstone-homelab/proto/gen/wardstone/v1"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/gateway"
+	wsv1 "github.com/Wildstone-Systems/wildstone-homelab/proto/gen/wardstone/v1"
 )
 
 // AgentReader is the Butler's entire live-node read surface (ADR-W006 A1,

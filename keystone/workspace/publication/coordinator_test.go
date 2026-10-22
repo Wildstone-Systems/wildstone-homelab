@@ -12,10 +12,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/internal/dbtemplate"
-	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
-	"github.com/chickenrat17/wildstone-homelab/keystone/workspace"
-	"github.com/chickenrat17/wildstone-homelab/keystone/workspace/storage"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/internal/dbtemplate"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/runtimedb"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/workspace"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/workspace/storage"
 )
 
 var template = dbtemplate.New(func(p string) error {

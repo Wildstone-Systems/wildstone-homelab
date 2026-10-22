@@ -53,7 +53,7 @@ func TestPackageNeverImportsWildstoneInternals(t *testing.T) {
 		checked++
 		for _, imp := range file.Imports {
 			path := strings.Trim(imp.Path.Value, `"`)
-			if path == "github.com/chickenrat17/wildstone-homelab/keystone/agentapi" {
+			if path == "github.com/Wildstone-Systems/wildstone-homelab/keystone/agentapi" {
 				continue
 			}
 			for _, f := range forbidden {
@@ -61,8 +61,8 @@ func TestPackageNeverImportsWildstoneInternals(t *testing.T) {
 					t.Errorf("%s imports %s — an external runtime's HTTP client must not reach a Wildstone internal (ADR-W040)", name, path)
 				}
 			}
-			if strings.HasPrefix(path, "github.com/chickenrat17/wildstone-homelab/keystone/") &&
-				path != "github.com/chickenrat17/wildstone-homelab/keystone/agentapi" {
+			if strings.HasPrefix(path, "github.com/Wildstone-Systems/wildstone-homelab/keystone/") &&
+				path != "github.com/Wildstone-Systems/wildstone-homelab/keystone/agentapi" {
 				t.Errorf("%s imports %s — this Client's only Wildstone dependency is keystone/agentapi itself", name, path)
 			}
 		}

@@ -47,7 +47,7 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 
-	wsv1 "github.com/chickenrat17/wildstone-homelab/proto/gen/wardstone/v1"
+	wsv1 "github.com/Wildstone-Systems/wildstone-homelab/proto/gen/wardstone/v1"
 )
 
 // SpecHashLabel mirrors the agent's (and the reconciler's) spec-hash label:

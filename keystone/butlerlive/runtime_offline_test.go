@@ -13,8 +13,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/agentapi"
-	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/agentapi"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/runtimedb"
 )
 
 // TestATaskWaitsWhenItsRuntimeIsNotConnected proves the three "not

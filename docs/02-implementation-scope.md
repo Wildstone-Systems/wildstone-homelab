@@ -51,7 +51,7 @@ with the plan.
 |---|---|---|---|
 | D1 | MVP target | **Full MVP as scoped** (E1–E13 complete: Photos+Media+Documents, Butler write tools, public ingress). The §3 cut line remains the pre-agreed descope order if slipping — it is a contingency, not the plan. | Calendar: ~72 fw ≈ 9–16 months depending on pace |
 | D2 | Audience year one | **You-first.** Dogfood target is the maintainer's own homelab; distribution = GitHub releases only. No `get.wildstone.dev` domain, hosted install script, or public docs site until a second user exists. | E0.1 shrinks ~0.5 fw; E9 bootstrap installs from a GitHub release URL; signing kept (cheap now, painful to retrofit) |
-| D3 | Repo & name | **`chickenrat17/wildstone-homelab` (created 2026-07-30), "Wildstone" name locked.** Accepted rename risk; module paths (`github.com/chickenrat17/wildstone-homelab/...`) and binary names (`wardstoned`, `keystone`, `wild`) may harden immediately. | Unblocks E0.1 today |
+| D3 | Repo & name | **`Wildstone-Systems/wildstone-homelab` (created 2026-07-30 under the maintainer's personal account, moved to the Wildstone-Systems organization in October 2026), "Wildstone" name locked.** Accepted rename risk; module paths (`github.com/Wildstone-Systems/wildstone-homelab/...`) and binary names (`wardstoned`, `keystone`, `wild`) may harden immediately. | Unblocks E0.1 today |
 | D4 | Butler dev LLM | **One cloud (Anthropic API) + one local (Ollama) from day one.** Tool-reliability probe and degraded modes developed against both in parallel. | S4/E12 as scoped |
 
 ## 1. Repository and delivery infrastructure (Epic 0)

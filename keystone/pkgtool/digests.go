@@ -9,7 +9,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/pkgspec"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/pkgspec"
 )
 
 // imageRefRegexp finds digest-pinned image references inside a

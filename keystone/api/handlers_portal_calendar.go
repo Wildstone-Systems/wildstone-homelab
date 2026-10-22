@@ -29,9 +29,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/ingressorigin"
-	"github.com/chickenrat17/wildstone-homelab/keystone/mobileconfig"
-	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/ingressorigin"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/mobileconfig"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/resource"
 )
 
 // householdCalendarName is what the shared calendar is called on a

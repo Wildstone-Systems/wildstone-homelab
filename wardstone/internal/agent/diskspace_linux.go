@@ -16,7 +16,7 @@ import (
 	"strings"
 	"syscall"
 
-	wsv1 "github.com/chickenrat17/wildstone-homelab/proto/gen/wardstone/v1"
+	wsv1 "github.com/Wildstone-Systems/wildstone-homelab/proto/gen/wardstone/v1"
 )
 
 // statfsFn is a seam over syscall.Statfs so tests can report a disk of

@@ -14,8 +14,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/internal/confinedpath"
-	"github.com/chickenrat17/wildstone-homelab/keystone/workspace"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/internal/confinedpath"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/workspace"
 )
 
 // ErrUncertain retains the object for journal reconciliation after a link whose

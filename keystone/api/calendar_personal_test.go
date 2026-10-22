@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/adapter/caldav"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/adapter/caldav"
 )
 
 // fakeAccount is one person's principal: the calendars under it, each a

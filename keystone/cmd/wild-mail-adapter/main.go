@@ -50,10 +50,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/adapter"
-	"github.com/chickenrat17/wildstone-homelab/keystone/adapter/mail"
-	"github.com/chickenrat17/wildstone-homelab/keystone/adapter/mail/mailadapter"
-	"github.com/chickenrat17/wildstone-homelab/keystone/redact"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/adapter"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/adapter/mail"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/adapter/mail/mailadapter"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/redact"
 )
 
 var version = "dev" // set via -ldflags at release

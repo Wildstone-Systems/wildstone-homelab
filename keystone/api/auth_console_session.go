@@ -39,9 +39,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/consoleauth"
-	"github.com/chickenrat17/wildstone-homelab/keystone/ingressorigin"
-	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/consoleauth"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/ingressorigin"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/resource"
 )
 
 const (

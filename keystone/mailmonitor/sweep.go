@@ -5,7 +5,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/runtimedb"
 )
 
 // DefaultSweepInterval is how often RunSweeper expires candidates and

@@ -5,12 +5,12 @@ import (
 	"net/http"
 	"testing"
 
-	wsv1 "github.com/chickenrat17/wildstone-homelab/proto/gen/wardstone/v1"
+	wsv1 "github.com/Wildstone-Systems/wildstone-homelab/proto/gen/wardstone/v1"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/reconcile"
-	"github.com/chickenrat17/wildstone-homelab/keystone/reconcile/loop"
-	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
-	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/reconcile"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/reconcile/loop"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/resource"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/runtimedb"
 )
 
 type driftApplier struct{}

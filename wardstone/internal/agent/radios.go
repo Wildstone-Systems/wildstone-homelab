@@ -8,7 +8,7 @@ import (
 	"strings"
 	"unicode"
 
-	wsv1 "github.com/chickenrat17/wildstone-homelab/proto/gen/wardstone/v1"
+	wsv1 "github.com/Wildstone-Systems/wildstone-homelab/proto/gen/wardstone/v1"
 )
 
 // radioUSBKinds classifies a serial adapter by its EXACT USB

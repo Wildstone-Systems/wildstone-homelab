@@ -6,7 +6,7 @@ import (
 	"encoding/hex"
 	"os"
 
-	wsv1 "github.com/chickenrat17/wildstone-homelab/proto/gen/wardstone/v1"
+	wsv1 "github.com/Wildstone-Systems/wildstone-homelab/proto/gen/wardstone/v1"
 )
 
 // selfUpdate implements the full A/B happy path (ADR-W003 W5): verify

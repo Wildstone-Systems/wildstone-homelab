@@ -7,9 +7,9 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/butler/provider"
-	"github.com/chickenrat17/wildstone-homelab/keystone/plan"
-	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/butler/provider"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/plan"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/resource"
 )
 
 // kindDescription names every kind the gateway will accept, generated

@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/butler/provider"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/butler/provider"
 )
 
 // fakeToolset is the slice of a Butler gateway RuntimeTools uses.

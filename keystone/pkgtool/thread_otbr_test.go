@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/capability"
-	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/capability"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/resource"
 )
 
 // The OpenThread Border Router package (#443). These tests expand the

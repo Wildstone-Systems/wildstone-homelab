@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/butler/provider"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/butler/provider"
 )
 
 // ADR-W017 A6: the injection-hardening red-team suite. A failure in this

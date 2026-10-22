@@ -6,10 +6,10 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/butlerlive"
-	"github.com/chickenrat17/wildstone-homelab/keystone/butlerstore"
-	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
-	"github.com/chickenrat17/wildstone-homelab/keystone/speech"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/butlerlive"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/butlerstore"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/runtimedb"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/speech"
 )
 
 // consoleDictation is a harness with named Butlers on: sandy (family)

@@ -19,7 +19,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/chickenrat17/wildstone-homelab/proto/recoveryseal"
+	"github.com/Wildstone-Systems/wildstone-homelab/proto/recoveryseal"
 )
 
 // Kind is the closed set of resource kinds Keystone understands. Adding a

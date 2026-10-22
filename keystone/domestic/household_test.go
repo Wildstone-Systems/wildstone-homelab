@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/householdtz"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/householdtz"
 )
 
 // An Agent proposes; nothing changes here (ADR-W033 E2).

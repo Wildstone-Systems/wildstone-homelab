@@ -12,7 +12,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/resource"
 )
 
 // gitRunner execs the git binary against a working directory. Tests can

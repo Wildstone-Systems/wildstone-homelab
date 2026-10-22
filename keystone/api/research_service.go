@@ -6,9 +6,9 @@ import (
 	"reflect"
 	"time"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/reconcile"
-	"github.com/chickenrat17/wildstone-homelab/keystone/research"
-	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/reconcile"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/research"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/resource"
 )
 
 // ResolveManagedResearchEndpoint reads current desired configuration each time.

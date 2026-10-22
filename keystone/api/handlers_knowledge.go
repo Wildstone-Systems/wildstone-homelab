@@ -6,8 +6,8 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/domestic"
-	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/domestic"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/resource"
 )
 
 // knowledgeSettingsFile is the file the knowledge capability renders

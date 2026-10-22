@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/butler/provider"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/butler/provider"
 )
 
 func TestActiveTurnDoesNotContinueIntoAnotherModelRound(t *testing.T) {

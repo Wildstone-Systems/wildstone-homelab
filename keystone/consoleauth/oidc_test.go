@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/consoleauth"
-	"github.com/chickenrat17/wildstone-homelab/keystone/consoleauth/fakeidp"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/consoleauth"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/consoleauth/fakeidp"
 )
 
 const issuer = "https://auth.home.test"

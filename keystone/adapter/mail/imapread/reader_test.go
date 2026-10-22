@@ -16,9 +16,9 @@ import (
 	"testing"
 	"time"
 
-	mailapi "github.com/chickenrat17/wildstone-homelab/keystone/adapter/mail"
-	"github.com/chickenrat17/wildstone-homelab/keystone/adapter/mail/imapread/imapfake"
-	"github.com/chickenrat17/wildstone-homelab/keystone/adapter/mail/imapread/mimenorm"
+	mailapi "github.com/Wildstone-Systems/wildstone-homelab/keystone/adapter/mail"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/adapter/mail/imapread/imapfake"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/adapter/mail/imapread/mimenorm"
 )
 
 const corpus = "../../../../testing/fixtures/mail"

@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/butlerlive"
-	"github.com/chickenrat17/wildstone-homelab/keystone/portal"
-	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/butlerlive"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/portal"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/runtimedb"
 )
 
 const resumeOfferLifetime = 10 * time.Minute

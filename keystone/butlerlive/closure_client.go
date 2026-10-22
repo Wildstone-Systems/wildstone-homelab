@@ -27,11 +27,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/agentapi"
-	"github.com/chickenrat17/wildstone-homelab/keystone/butler"
-	"github.com/chickenrat17/wildstone-homelab/keystone/butlerstore"
-	"github.com/chickenrat17/wildstone-homelab/keystone/operation"
-	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/agentapi"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/butler"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/butlerstore"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/operation"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/runtimedb"
 )
 
 type closureClient struct {

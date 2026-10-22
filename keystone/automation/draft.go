@@ -17,8 +17,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/policy"
-	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/policy"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/resource"
 )
 
 // DefaultDraftWindow is how far back a draft replays when the caller

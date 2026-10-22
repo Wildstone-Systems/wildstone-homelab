@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/agentapi"
-	"github.com/chickenrat17/wildstone-homelab/keystone/proposals"
-	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/agentapi"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/proposals"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/resource"
 )
 
 // Propose implements agentapi.Client (ADR-W039 §3.2 Proposals,

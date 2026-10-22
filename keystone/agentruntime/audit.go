@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/runtimedb"
 )
 
 // Audit event types. Every tool call produces tool.requested and then

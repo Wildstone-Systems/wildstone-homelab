@@ -11,8 +11,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/agentruntime"
-	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/agentruntime"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/runtimedb"
 )
 
 // scriptRuntime is an AgentRuntime whose "loop" is a Go function. It

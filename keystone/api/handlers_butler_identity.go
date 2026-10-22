@@ -19,8 +19,8 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
-	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/principal"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/runtimedb"
 )
 
 func (s *Server) listButlerMembers(_ *http.Request, _ principal.Identity) (any, int, error) {

@@ -29,7 +29,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/theme"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/theme"
 )
 
 // wallpaperTypes is every extension a shipped picture may have, and the

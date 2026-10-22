@@ -6,9 +6,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/adapter/caldav"
-	"github.com/chickenrat17/wildstone-homelab/keystone/adapter/mail/imapread/mimenorm"
-	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/adapter/caldav"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/adapter/mail/imapread/mimenorm"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/runtimedb"
 )
 
 // maxEventsPerMessage bounds how many candidates one message can

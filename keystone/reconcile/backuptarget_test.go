@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/plan"
-	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/plan"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/resource"
 )
 
 func backupTargetResource(name string) resource.Resource {

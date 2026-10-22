@@ -21,16 +21,16 @@ package upkeep
 
 import (
 	"fmt"
-	"github.com/chickenrat17/wildstone-homelab/keystone/householdtz"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/householdtz"
 	"log/slog"
 	"slices"
 	"sort"
 	"strings"
 	"time"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/commitment"
-	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
-	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/commitment"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/resource"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/runtimedb"
 )
 
 const (

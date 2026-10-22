@@ -19,10 +19,10 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
-	"github.com/chickenrat17/wildstone-homelab/keystone/redact"
-	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
-	"github.com/chickenrat17/wildstone-homelab/keystone/speech"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/principal"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/redact"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/runtimedb"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/speech"
 )
 
 // replySpeech is the text to read aloud for the reply to a voice

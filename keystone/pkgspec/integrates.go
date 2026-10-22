@@ -31,7 +31,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/integration"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/integration"
 )
 
 // AdapterContract is the newest adapter contract this Keystone

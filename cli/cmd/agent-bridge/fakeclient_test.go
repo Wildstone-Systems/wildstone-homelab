@@ -5,7 +5,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/agentapi"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/agentapi"
 )
 
 // fakeClient is an in-memory agentapi.Client + agentapi.DeliveryClient

@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/provider"
-	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/provider"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/resource"
 )
 
 func dnsResource(zone, name, rtype, content string, proxied bool) resource.Resource {

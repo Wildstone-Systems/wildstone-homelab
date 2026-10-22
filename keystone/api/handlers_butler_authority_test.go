@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/runtimedb"
 )
 
 // A control cannot add a capability, and the endpoint says so rather

@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/adapter/caldav"
-	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
-	"github.com/chickenrat17/wildstone-homelab/keystone/upkeep"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/adapter/caldav"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/runtimedb"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/upkeep"
 )
 
 // child records a Person who is scheduled and cannot sign in: the state

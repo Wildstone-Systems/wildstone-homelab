@@ -457,7 +457,7 @@ func (d *discord) call(ctx context.Context, method, path string, in, out any) er
 		return err
 	}
 	req.Header.Set("Authorization", "Bot "+d.token)
-	req.Header.Set("User-Agent", "DiscordBot (https://github.com/chickenrat17/wildstone-homelab, 1)")
+	req.Header.Set("User-Agent", "DiscordBot (https://github.com/Wildstone-Systems/wildstone-homelab, 1)")
 	if in != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}

@@ -3,10 +3,10 @@ package pkgtool
 import (
 	"testing"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/capability"
-	"github.com/chickenrat17/wildstone-homelab/keystone/portal"
-	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
-	"github.com/chickenrat17/wildstone-homelab/keystone/workspace"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/capability"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/portal"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/resource"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/workspace"
 )
 
 func TestWorkspaceCapabilityIsContainerFreeAndGrantsNothing(t *testing.T) {

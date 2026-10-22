@@ -11,9 +11,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/automation"
-	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
-	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/automation"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/resource"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/runtimedb"
 )
 
 // seedRoutine records one Wildstone routine in the given state.

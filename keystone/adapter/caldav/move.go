@@ -8,7 +8,7 @@ import (
 	"path"
 	"strings"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/sharedcalendar"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/sharedcalendar"
 )
 
 // MoveEvent uses CalDAV MOVE to retain the complete event, including alarms,

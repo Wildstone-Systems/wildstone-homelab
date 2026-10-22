@@ -20,9 +20,9 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/capability"
-	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
-	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/capability"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/principal"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/runtimedb"
 )
 
 // chatAdapterPrincipalPrefix names the principal minted for a chat

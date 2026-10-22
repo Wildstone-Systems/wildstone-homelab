@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/resource"
 )
 
 // The users file survives the shell that reads it.

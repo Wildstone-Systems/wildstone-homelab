@@ -1,4 +1,4 @@
-module github.com/chickenrat17/wildstone-homelab/proto
+module github.com/Wildstone-Systems/wildstone-homelab/proto
 
 go 1.25
 

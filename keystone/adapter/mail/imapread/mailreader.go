@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/adapter"
-	"github.com/chickenrat17/wildstone-homelab/keystone/adapter/mail"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/adapter"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/adapter/mail"
 )
 
 // MailReader is a Reader as the adapter's mail.Upstream sees it: the one

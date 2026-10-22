@@ -11,7 +11,7 @@ import (
 	"sort"
 	"strings"
 
-	wsv1 "github.com/chickenrat17/wildstone-homelab/proto/gen/wardstone/v1"
+	wsv1 "github.com/Wildstone-Systems/wildstone-homelab/proto/gen/wardstone/v1"
 )
 
 // OwnerLabel marks Docker objects Wardstone manages. It refuses to touch

@@ -30,13 +30,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/adapter"
-	"github.com/chickenrat17/wildstone-homelab/keystone/adapter/pantry"
-	"github.com/chickenrat17/wildstone-homelab/keystone/capability"
-	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
-	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
-	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
-	wsv1 "github.com/chickenrat17/wildstone-homelab/proto/gen/wardstone/v1"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/adapter"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/adapter/pantry"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/capability"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/principal"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/resource"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/runtimedb"
+	wsv1 "github.com/Wildstone-Systems/wildstone-homelab/proto/gen/wardstone/v1"
 )
 
 // PantryCapability is the capability a PantryOS pairing is recorded under.

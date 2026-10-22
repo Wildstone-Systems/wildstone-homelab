@@ -2,8 +2,8 @@ package api
 
 import (
 	"fmt"
-	"github.com/chickenrat17/wildstone-homelab/keystone/redact"
-	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/redact"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/runtimedb"
 	"regexp"
 	"strings"
 )

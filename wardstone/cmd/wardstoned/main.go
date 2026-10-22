@@ -13,7 +13,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/chickenrat17/wildstone-homelab/wardstone/internal/agent"
+	"github.com/Wildstone-Systems/wildstone-homelab/wardstone/internal/agent"
 )
 
 var version = "dev" // set via -ldflags at release

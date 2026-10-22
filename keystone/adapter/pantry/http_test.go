@@ -17,7 +17,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/adapter"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/adapter"
 )
 
 type seen struct {

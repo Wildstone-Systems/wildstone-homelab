@@ -2,7 +2,7 @@
 
 - **Status:** proposed; design only; not implemented by this document.
 - **Date:** 2026-10-08
-- **Project:** chickenrat17/wildstone-homelab
+- **Project:** Wildstone-Systems/wildstone-homelab
 - **ADR identifier:** W048
 - **Issue:** [#561](https://github.com/chickenrat17/wildstone-homelab/issues/561); tracker [#559](https://github.com/chickenrat17/wildstone-homelab/issues/559).
 - **Decision owner:** Wildstone maintainer.

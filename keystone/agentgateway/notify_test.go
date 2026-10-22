@@ -11,8 +11,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/agentapi"
-	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/agentapi"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/runtimedb"
 )
 
 func (f *fixture) openTaskOnConnection(t *testing.T, butlerName, owner, transport, externalID string) (string, agentapi.Handle, int64) {

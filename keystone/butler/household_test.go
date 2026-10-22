@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/butler/provider"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/butler/provider"
 )
 
 // householdSeams builds a family surface over in-memory fakes: a fixed

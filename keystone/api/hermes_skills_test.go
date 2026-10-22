@@ -3,8 +3,8 @@ package api
 import (
 	"testing"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/capability"
-	"github.com/chickenrat17/wildstone-homelab/keystone/catalog"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/capability"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/catalog"
 	"gopkg.in/yaml.v3"
 )
 

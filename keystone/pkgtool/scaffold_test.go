@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/pkgspec"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/pkgspec"
 )
 
 // writeScaffold renders a shape into a temp directory and returns the

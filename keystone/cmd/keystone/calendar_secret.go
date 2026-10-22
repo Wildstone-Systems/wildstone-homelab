@@ -3,10 +3,10 @@ package main
 import (
 	"context"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/agentgateway"
-	"github.com/chickenrat17/wildstone-homelab/keystone/domestic"
-	"github.com/chickenrat17/wildstone-homelab/keystone/operation"
-	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/agentgateway"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/domestic"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/operation"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/runtimedb"
 )
 
 // calendarSecretUse is the actual domestic call-site boundary. An unattended

@@ -29,9 +29,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/butler/provider"
-	"github.com/chickenrat17/wildstone-homelab/keystone/domestic"
-	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/butler/provider"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/domestic"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/resource"
 )
 
 // AgentClass names which Agent a manifest describes (ADR-W033 design

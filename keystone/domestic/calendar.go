@@ -37,14 +37,14 @@ package domestic
 import (
 	"context"
 	"fmt"
-	"github.com/chickenrat17/wildstone-homelab/keystone/householdtz"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/householdtz"
 	"net/http"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/adapter/caldav"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/adapter/caldav"
 )
 
 // CalendarCapability is the capability these executors belong to. It is

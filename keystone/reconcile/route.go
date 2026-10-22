@@ -5,7 +5,7 @@ import (
 	"path"
 	"strings"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/resource"
 )
 
 // routeFragmentPath returns the managed-file path Route/<name> is rendered

@@ -26,8 +26,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/ingressorigin"
-	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/ingressorigin"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/resource"
 )
 
 // autheliaClientsPath is the merged file, the one Authelia is pointed at.

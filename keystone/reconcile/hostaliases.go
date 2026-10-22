@@ -28,8 +28,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/plan"
-	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/plan"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/resource"
 )
 
 // hostAliasesForNode returns the names containers on this node must

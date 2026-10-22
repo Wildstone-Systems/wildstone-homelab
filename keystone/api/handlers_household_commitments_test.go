@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
-	"github.com/chickenrat17/wildstone-homelab/keystone/upkeep"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/runtimedb"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/upkeep"
 )
 
 func consoleHarness(t *testing.T) (*harness, string) {

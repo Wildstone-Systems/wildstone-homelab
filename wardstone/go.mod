@@ -1,10 +1,10 @@
-module github.com/chickenrat17/wildstone-homelab/wardstone
+module github.com/Wildstone-Systems/wildstone-homelab/wardstone
 
 go 1.25.0
 
 require (
-	github.com/chickenrat17/wildstone-homelab/keystone v0.0.0-00010101000000-000000000000
-	github.com/chickenrat17/wildstone-homelab/proto v0.0.0
+	github.com/Wildstone-Systems/wildstone-homelab/keystone v0.0.0-00010101000000-000000000000
+	github.com/Wildstone-Systems/wildstone-homelab/proto v0.0.0
 	github.com/coreos/go-systemd/v22 v22.7.0
 	golang.org/x/sys v0.47.0
 	google.golang.org/grpc v1.74.2
@@ -20,6 +20,6 @@ require (
 )
 
 replace (
-	github.com/chickenrat17/wildstone-homelab/keystone => ../keystone
-	github.com/chickenrat17/wildstone-homelab/proto => ../proto
+	github.com/Wildstone-Systems/wildstone-homelab/keystone => ../keystone
+	github.com/Wildstone-Systems/wildstone-homelab/proto => ../proto
 )

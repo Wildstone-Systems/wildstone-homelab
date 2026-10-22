@@ -25,16 +25,16 @@ import (
 	"testing"
 	"time"
 
-	wsv1 "github.com/chickenrat17/wildstone-homelab/proto/gen/wardstone/v1"
+	wsv1 "github.com/Wildstone-Systems/wildstone-homelab/proto/gen/wardstone/v1"
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/capability"
-	"github.com/chickenrat17/wildstone-homelab/keystone/pkgspec"
-	"github.com/chickenrat17/wildstone-homelab/keystone/plan"
-	"github.com/chickenrat17/wildstone-homelab/keystone/reconcile"
-	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
-	"github.com/chickenrat17/wildstone-homelab/keystone/statefile"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/capability"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/pkgspec"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/plan"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/reconcile"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/resource"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/statefile"
 )
 
 // testManagedPrefix mirrors keystone/reconcile's test convention (see

@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/crossapp"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/crossapp"
 )
 
 // emptyThen answers "empty" for the named capability and "ok" for

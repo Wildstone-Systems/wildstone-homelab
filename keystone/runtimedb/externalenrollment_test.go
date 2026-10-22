@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/agentapi"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/agentapi"
 )
 
 func enrollmentFixture(t *testing.T) (*DB, CreatePendingExternalRegistration, ExternalClientRegistration) {

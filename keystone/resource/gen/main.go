@@ -19,7 +19,7 @@ import (
 	"reflect"
 	"strings"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/resource"
 )
 
 // kindSpecs pairs each kind with its spec type. Adding a kind here is

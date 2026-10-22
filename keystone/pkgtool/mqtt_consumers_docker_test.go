@@ -30,7 +30,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/capability"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/capability"
 )
 
 func TestShippedMQTTConsumersAuthenticateToTheSecuredBroker(t *testing.T) {

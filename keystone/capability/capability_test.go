@@ -4,9 +4,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/resource"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/pkgspec"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/pkgspec"
 )
 
 func simplePackage() *pkgspec.Package {

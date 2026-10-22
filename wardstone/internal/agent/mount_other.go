@@ -2,7 +2,7 @@
 
 package agent
 
-import wsv1 "github.com/chickenrat17/wildstone-homelab/proto/gen/wardstone/v1"
+import wsv1 "github.com/Wildstone-Systems/wildstone-homelab/proto/gen/wardstone/v1"
 
 // Wardstone targets Linux; EnsureMount performs a real syscall.Mount which
 // has no portable equivalent, so non-Linux builds refuse outright rather

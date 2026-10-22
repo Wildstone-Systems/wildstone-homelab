@@ -5,8 +5,8 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/capability"
-	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/capability"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/resource"
 )
 
 // Home Assistant's bluetooth mode (#445), expanded for real.

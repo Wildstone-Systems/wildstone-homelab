@@ -37,8 +37,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/pkgspec"
-	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/pkgspec"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/principal"
 )
 
 // maxHARequestBytes bounds an orchestration request: a handful of ids.

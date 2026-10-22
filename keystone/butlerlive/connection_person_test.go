@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/butler"
-	"github.com/chickenrat17/wildstone-homelab/keystone/portal"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/butler"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/portal"
 )
 
 // Slice 11 (#212): §10 layer 1 ∩ layer 3. A Connection is a ceiling on

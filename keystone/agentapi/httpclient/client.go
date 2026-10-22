@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/agentapi"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/agentapi"
 )
 
 // Client implements agentapi.Client against Keystone's REST routes

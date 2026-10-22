@@ -10,11 +10,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/adapter/caldav"
-	"github.com/chickenrat17/wildstone-homelab/keystone/adapter/caldav/caldavfake"
-	"github.com/chickenrat17/wildstone-homelab/keystone/domestic"
-	"github.com/chickenrat17/wildstone-homelab/keystone/internal/dbtemplate"
-	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/adapter/caldav"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/adapter/caldav/caldavfake"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/domestic"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/internal/dbtemplate"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/runtimedb"
 )
 
 // now is a week before the school-night scenario (Thursday 15 October

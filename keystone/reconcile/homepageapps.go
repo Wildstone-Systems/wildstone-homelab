@@ -15,7 +15,7 @@ package reconcile
 // family switching profiles should see the same twelve cards with the
 // same names, because they are the same twelve cards.
 
-import "github.com/chickenrat17/wildstone-homelab/keystone/resource"
+import "github.com/Wildstone-Systems/wildstone-homelab/keystone/resource"
 
 // App is one launcher card for a Wildstone-served dashboard.
 //

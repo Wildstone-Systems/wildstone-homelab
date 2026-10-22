@@ -11,7 +11,7 @@ import (
 	"syscall"
 	"time"
 
-	wsv1 "github.com/chickenrat17/wildstone-homelab/proto/gen/wardstone/v1"
+	wsv1 "github.com/Wildstone-Systems/wildstone-homelab/proto/gen/wardstone/v1"
 )
 
 func (a *Agent) hostFacts() (*wsv1.OpResult_HostFacts, *wsv1.OpError) {

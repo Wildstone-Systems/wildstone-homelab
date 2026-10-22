@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/resource"
 )
 
 // TestHomepageLayoutIsAGridNotAList is the F87 headline. Homepage's

@@ -10,14 +10,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/agentapi"
-	"github.com/chickenrat17/wildstone-homelab/keystone/agentruntime/legacy"
-	"github.com/chickenrat17/wildstone-homelab/keystone/butler"
-	"github.com/chickenrat17/wildstone-homelab/keystone/butler/provider"
-	"github.com/chickenrat17/wildstone-homelab/keystone/butlerstore"
-	"github.com/chickenrat17/wildstone-homelab/keystone/portal"
-	"github.com/chickenrat17/wildstone-homelab/keystone/redact"
-	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/agentapi"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/agentruntime/legacy"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/butler"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/butler/provider"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/butlerstore"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/portal"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/redact"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/runtimedb"
 )
 
 // conversationSliceRounds bounds one TURN's model rounds. It is the

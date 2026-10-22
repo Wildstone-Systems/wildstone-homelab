@@ -37,7 +37,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/resource"
 )
 
 func TestSecuredMosquittoAuthenticatesFromHostAndBridge(t *testing.T) {

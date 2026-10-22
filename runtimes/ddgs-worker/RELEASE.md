@@ -48,7 +48,7 @@ container smoke test, reproducibility comparison or live conformance passed.
 The supported release workflow cannot supply that missing build. A publisher
 with permitted registry access is still required.
 The proposed private destination is
-`ghcr.io/chickenrat17/wildstone-ddgs-worker`; publication awaits approval and
+`ghcr.io/wildstone-systems/wildstone-ddgs-worker`; publication awaits approval and
 remains deferred. The verified pinned
 base, real multi-architecture image, pull/health/shutdown evidence and matching
 package-default/`ManagedReleaseImage` pins remain outstanding.

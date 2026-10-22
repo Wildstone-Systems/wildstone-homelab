@@ -25,7 +25,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/agentapi"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/agentapi"
 )
 
 // ErrRuntimePrincipalBound reports an attempt to bind a runtime

@@ -44,7 +44,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/portal"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/portal"
 )
 
 // Extension is the only kind of file the store reads or writes.

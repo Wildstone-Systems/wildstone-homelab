@@ -2,8 +2,8 @@ package butlerlive
 
 import (
 	"context"
-	"github.com/chickenrat17/wildstone-homelab/keystone/butler/provider"
-	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/butler/provider"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/runtimedb"
 )
 
 // Enforce at every call, including tool-result rounds and retries, and again

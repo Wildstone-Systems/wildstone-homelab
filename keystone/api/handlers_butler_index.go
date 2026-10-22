@@ -14,7 +14,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/principal"
 )
 
 // listIndexMeasurements reports what the retrieval fixtures actually

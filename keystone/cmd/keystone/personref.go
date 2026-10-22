@@ -18,7 +18,7 @@ import (
 	"sort"
 	"text/tabwriter"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb/personref"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/runtimedb/personref"
 )
 
 func personRefs(args []string) error {

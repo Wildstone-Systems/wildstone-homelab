@@ -35,13 +35,13 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
-	"github.com/chickenrat17/wildstone-homelab/keystone/householdtz"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/householdtz"
 	"io"
 	"net/http"
 	"strings"
 	"time"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/adapter"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/adapter"
 )
 
 const (

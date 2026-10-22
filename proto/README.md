@@ -28,8 +28,8 @@ Only needed when a .proto changes:
 go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
 go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
 cd proto && protoc \
-  --go_out=. --go_opt=module=github.com/chickenrat17/wildstone-homelab/proto \
-  --go-grpc_out=. --go-grpc_opt=module=github.com/chickenrat17/wildstone-homelab/proto \
+  --go_out=. --go_opt=module=github.com/Wildstone-Systems/wildstone-homelab/proto \
+  --go-grpc_out=. --go-grpc_opt=module=github.com/Wildstone-Systems/wildstone-homelab/proto \
   wardstone/v1/wardstone.proto
 ```
 
@@ -40,7 +40,7 @@ does, and it drives the same plugins:
 ```sh
 go install github.com/bufbuild/buf/cmd/buf@latest
 cd proto && buf generate --path wardstone/v1/wardstone.proto --template \
-  '{"version":"v1","plugins":[{"plugin":"go","out":".","opt":["module=github.com/chickenrat17/wildstone-homelab/proto"]}]}' .
+  '{"version":"v1","plugins":[{"plugin":"go","out":".","opt":["module=github.com/Wildstone-Systems/wildstone-homelab/proto"]}]}' .
 ```
 
 Pass the DIRECTORY as the input and select the file with `--path`. Given

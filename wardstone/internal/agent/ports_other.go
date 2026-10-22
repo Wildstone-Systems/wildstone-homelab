@@ -2,7 +2,7 @@
 
 package agent
 
-import wsv1 "github.com/chickenrat17/wildstone-homelab/proto/gen/wardstone/v1"
+import wsv1 "github.com/Wildstone-Systems/wildstone-homelab/proto/gen/wardstone/v1"
 
 // Wardstone targets Linux; this stub only keeps the module compiling on
 // developer machines (matches facts_other.go's pattern).

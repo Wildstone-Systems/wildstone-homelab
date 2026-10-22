@@ -21,7 +21,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/adapter"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/adapter"
 )
 
 const (

@@ -10,9 +10,9 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/butler"
-	"github.com/chickenrat17/wildstone-homelab/keystone/research"
-	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/butler"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/research"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/runtimedb"
 )
 
 const searchTTL = 15 * time.Minute

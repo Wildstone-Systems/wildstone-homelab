@@ -14,7 +14,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/research/publicfetch"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/research/publicfetch"
 )
 
 const (

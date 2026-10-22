@@ -11,8 +11,8 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/butler"
-	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/butler"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/runtimedb"
 )
 
 // fakeInventory is a tool surface with one opt-in tool per class.

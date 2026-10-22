@@ -35,11 +35,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/agentruntime"
-	"github.com/chickenrat17/wildstone-homelab/keystone/agentruntime/legacy"
-	"github.com/chickenrat17/wildstone-homelab/keystone/butler"
-	"github.com/chickenrat17/wildstone-homelab/keystone/butler/provider"
-	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/agentruntime"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/agentruntime/legacy"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/butler"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/butler/provider"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/runtimedb"
 )
 
 // nativeJobTimeout is the hard wall-clock bound on one turn's reasoning.

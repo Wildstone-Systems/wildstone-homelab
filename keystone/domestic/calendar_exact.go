@@ -22,7 +22,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/adapter/caldav"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/adapter/caldav"
 )
 
 // ErrCalendarAccess is every refusal because the acting Person may not

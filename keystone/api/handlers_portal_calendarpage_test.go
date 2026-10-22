@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/adapter"
-	"github.com/chickenrat17/wildstone-homelab/keystone/adapter/caldav"
-	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/adapter"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/adapter/caldav"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/resource"
 )
 
 const testCollection = "http://radicale:5232/GROUPS/Y2FsZW5kYXJfdXNlcnM=/"

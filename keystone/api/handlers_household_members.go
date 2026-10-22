@@ -26,8 +26,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/principal"
-	"github.com/chickenrat17/wildstone-homelab/keystone/resource"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/principal"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/resource"
 )
 
 // memberOwner owns an LdapUser the operator added by hand. It is not a

@@ -37,8 +37,8 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/gateway"
-	wsv1 "github.com/chickenrat17/wildstone-homelab/proto/gen/wardstone/v1"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/gateway"
+	wsv1 "github.com/Wildstone-Systems/wildstone-homelab/proto/gen/wardstone/v1"
 )
 
 // testDigestImage is a validly digest-pinned image reference for tests.

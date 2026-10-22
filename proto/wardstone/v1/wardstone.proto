@@ -15,7 +15,7 @@ syntax = "proto3";
 
 package wardstone.v1;
 
-option go_package = "github.com/chickenrat17/wildstone-homelab/proto/gen/wardstone/v1;wardstonev1";
+option go_package = "github.com/Wildstone-Systems/wildstone-homelab/proto/gen/wardstone/v1;wardstonev1";
 
 // KeystoneGateway is implemented by Keystone (the control plane).
 service KeystoneGateway {

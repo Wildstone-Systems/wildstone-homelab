@@ -6,7 +6,7 @@ import (
 	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
-	"github.com/chickenrat17/wildstone-homelab/keystone/pkgspec"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/pkgspec"
 	"os"
 	"path/filepath"
 	"strings"

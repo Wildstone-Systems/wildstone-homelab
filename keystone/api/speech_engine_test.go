@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chickenrat17/wildstone-homelab/keystone/catalog"
-	"github.com/chickenrat17/wildstone-homelab/keystone/runtimedb"
-	"github.com/chickenrat17/wildstone-homelab/keystone/speech"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/catalog"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/runtimedb"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/speech"
 )
 
 // speaches is a stand-in Speaches container on 127.0.0.1: it has no
