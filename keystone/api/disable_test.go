@@ -218,6 +218,26 @@ func TestARetainedSharedResourceDoesNotKeepAPackageInstalled(t *testing.T) {
 	}
 }
 
+// Retained data must not keep a removed instanced package installed.
+//
+// Disabling an instance deliberately retains its Volume and SeedFile
+// resources for recovery. They stay stamped with the package, so counting
+// any stamped resource left the dead instance in Installed.
+func TestRetainedHermesDataDoesNotKeepAnInstanceInstalled(t *testing.T) {
+	pkg := &pkgspec.Package{Metadata: pkgspec.Metadata{Name: "agent-hermes", Instanced: true}}
+	current := []resource.Resource{
+		res(resource.KindVolume, "hermes-data", "capability/agent", "agent-hermes"),
+		res(resource.KindSeedFile, "hermes-seed", "capability/agent", "agent-hermes"),
+	}
+	if packageIsInstalled(pkg, current) {
+		t.Fatal("retained data alone is not an installed instance")
+	}
+	current = append(current, res(resource.KindContainer, "hermes", "capability/agent", "agent-hermes"))
+	if !packageIsInstalled(pkg, current) {
+		t.Fatal("an instance running its own container is installed")
+	}
+}
+
 // A package that runs nothing — the config-shim shape — has no container
 // to look for, so its stamp is the only evidence there is.
 func TestAContainerlessPackageIsInstalledByItsStamp(t *testing.T) {
