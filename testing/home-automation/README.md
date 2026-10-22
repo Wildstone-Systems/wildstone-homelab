@@ -286,8 +286,8 @@ Three automated tests could not run where they were written (no IPv6,
 or the registry was blocked). They need Go on the VM:
 
 ```sh
-cd ~ && curl -fsSLO https://go.dev/dl/go1.25.1.linux-amd64.tar.gz
-mkdir -p ~/go-sdk && tar -C ~/go-sdk -xzf go1.25.1.linux-amd64.tar.gz
+cd ~ && curl -fsSLO https://go.dev/dl/go1.26.10.linux-amd64.tar.gz
+mkdir -p ~/go-sdk && tar -C ~/go-sdk -xzf go1.26.10.linux-amd64.tar.gz
 export PATH="$HOME/go-sdk/go/bin:$PATH"
 cd ~/wildstone-homelab/keystone
 sudo env PATH="$PATH" WILDSTONE_DOCKER_TESTS=1 go test ./pkgtool/ -run 'TestSecuredMosquitto' -v -count=1

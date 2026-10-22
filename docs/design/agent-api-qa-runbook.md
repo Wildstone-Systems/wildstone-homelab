@@ -47,14 +47,14 @@ git log --oneline --grep 'ADR-W039 Phase 6/H6' -1
 Expected: the last line names a commit whose message starts with
 `feat(api): re-render a packaged runtime as a reviewed Plan`.
 
-**Tool versions.** CI builds `main` with Go 1.25 and Node 22.
+**Tool versions.** CI builds `main` with Go 1.26 and Node 22.
 Check yours match closely enough:
 
 ```sh
 go version
 node --version
 ```
-Expected: `go1.25.x` and `v22.x`. A different patch version is fine; a
+Expected: `go1.26.x` and `v22.x`. A different patch version is fine; a
 different major version is not — install the right one before
 continuing.
 
