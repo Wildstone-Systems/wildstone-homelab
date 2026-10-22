@@ -1,6 +1,6 @@
 # Native Agent current-segment handoff
 
-Prepared 2026-10-02 for [epic #471](https://github.com/chickenrat17/wildstone_homelab-control-plane/issues/471).
+Prepared 2026-10-02 for [epic #98](https://github.com/Wildstone-Systems/wildstone-homelab/issues/98).
 This records the current foundation and in-flight integration. The epic and its
 release gates remain open. No new issue work, image publication or deployment is
 part of this segment. [ADR-W047](../decisions/ADR-W047-native-agent-research-and-workspaces.md)

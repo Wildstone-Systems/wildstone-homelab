@@ -1,7 +1,7 @@
 # Issue #407 — off-site (S3-compatible) backup: repository audit
 
 Audit of what exists today, what is missing, and the proposed epic shape
-for [#407](https://github.com/chickenrat17/wildstone-homelab/issues/407).
+for old private issue 407.
 Goal: a user-configurable S3-compatible endpoint for disaster recovery,
 where the user chooses which data goes off-site.
 

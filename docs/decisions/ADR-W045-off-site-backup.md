@@ -5,7 +5,7 @@
   I3 (#415), I4 (#416), I5 (#417) and I6 (#418) are done — off-site
   backups, the disk-space guard, NAS shares, excludes and data classes
   work end to end from the CLI.
-- **Issue:** [#407](https://github.com/chickenrat17/wildstone-homelab/issues/407).
+- **Issue:** old private issue 407.
   Audit: [`docs/design/issue-407-offsite-backup-audit.md`](../design/issue-407-offsite-backup-audit.md).
 - **Builds on:** ADR-W011 A4 (backup engine), ADR-W012 (secrets path),
   ADR-W018 A2 (recovery contract), ADR-W033 D1 (household secrets).

@@ -7,7 +7,7 @@ implementation planning; the original prose, tables and runtime notes remain
 historical evidence. The [gap report](gap-report.md) counts both sets.
 
 How to run one audit slice of
-[#151](https://github.com/chickenrat17/wildstone-homelab/issues/151).
+old private issue 151.
 
 Each slice is a separate GitHub issue and is meant to be run from a
 **fresh session** with no memory of the others. That is deliberate.
@@ -40,7 +40,7 @@ its old evidence.
    sections your issue names. Where it is silent or differs, the design
    contract and ADR-W033 win. See [`docs/README.md`](../README.md) for
    the full precedence.
-4. [#151](https://github.com/chickenrat17/wildstone-homelab/issues/151)
+4. old private issue 151
    — the ground rules and the findings already established, so you do
    not spend the session rediscovering them.
 5. [`CONTRIBUTING.md`](../../CONTRIBUTING.md) — the checks CI runs and

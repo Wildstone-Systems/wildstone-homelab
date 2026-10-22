@@ -4,7 +4,7 @@
 - **Date:** 2026-09-30
 - **Project:** Wildstone-Systems/wildstone-homelab
 - **ADR identifier:** W047
-- **Issue:** [#473](https://github.com/chickenrat17/wildstone-homelab/issues/473); tracker [#471](https://github.com/chickenrat17/wildstone-homelab/issues/471).
+- **Issue:** old private issue 473; tracker [#98](https://github.com/Wildstone-Systems/wildstone-homelab/issues/98).
 - **Binding v1 interface proposal:** [native-agent-capability-contract-v1](../design/native-agent-capability-contract-v1.md). These are new contracts to implement, not an inventory of shipped tools.
 - **Decision owner:** Wildstone maintainer.
 - **Scope:** native Agent research, persistent scoped files, user-facing artifacts, and explicit Filedrop export.
@@ -287,7 +287,7 @@ W032 and W046 need no scope reversal: the new surfaces preserve Owner-only Conso
 
 The accepted product decisions are now reconciled. The companion v1 contract fixes tool names/shapes, identifiers, errors, cursor/write-session semantics, provider configuration, route families, and ownership/publication/backup boundaries. Focused implementation issues choose database table/migration layout, journal/locking implementation, storage-platform support, snapshot coordination mechanics, and channel-specific confirmation/link UI within those contracts. These are not claims that those interfaces exist today. Tests must exercise the new grant resolver rules, privacy edges, and native runtime integration rather than merely test isolated filesystem helpers.
 
-The earlier [research issue #467](https://github.com/chickenrat17/wildstone-homelab/issues/467) is a related-work pointer; its current status and scope were not rechecked in this source review. Check it and other open issues before creating implementation tickets. Do not infer deployed capabilities from closed issue status.
+The earlier [research issue #97](https://github.com/Wildstone-Systems/wildstone-homelab/issues/97) is a related-work pointer; its current status and scope were not rechecked in this source review. Check it and other open issues before creating implementation tickets. Do not infer deployed capabilities from closed issue status.
 
 ### Evidence links
 

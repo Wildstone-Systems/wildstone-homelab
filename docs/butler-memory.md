@@ -8,7 +8,7 @@
 > does not match the design. Memory scopes are ADR-W033 C1–C11 and
 > [design contract](agent-system-design.md) §11. Treat anything below
 > as observation about the code. Remaining work is tracked from
-> [#151](https://github.com/chickenrat17/wildstone-homelab/issues/151).
+> old private issue 151.
 
 - **Status:** steps 1 and 2 of the ordering below were built and
   deployed. Step 3 was started and parked. Steps 4 to 7 are not planned

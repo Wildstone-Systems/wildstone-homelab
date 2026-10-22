@@ -1,7 +1,7 @@
 # Desired-state publication and bounded-approval contract
 
-- **Issue:** [#521](https://github.com/chickenrat17/wildstone_homelab-control-plane/issues/521)
-- **Coordinator:** [#580](https://github.com/chickenrat17/wildstone_homelab-control-plane/issues/580)
+- **Issue:** old private issue 521
+- **Coordinator:** [#130](https://github.com/Wildstone-Systems/wildstone-homelab/issues/130)
 - **Evidence base:** `e33a88036231e4c94ef95e6a2dbaffe985fcfdd4` (`main`, 2026-10-16)
 - **Status:** proposed for review; not an accepted ADR or implementation authority
 - **Would amend:** ADR-W007 A4/A6 and ADR-W008 A1/A2 if accepted

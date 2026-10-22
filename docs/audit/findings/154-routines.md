@@ -6,7 +6,7 @@
 - **Acceptance criteria:** AC02, AC10, AC16
 
 Written by the audit slice for
-[#154](https://github.com/chickenrat17/wildstone-homelab/issues/154).
+old private issue 154.
 **This file belongs to that slice alone** — no other session writes
 here, which is what keeps parallel audits from colliding. See
 [`../README.md`](../README.md) for how to run one and

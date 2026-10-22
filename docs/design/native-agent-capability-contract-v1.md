@@ -1,7 +1,7 @@
 # Native Agent capability contract v1
 
 - **Status:** proposed with [ADR-W047](../decisions/ADR-W047-native-agent-research-and-workspaces.md); not implemented by this document.
-- **Issue:** [#473](https://github.com/chickenrat17/wildstone-homelab/issues/473), parent [#471](https://github.com/chickenrat17/wildstone-homelab/issues/471).
+- **Issue:** old private issue 473, parent [#98](https://github.com/Wildstone-Systems/wildstone-homelab/issues/98).
 - **Baseline:** `0727a5d57b90216896a931dd0209c2f3c33791fc`; original reconciliation `71ff92a95c108c91a897a8b649c99d92bb4b2e2d`.
 
 This fixes interfaces for the implementation slices. Database table names,
