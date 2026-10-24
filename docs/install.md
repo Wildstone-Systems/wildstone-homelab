@@ -20,6 +20,17 @@ less install.sh
 sudo bash ./install.sh
 ```
 
+Or, without the inspection step, as one line:
+
+```sh
+curl -fsSLO https://github.com/Wildstone-Systems/wildstone-homelab/releases/latest/download/install.sh && sudo bash install.sh
+```
+
+Either way, download first and run second; do not pipe this into `bash`.
+The interactive install pairs the host as its own node by re-running its
+own file, which a piped script does not have, and its questions need a
+terminal.
+
 Use a published tag with `--version <tag>` when reproducing a deployment;
 `latest` selects the latest eligible release and does not necessarily select a
 prerelease or the current `main`. Release availability and installed versions
@@ -111,19 +122,19 @@ wild node mint-join
 
 `mint-join` prints the install command to run on the node with the
 address, token and CA fingerprint already filled in — paste it as
-given. While this repository is private it prints a second form as
-well, and that is the one to use: the anonymous `curl` in the public
-one-liner 404s on a private repo's release assets before the installer
-ever runs.
+given:
 
 ```sh
-# what mint-join prints, while the repo is private
-gh release download --repo Wildstone-Systems/wildstone-homelab --pattern install.sh
-sudo GH_TOKEN=<pat> bash ./install.sh --role node \
-  --keystone <keystone-host>:9440 \
-  --join-token <token> \
-  --ca-fingerprint <hex>
+# what mint-join prints
+curl -fsSL https://github.com/Wildstone-Systems/wildstone-homelab/releases/latest/download/install.sh | sudo bash -s -- \
+  --role node --keystone <keystone-host>:9440 \
+  --join-token <token> --ca-fingerprint <hex>
 ```
+
+Piping is fine for a node: only the interactive install re-runs its
+own file. `mint-join` also prints a second, token-based form under "While
+this repository is private"; that is left over from before the
+repository was public, and you can ignore it.
 
 To upgrade a node that has already joined, run
 `sudo bash ./install.sh --role node [--version vX.Y.Z]` — no token is

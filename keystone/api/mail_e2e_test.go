@@ -37,7 +37,7 @@ func TestSchoolNightEndToEndForTwoIsolatedAccounts(t *testing.T) {
 	// bo's private evening overlaps sam's school night; sam may not read
 	// bo-private, so it must never reach her review.
 	m.dav.Seed("bo-private", "bo-thing", "Bo's private appointment",
-		m.schoolDay.Add(17*time.Hour), m.schoolDay.Add(21*time.Hour))
+		e2eAt(m.schoolDay, 17), e2eAt(m.schoolDay, 21))
 
 	// First cadence: each monitor commits a baseline and reads nothing
 	// that was already in the mailbox.
@@ -63,7 +63,7 @@ func TestSchoolNightEndToEndForTwoIsolatedAccounts(t *testing.T) {
 		t.Fatalf("sam has %d candidates, want 1", len(samList))
 	}
 	samC := samList[0]
-	wantStart := m.schoolDay.Add(18 * time.Hour)
+	wantStart := e2eAt(m.schoolDay, 18)
 	if samC.Fields.Title != "School family night" || !samC.Fields.Start.Equal(wantStart) ||
 		samC.TargetCalendar != "sam-family" || samC.State != runtimedb.MailCandidateProposed {
 		t.Fatalf("sam's candidate: %+v", samC)

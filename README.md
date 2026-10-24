@@ -17,11 +17,17 @@ central to the design. Read [docs/vision.md](docs/vision.md).
 
 ## Status
 
-**Pre-alpha.** The repository contains the control plane and host agent,
-declarative packages, policy and Plan handling, installer, Console/CLI,
-household and Agent services, and local/off-site backup and recovery code.
-Implementation does not establish production readiness or that every package
-has passed live installation and restore testing. See the
+**Alpha.** [`v0.1.13-alpha`](https://github.com/Wildstone-Systems/wildstone-homelab/releases/tag/v0.1.13-alpha)
+is the first public release. The repository contains the control plane
+and host agent, declarative packages, policy and Plan handling,
+installer, Console/CLI, household and Agent services, and local/off-site
+backup and recovery code.
+
+It installs and runs, but implementation does not establish production
+readiness or that every package has passed live installation and
+restore testing: some capabilities are well tested, others are still
+experimental, and upgrades between alpha releases may need manual
+steps. Back up anything you can't afford to lose. See the
 [alpha tracker](https://github.com/Wildstone-Systems/wildstone-homelab/issues/13)
 and [documentation review](docs/design/documentation-refresh-2026-10-22.md).
 
@@ -39,11 +45,27 @@ runtime: independent management, packages as recovery groups and
 readiness-ordered restart. Kubernetes placement and automatic failover are
 not shipped features. No migration or feature removal is authorized by the draft.
 
+## Install
+
+On a Linux host, from a terminal, as one line:
+
+```sh
+curl -fsSLO https://github.com/Wildstone-Systems/wildstone-homelab/releases/latest/download/install.sh && sudo bash install.sh
+```
+
+The installer verifies every download against the release's
+`checksums.txt`, asks you to accept the AGPL-3.0 licence, and walks you
+through setup: Docker, optional Tailscale, your account, time zone and
+services. [docs/install.md](docs/install.md) covers the manual
+`--role` install, joining more machines, pinning a version, and
+air-gapped installs.
+
 ## Documentation
 
 - [docs/vision.md](docs/vision.md) — why this exists.
 - [docs/concepts.md](docs/concepts.md) — the mental model.
 - [docs/install.md](docs/install.md) — installing (from a release).
+- [docs/releasing.md](docs/releasing.md) — cutting a release.
 - [docs/recovery.md](docs/recovery.md) — the recovery contract and
   total-host-loss runbook, with scoped local and S3 CI drills.
 - [docs/threat-model.md](docs/threat-model.md) — selected trust boundaries, implementation evidence and residual risks.

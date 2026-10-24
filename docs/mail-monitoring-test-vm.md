@@ -43,10 +43,9 @@ installer *from that release* and pin the version:
 
 ```sh
 gh release download v0.1.13-rc.mail1 -R Wildstone-Systems/wildstone-homelab -p install.sh
-sudo GH_TOKEN=github_pat_... bash ./install.sh --role keystone --version v0.1.13-rc.mail1
+sudo bash ./install.sh --role keystone --version v0.1.13-rc.mail1
 ```
 
-(`GH_TOKEN` only while the repository is private; see `docs/install.md`.)
 Then join the VM as its own node, again with `--version`:
 
 ```sh
