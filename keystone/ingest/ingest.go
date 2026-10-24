@@ -16,6 +16,7 @@ import (
 
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/plan"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/policy"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/reconcile"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/resource"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/runtimedb"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/statefile"
@@ -66,6 +67,11 @@ type Ingestor struct {
 	// one. nil skips policy (unit-test posture; cmd/keystone always sets
 	// it).
 	Policy *policy.Engine
+	// ManagedPrefix is the reconciler's -managed-prefix, so an accepted
+	// edit's plan also lists the containers it restarts through the files
+	// they mount (reconcile.DependentRestarts). Its approval covers only
+	// listed steps (ADR-W008 A2a).
+	ManagedPrefix string
 }
 
 // Tick runs one detect → validate → decide pass (ADR-W007 A6).
@@ -141,6 +147,10 @@ func (in *Ingestor) Tick() (Result, error) {
 	// same audit/review/reconcile surface as an API-proposed one, and
 	// E3's reconciler converges from it.
 	p := plan.Diff(newTree, oldTree)
+	if restarts := reconcile.DependentRestarts(in.ManagedPrefix, oldTree, newTree); len(restarts) > 0 && len(p.Steps) > 0 {
+		reviewed := plan.WithSteps(*p, append(p.Steps, restarts...))
+		p = &reviewed
+	}
 	summary := fmt.Sprintf("out-of-band edit %.12s: %s", head, subject)
 	p.Summary = summary
 	planID := ""

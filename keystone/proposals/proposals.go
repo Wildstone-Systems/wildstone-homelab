@@ -107,6 +107,11 @@ type Deps struct {
 	// an agent older than plan.RadioInventoryProtocolMinor, or an unwired
 	// caller — falls back to exact cleaned paths (#435).
 	Radios func(node string) []plan.Radio
+	// ManagedPrefix is the reconciler's -managed-prefix. With it a Plan
+	// also lists the containers its change restarts through the files
+	// they mount (reconcile.DependentRestarts), so the Owner reviews
+	// those restarts and bounded approval covers them (ADR-W008 A2a).
+	ManagedPrefix string
 }
 
 func (d Deps) event(typ, planID string, id principal.Identity, msg string) {
@@ -297,6 +302,14 @@ func File(deps Deps, id principal.Identity, req Request, opts Options) (any, int
 	p := plan.Diff(desired, current)
 	if len(p.Steps) == 0 {
 		return nil, http.StatusBadRequest, ErrNoOp
+	}
+	// The restarts this change causes in resources it does not edit are
+	// part of what it does, so they are part of what is reviewed and
+	// approved; the reconciler runs nothing at Medium/High that a Plan
+	// did not list (ADR-W008 A2a).
+	if restarts := reconcile.DependentRestarts(deps.ManagedPrefix, current, desired); len(restarts) > 0 {
+		reviewed := plan.WithSteps(*p, append(p.Steps, restarts...))
+		p = &reviewed
 	}
 	p.Summary = req.Summary
 

@@ -1,7 +1,12 @@
 package loop
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
+
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/plan"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/resource"
 )
 
 // acceptedHarness is harness with the Statefile wired to the runtime DB's
@@ -83,4 +88,37 @@ func TestTickWaitsWhenNothingIsAccepted(t *testing.T) {
 	if out.Revision != "" || out.Repaired || app.ops != 0 {
 		t.Fatalf("tick with nothing accepted = %+v, ops %d; want a pause", out, app.ops)
 	}
+}
+
+// reviewedPlan is the plan_json of a Plan whose approver reviewed exactly
+// the diff from before to after, the way proposals.File records one.
+func reviewedPlan(t *testing.T, before, after []resource.Resource) string {
+	t.Helper()
+	p := plan.Diff(after, before)
+	raw, err := json.Marshal(plan.StoredProposal{BasedOnHead: "head", Summary: "reviewed", Plan: p})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw)
+}
+
+// reviewedDelete is the plan_json of a Plan that reviewed removing one
+// resource.
+func reviewedDelete(t *testing.T, kind resource.Kind, name string) string {
+	t.Helper()
+	return reviewedPlan(t, []resource.Resource{{
+		ApiVersion: resource.ApiVersion, Kind: kind,
+		Metadata: resource.Metadata{Name: name, Owner: "capability/test", Node: "n1"},
+	}}, nil)
+}
+
+// reviewedUpdate is the plan_json of a Plan that reviewed updating r to
+// its current content from an earlier image.
+func reviewedUpdate(t *testing.T, r resource.Resource) string {
+	t.Helper()
+	before := r
+	spec := *r.Container
+	spec.Image = "reg.example/old@sha256:" + strings.Repeat("0", 64)
+	before.Container = &spec
+	return reviewedPlan(t, []resource.Resource{before}, []resource.Resource{r})
 }

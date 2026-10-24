@@ -937,7 +937,7 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	// Out-of-band ingestion loop (ADR-W007 A6). An accepted or adopted
 	// edit pokes the reconcile service (ADR-W008 R2a) — a hand-committed
 	// change converges as promptly as an API-approved one.
-	ing := &ingest.Ingestor{State: state, DB: db, Log: log, Policy: pol}
+	ing := &ingest.Ingestor{State: state, DB: db, Log: log, Policy: pol, ManagedPrefix: managedPrefix}
 	go func() {
 		for {
 			res, err := ing.Tick()

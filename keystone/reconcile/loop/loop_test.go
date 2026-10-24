@@ -177,7 +177,8 @@ func TestPlanTickAppliesAndResolvesRecords(t *testing.T) {
 	// Two approved plans describing the same target tree resolve together
 	// (ADR-W008 A2).
 	for range 2 {
-		id, err := db.InsertPlan("op", "", "add volume", "low", `{"x":1}`)
+		id, err := db.InsertPlan("op", "", "add volume", "low",
+			reviewedPlan(t, nil, []resource.Resource{volume("data", "n1")}))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -333,7 +334,9 @@ func TestOfflineNode(t *testing.T) {
 	// Plan tick: an approved change that cannot land remains queued. An
 	// offline node is transport state, not evidence that desired state is
 	// invalid, so reconnecting must retry without another approval (#323).
-	id, err := db.InsertPlan("op", "", "deploy app", "low", `{"x":1}`)
+	// The fake agent reports every container as present but out of date,
+	// so the pass is an update; the Plan reviewed that update.
+	id, err := db.InsertPlan("op", "", "deploy app", "low", reviewedUpdate(t, container))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -454,7 +457,7 @@ func TestPlanInterruptedAtContainerGateRemainsApplyingAndRetries(t *testing.T) {
 	if err := state.Put(container); err != nil {
 		t.Fatal(err)
 	}
-	id, err := db.InsertPlan("op", "", "deploy app", "low", `{"x":1}`)
+	id, err := db.InsertPlan("op", "", "deploy app", "low", reviewedPlan(t, nil, []resource.Resource{container}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -512,7 +515,7 @@ func TestApplyingDeleteRecoversUnhealthyTargetAfterRestart(t *testing.T) {
 	app := &pendingDeleteApplier{exists: true}
 	l.Rec.Applier = app // fresh Reconciler: no in-memory managed refs
 
-	planJSON := `{"basedOnHead":"head","summary":"remove stale service","delete":[{"kind":"Container","name":"stuck"}],"plan":{"steps":[],"overallRisk":"Low"}}`
+	planJSON := reviewedDelete(t, resource.KindContainer, "stuck")
 	id, err := db.InsertPlan("op", "", "remove stale service", "High", planJSON)
 	if err != nil {
 		t.Fatal(err)
