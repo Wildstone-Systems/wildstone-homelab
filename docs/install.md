@@ -51,11 +51,16 @@ sudo bash ./install.sh --role keystone
 ```
 
 The canonical repository is public; anonymous release downloads do not need a
-GitHub token. For private forks or authenticated downloads, the installer also
-supports `--token` and `WILDSTONE_TOKEN`, `GH_TOKEN`, or `GITHUB_TOKEN`.
-Private repositories require an authenticated client to obtain the installer
-itself, for example `gh release download <tag> -R <owner/repo> -p install.sh`.
-Do not commit access tokens or paste them into a support report.
+GitHub token. `--token` (or `WILDSTONE_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN`) only
+authenticates downloads from the canonical repository: `install.sh` always
+fetches from `Wildstone-Systems/wildstone-homelab` and has no repository
+selector, so a fork's copy of the script still installs the upstream release.
+
+**Installing from a fork:** download the fork's complete release
+(`*_linux_*.tar.gz`, `checksums.txt` and `install.sh`), for example
+`gh release download <tag> -R <owner/repo>`, and install from that directory
+with `--artifact-dir <dir>` as in the air-gapped steps below. Do not commit
+access tokens or paste them into a support report.
 
 **Air-gapped host?** Download the release assets (`*_linux_*.tar.gz` +
 `checksums.txt` + `install.sh`) elsewhere with `gh release download`,
