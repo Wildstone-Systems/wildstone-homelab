@@ -3,8 +3,8 @@
 - **Issue:** [#179](https://github.com/Wildstone-Systems/wildstone-homelab/issues/179) (W050 gate)
 - **Replaces:** the `availability` array drafted in [#178](https://github.com/Wildstone-Systems/wildstone-homelab/pull/178), which stays a draft until this is accepted
 - **Evidence base:** `main` after #177 (`97628db`), 2026-10-24
-- **Status:** proposed. Owner decisions are in §9.
-- **Amends on acceptance:** ADR-W005 (package format), ADR-W050 §6.4 (placement)
+- **Status:** accepted 2026-10-24 by the owner, with the §9 recommendations taken as decisions
+- **Amends:** ADR-W005 (A5, package format) and ADR-W050 §2.3 (placement)
 
 This document defines what a package may **say about itself** when it runs on more than one machine, and what the **household chooses**. It keeps those two apart.
 
@@ -85,13 +85,14 @@ Lint renders the package in **every variant that changes a need**, not only with
 
 1. **Every mapped device is labelled.** A device source that matches no `devices` entry is an error. Lint fills each device param with a unique placeholder (`/dev/lint-<param>`), so it can tell which param produced which mapping.
 2. **`relocate: true` is refused** on a component that maps an `identity` device in any variant. It is allowed for `class` and `any-node` devices.
-3. **`relocate: true` with a read-write host folder** is allowed only for a folder the package reaches through a shared-storage requirement (W050 D4). Otherwise it is an error, because the folder doesn't exist on the other machine.
+3. **`relocate: true` with a host folder is an error, read-only or not,** because the folder (and the files in it) isn't on the other machine. Jellyfin reads `/srv/wildstone/media` read-only, and moved without it, it would show an empty library. The exception is Keystone's own managed config under `/etc/wildstone`: Keystone renders it, so it can deliver it to whichever machine runs the component. Once W050 D4 (shared storage) is decided, this rule may allow folders the package reaches through a shared-storage requirement (§9 decision 5).
 4. **`relocate: true` with host networking** is a **warning, not an error.** Host networking needs a machine, not necessarily *this* machine, but LAN discovery and fixed ports often assume one. The author confirms by setting `relocate: true` on purpose, and the warning stays in lint output.
 5. **`copies: many` is refused** on a component with any read-write mount, volume or host folder. This is a starting restriction. A later, reviewed exception (for example, a database the package proves is shared-safe) is out of scope.
 6. **`copies: many` is refused with host networking or an `identity` device**, because two copies would fight over one port or one stick.
 7. **`role: worker` needs a `main`** in the same package. A worker's `copies` and `relocate` are its own.
 8. **Every `deployment.components[].name` must match** a rendered Container in at least one variant. A misspelt name is an error, not a silent default.
 9. **No `deployment` and no `devices` is valid.** Everything gets the defaults. Rule 1 still applies: any mapped device must be labelled.
+10. **A free-text param may not change needs** (§9 decision 4). If rendering the param empty and with a placeholder changes a component's devices, host networking or host folders, the param must become an `enum:` or a labelled device param.
 
 The vocabulary (`identity`, `class`, `any-node`, `one`, `many`, `main`, `worker`) is checked in lint, as `accessGroups` is. See §7 for the parser.
 
@@ -103,7 +104,7 @@ Rendering every combination of every param would be too many. Lint renders a bou
 2. **Every device param filled at once**, with the placeholders from rule 1.
 3. **Each value of every `enum:` param**, one at a time, with the other params at their defaults. This catches Home Assistant's `bluetooth: host-bluez`, which adds host networking and D-Bus.
 
-That covers every case #179 names: Frigate with and without GPU or Coral, host networking switched on by a param, and tun. A package whose needs depend on a free-text param, rather than an enum or a device param, has to say so in a comment. This is listed as an open question (§9, Q4).
+That covers every case #179 names: Frigate with and without GPU or Coral, host networking switched on by a param, and tun. A free-text param that changes needs is refused (rule 10).
 
 ## 6. Worked examples
 
@@ -134,19 +135,16 @@ devices:
   - { param: usb_device, kind: identity }
 ```
 
-There is no `deployment` block, so the defaults apply: one copy, doesn't move. `relocate: true` would fail rule 2. With a network coordinator (`coordinator_url`) instead, no device is mapped and the app could move. That is the same param-dependent case as Frigate (§9 Q2).
+There is no `deployment` block, so the defaults apply: one copy, doesn't move. `relocate: true` would fail rule 2. With a network coordinator (`coordinator_url`) instead, no device is mapped and the app could move. That is the same param-dependent case as Frigate, and under §9 decision 2 it doesn't move either.
 
 **Relocatable GPU app, `media-jellyfin`** (when it gains its iGPU param):
 
 ```yaml
 devices:
   - { param: gpu_device, kind: class, class: gpu }
-deployment:
-  components:
-    - { name: jellyfin, relocate: true }
 ```
 
-It may move only to a machine labelled `gpu`. Rule 3 also applies to its media folder.
+The GPU is a type of device, so on its own it would allow `relocate: true` on any machine labelled `gpu`. But Jellyfin also reads the media folder from the host, so rule 3 refuses `relocate: true` until D4 is decided. Until then, the honest declaration is the GPU label alone, and Jellyfin stays put. After D4, adding `deployment: { components: [{ name: jellyfin, relocate: true }] }` lets it move to another GPU machine that can see the shared media.
 
 **Main plus workers, `photos-immich`:**
 
@@ -170,7 +168,7 @@ deployment:
     - { name: frigate, relocate: true }
 ```
 
-This **fails** rule 2 in the "every device filled" variant, because the Coral is a specific device. The honest declaration is to leave `relocate` out (the default). The household gets moving only by not using a Coral, and that becomes a question for §9 Q2.
+This **fails** rule 2 in the "every device filled" variant, because the Coral is a specific device. The honest declaration is to leave `relocate` out (the default). Under §9 decision 2 it stays that way: Frigate doesn't move.
 
 ## 7. Compatibility and versioning
 
@@ -194,17 +192,17 @@ This section is recorded here so it stays separate. It is implemented in the mul
 - **Changing it is a Plan,** approved like any other change. Keystone's policy check refuses a policy that exceeds the package's declaration.
 - **This document does not promise availability.** `keepRunning` only means "Keystone will try to restart it elsewhere". Whether that is safe depends on #180's storage and partition proof (single writer, detach and reattach).
 
-## 9. Open questions for the owner
+## 9. Owner decisions (2026-10-24)
 
-1. **Is the conservative default acceptable for the catalog?** With it, most packages don't move until someone declares `relocate: true`. The alternative is defaulting `relocate: true` for packages with no device and no host folder, which is less safe and less work.
-2. **Frigate and similar packages:** should a declaration be allowed to depend on a param (relocatable unless a Coral is set), or is "leave it out" enough? The first needs a small expression language; the second is simple, and I recommend it.
-3. **Host networking:** is a warning (rule 4) enough, or should `relocate: true` with host networking need an explicit `hostNetworkRelocates: true`?
-4. **Free-text params that change needs:** should lint refuse them (forcing an enum), or accept a comment? I recommend refusing, but it touches a few existing packages.
-5. **Shared-storage folders (rule 3):** this depends on W050 D4 (the NAS question). Until D4 is decided, should rule 3 refuse every read-write host folder for `relocate: true`?
+1. **Conservative default: kept.** A package that says nothing doesn't move. `relocate: true` is declared one package at a time.
+2. **Param-dependent packages: leave the field out.** Frigate (Coral) and Zigbee (USB stick) declare no `relocate`, and there is no condition language. This can be revisited if it is missed.
+3. **Host networking: a warning is enough** (rule 4). There is no second switch.
+4. **Free-text params that change needs: refused.** Lint rule 10: if a free-text param changes a component's needs (a device, host networking or a host folder), it must become an `enum:` or a device param. Lint detects this by rendering the param empty and with a placeholder.
+5. **Host folders before D4: refused.** Until W050 D4 (shared storage) is decided, rule 3 refuses `relocate: true` for every component that mounts a host folder. Read-only folders are included, because a read-only library on the wrong machine is just as empty. Keystone-managed `/etc/wildstone` config is the exception.
 
 ## 10. Acceptance (from #179)
 
-- [ ] Schema and examples for a stateless app, a SQLite singleton, a device-pinned app, a relocatable GPU app, and a main plus workers (§3, §6).
-- [ ] Conservative defaults, supported-versus-selected semantics, and a parameter-aware lint strategy (§2, §4, §5, §8).
-- [ ] #178 reconciled before merge (§7).
-- [ ] #151, #158, #161, #167 and #171 aligned, with no runtime behaviour from metadata alone. This is done when the owner accepts the contract and the ADR-W005 and ADR-W050 amendments are written.
+- [x] Schema and examples for a stateless app, a SQLite singleton, a device-pinned app, a relocatable GPU app, and a main plus workers (§3, §6).
+- [x] Conservative defaults, supported-versus-selected semantics, and a parameter-aware lint strategy (§2, §4, §5, §8).
+- [x] #178 reconciled before merge (§7).
+- [x] #151, #158, #161, #167 and #171 aligned, with no runtime behaviour from metadata alone (ADR-W005 A5, ADR-W050 §2.3).

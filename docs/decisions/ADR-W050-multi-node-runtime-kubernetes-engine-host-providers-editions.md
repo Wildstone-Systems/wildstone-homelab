@@ -81,20 +81,15 @@ contract.
   VMs; it never moves or restarts Wildstone apps. One controller per
   decision: Kubernetes places apps, Proxmox (if present) owns VMs.
 
-### 2.3 Packages gain one field: `availability`
+### 2.3 Packages declare deployment capabilities (amended 2026-10-24, #179)
 
-| Value | Meaning | Examples |
-|---|---|---|
-| `pinned` | Needs hardware on one node; never moves | Zigbee or Z-Wave stick |
-| `failover` (default for stateful apps) | One copy; restarts on another node | Jellyfin, Immich, Keystone |
-| `replicated` | Several copies behind one Service | Stateless web front ends |
-| `offload` | One main copy plus workers on other nodes | Jellyfin + transcode workers |
+The original single `availability` list (pinned / failover / replicated / offload) is replaced by the accepted [package deployment capabilities contract](../design/package-deployment-capabilities-contract.md). In short:
 
-- A package declares which values it supports; the household toggle only
-  chooses between them. A package that cannot run as two copies (for
-  example one using SQLite) never offers `replicated`.
-- Hardware needs become node selectors on Wardstone-applied labels
-  (`has-igpu`, `has-zigbee`), not host paths in the package.
+- **What a package needs** is worked out by lint from what it renders. Each device is labelled `identity` (this exact device), `class` (any device of a type, such as a GPU) or `any-node` (every machine has one).
+- **What a package can safely do** is declared per Container: `copies` (one or many), `relocate` (may restart on another machine) and `role` (main or worker). The defaults are one copy, doesn't move, main: today's behaviour.
+- **What the household picks** (keep running elsewhere, number of copies, where workers run) lives in Keystone, is changed by a Plan, and can never exceed the package's declaration. A package never chooses a replica count.
+- Hardware needs become node selectors on Wardstone-applied labels (`gpu`, `coral`), not host paths in the package.
+- Nothing reads these fields until a multi-node backend slice does.
 
 ### 2.4 The engine is small
 
