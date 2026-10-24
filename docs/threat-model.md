@@ -1,8 +1,11 @@
-# Threat model (as built)
+# Threat model: boundaries, evidence and residual risks
 
-Refreshed for E13 (ADR-W018 A3) against the code as it exists today.
-Each mitigation names the ADR that decided it and, where it matters,
-the test that pins it.
+Documentation review: 2026-10-22, baseline
+`60df9dcbc1daa99d43f7692eb83f7d72f7070956`. This updates selected stale
+claims by reading implementation, tests and accepted ADRs; it is not a fresh
+penetration test or a complete security audit. Some detailed sections retain
+historical evidence. [ADR-W033](decisions/ADR-W033-the-agent-design.md) and
+the [agent design](agent-system-design.md) govern newer Agent semantics.
 
 ## Assets
 
@@ -17,16 +20,17 @@ the test that pins it.
 
 ### Internet → public API
 
-- One API, every caller (ADR-W007). Fixed middleware chain
-  authn → RBAC → rate limit → handler → audit; no route opts out.
-- Opaque `wst_` bearer tokens, stored as sha256 only; authn failures
-  are indistinguishable and share one strict anonymous rate bucket
-  (token guessing is globally throttled).
-- Closed role set; the butler role structurally lacks approve/manage.
-- **Redaction is a serialization property**: every response body passes
-  the redacting encoder; the only carve-outs are the two mint
-  responses, each carrying a secret in the single moment it exists
-  (`TestRedactionProperty`).
+- Public management routes, browser sessions, machine credentials and Agent
+  transports have different authentication entry points. Do not interpret
+  the older claim that every route uses one bearer middleware chain literally.
+  See `keystone/api/api.go`, `keystone/consoleauth`, `keystone/principal`
+  and the external enrollment/OAuth handlers.
+- Console is Owner-only with OIDC/PKCE and authentication freshness; machine
+  API tokens are opaque and stored hashed. Person roles, Agent classes and
+  machine credential roles are distinct.
+- Redaction and bounded outputs are defense in depth. Explicit response and
+  credential-mint handling must be reviewed per route; no assertion that only
+  two responses are exempt from encoding is made here.
 
 ### Keystone → nodes
 
@@ -35,8 +39,8 @@ the test that pins it.
   network gets you neither a join nor a replay.
 - **Closed op surface, no Exec** (ADR-W003): a fully compromised
   Keystone can manage containers/volumes/managed files on nodes but
-  cannot run arbitrary commands, read arbitrary paths, or write
-  outside managed prefixes (agent-side path resolution refuses
+  has no generic host-shell operation and cannot use managed-file operations
+  to read arbitrary paths or write outside managed prefixes (agent-side path resolution refuses
   traversal and symlink escapes).
 - Images must be digest-pinned; the agent refuses un-pinned refs.
 - Ownership labels: the agent refuses to touch containers it does not
@@ -44,13 +48,14 @@ the test that pins it.
 
 ### Operator input → state
 
-- Plans are the only write path; a human approve verb gates every
-  change (ADR-W004/W007). Policy (ADR-W009) validates every proposed
+- Infrastructure proposals use Plans; a human approves them (ADR-W004/W007). Policy (ADR-W009) validates every proposed
   tree — public routes require auth, secret-shaped literals are
   rejected from specs (`SecretShaped` shares its definition with the
   redactor, so they cannot disagree).
-- The Statefile is git-backed: out-of-band edits are ingested as
-  proposals, not silently applied.
+- The Statefile is git-backed. Do not assume it is an atomic authority
+  boundary across Git, the worktree and SQLite. The proposed
+  [publication/approval contract](design/desired-state-publication-and-approval-contract.md)
+  addresses those boundaries and is not implementation authority.
 
 ### Secrets
 
@@ -173,9 +178,12 @@ propose an event to its Person and nothing else.
 ADR-W006/W017; the red-team suite (`keystone/butler/redteam_test.go`,
 `injection_test.go`) is pinned and release-blocking:
 
-- Structural ceiling: read tools + `propose_change` only; the package
-  imports no apply capability (`structural_test.go`); proposals land
-  in state `proposed` under principal `butler` acting-for the caller.
+- Infrastructure proposals remain subject to human approval. The older
+  read-plus-propose-only description applies to the infrastructure path, not
+  every Agent tool. Current Owner/Member gateways expose granted application
+  tools and an opt-in Owner `host.*` family with its own tier/confirmation
+  checks. See `keystone/butler/owner_toolset.go`, `hostops_manifest_test.go`
+  and `keystone/domestic`; Agents cannot approve their own Plans.
 - **A container is never handed the node's secrets.** The agent's data
   directory (node identity, the secret-store key, the encrypted secrets)
   lives outside every managed prefix, and `EnsureContainer` refuses a bind
@@ -207,10 +215,15 @@ ADR-W006/W017; the red-team suite (`keystone/butler/redteam_test.go`,
 - The public API binds loopback/tailnet by default and offers no TLS
   of its own — exposure beyond that perimeter needs a TLS reverse
   proxy in front; public app ingress is Route-managed Caddy, but the
-  API itself is not meant to be internet-facing at MVP.
+  API must not be exposed wholesale. Explicit enrollment/callback routes have
+  their own ingress and identity contracts; do not infer safe exposure for
+  every route from their existence.
 - A malicious human admin is out of scope: admin approves plans, and
   approved plans run.
-- Docker itself is trusted on nodes; container escape is out of scope.
+- Docker and the workload host kernel are trusted execution dependencies.
+  A container escape or compromised allowed image can compromise the node;
+  host networking, D-Bus, device mappings and selected network capabilities
+  increase exposure. A closed wire vocabulary does not remove this risk.
 - DoS beyond token-bucket rate limiting is out of scope.
 - A reply token is bounded by time, not by use: within its TTL it can
   post more than the one answer it was minted for. Single-use reply
@@ -219,3 +232,18 @@ ADR-W006/W017; the red-team suite (`keystone/butler/redteam_test.go`,
 - The drift classifier protects foreign resources but cannot protect
   Wildstone-owned resources from hand edits on the node; drift repair
   reverts what it observes, Low-risk only.
+
+## Proposed failure-domain and Proxmox boundary (not implemented)
+
+[ADR-W051](decisions/ADR-W051-failure-domains-and-recovery.md)
+introduces requirements, not new credentials or execution authority. Under
+ADR-W050, Proxmox (if used) only hosts k3s node VMs: no Proxmox HA for
+workloads, no Docker or k3s directly on the hypervisor by default, and no
+Proxmox credentials for the Butler. Several VMs on one machine do not protect
+against shared power/storage failure. Guest backups must explicitly
+account for external mounts, passthrough and application-consistent state.
+
+Keep management recovery independent of household SSO and keep an external
+observer for complete host loss. Never promote two Keystone coordinators from
+replicated state. Proposed application adapters must reuse existing authority
+and secret boundaries; declaring a supported action is not permission to run it.

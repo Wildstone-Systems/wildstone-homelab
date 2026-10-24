@@ -1,18 +1,44 @@
 # Installing Wildstone
 
+Reviewed 2026-10-22 against `60df9dcbc1daa99d43f7692eb83f7d72f7070956`.
+Canonical public repository: [Wildstone-Systems/wildstone-homelab](https://github.com/Wildstone-Systems/wildstone-homelab).
+These instructions describe the existing Linux/systemd installer, not the
+proposed k3s runtime of [ADR-W050](decisions/ADR-W050-multi-node-runtime-kubernetes-engine-host-providers-editions.md). See also [ADR-W051](decisions/ADR-W051-failure-domains-and-recovery.md).
+
+## Choose the existing installation path
+
+- **One Linux guest:** interactive setup installs Keystone and a workload node together. This is the simplest current path and shares a guest failure domain.
+- **Separate Linux guests/hosts:** install Keystone with `--role keystone`, then enroll workload nodes with `--role node`. Audit each package's identity, secret, storage and network locality before distributing it.
+- **Proxmox:** provision the Linux guest yourself. Do not run this installer in the Proxmox hypervisor shell: its workload path installs/configures Docker and host services. Native LXC provisioning and Docker-in-LXC compatibility are not established by this guide.
+
+From a terminal on the chosen Linux machine, download and inspect the script,
+then run the interactive path:
+
+```sh
+curl -fsSLO https://github.com/Wildstone-Systems/wildstone-homelab/releases/latest/download/install.sh
+less install.sh
+sudo bash ./install.sh
+```
+
+Use a published tag with `--version <tag>` when reproducing a deployment;
+`latest` selects the latest eligible release and does not necessarily select a
+prerelease or the current `main`. Release availability and installed versions
+must be checked before assuming a source feature is present. For automation,
+node enrollment or separate management, use the role-based steps below.
+
 Wildstone is two binaries plus a CLI:
 
 - **keystone** — the control plane: agent gateway (`:9440`, mTLS),
   public HTTP API (`127.0.0.1:9441` by default), Statefile, runtime DB,
   reconciler, backup engine, Butler host.
-- **wardstoned** — the node agent: the only thing that touches Docker,
+- **wardstoned** — the typed workload node agent for Docker operations,
   through a closed operation surface (ADR-W003). One per node.
 - **wild** — the operator CLI, talking to the same public API as the
   Console and the Butler (ground rule: there is ONE API).
 
 ## Prerequisites
 
-- A Linux host for Keystone (no Docker required there).
+- A Linux host with systemd for Keystone. A control-plane-only role does not require Docker at install time; a combined install and Docker-based recovery tooling do.
 - Docker on every node that will run workloads.
 - Releases are published from `v*` tags with `checksums.txt`
   (ADR-W014); the installer verifies sha256 before installing.
@@ -24,21 +50,17 @@ curl -fsSLO https://github.com/Wildstone-Systems/wildstone-homelab/releases/late
 sudo bash ./install.sh --role keystone
 ```
 
-**Private repo?** An anonymous download cannot reach a private
-repository's release assets. Pass a GitHub token and the installer
-switches to the authenticated release-asset API:
+The canonical repository is public; anonymous release downloads do not need a
+GitHub token. `--token` (or `WILDSTONE_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN`) only
+authenticates downloads from the canonical repository: `install.sh` always
+fetches from `Wildstone-Systems/wildstone-homelab` and has no repository
+selector, so a fork's copy of the script still installs the upstream release.
 
-```sh
-sudo GH_TOKEN=github_pat_... bash ./install.sh --role keystone
-# or: sudo bash ./install.sh --role keystone --token github_pat_...
-```
-
-The token needs only **contents: read** on this repository (a
-fine-grained PAT scoped to it is enough). `WILDSTONE_TOKEN` and
-`GITHUB_TOKEN` are also read. The `curl` above that fetches
-`install.sh` is itself anonymous, so while the repo is private get the
-script with an authenticated client instead:
-`gh release download <tag> -R Wildstone-Systems/wildstone-homelab -p install.sh`.
+**Installing from a fork:** download the fork's complete release
+(`*_linux_*.tar.gz`, `checksums.txt` and `install.sh`), for example
+`gh release download <tag> -R <owner/repo>`, and install from that directory
+with `--artifact-dir <dir>` as in the air-gapped steps below. Do not commit
+access tokens or paste them into a support report.
 
 **Air-gapped host?** Download the release assets (`*_linux_*.tar.gz` +
 `checksums.txt` + `install.sh`) elsewhere with `gh release download`,
@@ -233,11 +255,12 @@ than as anything naming the setting.
 Re-running the installer to upgrade leaves an existing join alone, so
 this is safe on every run.
 
-**Why the host and not a container.** Tailscale needs `/dev/net/tun`
-and `NET_ADMIN`. The Wardstone operation surface carries neither, on
-purpose — a closed surface with no way to grant a container host
-network control is the property the whole design defends. So this is
-host setup you own, exactly like Docker.
+**Tailscale is node setup.** The installer runs tailscaled on the Linux
+machine being installed (the guest, when using Proxmox), rather than deploying
+it as a managed application. Some reviewed Home Assistant/Thread profiles now
+have narrowly allowed network capabilities; that does not turn this installer
+step into a generic privileged-container interface. Tailnet membership remains
+outside Wildstone's desired state, like Docker installation.
 
 The consequence is that the tailnet join is **not Wildstone-managed**:
 it is not in the Statefile, not reconciled, and not restored when you
@@ -725,3 +748,23 @@ into the volume, move the stick across, enable it.
    block of `configuration.yaml`, on an older config) include
    `172.16.0.0/12` and `127.0.0.1/32`, with `use_x_forwarded_for: true`.
 8. **Turn the old installation off** for good, and keep its backup.
+
+## Verify startup and recovery before relying on the installation
+
+The installer enables/restarts systemd units and checks that they stay active
+for a short interval (`scripts/install.sh: install_unit`). That is not a
+post-outage application readiness test. Check `systemctl is-enabled` and
+`systemctl status` for Keystone/Wardstone, then verify application login,
+storage mounts, backups and the route used by household clients.
+
+On Proxmox, guest autostart/order/delays are separate operator configuration;
+this installer does not set them. Hardware AC-power restoration is also a
+separate prerequisite. A running guest is not proof of application readiness.
+Test restart behavior in a disposable installation before scheduling a real
+reboot. Keep a direct SSH/console recovery path that does not require the
+identity service being repaired.
+
+Follow [disk and recovery guardrails](operations/disk-and-recovery.md) for
+capacity/mount checks, and place host-loss observation outside the physical
+host. Configure and test the [recovery kit and restore path](recovery.md);
+placing every backup on the same host does not protect against its loss.

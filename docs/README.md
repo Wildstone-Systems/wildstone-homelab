@@ -2,7 +2,7 @@
 
 Wildstone product documentation and ADRs.
 
-- `02-implementation-scope.md` — implementation scope (epics E0–E13, milestones M0–M5, sizing, cut line).
+- `02-implementation-scope.md` — historical implementation scope, epics and estimates, with current planning guidance.
 - `decisions/` — Wildstone ADRs (W-series).
 
 User and operator docs (E13, ADR-W018):
@@ -10,7 +10,7 @@ User and operator docs (E13, ADR-W018):
 - `install.md` — installing Keystone, joining nodes, `wild`, Console, Butler.
 - `concepts.md` — Statefile, plans, reconcile, principals, capabilities, secrets, backups, and the Butler ceiling.
 - `recovery.md` — recovery contract and total-host-loss runbook.
-- `threat-model.md` — threat model refreshed against as-built behavior.
+- `threat-model.md` — selected trust-boundary review, implementation evidence and residual risks.
 - `household-secrets.md` — household and Personal secret storage, including mailbox app passwords.
 - `mail-monitoring-test-vm.md` — testing mailbox monitoring on a VM from a pre-release tag.
 - `vision.md` — product direction and standing principles.
@@ -19,6 +19,18 @@ User and operator docs (E13, ADR-W018):
 - `repository-settings.md` — the GitHub repository and organization settings, rulesets, and Sponsors setup.
 
 The original design brief (`00-design-brief-v0.1.md`) and architecture proposal (`01-architecture-proposal.md`) remain in the maintainer's private reference deployment repo and are not published.
+
+## Deployment, terminology and application management proposals
+
+- [Glossary](glossary.md) — existing terms and separately marked proposed management terms.
+- [ADR-W051](decisions/ADR-W051-failure-domains-and-recovery.md) — proposed failure domains and recovery under ADR-W050: management isolation, packages as recovery groups, readiness-ordered restart, bounded remediation.
+- [Application Management Contract 0.1](design/application-management-contract-v0.1.md) — draft operational facets and authority boundaries, not a new wire protocol or executable schema.
+- [Package comparison](design/application-management-contract-v0.1-comparison.md) — source-based application matrix and unresolved runtime verification.
+- [Failure-domain review](design/failure-domain-recovery-review.md) — investigation order, candidate dispositions and acceptance gates; no feature removal or cutover approved.
+- [Documentation review](design/documentation-refresh-2026-10-22.md) — what was refreshed, source baseline and limits.
+- [Disk and recovery guardrails](operations/disk-and-recovery.md) — existing operator setup for capacity, mounts and external observation.
+
+These proposals do not supersede accepted ADRs or prove production support.
 
 ## Agent / Butler architecture
 
@@ -68,14 +80,14 @@ The detailed implementation sequence belongs in GitHub issues/planning. ADR-W033
 - [ADR-W042](decisions/ADR-W042-voice-pipeline-speech-to-text.md) — implemented: voice part one. Voice messages on Telegram, Discord, Slack and Matrix, and dictation on the dashboard and Console, become text on the house's own Speaches engine (or OpenAI, only for an Agent that already sends out of the house); a stranger's audio is never transcribed, and a transcript cannot run a command or store a secret.
 - [ADR-W043](decisions/ADR-W043-voice-pipeline-spoken-replies.md) — implemented: voice part two. Replies read aloud with Kokoro under the same privacy rule: a voice message is answered with a voice message, and the dashboard and Console have a listen button; spoken turns carry a 🎙️.
 - [ADR-W044](decisions/ADR-W044-pantryos-integration.md) — proposed: the PantryOS integration. PantryOS may run on its own machine (connection-only); a thin HTTP adapter over PantryOS's `pantry-1` contract; PantryOS owns the grocery list when connected, with no silent fallback; `pantry.*` events and agent tools with risk tiers, including a step-by-step cook-along.
-- [ADR-W045](decisions/ADR-W045-off-site-backup.md) — accepted, not yet implemented: off-site backup to S3-compatible storage. Opt-in only, ciphertext only; a `BackupTarget` kind; a per-plan route (`offsite-only`, or `local-and-offsite` via `restic copy`) with a separate password; a disk-space guard so a local copy never fills its disk; user-selectable plans, host folders and NAS shares; a whole-site recovery set (Statefile, runtime DB, sealed secrets) and a recovery kit.
+- [ADR-W045](decisions/ADR-W045-off-site-backup.md) — accepted, with off-site engine, whole-site recovery and CI drill code present: opt-in backup to S3-compatible storage. See `keystone/backup/offsite.go`, `keystone/recovery` and `scripts/offsite-exit-drill.sh`; inspect actual run results and application restore evidence. Opt-in only, ciphertext only; a `BackupTarget` kind; a per-plan route (`offsite-only`, or `local-and-offsite` via `restic copy`) with a separate password; a disk-space guard so a local copy never fills its disk; user-selectable plans, host folders and NAS shares; a whole-site recovery set (Statefile, runtime DB, sealed secrets) and a recovery kit.
 - [ADR-W046](decisions/ADR-W046-markdown-knowledge.md) — proposed: the household keeps its knowledge as a folder of Markdown files. `knowledge-wildstone` owns the folder, its backup and six bounded agent tools (list, search, read, and write/append/update that never overwrite blindly and refuse executable content). `notes-silverbullet` is a removable browser UI over the same folder.
 - [ADR-W048](decisions/ADR-W048-skill-lifecycle-dependencies-and-rollout.md) — proposed: native Agent skill lifecycle, dependency validation, bulk rollout/rollback, concurrency, emergency revocation, and the rule that a pointer rollback never reverses external side effects. Design only (#561, tracker #559).
 - [ADR-W049](decisions/ADR-W049-external-agent-identity-and-oauth-transport.md) — accepted on 2026-10-13: #541 companion amendment for a dedicated external-profile Agent per Person, separate pending Owner configuration and Person consent, direct-Hermes task admission, and OAuth MCP termination at Keystone. Accepted design; implementation is authorized only through bounded ready issues, and live compatibility remains unverified.
 - [ADR-W050](decisions/ADR-W050-multi-node-runtime-kubernetes-engine-host-providers-editions.md) — accepted on 2026-10-24, post-alpha, not yet implemented: the multi-node runtime. Standard Kubernetes (k3s) on every size of install, behind Wardstone; one Wardstone per node plus an elected leader; a package `availability` field; a small engine (Longhorn, kube-vip, device plugins) that keeps Wildstone's own ingress, identity, secrets and backups; signed local Ansible playbooks for first install and rolling host updates; Linux edition first, Talos appliance much later.
 - [Hermes capability package and execution profiles](design/hermes-capability-package-and-execution-profiles.md) — #334, built on ADR-W039; H1–H7 and H9 implemented, H8 and H10 open: packaging Hermes as an optional capability bound to a Wildstone Agent, one container per Agent, three execution profiles (platform-only, sandboxed, host administration via Wildstone executors), threat analysis, spike plan and draft follow-up issues.
 - [External Agent identity, route, and OAuth contract](design/external-agent-identity-route-oauth-contract.md) — #541 source-backed contract for explicit Person/Agent/client/task binding, a deny-by-default runtime route surface, and the accepted ADR-W049 Authelia/MCP design target; implementation and installed compatibility remain pending.
-- [External Agent enrollment and activation contract](design/external-agent-enrollment-and-activation-contract.md) — proposed #580 follow-up contract for a Person-facing enrollment ceremony, issuer subject capture, atomic registration activation, and static/OAuth profile exclusion; pending maintainer review and not implementation authority.
+- [External Agent enrollment and activation contract](design/external-agent-enrollment-and-activation-contract.md) — accepted 2026-10-17 for the bounded enrollment/activation slice. Enrollment handlers and regression tests are present (`keystone/api/handlers_external_enrollment*`); the contract's current-implementation section records its earlier baseline. Resource-token resolution, MCP and live compatibility remain separate work.
 - [Desired-state publication and bounded-approval contract](design/desired-state-publication-and-approval-contract.md) — proposed #521 foundation contract for an immutable accepted Statefile revision, serialized Git/SQLite publication and recovery, and exact per-resource/action Plan authority; pending review and not implementation authority.
 - [Agent API and Hermes runtime QA runbook](design/agent-api-qa-runbook.md) — a step-by-step manual and automated QA pass for the ADR-W039/ADR-W040/#334 work on `main`: CI-equivalent checks, and scenarios for runtime credentials, the HTTP Agent API, conformance, proposals, subscriptions, execution profiles, processing class, and the Hermes package.
 - [Capability and design brief](butler-capability-and-design-brief.md) — non-normative rationale and deployment examples.
