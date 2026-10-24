@@ -174,6 +174,12 @@ func runLint(args []string) int {
 		fmt.Fprintln(os.Stderr, "wild pkg lint:", err)
 		return 1
 	}
+	for _, issue := range issues {
+		if issue.Warning {
+			fmt.Fprintln(os.Stderr, issue.String())
+		}
+	}
+	issues = pkgtool.Failures(issues)
 	if len(issues) == 0 {
 		fmt.Println("ok: package lints clean")
 		return 0

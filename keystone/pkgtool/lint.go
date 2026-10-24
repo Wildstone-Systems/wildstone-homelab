@@ -29,9 +29,28 @@ type Issue struct {
 	// list, and it cannot go stale.
 	Rule string
 	Msg  string
+	// Warning marks a finding the author should look at that does not
+	// fail lint: a claim lint cannot prove wrong, only doubt.
+	Warning bool
 }
 
-func (i Issue) String() string { return i.Rule + ": " + i.Msg }
+func (i Issue) String() string {
+	if i.Warning {
+		return "warning: " + i.Rule + ": " + i.Msg
+	}
+	return i.Rule + ": " + i.Msg
+}
+
+// Failures returns the issues that fail lint, leaving out warnings.
+func Failures(issues []Issue) []Issue {
+	var out []Issue
+	for _, i := range issues {
+		if !i.Warning {
+			out = append(out, i)
+		}
+	}
+	return out
+}
 
 // LintOptions configures a lint run.
 type LintOptions struct {
@@ -168,6 +187,7 @@ func Lint(dir string, opts LintOptions) ([]Issue, error) {
 		issues = append(issues, requiredEnvIssues(r)...)
 	}
 	issues = append(issues, manualStepIssues(pkg, rendered)...)
+	issues = append(issues, deploymentIssues(pkg, params, catalog)...)
 	issues = append(issues, seedIssues(rendered)...)
 	violations, exempted := policy.NewEngine(nil).Validate(policy.Change{
 		Proposed:  rendered,
