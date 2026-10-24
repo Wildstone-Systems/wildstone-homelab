@@ -12,6 +12,7 @@ import (
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/plan"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/principal"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/proposals"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/publish"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/research"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/resource"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/runtimedb"
@@ -265,35 +266,37 @@ func (s *Server) approvePlan(r *http.Request, id principal.Identity) (any, int, 
 		}
 	}
 
+	puts := make([]resource.Resource, 0, len(stored.Put))
 	for i, doc := range stored.Put {
 		res, err := resource.Unmarshal([]byte(doc))
 		if err != nil {
 			return nil, http.StatusInternalServerError, fmt.Errorf("stored put[%d] corrupt: %w", i, err)
 		}
-		if err := s.State.Put(res); err != nil {
-			return nil, http.StatusInternalServerError, err
-		}
+		puts = append(puts, res)
 	}
+	deletes := make([]statefile.ResourceRef, 0, len(stored.Delete))
 	for _, d := range stored.Delete {
-		if err := s.State.Delete(resource.Kind(d.Kind), d.Name); err != nil {
-			return nil, http.StatusInternalServerError, err
-		}
+		deletes = append(deletes, statefile.ResourceRef{Kind: resource.Kind(d.Kind), Name: d.Name})
 	}
 	who := id.Name
 	if id.ActingFor != "" {
 		who = fmt.Sprintf("%s(%s)", id.Name, id.ActingFor)
 	}
-	if err := s.State.Commit(who, planID, stored.Summary); err != nil {
-		return nil, http.StatusInternalServerError, err
-	}
-	newHead, err := s.State.Head()
-	if err != nil {
-		return nil, http.StatusInternalServerError, err
-	}
-	if err := s.DB.SetStatefileHead(newHead); err != nil {
-		return nil, http.StatusInternalServerError, err
-	}
-	if err := s.DB.TransitionPlan(planID, runtimedb.PlanApproved, id.Name); err != nil {
+	// One publication: the change is built from the accepted tree,
+	// accepted against exactly the revision this Plan was reviewed at, and
+	// the Plan becomes approved in the same transaction (ADR-W007 A8). A
+	// concurrent publication that won leaves nothing of this one behind.
+	if _, err := s.Publisher.Publish(publish.Request{
+		Source: runtimedb.SourceAPIPlan, PlanID: planID, PlanTo: runtimedb.PlanApproved, ResolvedBy: id.Name,
+		Expected: head, Put: puts, Delete: deletes, Who: who, Why: stored.Summary,
+	}); err != nil {
+		if errors.Is(err, publish.ErrSuperseded) {
+			if terr := s.DB.TransitionPlan(planID, runtimedb.PlanSuperseded, ""); terr != nil {
+				return nil, http.StatusInternalServerError, terr
+			}
+			s.event("plan.superseded", planID, id, "statefile moved since proposal")
+			return nil, http.StatusConflict, fmt.Errorf("statefile changed since proposal; plan superseded")
+		}
 		return nil, http.StatusInternalServerError, err
 	}
 	s.event("plan.approved", planID, id, stored.Summary)

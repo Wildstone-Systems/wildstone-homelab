@@ -68,5 +68,13 @@ func RestoreBundle(bundle, destination string) (*Store, error) {
 		"clone", "--no-local", absBundle, absDestination); err != nil {
 		return nil, fmt.Errorf("statefile: restoring git bundle: %w", err)
 	}
+	// A clone maps branches only. The reserved publication refs are what
+	// keep an accepted revision reachable when the branch never caught up
+	// to it, and recovery verifies the accepted revision exists, so they
+	// come across too.
+	if _, err := defaultGitRunner(context.Background(), absDestination,
+		"fetch", "--no-tags", absBundle, "+"+PublicationRefPrefix+"*:"+PublicationRefPrefix+"*"); err != nil {
+		return nil, fmt.Errorf("statefile: restoring publication refs: %w", err)
+	}
 	return &Store{Root: absDestination, git: defaultGitRunner, gitIn: defaultGitInputRunner}, nil
 }

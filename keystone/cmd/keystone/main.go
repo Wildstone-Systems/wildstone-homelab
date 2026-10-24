@@ -46,6 +46,7 @@ import (
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/ingest"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/policy"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/principal"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/publish"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/reconcile"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/reconcile/loop"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/recovery"
@@ -789,6 +790,18 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	// uncommitted edit, or a commit the ingestion loop has not yet checked,
 	// reaches neither a node nor a proposal.
 	state.Accepted = db.StatefileHead
+	// The one desired-state writer (ADR-W007 A8), shared by API approval,
+	// the household tracker writer and ingestion. Recovery runs before any
+	// of them, and before reconciliation: it finishes or abandons what a
+	// crash interrupted, and refuses an accepted revision that is missing
+	// or does not match its recorded tree. Refused, desired state stays
+	// unreadable — every read and every reconcile tick reports why —
+	// rather than falling back to the working files or a nearby commit.
+	publisher := &publish.Publisher{State: state, DB: db, Log: log}
+	if rerr := publisher.Recover(); rerr != nil {
+		log.Error("statefile recovery refused the accepted revision; desired state is unavailable until an operator restores it", "err", rerr)
+		state.Accepted = func() (string, error) { return "", rerr }
+	}
 	principals := &principal.Store{DB: db}
 
 	// Policy engine (ADR-W009): exemptions load from a root-owned file in
@@ -937,7 +950,7 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	// Out-of-band ingestion loop (ADR-W007 A6). An accepted or adopted
 	// edit pokes the reconcile service (ADR-W008 R2a) — a hand-committed
 	// change converges as promptly as an API-approved one.
-	ing := &ingest.Ingestor{State: state, DB: db, Log: log, Policy: pol, ManagedPrefix: managedPrefix}
+	ing := &ingest.Ingestor{State: state, DB: db, Log: log, Policy: pol, ManagedPrefix: managedPrefix, Publisher: publisher}
 	go func() {
 		for {
 			res, err := ing.Tick()
@@ -1240,6 +1253,7 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	// Public plane. Plan approval pokes the reconcile service (R2a); a
 	// new household event pokes the automation engine.
 	apiSrv := api.New(principals, db, state, log)
+	apiSrv.Publisher = publisher
 	apiSrv.SecretVault = secretVault
 	if calendarActions != nil {
 		calendarActions.SecretUse = calendarSecretUse(db, secretVault)

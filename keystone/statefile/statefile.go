@@ -425,25 +425,6 @@ func (s *Store) Subject(commit string) (string, error) {
 	return strings.TrimSpace(out), nil
 }
 
-// RevertTo records a new commit whose tree equals the tree at commit —
-// the ADR-W007 A6 response to an invalid out-of-band edit. It never
-// rewrites history: the foreign commits stay reachable in the log and the
-// human's work stays recoverable. Implemented as restore-tree-and-commit
-// rather than `git revert` so a run of foreign commits can never produce
-// revert conflicts.
-func (s *Store) RevertTo(commit, who, why string) error {
-	ctx := context.Background()
-	// Drop every tracked file, then restore the target tree over it: the
-	// combination handles both modified and newly-added files.
-	if _, err := s.git(ctx, s.Root, "rm", "-rq", "--ignore-unmatch", "."); err != nil {
-		return fmt.Errorf("statefile: revert rm: %w", err)
-	}
-	if _, err := s.git(ctx, s.Root, "checkout", commit, "--", "."); err != nil {
-		return fmt.Errorf("statefile: revert checkout %s: %w", commit, err)
-	}
-	return s.Commit(who, "", why)
-}
-
 // Commit stages all changes under Root and records a structured commit:
 // a subject line followed by trailing "Who:"/"Plan:"/"Why:" metadata
 // lines, using a per-invocation git identity so no global git config is

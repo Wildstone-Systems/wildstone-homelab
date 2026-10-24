@@ -10,12 +10,14 @@ package ingest
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
 
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/plan"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/policy"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/publish"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/reconcile"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/resource"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/runtimedb"
@@ -41,6 +43,10 @@ const (
 	// OutcomeReverted: an invalid foreign edit was reverted by a new
 	// commit restoring the last accepted tree.
 	OutcomeReverted Outcome = "reverted"
+	// OutcomeDiverged: the branch holds history that does not contain the
+	// accepted revision. Nothing is accepted or reverted until a human
+	// puts the branch back on top of it.
+	OutcomeDiverged Outcome = "diverged"
 )
 
 // Result reports one Tick.
@@ -72,6 +78,21 @@ type Ingestor struct {
 	// they mount (reconcile.DependentRestarts). Its approval covers only
 	// listed steps (ADR-W008 A2a).
 	ManagedPrefix string
+	// Publisher accepts adopted, accepted and reverting commits, the same
+	// one API approval uses (ADR-W007 A8). nil builds one over State/DB,
+	// which is what tests get.
+	Publisher *publish.Publisher
+
+	// diverged is the last head reported as diverged, so a standing
+	// conflict is one event, not one per tick.
+	diverged string
+}
+
+func (in *Ingestor) publisher(log *slog.Logger) *publish.Publisher {
+	if in.Publisher == nil {
+		in.Publisher = &publish.Publisher{State: in.State, DB: in.DB, Log: log}
+	}
+	return in.Publisher
 }
 
 // Tick runs one detect → validate → decide pass (ADR-W007 A6).
@@ -91,6 +112,34 @@ func (in *Ingestor) Tick() (Result, error) {
 	if head == marker || head == "" {
 		return Result{Outcome: OutcomeNoChange, Head: head}, nil
 	}
+	pub := in.publisher(log)
+
+	if marker != "" {
+		// The branch is behind the accepted revision: a mirror that did
+		// not finish. Catching it up is the whole job.
+		if behind, err := in.State.IsAncestor(head, marker); err != nil {
+			return Result{}, err
+		} else if behind {
+			if err := in.State.Mirror(marker); err != nil {
+				return Result{}, fmt.Errorf("ingest: catching the branch up to %s: %w", marker, err)
+			}
+			return Result{Outcome: OutcomeNoChange, Head: marker}, nil
+		}
+		// History that does not descend from the accepted revision is a
+		// conflict, not an edit (contract §4.5): accepting it would drop
+		// accepted changes, reverting it would rewrite someone's work.
+		// Keystone does neither and says so.
+		if descends, err := in.State.IsAncestor(marker, head); err != nil {
+			return Result{}, err
+		} else if !descends {
+			if in.diverged != head {
+				in.diverged = head
+				in.event(log, "statefile.diverged", head,
+					fmt.Sprintf("the branch no longer contains the accepted revision %.12s; reset or rebase it onto that revision", marker))
+			}
+			return Result{Outcome: OutcomeDiverged, Head: head}, nil
+		}
+	}
 
 	// First contact with a repo that already has history: validate and
 	// adopt as baseline. There is no prior accepted tree to revert to, so
@@ -107,7 +156,7 @@ func (in *Ingestor) Tick() (Result, error) {
 			in.event(log, "statefile.invalid", head, err.Error())
 			return Result{}, fmt.Errorf("ingest: initial statefile tree is invalid: %w", err)
 		}
-		if err := in.DB.SetStatefileHead(head); err != nil {
+		if _, err := pub.Publish(publish.Request{Source: runtimedb.SourceOutOfBand, Candidate: head}); err != nil {
 			return Result{}, err
 		}
 		in.event(log, "statefile.adopted", head, "")
@@ -157,7 +206,7 @@ func (in *Ingestor) Tick() (Result, error) {
 	if len(p.Steps) == 0 {
 		// Commit(s) that don't change the resource tree (docs, comments,
 		// whitespace): accept silently, no plan needed.
-		if err := in.DB.SetStatefileHead(head); err != nil {
+		if _, err := pub.Publish(publish.Request{Source: runtimedb.SourceOutOfBand, Expected: marker, Candidate: head}); err != nil {
 			return Result{}, err
 		}
 		in.event(log, "statefile.oob-accepted", head, subject)
@@ -171,10 +220,15 @@ func (in *Ingestor) Tick() (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	if err := in.DB.TransitionPlan(planID, runtimedb.PlanApproved, oobPrincipal); err != nil {
-		return Result{}, err
-	}
-	if err := in.DB.SetStatefileHead(head); err != nil {
+	// Approved in the transaction that accepts the commit: never an
+	// approved Plan for a revision that was not accepted.
+	if _, err := pub.Publish(publish.Request{
+		Source: runtimedb.SourceOutOfBand, PlanID: planID, PlanTo: runtimedb.PlanApproved, ResolvedBy: oobPrincipal,
+		Expected: marker, Candidate: head,
+	}); err != nil {
+		if errors.Is(err, publish.ErrSuperseded) {
+			_ = in.DB.TransitionPlan(planID, runtimedb.PlanSuperseded, "")
+		}
 		return Result{}, err
 	}
 	in.event(log, "statefile.oob-accepted", head, subject)
@@ -207,16 +261,18 @@ func (in *Ingestor) checkPolicy(log *slog.Logger, head string, proposed, current
 // the failure (ADR-W007 A6). The foreign commits stay in history.
 func (in *Ingestor) revert(log *slog.Logger, marker, head, subject string, cause error) (Result, error) {
 	why := fmt.Sprintf("revert out-of-band edit %.12s (%s): %v", head, subject, cause)
-	if rerr := in.State.RevertTo(marker, oobPrincipal, why); rerr != nil {
-		return Result{}, fmt.Errorf("ingest: reverting invalid edit: %w", rerr)
+	// Built on top of the foreign commits, with the accepted tree, and
+	// fast-forwarded onto the branch: history keeps the human's work, and
+	// no working file is rewritten wholesale to get there.
+	revert, err := in.State.BuildRevert(marker, head, oobPrincipal, why)
+	if err != nil {
+		return Result{}, fmt.Errorf("ingest: reverting invalid edit: %w", err)
 	}
-	newHead, herr := in.State.Head()
-	if herr != nil {
-		return Result{}, herr
+	res, err := in.publisher(log).Publish(publish.Request{Source: runtimedb.SourceOutOfBand, Expected: marker, Candidate: revert})
+	if err != nil {
+		return Result{}, fmt.Errorf("ingest: reverting invalid edit: %w", err)
 	}
-	if err := in.DB.SetStatefileHead(newHead); err != nil {
-		return Result{}, err
-	}
+	newHead := res.Revision
 	in.event(log, "statefile.oob-reverted", head, cause.Error())
 	return Result{Outcome: OutcomeReverted, Head: newHead, Detail: cause.Error()}, nil
 }

@@ -44,6 +44,10 @@ import (
 // and `created_at` mean the same thing wherever they appear, and a new
 // table reusing them needs no ceremony. A new name does.
 var dismissed = map[string]string{
+	"publication_id":      "names a desired-state publication journal row (ADR-W007 A8), not a party",
+	"tree_digest":         "a git tree object id: the digest of a Statefile revision, not a party",
+	"candidate_revision":  "a git commit id a publication would accept, not a party",
+	"expected_revision":   "a git commit id a publication was computed against, not a party",
 	"audience_id":         "names an audience — a disclosure rule, not a party; who it resolves to lives in audience_members.ref (design §10 layer 3)",
 	"group_id":            "names a group — a set of people, which is not itself a party; who is in it lives in person_group_members.person_id (design §4)",
 	"seed_key":            "names the ROLE a seeded group plays ('adults'), not a person and not the group's display name",
