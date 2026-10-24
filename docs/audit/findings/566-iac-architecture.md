@@ -156,6 +156,8 @@ Ansible check/diff is useful preview evidence, but it is a simulation with modul
 
 Docker Compose is a sensible production tool for independent single-host applications. Here, replacing the current typed Docker reconciler with Compose would be a large ownership/security migration. Compose imports can eventually be compiled into a supported subset of typed resources and rejected on unsupported fields, with no second runtime writer. A read-only export is lower-risk. Swarm, Nomad or Kubernetes become relevant only when measured requirements demand cluster placement/failover/rolling deployment; multiple static nodes alone do not justify them.
 
+> **Later direction (2026-10-24):** [ADR-W050](../../decisions/ADR-W050-multi-node-runtime-kubernetes-engine-host-providers-editions.md) (proposed) records that requirement: the household goal is placement, failover and rolling updates across 1 to N machines, so it proposes k3s behind Wardstone, with Ansible as the Linux-edition host layer. This audit's findings are otherwise unchanged.
+
 ### Host and provider options
 
 Ordinary users keep “bring a host, run the installer, install capabilities.” Advanced users can first run reviewed Ansible roles to prepare that host. Later, OpenTofu provisions a Proxmox VM, returns a versioned inventory, then Ansible prepares it and Wardstone enrolls. Imported existing VMs require a read-only/no-change import verification before taking lifecycle ownership. NAS pools, physical switches and hypervisor cluster/HA remain externally administered in the first increment.
