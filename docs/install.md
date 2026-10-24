@@ -132,9 +132,7 @@ curl -fsSL https://github.com/Wildstone-Systems/wildstone-homelab/releases/lates
 ```
 
 Piping is fine for a node: only the interactive install re-runs its
-own file. `mint-join` also prints a second, token-based form under "While
-this repository is private"; that is left over from before the
-repository was public, and you can ignore it.
+own file.
 
 To upgrade a node that has already joined, run
 `sudo bash ./install.sh --role node [--version vX.Y.Z]` — no token is
