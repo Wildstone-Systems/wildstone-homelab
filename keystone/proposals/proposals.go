@@ -241,15 +241,16 @@ func File(deps Deps, id principal.Identity, req Request, opts Options) (any, int
 		}
 	}
 
-	// Compute the plan against the current desired state: desired' =
+	// Compute the plan against the accepted desired state: desired' =
 	// current + puts − deletes; the diff is what approval will commit.
-	current, err := deps.State.Load()
+	// The tree and the revision it is based on are one read, so the base
+	// approval compares against is exactly the tree this diff came from.
+	head, current, err := deps.State.Snapshot()
+	if errors.Is(err, statefile.ErrNoAcceptedRevision) {
+		return nil, http.StatusServiceUnavailable, fmt.Errorf("desired state has not been accepted yet; try again in a moment")
+	}
 	if err != nil {
 		return nil, http.StatusInternalServerError, fmt.Errorf("loading statefile: %w", err)
-	}
-	head, err := deps.State.Head()
-	if err != nil {
-		return nil, http.StatusInternalServerError, err
 	}
 	desired := ApplyChanges(current, puts, req.Delete)
 
@@ -479,7 +480,7 @@ func FileSubscription(deps Deps, id principal.Identity, req SubscriptionRequest)
 			Revises: req.Revises, Version: req.Version,
 		},
 	}
-	if head, err := deps.State.Head(); err == nil {
+	if head, err := deps.State.AcceptedRevision(); err == nil {
 		stored.BasedOnHead = head
 	}
 	raw, err := json.Marshal(stored)

@@ -30,3 +30,19 @@ func defaultGitRunner(ctx context.Context, dir string, args ...string) (string, 
 	}
 	return stdout.String(), nil
 }
+
+// defaultGitInputRunner is defaultGitRunner with stdin, returning raw
+// stdout bytes (blob contents are not text).
+func defaultGitInputRunner(ctx context.Context, dir string, stdin []byte, args ...string) ([]byte, error) {
+	args = append([]string{"-c", "gc.auto=0"}, args...)
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = dir
+	cmd.Stdin = bytes.NewReader(stdin)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return stdout.Bytes(), fmt.Errorf("git %v: %w: %s", args, err, stderr.String())
+	}
+	return stdout.Bytes(), nil
+}

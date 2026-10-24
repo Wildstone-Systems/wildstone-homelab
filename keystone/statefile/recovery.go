@@ -68,5 +68,5 @@ func RestoreBundle(bundle, destination string) (*Store, error) {
 		"clone", "--no-local", absBundle, absDestination); err != nil {
 		return nil, fmt.Errorf("statefile: restoring git bundle: %w", err)
 	}
-	return &Store{Root: absDestination, git: defaultGitRunner}, nil
+	return &Store{Root: absDestination, git: defaultGitRunner, gitIn: defaultGitInputRunner}, nil
 }

@@ -53,12 +53,8 @@ func (s *Server) managedResearchTest(check func(context.Context, string, string,
 		}
 		ctx, cancel := context.WithTimeout(ctx, time.Duration(config.Limits.RequestTimeoutSeconds)*time.Second)
 		defer cancel()
-		head, err := s.State.Head()
-		if err != nil || ctx.Err() != nil {
-			return unavailable
-		}
-		desired, err := s.State.LoadAt(head)
-		if err != nil {
+		head, desired, err := s.State.Snapshot()
+		if err != nil || head == "" || ctx.Err() != nil {
 			return unavailable
 		}
 		endpoint, err := research.ManagedEndpoint(desired, s.NodeID, config.EndpointRef)
@@ -71,12 +67,11 @@ func (s *Server) managedResearchTest(check func(context.Context, string, string,
 			}
 		}
 		unchanged := func() error {
-			current, err := s.State.Head()
+			current, now, err := s.State.Snapshot()
 			if err != nil || current != head || ctx.Err() != nil {
 				return unavailable
 			}
-			working, err := s.State.Load()
-			if err != nil || !reflect.DeepEqual(working, desired) {
+			if !reflect.DeepEqual(now, desired) {
 				return unavailable
 			}
 			return nil

@@ -120,6 +120,9 @@ func (l *Loop) delay(base time.Duration) time.Duration {
 
 // TickOutcome summarizes one Tick for callers and tests.
 type TickOutcome struct {
+	// Revision is the accepted Statefile revision the pass converged
+	// toward ("" for an empty repository or a tick that did not run).
+	Revision string
 	// PlanIDs are the approved plans this tick executed (empty = drift tick).
 	PlanIDs []string
 	// Failed is the failure detail when the tick's pass did not fully
@@ -188,9 +191,19 @@ func (l *Loop) Tick(ctx context.Context) (TickOutcome, error) {
 	}
 	approved = filterSelfDriven(approved, false)
 	applying = filterSelfDriven(applying, true)
-	desired, err := l.State.Load()
+	// Desired state is the accepted revision and nothing else (ADR-W008
+	// A1 as amended): an uncommitted edit, or a commit the ingestion loop
+	// has not accepted, never reaches a node.
+	revision, desired, err := l.State.Snapshot()
+	if errors.Is(err, statefile.ErrNoAcceptedRevision) {
+		// History with nothing accepted yet: a restored or upgraded
+		// control plane before its first ingestion tick. Converging to an
+		// empty tree would remove everything; wait instead.
+		log.Info("reconcile paused: no accepted statefile revision yet")
+		return TickOutcome{}, nil
+	}
 	if err != nil {
-		return TickOutcome{}, fmt.Errorf("loop: loading statefile: %w", err)
+		return TickOutcome{}, fmt.Errorf("loop: loading accepted statefile revision: %w", err)
 	}
 	// A restored control plane stays inert until every replacement node has
 	// successfully imported its sealed secret bundle. Once that durable marker
@@ -250,7 +263,7 @@ func (l *Loop) Tick(ctx context.Context) (TickOutcome, error) {
 		}
 	}
 
-	out := TickOutcome{}
+	out := TickOutcome{Revision: revision}
 	queuedPlans := append(append([]runtimedb.PlanRecord{}, applying...), approved...)
 	planTick := len(queuedPlans) > 0
 	for _, p := range queuedPlans {
@@ -413,7 +426,7 @@ func (l *Loop) Tick(ctx context.Context) (TickOutcome, error) {
 	}
 
 	if pendingDrift && !planTick {
-		id, err := l.proposeDrift(desired)
+		id, err := l.proposeDrift(revision)
 		if err != nil {
 			return out, err
 		}
@@ -481,11 +494,7 @@ func (l *Loop) seedPendingDeletes(records []runtimedb.PlanRecord) error {
 // proposeDrift records Medium/High drift as a proposed system/drift plan
 // for a human to approve through the API — at most one open at a time
 // (ADR-W008 A2).
-func (l *Loop) proposeDrift(desired []resource.Resource) (string, error) {
-	head, err := l.State.Head()
-	if err != nil {
-		return "", fmt.Errorf("loop: reading statefile head for drift proposal: %w", err)
-	}
+func (l *Loop) proposeDrift(head string) (string, error) {
 	open, err := l.DB.PlansInState(runtimedb.PlanProposed)
 	if err != nil {
 		return "", err
@@ -512,7 +521,10 @@ func (l *Loop) proposeDrift(desired []resource.Resource) (string, error) {
 		l.event("drift.superseded", "", "statefile moved since this drift proposal", map[string]string{"plan": p.ID})
 	}
 	summary := "drift repair requires approval (Medium/High risk)"
-	// BasedOnHead must be the live head, not "": approval refuses a
+	// The concrete diff re-materializes on the approving tick
+	// (level-triggered), so the proposal carries no steps.
+	//
+	// BasedOnHead must be the accepted revision, not "": approval refuses a
 	// proposal whose base has moved, and no head ever equals "", so an
 	// unset field made every drift repair permanently unapprovable and
 	// left a drifted resource broken with no supported way back (F28).
@@ -534,7 +546,6 @@ func (l *Loop) proposeDrift(desired []resource.Resource) (string, error) {
 		return "", err
 	}
 	l.event("drift.pending-approval", "", summary, map[string]string{"plan": id})
-	_ = desired // the concrete diff re-materializes on the approving tick (level-triggered)
 	return id, nil
 }
 

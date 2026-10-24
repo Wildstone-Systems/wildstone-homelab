@@ -784,6 +784,11 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	if err != nil {
 		return err
 	}
+	// Desired state is the accepted revision the runtime DB records, never
+	// the working files (ADR-W007 A6, ADR-W008 A1 as amended): an
+	// uncommitted edit, or a commit the ingestion loop has not yet checked,
+	// reaches neither a node nor a proposal.
+	state.Accepted = db.StatefileHead
 	principals := &principal.Store{DB: db}
 
 	// Policy engine (ADR-W009): exemptions load from a root-owned file in

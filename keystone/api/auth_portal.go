@@ -137,18 +137,12 @@ func (s *Server) portalMember(r *http.Request, surface portalSurface) (string, s
 	if s.State == nil {
 		return "", "", nil, errPortalNotInstalled
 	}
-	// THE HEAD IS READ BEFORE THE STATE, NOT AFTER, and the order is the
-	// whole safety of it. A write computed from this read commits only
-	// if the head is still this one (see applyAuthored). Reading the
-	// head second would mean a commit landing in between made a STALE
-	// read look current — the silent overwrite this is here to stop.
-	// Read first, and the same race only ever makes a CURRENT read look
-	// stale, which costs somebody a retry and loses nobody's work.
-	at, err := s.State.Head()
-	if err != nil {
-		return "", "", nil, fmt.Errorf("reading statefile head: %w", err)
-	}
-	desired, err := s.State.Load()
+	// THE REVISION AND THE STATE ARE ONE READ. A write computed from
+	// this view commits only if the accepted revision is still this one
+	// (see applyAuthored), so the view must be exactly the tree at that
+	// revision: Snapshot reads the immutable commit it names, and no
+	// commit landing in between can make a stale read look current.
+	at, desired, err := s.State.Snapshot()
 	if err != nil {
 		return "", "", nil, fmt.Errorf("reading desired state: %w", err)
 	}

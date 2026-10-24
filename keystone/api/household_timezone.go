@@ -59,7 +59,7 @@ func (s *Server) ProposeHouseholdTimezone(_ context.Context, zone, reason, propo
 		Summary: summary,
 		Setting: &plan.SettingChange{Timezone: zone, Reason: reason},
 	}
-	if head, err := s.State.Head(); err == nil {
+	if head, err := s.State.AcceptedRevision(); err == nil {
 		stored.BasedOnHead = head
 	}
 	raw, err := json.Marshal(stored)

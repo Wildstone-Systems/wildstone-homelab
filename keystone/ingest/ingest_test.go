@@ -289,3 +289,89 @@ func TestPolicyInvalidForeignEditReverted(t *testing.T) {
 		}
 	}
 }
+
+// publicRouteDoc is a schema-valid Route that standing policy refuses:
+// public, auth disabled.
+func publicRouteDoc(t *testing.T) []byte {
+	t.Helper()
+	doc, err := resource.Marshal(resource.Resource{
+		ApiVersion: resource.ApiVersion,
+		Kind:       resource.KindRoute,
+		Metadata:   resource.Metadata{Name: "cam", Owner: "capability/test", Node: "n1"},
+		Route: &resource.RouteSpec{
+			Host: "cam.example.com", Upstream: "10.0.0.9:80",
+			Auth: "none", Classification: "family_public",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return doc
+}
+
+func writeFile(t *testing.T, path string, data []byte) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The committed tree is what ingestion validates. A bad commit whose
+// working copy happens to have been fixed (an uncommitted edit after it)
+// is still a bad commit, and is reverted rather than accepted on the
+// strength of files nobody committed.
+func TestInvalidCommitIsRevertedWhateverTheWorkingFilesSay(t *testing.T) {
+	in, state := harness(t)
+	seed(t, in, state)
+
+	bad := filepath.Join(state.Root, "volume", "bad.yaml")
+	writeFile(t, bad, []byte("apiVersion: wildstone.dev/v1\nkind: Rootkit\nmetadata:\n  name: bad\n"))
+	humanGit(t, state.Root, "add", "-A")
+	humanGit(t, state.Root, "commit", "-m", "oops")
+	// The human notices and deletes the file, but has not committed yet.
+	if err := os.Remove(bad); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := in.Tick()
+	if err != nil {
+		t.Fatalf("Tick: %v", err)
+	}
+	if res.Outcome != OutcomeReverted {
+		t.Fatalf("result = %+v, want the committed tree reverted", res)
+	}
+}
+
+// First adoption is held to standing policy too (contract §4.2): a tree
+// first seen is not exempt.
+func TestInitialAdoptionAppliesStandingPolicy(t *testing.T) {
+	in, state := harness(t)
+	in.Policy = policy.NewEngine(nil)
+	writeFile(t, filepath.Join(state.Root, "route", "cam.yaml"), publicRouteDoc(t))
+	humanGit(t, state.Root, "add", "-A")
+	humanGit(t, state.Root, "commit", "-m", "history before Keystone")
+
+	if _, err := in.Tick(); err == nil || !strings.Contains(err.Error(), "public-requires-auth") {
+		t.Fatalf("Tick err = %v, want a policy refusal", err)
+	}
+	if marker, _ := in.DB.StatefileHead(); marker != "" {
+		t.Fatalf("a policy-invalid tree was adopted as %q", marker)
+	}
+}
+
+// An uncommitted valid edit is not an out-of-band change: nothing moved
+// HEAD, so nothing is accepted.
+func TestUncommittedEditIsNotIngested(t *testing.T) {
+	in, state := harness(t)
+	seed(t, in, state)
+	if err := state.Put(volume("scratch")); err != nil {
+		t.Fatal(err)
+	}
+	res, err := in.Tick()
+	if err != nil || res.Outcome != OutcomeNoChange {
+		t.Fatalf("Tick = %+v, %v; want no change", res, err)
+	}
+}
