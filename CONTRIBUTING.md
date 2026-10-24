@@ -3,12 +3,12 @@
 Thanks for your interest. Please read this before opening anything —
 it will save us both time.
 
-## Project stage: pre-alpha, opinionated, solo-maintained
+## Project stage: alpha, opinionated, solo-maintained
 
 Wildstone is being built to a written scope
 (`docs/02-implementation-scope.md`) with binding architecture decisions
 (`docs/decisions/`, the W-series ADRs) and a vision (`docs/vision.md`)
-that ambiguous questions resolve against. Until the alpha ships:
+that ambiguous questions resolve against. During the alpha:
 
 - **Issues are welcome** — bug reports, security-property questions,
   and friction from trying it out are genuinely useful. Use GitHub

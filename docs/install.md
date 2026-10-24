@@ -19,26 +19,21 @@ Wildstone is two binaries plus a CLI:
 
 ## 1. Install Keystone
 
-```sh
-curl -fsSLO https://github.com/Wildstone-Systems/wildstone-homelab/releases/latest/download/install.sh
-sudo bash ./install.sh --role keystone
-```
-
-**Private repo?** An anonymous download cannot reach a private
-repository's release assets. Pass a GitHub token and the installer
-switches to the authenticated release-asset API:
+On the Keystone host, as one line:
 
 ```sh
-sudo GH_TOKEN=github_pat_... bash ./install.sh --role keystone
-# or: sudo bash ./install.sh --role keystone --token github_pat_...
+curl -fsSLO https://github.com/Wildstone-Systems/wildstone-homelab/releases/latest/download/install.sh && sudo bash install.sh --role keystone
 ```
 
-The token needs only **contents: read** on this repository (a
-fine-grained PAT scoped to it is enough). `WILDSTONE_TOKEN` and
-`GITHUB_TOKEN` are also read. The `curl` above that fetches
-`install.sh` is itself anonymous, so while the repo is private get the
-script with an authenticated client instead:
-`gh release download <tag> -R Wildstone-Systems/wildstone-homelab -p install.sh`.
+This downloads the latest release's installer, then runs it. Keep the
+two steps: do not pipe this one into `bash`. A Keystone install pairs
+the host as its own node by re-running its own file, which a piped
+script does not have.
+
+The repository and its releases are public, so no GitHub token is
+needed. To install a specific release rather than the latest, add
+`--version vX.Y.Z`; every release is listed at
+<https://github.com/Wildstone-Systems/wildstone-homelab/releases>.
 
 **Air-gapped host?** Download the release assets (`*_linux_*.tar.gz` +
 `checksums.txt` + `install.sh`) elsewhere with `gh release download`,
@@ -89,19 +84,19 @@ wild node mint-join
 
 `mint-join` prints the install command to run on the node with the
 address, token and CA fingerprint already filled in — paste it as
-given. While this repository is private it prints a second form as
-well, and that is the one to use: the anonymous `curl` in the public
-one-liner 404s on a private repo's release assets before the installer
-ever runs.
+given:
 
 ```sh
-# what mint-join prints, while the repo is private
-gh release download --repo Wildstone-Systems/wildstone-homelab --pattern install.sh
-sudo GH_TOKEN=<pat> bash ./install.sh --role node \
-  --keystone <keystone-host>:9440 \
-  --join-token <token> \
-  --ca-fingerprint <hex>
+# what mint-join prints
+curl -fsSL https://github.com/Wildstone-Systems/wildstone-homelab/releases/latest/download/install.sh | sudo bash -s -- \
+  --role node --keystone <keystone-host>:9440 \
+  --join-token <token> --ca-fingerprint <hex>
 ```
+
+Piping is fine for a node: only the Keystone install re-runs its own
+file. `mint-join` also prints a second, token-based form under "While
+this repository is private"; that is left over from before the
+repository was public, and you can ignore it.
 
 To upgrade a node that has already joined, run
 `sudo bash ./install.sh --role node [--version vX.Y.Z]` — no token is

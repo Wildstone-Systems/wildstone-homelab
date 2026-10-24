@@ -16,23 +16,40 @@ home; power stays with the household. Read [docs/vision.md](docs/vision.md).
 
 ## Status
 
-**Pre-alpha.** The MVP epics (E1–E13) are implemented: privileged agent,
-control plane, plan-mediated reconciliation, policy engine, signed
-capability packages, backups with a weekly total-host-loss exit drill in
-CI, secrets, installer, CLI, web console, and the Butler (sessions,
-diagnostics, injection-hardening red-team suite). What remains before an
-alpha tag: the dogfood migration of a real household and the first
-release-pipeline exercise — tracked in the
-[road-to-alpha issue](https://github.com/Wildstone-Systems/wildstone-homelab/issues/13).
+**Alpha.** [`v0.1.13-alpha`](https://github.com/Wildstone-Systems/wildstone-homelab/releases/tag/v0.1.13-alpha)
+is the first public release. The MVP epics (E1–E13) are implemented:
+privileged agent, control plane, plan-mediated reconciliation, policy
+engine, signed capability packages, backups with a weekly
+total-host-loss exit drill in CI, secrets, installer, CLI, web console,
+and the Butler (sessions, diagnostics, injection-hardening red-team
+suite).
 
-Not ready to run your home yet. Watch the repo if you want to be there
-when it is.
+It installs and runs, but expect rough edges and frequent changes.
+Package quality varies — some capabilities are well tested, others are
+still experimental — and upgrades between alpha releases may need
+manual steps. Back up anything you can't afford to lose. What remains,
+chiefly moving a real household onto it, is tracked in the
+[alpha tracker](https://github.com/Wildstone-Systems/wildstone-homelab/issues/13).
+
+## Install
+
+On a Linux host, as one line:
+
+```sh
+curl -fsSLO https://github.com/Wildstone-Systems/wildstone-homelab/releases/latest/download/install.sh && sudo bash install.sh --role keystone
+```
+
+The installer verifies every download against the release's
+`checksums.txt`, asks you to accept the AGPL-3.0 licence, and walks you
+through setup. [docs/install.md](docs/install.md) covers joining more
+machines, pinning a version, and air-gapped installs.
 
 ## Documentation
 
 - [docs/vision.md](docs/vision.md) — why this exists.
 - [docs/concepts.md](docs/concepts.md) — the mental model.
 - [docs/install.md](docs/install.md) — installing (from a release).
+- [docs/releasing.md](docs/releasing.md) — cutting a release.
 - [docs/recovery.md](docs/recovery.md) — the recovery contract and
   total-host-loss runbook, proven weekly by `scripts/exit-drill.sh`.
 - [docs/threat-model.md](docs/threat-model.md) — the threat model
