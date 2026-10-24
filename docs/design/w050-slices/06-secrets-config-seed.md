@@ -1,0 +1,49 @@
+# W050 slice 6: secrets, ConfigFiles and SeedFiles on k3s
+
+> Draft issue body. Plan: §4, D3/O7, §11 (W012).
+
+## Goal
+
+Packages that need generated secrets, rendered config files or first-run seed files run on k3s without Keystone ever reading a secret value.
+
+## User-visible outcome
+
+`metrics-grafana` (ConfigFile, Secret, OidcClient, Volume) runs on the new engine with login working. Rotating a secret restarts it with a rolling restart.
+
+## Scope
+
+- `EnsureClusterSecret`: leader generates or imports the value from its node store and writes a Kubernetes Secret (encrypted at rest). Keystone gets existence + version only, as today (`keystone/reconcile/secret.go`).
+- `secret/<name>` env → `secretKeyRef`.
+- `EnsureClusterConfig`: ConfigFile → ConfigMap, or Secret when it contains `secret/` refs (materialized by the leader, `materialize.go` forms incl. `pbkdf2:`).
+- Config digest → pod-template annotation (replaces `configdigest.go` spec-hash folding).
+- SeedFile → init container with a new Wildstone seeder image (Go, static, no shell): O_EXCL write from a mounted ConfigMap into the PVC; existence observed via `ObserveWorkload`.
+- Secret export/import bundle (`ExportSecretBundle`/`ImportSecretBundle`) works on k3s through the leader.
+- Release: seeder image in `release.yml`.
+
+## Non-goals
+
+OidcClient into a k3s Authelia (slice 9); identity move.
+
+## Dependencies
+
+Slice 5. ADR-W012 amendment accepted.
+
+## Acceptance criteria
+
+- [ ] Unit: Keystone never receives a secret value (existing red-team tests extended to cluster ops).
+- [ ] e2e: grafana login works; rotating its secret causes one rolling restart.
+- [ ] e2e: SeedFile written once; a user edit survives a reconcile and a pod restart.
+- [ ] Recovery: export bundle on k3s, import on a fresh install, secret versions match.
+- [ ] Audit log never contains Secret data (`wardstone/internal/agent/audit.go` cases).
+
+## Risks
+
+Secret material now lives in the cluster datastore; limit RBAC to the leader and kubelet.
+
+## Size
+
+**L.** Three kinds, a new image and a security-sensitive amendment.
+
+## ADR amendment
+
+**ADR-W012** (where values live on k3s).
