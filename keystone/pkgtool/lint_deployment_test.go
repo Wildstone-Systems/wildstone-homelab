@@ -77,6 +77,12 @@ func TestDeploymentLintAllows(t *testing.T) {
 			"deployment:\n  components:\n    - { name: deploy-side, role: worker, copies: many, relocate: true }\n", "", "      env: { ROLE: worker }\n"},
 		{"a component name with a template expression", "",
 			"deployment:\n  components:\n    - { name: \"deploy-{{ if .Params.node }}app{{ end }}\", relocate: true }\n", "", ""},
+		// An empty default renders as empty in the name, as the engine
+		// renders it in the template; a param that only renames a
+		// Container changes no need.
+		{"a component name over an empty optional param", "  - { name: suffix, default: \"\" }\n",
+			"deployment:\n  components:\n    - { name: \"deploy-side{{ .Params.suffix }}\", copies: many }\n", "",
+			"      env: { ROLE: side }\n"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -84,6 +90,16 @@ func TestDeploymentLintAllows(t *testing.T) {
 				t.Fatalf("issues = %v, want none", issues)
 			}
 		})
+	}
+}
+
+// A free-text param that only renames a Container changes no need, so
+// rule 10 leaves it alone.
+func TestDeploymentLintIgnoresARenameOnlyParam(t *testing.T) {
+	yaml := strings.Replace(deployPackage("  - { name: suffix, default: \"\" }\n", relocateApp, "", "      env: { ROLE: side }\n"),
+		"name: deploy-side,", "name: \"deploy-side{{ .Params.suffix }}\",", 1)
+	if issues := deployLint(t, yaml); len(issues) != 0 {
+		t.Fatalf("issues = %v, want none", issues)
 	}
 }
 
@@ -119,6 +135,9 @@ func TestDeploymentLintRefuses(t *testing.T) {
 			"devices:\n  - { param: gpu, kind: class }\n", "      devices: [{ source: \"{{ .Params.gpu }}\" }]\n", "", "class names the node label"},
 		{"an unknown copies value", "",
 			"deployment:\n  components:\n    - { name: deploy-app, copies: replicated }\n", "", "", "copies \"replicated\""},
+		{"a required free-text param that switches on host networking",
+			"  - { name: lan, required: true, example: \"off\" }\n", relocateApp,
+			"      {{- if ne .Params.lan \"off\" }}\n      networkMode: host\n      {{- end }}\n", "", "param \"lan\" is free text"},
 		{"a free-text param that switches on host networking",
 			"  - { name: mode, default: \"\", example: host }\n", relocateApp,
 			"      {{- if eq .Params.mode \"host\" }}\n      networkMode: host\n      {{- end }}\n", "", "param \"mode\" is free text"},

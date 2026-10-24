@@ -197,13 +197,13 @@ type deploymentVariant struct {
 // path written in the template.
 func deploymentVariants(pkg *pkgspec.Package, base map[string]string, byParam map[string]pkgspec.DeviceDecl, dirParams map[string]bool) []deploymentVariant {
 	with := func(extra map[string]string) map[string]string {
-		// Defaults are written out, so a device a default names is
-		// attributed to its param like any other value.
+		// Every param is written out, empty defaults included, as the
+		// engine's own merge does: a device a default names is then
+		// attributed to its param, and a component name over an empty
+		// param renders the same as the template it names.
 		p := map[string]string{}
 		for _, decl := range pkg.Params {
-			if decl.Default != "" {
-				p[decl.Name] = decl.Default
-			}
+			p[decl.Name] = decl.Default
 		}
 		for k, v := range base {
 			p[k] = v
@@ -301,9 +301,12 @@ func fromDirParam(path string, params map[string]string, dirParams map[string]bo
 }
 
 // freeTextNeedsIssues is rule 10: a free-text param may not change what a
-// component needs. Each optional param that is not a labelled device, a
-// directory or an enum is set to a probe value; if the rendered needs
-// differ from the defaults', the param must become one of those.
+// component needs. Each param that is not a labelled device, a directory,
+// an enum or a deployment fact (source:) is set to its example and to a
+// probe value, required ones included; if the rendered needs differ from
+// lint's own values, the param must become one of those. Free text has no
+// list to try, so this finds a condition any other value flips, not one
+// that waits for one exact word.
 func freeTextNeedsIssues(pkg *pkgspec.Package, base map[string]string, catalog *capability.Catalog, byParam map[string]pkgspec.DeviceDecl, dirParams map[string]bool) []Issue {
 	baseline, err := needsFingerprint(pkg, base, catalog)
 	if err != nil {
@@ -311,35 +314,39 @@ func freeTextNeedsIssues(pkg *pkgspec.Package, base map[string]string, catalog *
 	}
 	var issues []Issue
 	for _, decl := range pkg.Params {
-		if _, isEnum := decl.EnumValues(); isEnum || decl.Required || byParam[decl.Name].Kind != "" || dirParams[decl.Name] ||
+		if _, isEnum := decl.EnumValues(); isEnum || byParam[decl.Name].Kind != "" || dirParams[decl.Name] ||
 			decl.Name == pkgspec.InstanceParam || decl.Source != "" {
 			continue
 		}
-		probe := decl.Example
-		if probe == "" {
-			probe = "lint-probe"
+		current, ok := base[decl.Name]
+		if !ok {
+			current = decl.Default
 		}
-		if probe == decl.Default {
-			continue
+		for _, probe := range []string{decl.Example, "lint-probe"} {
+			if probe == "" || probe == current {
+				continue
+			}
+			p := map[string]string{}
+			for k, v := range base {
+				p[k] = v
+			}
+			p[decl.Name] = probe
+			got, err := needsFingerprint(pkg, p, catalog)
+			if err != nil || got == baseline {
+				continue
+			}
+			issues = append(issues, Issue{Rule: "deployment", Msg: fmt.Sprintf(
+				"param %q is free text but changes what the package needs from a machine (a device, host networking or a host folder): "+
+					"make it an enum: param, or label it under devices", decl.Name)})
+			break
 		}
-		p := map[string]string{}
-		for k, v := range base {
-			p[k] = v
-		}
-		p[decl.Name] = probe
-		got, err := needsFingerprint(pkg, p, catalog)
-		if err != nil || got == baseline {
-			continue
-		}
-		issues = append(issues, Issue{Rule: "deployment", Msg: fmt.Sprintf(
-			"param %q is free text but changes what the package needs from a machine (a device, host networking or a host folder): "+
-				"make it an enum: param, or label it under devices", decl.Name)})
 	}
 	return issues
 }
 
 // needsFingerprint renders params and summarizes every Container's
-// devices, host networking and host folders, in a stable order.
+// devices, host networking and host folders, in a stable order. Names are
+// left out: a param that only renames a Container changes no need.
 func needsFingerprint(pkg *pkgspec.Package, params map[string]string, catalog *capability.Catalog) (string, error) {
 	rendered, err := capability.NewEngine().Expand(pkg, params, catalog)
 	if err != nil {
@@ -351,7 +358,7 @@ func needsFingerprint(pkg *pkgspec.Package, params map[string]string, catalog *c
 			continue
 		}
 		var b strings.Builder
-		fmt.Fprintf(&b, "%s host=%t", r.Metadata.Name, r.Container.HostNetwork())
+		fmt.Fprintf(&b, "host=%t", r.Container.HostNetwork())
 		for _, d := range r.Container.Devices {
 			fmt.Fprintf(&b, " dev=%s", d.Source)
 		}
