@@ -59,6 +59,14 @@ func e2eDays(base time.Time, days int) time.Time {
 	return time.Date(d.Year(), d.Month(), d.Day(), 0, 0, 0, 0, ny)
 }
 
+// e2eAt is hour o'clock on day's wall clock. Adding hours to midnight is
+// not the same thing: on a daylight-saving day it lands an hour off, and
+// e2eDays puts these days a week out, so the suite would fail for one
+// day every spring and autumn.
+func e2eAt(day time.Time, hour int) time.Time {
+	return time.Date(day.Year(), day.Month(), day.Day(), hour, 0, 0, 0, day.Location())
+}
+
 // Each Person's app password, the credential the capture checks hunt.
 var e2ePasswords = map[string]string{
 	"sam": "REPLACED-sam-app-password-7d1f0c",
