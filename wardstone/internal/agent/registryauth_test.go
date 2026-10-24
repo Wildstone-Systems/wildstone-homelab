@@ -179,7 +179,7 @@ func TestPullSendsTheRegistryHeader(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a.docker = dc
+	a.runtime = dc
 	putSecret(t, a, "registry.ghcr.io", "mika:ghp_exampletoken")
 
 	if _, oerr := a.pullImage(context.Background(), &wsv1.PullImage{

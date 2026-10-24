@@ -141,6 +141,12 @@ placeholders) — with **no hand-editing between package and applied state**.
 The Authelia reload fires exactly once for the batch. That equivalence is
 the go/no-go signal.
 
+### A5. Deployment capability fields (2026-10-24, #179)
+
+Package format v1 gains two optional top-level fields, `devices` and `deployment`, defined by the accepted [package deployment capabilities contract](../design/package-deployment-capabilities-contract.md). Lint checks them against the rendered tree in every variant that changes a need (§4–§5 there).
+
+The parser rejects unknown fields (`KnownFields(true)`), so a Keystone that predates them cannot load a package that uses them. They therefore ship in two releases: parser and lint support first, catalog packages using them after (contract §7).
+
 ---
 
 # Part B — Codebase contract

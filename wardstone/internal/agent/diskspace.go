@@ -27,9 +27,9 @@ func (a *Agent) diskSpaceTarget(ctx context.Context, path, volume string) (strin
 // volume. Only ever one Wildstone created: sizing is read-only, but the
 // ownership rule is the same one every volume op keeps.
 func (a *Agent) volumeMountpoint(ctx context.Context, volume string) (string, *wsv1.OpError) {
-	vol, err := a.docker.volumeInspect(ctx, volume)
+	vol, err := a.runtime.volumeInspect(ctx, volume)
 	if err != nil {
-		if derr, ok := err.(*dockerError); ok && derr.notFound() {
+		if isNotFound(err) {
 			return "", opErr(wsv1.ErrorCode_ERROR_CODE_NOT_FOUND, "volume %q does not exist", volume)
 		}
 		return "", opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "volume inspect: %v", err)

@@ -11,7 +11,7 @@
 Issue and slice numbers remain stable identifiers, not an execution sequence. The gates below and §7 define the current dependencies and decision exits. Historical code inventory remains evidence against the cited revision, not a fresh code audit.
 
 ### Work already in progress
-#177 merged as `97628db`: Docker-only encapsulation is complete. Docker-shaped types are not the Kubernetes contract. #178 is a draft pending owner acceptance of #179; its metadata has no runtime effect.
+#177 merged as `97628db`: Docker-only encapsulation is complete. Docker-shaped types are not the Kubernetes contract. G2 passed: the owner accepted #179 in merged #182. #178 is open and no longer a draft; it implements release 1 parser support and opt-in lint for `devices`/`deployment`, with no catalog edits or runtime effect.
 
 ### Revised execution gates
 
@@ -20,7 +20,7 @@ The maintainer/owner records **pass, revise, or reject** in the named issue. A p
 | Gate | Decides | Evidence that passes | Revise returns to / what may proceed |
 |---|---|---|---|
 | G1 — foundation (#157/#151/#158) | Owner schedules bounded refactors and accepts their PRs | #177 merged; #157 immutable-revision/bounded-approval crash and concurrency tests; #158 unchanged Plans, Docker ordering, e2e and exit drill | Failed refactor returns to #157 or #158. **#158 may start after merged #177 when scheduled, in parallel with #179**; it does not consume availability or wait for deployment proof. |
-| G2 — capability contract (#179) | Owner accepts reviewed #179 contract | Examples distinguish placement, relocation, replica safety, workers and selected policy; defaults/versioning/parameter-aware validation specified; draft #178 reconciled | Revise #179/#178; Docker-only #158 continues. No capability consumer or metadata merge until accepted. |
+| G2 — capability contract (#179) — **PASSED 2026-10-24** | Owner accepted #179 in merged #182 | [Accepted contract](package-deployment-capabilities-contract.md), including §9 owner decisions; #178 now implements release 1 parser support and opt-in lint for devices/deployment, with no catalog edits | Contract gate is complete. Implementation findings return to #178; changes to accepted semantics require an explicit contract amendment. #158 continues independently. |
 | G3 — small single-node proof (#129) | Owner records pass/revise/reject in #129 | Small disposable deployment with **1–3 migrated services**, including Uptime Kuma as the stateful case; tools-it-tools and one optional Mealie/Postgres fixture. For each selected service: forward migration, new write where stateful, rollback preserving it, install/update/reboot/front-door results and measured outage. Stateful case also passes consistent backup and replacement restore. #159–#164 and early #168 proof evidence complete. | Return to failing #159–#164 or early #168 child; reopen #179 if semantics failed. Reject stops core/catalog migration. #164 alone cannot close #129. Docker identity may remain. |
 | G4 — early multi-node safety (#180) | Owner accepts reproducible disposable-cluster evidence in #180 | G1–G3 passed; same limited service set plus management fixture on three node VMs. Power loss, partition, old-node return, stale leader/apply, single-writer storage, secret continuity and backup placement pass; topology/versions/outage/data-loss measured. Contract review happens before implementation, fault evidence after #163. | Return to #180 contract/harness or failing #159/#161/#162/#163 child; reopen #179 if capability assumptions fail. No #169 or #170 dependency. VMs on one host establish no independent hardware/power protection. |
 | G5 — core and household migration (#165/#166/#168) | Owner accepts core recovery and supported household migration evidence | G3/G4 accepted; ingress/identity cutover, actual Keystone power-loss/partition/secret-revocation continuity, host/off-host recovery without Keystone, and household migration rollback proven; #167 covers required hardware variants | Return to failing #165/#166/#167/#168 child. Actual Keystone recovery is required before household migration is offered; fixture success alone is insufficient. |
@@ -30,7 +30,8 @@ The maintainer/owner records **pass, revise, or reject** in the named issue. A p
 Authority and secret-custody design portions of #180 are reviewed **before** #159/#162 implementation; its fault evidence is collected **after** those slices. This separates design prerequisites from test completion and avoids a cycle.
 
 ### Capability contract (#179)
-Placement requirements, supported relocation, replica safety, worker components, and selected household policy are distinct. Do not use availability array order as a production replica default. No volume does not prove statelessness. Device identity differs from a device class: a specific radio may pin an app, while a GPU workload may relocate to another eligible GPU. Host networking alone does not prove exact-node affinity. Default-parameter rendering is insufficient for conditional hardware access. Review a small compatible schema evolution before rewriting the catalog.
+
+See the [accepted package deployment capabilities contract](package-deployment-capabilities-contract.md), including its §9 owner decisions (accepted in #182; G2 passed).
 
 ### Authority, storage and recovery contract (#180)
 - Keystone is the sole product-level desired-state/approval authority; Kubernetes controllers implement that intent. Bootstrap and emergency recovery are explicit audited exceptions.
@@ -110,7 +111,7 @@ Short list. Full list with recommendations in [§9](#9-risks-and-open-decisions)
 | D1 | Accept the two-seam design (Wardstone seam #151 **and** Keystone seam, slice 2) | Accept; amend #151's scope note | Slices 1–2 |
 | D2 | Typed cluster operations; no raw manifest/command op | Draft in #158; review authority before runtime implementation, refine from #129 evidence | Runtime operation implementation; not Docker-only #158 |
 | D3 | Canonical secret source, handover and key recovery | Review #180 custody contract and amend ADR-W012 before #162 | Slice 6 |
-| D4 | Shared host folders (`/srv/wildstone/media`, …) on k3s | NAS → NFS CSI. No NAS → Longhorn RWX on one node. No `hostPath` | Slices 5, 13 |
+| D4 | Shared host folders (`/srv/wildstone/media`, …) on k3s | **Decided 2026-10-24:** a NAS or NFS share is optional on any topology. With one, shared folders live on it (NFS CSI, `ReadWriteMany`) and may move. Without one, they stay on their machine's own disk (a local PersistentVolume under the managed prefix); on several machines those apps stay on that machine. See [§6.6](#66-storage-and-backup) | Slices 5, 13 |
 | D5 | Owner-operated test runner | Owner-run disposable cluster evidence under ADR-W002; no hosted-agent homelab access | #180 and slice 14 |
 | D6 | #128 G1/G2 before slice 3 | Yes. The leader will act on approvals across machines | Slice 3 |
 | D7 | Accept ADR-W051 (with the small changes in §11) | Accept before slice 10 | Slice 10 |
@@ -214,7 +215,7 @@ Short list. Full list with recommendations in [§9](#9-risks-and-open-decisions)
 | `Container.capAdd` | `securityContext.capabilities.add`, admission-checked against `hostaccess.go` list | – | Medium |
 | `Container.mounts` (named volume) | PVC | – | Easy |
 | `Container.mounts` (`/etc/wildstone/<cap>` read-only) | ConfigMap or Secret volume | – | Medium |
-| `Container.mounts` (`/srv/wildstone/<dir>` shared folder) | PVC on NFS CSI (NAS) or Longhorn RWX (D4) | – | Medium |
+| `Container.mounts` (`/srv/wildstone/<dir>` shared folder) | PVC on NFS CSI when the folder is on the household's share; otherwise a local PersistentVolume on that node (D4) | – | Medium |
 | `Container.mounts` (`/run/dbus`, `/srv/wildstone/bin`, `tailscaled.sock`) | `hostPath`, admission exemption, `pinned`. `/srv/wildstone/bin` should become an image instead | – | **Hard** |
 | `Container.env` `secret/<name>` | `env.valueFrom.secretKeyRef` to a leader-written Secret | Store (D3) | Medium |
 | Host aliases (`hostaliases.go`) | CoreDNS stub zone `*.ts.net → 100.100.100.100` **(inferred)** | Name list | **Hard** |
@@ -245,7 +246,7 @@ Collected by scanning every `packages/*/package.yaml` on `5a81358` (73 packages)
 
 **Difficulty rules:** *easy* = one container, no host access, no hook. *Medium* = database or hook, several containers, Jobs, LAN ports, shared folders or host binaries. *Hard* = host networking, devices, D-Bus or core infrastructure.
 
-**Historical survey notation:** candidate modes/defaults from the original inventory appear below (bold was the proposed default); they are not accepted deployment policy. #179 reviews the capability contract and conservative defaults before #178 merges or runtime consumes metadata. `n/a` means no workload.
+**Historical survey notation:** candidate modes/defaults from the original inventory appear below (bold was the proposed default); they are not accepted deployment policy. The [accepted contract](package-deployment-capabilities-contract.md) governs current capabilities/defaults; the candidate modes below are historical inventory, not the current schema. `n/a` means no workload.
 
 ### 5.1 Core infrastructure
 
@@ -285,7 +286,7 @@ Collected by scanning every `packages/*/package.yaml` on `5a81358` (73 packages)
 
 ### 5.4 Media and shared folders
 
-All read or write `/srv/wildstone/media` or `/downloads` (shared between packages), so all need D4.
+All read or write `/srv/wildstone/media` or `/downloads` (shared between packages), so all depend on D4: they can move only when those folders are on the household's NAS/NFS share.
 
 | Package | Avail. | State | Hook | Host | Difficulty |
 |---|---|---|---|---|---|
@@ -442,7 +443,11 @@ Two layers, as today:
 | 2 | 2 copies | Survives one disk/node; the Console warns the server node is a single point (ADR-W050 §2.8) |
 | 3+ | 2 copies (recommended) | 3 copies costs 50 % more disk for little gain at home **(open, O3)** |
 
-- **Media:** NFS CSI StorageClass to the NAS, `ReadWriteMany`, `reclaimPolicy: Retain`. A missing NAS fails only the pods that mount it (#132).
+- **Shared folders (D4, decided 2026-10-24).** A NAS or NFS share is optional with one machine or many.
+  - **With a share:** the household declares it once as a `NetworkMount`, exactly as today ([recovery.md](../recovery.md)), and points folder params under it. On k3s that becomes an NFS CSI PersistentVolume, `ReadWriteMany`, `reclaimPolicy: Retain`. Every machine sees the same files, so an app whose folders are all on the share may move. A missing share fails only the pods that mount it (#132).
+  - **Without a share:** folders stay on the machine's own disk, as on Docker today. On k3s that is a local PersistentVolume tied to that node, under the managed prefix only. With one machine nothing changes; with several, apps using those folders stay on their machine.
+  - Longhorn `ReadWriteMany` is not used for shared folders. It stays an option if a household with several machines and no share asks for it.
+  - The share's address is household configuration, never in the repo.
 - **Backup Jobs:** the engine's `Runner` seam (`keystone/backup/backup.go:59`) gets a `JobRunner`:
   - RWO volumes: the Job uses `podAffinity` to the app pod (Longhorn RWO allows several pods on the same node) **(inferred; prove in slice 7)**.
   - `pg_dump` Job reaches Postgres by Service name; output PVC separate from live data (as `hooks.go:42-46` already enforces).
@@ -514,7 +519,7 @@ Per package, as a Plan with named steps (slice 12):
 | # | Slice | Size | Needs ADR change | Draft | Issue |
 |---|---|---|---|---|---|
 | 0 | Prerequisites: accepted revision + bounded approval (#128 G1/G2) | L | No | [00](w050-slices/00-prerequisites-g1-g2.md) | #157 |
-| 1 | Wardstone runtime seam + `availability` field (#151) | M | No | [01](w050-slices/01-wardstone-runtime-seam.md) | #151 |
+| 1 | Wardstone Docker encapsulation (merged #177) + devices/deployment parser and opt-in lint (#178) | M | ADR-W005 A5 / accepted #179 contract | [01](w050-slices/01-wardstone-runtime-seam.md) | #151 |
 | 2 | Keystone backend seam + typed cluster ops (design + Docker-only refactor) | L | ADR-W003 amendment (new arms) | [02](w050-slices/02-keystone-backend-seam.md) | #158 |
 | 3 | Engine on one node: signed playbooks, k3s, add-ons, admission, leader | L | ADR-W014 amendment (Ansible step) | [03](w050-slices/03-engine-bootstrap-single-node.md) | #159 |
 | 4 | First stateless package on k3s (`tools-it-tools`) behind Docker Caddy | M | No | [04](w050-slices/04-first-stateless-package.md) | #160 |
@@ -536,7 +541,7 @@ Per package, as a Plan with named steps (slice 12):
 
 | Gate work outside numbered slices | Required before |
 |---|---|
-| #179 capability/policy review | #178 merge and any runtime capability consumption |
+| #179 capability/policy contract — passed in #182 | #178 release 1 implementation; later runtime consumers cite accepted contract |
 | Early #168 migration-proof child | #129 acceptance; no #165 prerequisite |
 | #180 authority/custody design review | #159/#162 runtime implementation |
 | #180 fault evidence, after #129 | Core household cutover and #169 catalog waves |
@@ -553,7 +558,7 @@ Per package, as a Plan with named steps (slice 12):
 ```mermaid
 flowchart TD
   F["G1 foundation"] --> P["G3 small proof #129"]
-  C["G2 capability #179"] --> P
+  C["G2 passed: contract #179"] --> P
   P --> M["G4 fault proof #180"]
   M --> R["G5 core recovery"]
   R --> W["G6 catalog #169"]
@@ -624,7 +629,7 @@ flowchart TD
 | O6 | Jellyfin transcode offload | Defer; evaluate rffmpeg in slice 15 only with a measured need. iGPU on the main pod first |
 | O7 | Secret custody and handover (D3) | Review #180 canonical source, versions, key recovery and ADR-W012 before #162 |
 | O8 | Egress NetworkPolicy | Not in W050 scope; ingress default-deny only |
-| O9 | Shared folders without a NAS (D4) | Longhorn RWX on 1 node; recommend a NAS at 2+ nodes |
+| O9 | Shared folders without a NAS (D4) | **Decided:** the machine's own disk; those apps don't move. A NAS/NFS share is optional on any topology |
 | O10 | G1/G2 ordering (D6) | G1 and G2 before slice 3 |
 | O11 | Chat adapters and agent-hermes ship a host binary | Publish them as OCI images in `release.yml` before wave B |
 | O12 | Namespaces | `wildstone-system`, `wildstone-apps`, `wildstone-host` |
@@ -638,7 +643,7 @@ flowchart TD
 Use the current drafts as the detailed implementation specifications; these links avoid duplicating scope and defaults here.
 
 - [Slice 0: immutable accepted revision and bounded approvals](w050-slices/00-prerequisites-g1-g2.md), #157.
-- [Slice 1: completed Docker encapsulation and pending capability review](w050-slices/01-wardstone-runtime-seam.md), #151/#177/#178/#179.
+- [Slice 1: completed Docker encapsulation and accepted capability contract implementation](w050-slices/01-wardstone-runtime-seam.md), #151/#177/#178/#179.
 - [Slice 2: Docker-only Keystone extraction and provisional typed operation design](w050-slices/02-keystone-backend-seam.md), #158. This may proceed alongside #179 when scheduled.
 
 See the [gate table](#revised-execution-gates) for decision-makers, evidence and revision routes. The historic inventory uses the cited code revision; it is not a new implementation audit.

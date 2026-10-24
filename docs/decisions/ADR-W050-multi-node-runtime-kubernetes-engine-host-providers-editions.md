@@ -81,20 +81,15 @@ contract.
   VMs; it never moves or restarts Wildstone apps. One controller per
   decision: Kubernetes places apps, Proxmox (if present) owns VMs.
 
-### 2.3 Packages gain one field: `availability`
+### 2.3 Packages declare deployment capabilities (amended 2026-10-24, #179)
 
-| Value | Meaning | Examples |
-|---|---|---|
-| `pinned` | Needs hardware on one node; never moves | Zigbee or Z-Wave stick |
-| `failover` (default for stateful apps) | One copy; restarts on another node | Jellyfin, Immich, Keystone |
-| `replicated` | Several copies behind one Service | Stateless web front ends |
-| `offload` | One main copy plus workers on other nodes | Jellyfin + transcode workers |
+The original single `availability` list (pinned / failover / replicated / offload) is replaced by the accepted [package deployment capabilities contract](../design/package-deployment-capabilities-contract.md). In short:
 
-- A package declares which values it supports; the household toggle only
-  chooses between them. A package that cannot run as two copies (for
-  example one using SQLite) never offers `replicated`.
-- Hardware needs become node selectors on Wardstone-applied labels
-  (`has-igpu`, `has-zigbee`), not host paths in the package.
+- **What a package needs** is worked out by lint from what it renders. Each device is labelled `identity` (this exact device), `class` (any device of a type, such as a GPU) or `any-node` (every machine has one).
+- **What a package can safely do** is declared per Container: `copies` (one or many), `relocate` (may restart on another machine) and `role` (main or worker). The defaults are one copy, doesn't move, main: today's behaviour.
+- **What the household picks** (keep running elsewhere, number of copies, where workers run) lives in Keystone, is changed by a Plan, and can never exceed the package's declaration. A package never chooses a replica count.
+- Hardware needs become node selectors on Wardstone-applied labels (`gpu`, `coral`), not host paths in the package.
+- Nothing reads these fields until a multi-node backend slice does.
 
 ### 2.4 The engine is small
 
@@ -263,8 +258,8 @@ under these limits:
 
 The Kubernetes direction remains accepted. This amendment changes the implementation details above for the reasons below; see the [migration plan gates](../design/w050-migration-plan.md#revised-execution-gates) for acceptance evidence and revision routes.
 
-- **Implementation state:** #177 merged as `97628db`, completing Docker-only encapsulation. #178 is a draft pending owner acceptance of #179; no runtime behavior is inferred from metadata. This preserves completed work without freezing the future contract.
-- **Capabilities:** #179 reviews placement, relocation, replica safety, workers and selected policy separately. This prevents a single availability list from selecting unsafe defaults; the schema is drafted separately.
+- **Implementation state:** #177 merged as `97628db`, completing Docker-only encapsulation. G2 passed when the owner accepted #179 in merged #182. #178 is open, no longer a draft, and implements release 1 devices/deployment parser support and opt-in lint with no catalog edits or runtime behavior.
+- **Capabilities:** §2.3 and the [accepted package deployment capabilities contract](../design/package-deployment-capabilities-contract.md), including §9 owner decisions, govern implementation. Refer there instead of duplicating schema requirements in this amendment.
 - **Proof order:** #129 is a small disposable deployment with 1–3 service migrations, backup/replacement restore and rollback preserving new writes. #180 proves multi-node safety before #169 waves; #170 remains later productization. This resolves architectural uncertainty before catalog investment.
 - **Authority:** Keystone owns product desired state and approvals; Kubernetes controllers implement that intent. Separate scoped runtime reconciliation credentials from bootstrap/break-glass administration, because retained server root/admin kubeconfigs remain authority even when not loaded by the leader.
 - **Lease versus fencing:** a Lease coordinates election, not exclusive effective authority. #180 must define leadership-loss cancellation, stale/in-flight rejection, revision checks and replay-safe resumption, because an old leader may still act during a partition.

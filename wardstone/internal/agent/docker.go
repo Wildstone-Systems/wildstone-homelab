@@ -31,6 +31,9 @@ type dockerClient struct {
 	pullTimeout time.Duration
 }
 
+// The Docker Engine client is the node's runtime backend (runtime.go).
+var _ runtimeBackend = (*dockerClient)(nil)
+
 const (
 	// dockerCallTimeout bounds every Docker Engine API call except a pull.
 	dockerCallTimeout = 2 * time.Minute
