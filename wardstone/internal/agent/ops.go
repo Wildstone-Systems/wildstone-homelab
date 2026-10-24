@@ -629,8 +629,8 @@ func (a *Agent) ensureContainer(ctx context.Context, op *wsv1.EnsureContainer) (
 	// rule EnsureDockerNetwork applies to creation applies to use:
 	// never adopt a resource Wardstone did not create.
 	if net := op.GetNetwork(); net != "" {
-		ni, err := a.docker.networkInspect(ctx, net)
-		if derr, ok := err.(*dockerError); err != nil && (!ok || !derr.notFound()) {
+		ni, err := a.runtime.networkInspect(ctx, net)
+		if err != nil && !isNotFound(err) {
 			return nil, opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "network inspect: %v", err)
 		}
 		if ni == nil {
@@ -654,8 +654,8 @@ func (a *Agent) ensureContainer(ctx context.Context, op *wsv1.EnsureContainer) (
 		exposedPorts[key] = struct{}{}
 	}
 
-	existing, err := a.docker.inspect(ctx, op.GetName())
-	if derr, ok := err.(*dockerError); err != nil && (!ok || !derr.notFound()) {
+	existing, err := a.runtime.inspect(ctx, op.GetName())
+	if err != nil && !isNotFound(err) {
 		return nil, opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "inspect: %v", err)
 	}
 	if existing != nil {
@@ -681,12 +681,12 @@ func (a *Agent) ensureContainer(ctx context.Context, op *wsv1.EnsureContainer) (
 		if specMatches && staleDevice(existing, devices) == "" {
 			started := false
 			if !existing.State.Running {
-				if err := a.docker.start(ctx, existing.ID); err != nil {
+				if err := a.runtime.start(ctx, existing.ID); err != nil {
 					return nil, opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "start: %v", err)
 				}
 				started = true
 				if len(ports) > 0 {
-					existing, err = a.docker.inspect(ctx, existing.ID)
+					existing, err = a.runtime.inspect(ctx, existing.ID)
 					if err != nil {
 						return nil, opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "inspect after start: %v", err)
 					}
@@ -702,10 +702,10 @@ func (a *Agent) ensureContainer(ctx context.Context, op *wsv1.EnsureContainer) (
 		}
 		// Spec changed: replace. (Spike kept this simple; health-gated
 		// replacement is the reconciler's job, per step.)
-		if err := a.docker.stop(ctx, existing.ID, 10); err != nil {
+		if err := a.runtime.stop(ctx, existing.ID, 10); err != nil {
 			return nil, opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "stop for replace: %v", err)
 		}
-		if _, err := a.docker.call(ctx, "DELETE", "/containers/"+existing.ID, nil, nil); err != nil {
+		if err := a.runtime.remove(ctx, existing.ID, false); err != nil {
 			return nil, opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "remove for replace: %v", err)
 		}
 	}
@@ -744,7 +744,7 @@ func (a *Agent) ensureContainer(ctx context.Context, op *wsv1.EnsureContainer) (
 		netCfg = &networkingConfig{EndpointsConfig: map[string]endpointConfig{net: {}}}
 	}
 
-	id, err := a.docker.create(ctx, op.GetName(), createBody{
+	id, err := a.runtime.create(ctx, op.GetName(), createBody{
 		Image:        op.GetImage(),
 		Cmd:          op.GetCommand(),
 		Env:          env,
@@ -771,22 +771,22 @@ func (a *Agent) ensureContainer(ctx context.Context, op *wsv1.EnsureContainer) (
 	if err != nil {
 		return nil, opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "create: %v", err)
 	}
-	if err := a.docker.start(ctx, id); err != nil {
+	if err := a.runtime.start(ctx, id); err != nil {
 		// Docker leaves a created container behind after a bind failure.
 		// Remove only this new instance so a retry starts from a clean slate.
-		if cleanupErr := a.docker.remove(ctx, id, true); cleanupErr != nil {
+		if cleanupErr := a.runtime.remove(ctx, id, true); cleanupErr != nil {
 			return nil, opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "start: %v (cleanup: %v)", err, cleanupErr)
 		}
 		return nil, opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "start: %v", err)
 	}
 	if len(ports) > 0 {
-		live, err := a.docker.inspect(ctx, id)
+		live, err := a.runtime.inspect(ctx, id)
 		if err != nil {
-			_ = a.docker.remove(ctx, id, true)
+			_ = a.runtime.remove(ctx, id, true)
 			return nil, opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "inspect after start: %v", err)
 		}
 		if missing := missingPublishedPort(live, ports); missing != "" {
-			_ = a.docker.remove(ctx, id, true)
+			_ = a.runtime.remove(ctx, id, true)
 			return nil, opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "published port %s is not active", missing)
 		}
 	}
@@ -845,8 +845,8 @@ func missingPublishedPort(ci *containerInspect, expected map[string][]portBindin
 
 // requireOwned loads a container and enforces the ownership label.
 func (a *Agent) requireOwned(ctx context.Context, name string) (*containerInspect, *wsv1.OpError) {
-	ci, err := a.docker.inspect(ctx, name)
-	if derr, ok := err.(*dockerError); ok && derr.notFound() {
+	ci, err := a.runtime.inspect(ctx, name)
+	if isNotFound(err) {
 		return nil, opErr(wsv1.ErrorCode_ERROR_CODE_NOT_FOUND, "container %q", name)
 	}
 	if err != nil {
@@ -866,7 +866,7 @@ func (a *Agent) stopContainer(ctx context.Context, op *wsv1.StopContainer) (*wsv
 	if !ci.State.Running {
 		return &wsv1.OpResult_StopContainer{StopContainer: &wsv1.StopContainerResult{WasRunning: false}}, nil
 	}
-	if err := a.docker.stop(ctx, ci.ID, op.GetTimeoutSeconds()); err != nil {
+	if err := a.runtime.stop(ctx, ci.ID, op.GetTimeoutSeconds()); err != nil {
 		return nil, opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "stop: %v", err)
 	}
 	return &wsv1.OpResult_StopContainer{StopContainer: &wsv1.StopContainerResult{WasRunning: true}}, nil
@@ -877,7 +877,7 @@ func (a *Agent) containerLogs(ctx context.Context, op *wsv1.ContainerLogs) (*wsv
 	if oerr != nil {
 		return nil, oerr
 	}
-	logs, err := a.docker.logs(ctx, ci.ID, op.GetTail(), op.GetSinceUnixSec())
+	logs, err := a.runtime.logs(ctx, ci.ID, op.GetTail(), op.GetSinceUnixSec())
 	if err != nil {
 		return nil, opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "logs: %v", err)
 	}
@@ -901,7 +901,7 @@ func (a *Agent) pullImage(ctx context.Context, op *wsv1.PullImage) (*wsv1.OpResu
 	if err != nil {
 		return nil, opErr(wsv1.ErrorCode_ERROR_CODE_INVALID, "%v", err)
 	}
-	if err := a.docker.pull(ctx, op.GetImage(), auth); err != nil {
+	if err := a.runtime.pull(ctx, op.GetImage(), auth); err != nil {
 		return nil, opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "pull: %v", err)
 	}
 	digest := op.GetImage()[strings.Index(op.GetImage(), "@")+1:]
@@ -913,8 +913,8 @@ func (a *Agent) pullImage(ctx context.Context, op *wsv1.PullImage) (*wsv1.OpResu
 // before that idempotence kicks in — a foreign container is FORBIDDEN,
 // never silently reported as "didn't exist".
 func (a *Agent) removeContainer(ctx context.Context, op *wsv1.RemoveContainer) (*wsv1.OpResult_RemoveContainer, *wsv1.OpError) {
-	ci, err := a.docker.inspect(ctx, op.GetName())
-	if derr, ok := err.(*dockerError); ok && derr.notFound() {
+	ci, err := a.runtime.inspect(ctx, op.GetName())
+	if isNotFound(err) {
 		return &wsv1.OpResult_RemoveContainer{RemoveContainer: &wsv1.RemoveContainerResult{Existed: false}}, nil
 	}
 	if err != nil {
@@ -923,7 +923,7 @@ func (a *Agent) removeContainer(ctx context.Context, op *wsv1.RemoveContainer) (
 	if ci.Config.Labels[OwnerLabel] != ownerValue {
 		return nil, opErr(wsv1.ErrorCode_ERROR_CODE_FORBIDDEN, "container %q is not wildstone-owned", op.GetName())
 	}
-	if err := a.docker.remove(ctx, ci.ID, op.GetForce()); err != nil {
+	if err := a.runtime.remove(ctx, ci.ID, op.GetForce()); err != nil {
 		return nil, opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "remove: %v", err)
 	}
 	return &wsv1.OpResult_RemoveContainer{RemoveContainer: &wsv1.RemoveContainerResult{Existed: true}}, nil
@@ -934,7 +934,7 @@ func (a *Agent) containerStats(ctx context.Context, op *wsv1.ContainerStats) (*w
 	if oerr != nil {
 		return nil, oerr
 	}
-	st, err := a.docker.stats(ctx, ci.ID)
+	st, err := a.runtime.stats(ctx, ci.ID)
 	if err != nil {
 		return nil, opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "stats: %v", err)
 	}
@@ -1006,9 +1006,9 @@ func (a *Agent) inspectContainer(ctx context.Context, op *wsv1.InspectContainer)
 }
 
 // pruneImages MUST scope to wildstone-owned images only (ADR-W003 §A4.3);
-// the label filter lives in dockerClient.pruneImages — never bypass it.
+// the label filter lives in the runtime's pruneImages — never bypass it.
 func (a *Agent) pruneImages(ctx context.Context, _ *wsv1.PruneImages) (*wsv1.OpResult_PruneImages, *wsv1.OpError) {
-	res, err := a.docker.pruneImages(ctx)
+	res, err := a.runtime.pruneImages(ctx)
 	if err != nil {
 		return nil, opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "prune images: %v", err)
 	}
@@ -1026,8 +1026,8 @@ func (a *Agent) pruneImages(ctx context.Context, _ *wsv1.PruneImages) (*wsv1.OpR
 // non-wildstone-owned volume as FORBIDDEN rather than silently adopting
 // it (ADR-W003 §A4.3 applied to volumes, not just containers).
 func (a *Agent) ensureVolume(ctx context.Context, op *wsv1.EnsureVolume) (*wsv1.OpResult_EnsureVolume, *wsv1.OpError) {
-	existing, err := a.docker.volumeInspect(ctx, op.GetName())
-	if derr, ok := err.(*dockerError); err != nil && (!ok || !derr.notFound()) {
+	existing, err := a.runtime.volumeInspect(ctx, op.GetName())
+	if err != nil && !isNotFound(err) {
 		return nil, opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "volume inspect: %v", err)
 	}
 	if existing != nil {
@@ -1037,7 +1037,7 @@ func (a *Agent) ensureVolume(ctx context.Context, op *wsv1.EnsureVolume) (*wsv1.
 		}
 		return &wsv1.OpResult_EnsureVolume{EnsureVolume: &wsv1.EnsureVolumeResult{Created: false}}, nil
 	}
-	if err := a.docker.volumeCreate(ctx, op.GetName(), map[string]string{OwnerLabel: ownerValue}); err != nil {
+	if err := a.runtime.volumeCreate(ctx, op.GetName(), map[string]string{OwnerLabel: ownerValue}); err != nil {
 		return nil, opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "volume create: %v", err)
 	}
 	return &wsv1.OpResult_EnsureVolume{EnsureVolume: &wsv1.EnsureVolumeResult{Created: true}}, nil
@@ -1051,8 +1051,8 @@ func (a *Agent) ensureVolume(ctx context.Context, op *wsv1.EnsureVolume) (*wsv1.
 // wildstone-owned -> FORBIDDEN (never adopt a network Wardstone did not
 // create).
 func (a *Agent) ensureDockerNetwork(ctx context.Context, op *wsv1.EnsureDockerNetwork) (*wsv1.OpResult_EnsureDockerNetwork, *wsv1.OpError) {
-	existing, err := a.docker.networkInspect(ctx, op.GetName())
-	if derr, ok := err.(*dockerError); err != nil && (!ok || !derr.notFound()) {
+	existing, err := a.runtime.networkInspect(ctx, op.GetName())
+	if err != nil && !isNotFound(err) {
 		return nil, opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "network inspect: %v", err)
 	}
 	if existing != nil {
@@ -1062,7 +1062,7 @@ func (a *Agent) ensureDockerNetwork(ctx context.Context, op *wsv1.EnsureDockerNe
 		}
 		return &wsv1.OpResult_EnsureDockerNetwork{EnsureDockerNetwork: &wsv1.EnsureDockerNetworkResult{Created: false}}, nil
 	}
-	if err := a.docker.networkCreate(ctx, op.GetName(), map[string]string{OwnerLabel: ownerValue}); err != nil {
+	if err := a.runtime.networkCreate(ctx, op.GetName(), map[string]string{OwnerLabel: ownerValue}); err != nil {
 		return nil, opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "network create: %v", err)
 	}
 	return &wsv1.OpResult_EnsureDockerNetwork{EnsureDockerNetwork: &wsv1.EnsureDockerNetworkResult{Created: true}}, nil

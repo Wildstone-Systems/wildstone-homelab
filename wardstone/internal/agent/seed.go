@@ -72,9 +72,9 @@ func (a *Agent) volumeRoot(ctx context.Context, volume string) (*os.Root, *wsv1.
 	if volume == "" {
 		return nil, opErr(wsv1.ErrorCode_ERROR_CODE_INVALID, "seed: no volume named")
 	}
-	vol, err := a.docker.volumeInspect(ctx, volume)
+	vol, err := a.runtime.volumeInspect(ctx, volume)
 	if err != nil {
-		if derr, ok := err.(*dockerError); ok && derr.notFound() {
+		if isNotFound(err) {
 			return nil, opErr(wsv1.ErrorCode_ERROR_CODE_NOT_FOUND, "seed: volume %q does not exist", volume)
 		}
 		return nil, opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "seed: volume inspect: %v", err)
