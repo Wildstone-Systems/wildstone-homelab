@@ -59,7 +59,7 @@ Short list. Full list with recommendations in [§9](#9-risks-and-open-decisions)
 | D1 | Accept the two-seam design (Wardstone seam #151 **and** Keystone seam, slice 2) | Accept; amend #151's scope note | Slices 1–2 |
 | D2 | New typed wire ops for the leader (`ApplyWorkload`, `RunJob`, `RunPlaybook`, …), never raw YAML | Accept. A "send this manifest" op is `Exec(string)` in disguise | Slice 2 |
 | D3 | Where secret values live on k3s | Kubernetes Secrets, encrypted at rest, written only by the leader. Needs an ADR-W012 amendment ([§11](#11-proposed-adr-amendments)) | Slice 6 |
-| D4 | Shared host folders (`/srv/wildstone/media`, …) on k3s | NAS → NFS CSI. No NAS → Longhorn RWX on one node. No `hostPath` | Slices 5, 13 |
+| D4 | Shared host folders (`/srv/wildstone/media`, …) on k3s | **Decided 2026-10-24:** a NAS or NFS share is optional on any topology. With one, shared folders live on it (NFS CSI, `ReadWriteMany`) and may move. Without one, they stay on their machine's own disk (a local PersistentVolume under the managed prefix); on several machines those apps stay on that machine. See [§6.6](#66-storage-and-backup) | Slices 5, 13 |
 | D5 | Owner-operated test runner | The PR template says every job stays on a GitHub-hosted runner. Multi-node tests need an exception or a manual owner run | Slice 14 |
 | D6 | #128 G1/G2 before slice 3 | Yes. The leader will act on approvals across machines | Slice 3 |
 | D7 | Accept ADR-W051 (with the small changes in §11) | Accept before slice 10 | Slice 10 |
@@ -163,7 +163,7 @@ Short list. Full list with recommendations in [§9](#9-risks-and-open-decisions)
 | `Container.capAdd` | `securityContext.capabilities.add`, admission-checked against `hostaccess.go` list | – | Medium |
 | `Container.mounts` (named volume) | PVC | – | Easy |
 | `Container.mounts` (`/etc/wildstone/<cap>` read-only) | ConfigMap or Secret volume | – | Medium |
-| `Container.mounts` (`/srv/wildstone/<dir>` shared folder) | PVC on NFS CSI (NAS) or Longhorn RWX (D4) | – | Medium |
+| `Container.mounts` (`/srv/wildstone/<dir>` shared folder) | PVC on NFS CSI when the folder is on the household's share; otherwise a local PersistentVolume on that node (D4) | – | Medium |
 | `Container.mounts` (`/run/dbus`, `/srv/wildstone/bin`, `tailscaled.sock`) | `hostPath`, admission exemption, `pinned`. `/srv/wildstone/bin` should become an image instead | – | **Hard** |
 | `Container.env` `secret/<name>` | `env.valueFrom.secretKeyRef` to a leader-written Secret | Store (D3) | Medium |
 | Host aliases (`hostaliases.go`) | CoreDNS stub zone `*.ts.net → 100.100.100.100` **(inferred)** | Name list | **Hard** |
@@ -234,7 +234,7 @@ Collected by scanning every `packages/*/package.yaml` on `5a81358` (73 packages)
 
 ### 5.4 Media and shared folders
 
-All read or write `/srv/wildstone/media` or `/downloads` (shared between packages), so all need D4.
+All read or write `/srv/wildstone/media` or `/downloads` (shared between packages), so all depend on D4: they can move only when those folders are on the household's NAS/NFS share.
 
 | Package | Avail. | State | Hook | Host | Difficulty |
 |---|---|---|---|---|---|
@@ -395,7 +395,11 @@ Two layers, as today:
 | 2 | 2 copies | Survives one disk/node; the Console warns the server node is a single point (ADR-W050 §2.8) |
 | 3+ | 2 copies (recommended) | 3 copies costs 50 % more disk for little gain at home **(open, O3)** |
 
-- **Media:** NFS CSI StorageClass to the NAS, `ReadWriteMany`, `reclaimPolicy: Retain`. A missing NAS fails only the pods that mount it (#132).
+- **Shared folders (D4, decided 2026-10-24).** A NAS or NFS share is optional with one machine or many.
+  - **With a share:** the household declares it once as a `NetworkMount`, exactly as today ([recovery.md](../recovery.md)), and points folder params under it. On k3s that becomes an NFS CSI PersistentVolume, `ReadWriteMany`, `reclaimPolicy: Retain`. Every machine sees the same files, so an app whose folders are all on the share may move. A missing share fails only the pods that mount it (#132).
+  - **Without a share:** folders stay on the machine's own disk, as on Docker today. On k3s that is a local PersistentVolume tied to that node, under the managed prefix only. With one machine nothing changes; with several, apps using those folders stay on their machine.
+  - Longhorn `ReadWriteMany` is not used for shared folders. It stays an option if a household with several machines and no share asks for it.
+  - The share's address is household configuration, never in the repo.
 - **Backup Jobs:** the engine's `Runner` seam (`keystone/backup/backup.go:59`) gets a `JobRunner`:
   - RWO volumes: the Job uses `podAffinity` to the app pod (Longhorn RWO allows several pods on the same node) **(inferred; prove in slice 7)**.
   - `pg_dump` Job reaches Postgres by Service name; output PVC separate from live data (as `hooks.go:42-46` already enforces).
@@ -584,7 +588,7 @@ graph TD
 | O6 | Jellyfin transcode offload | Defer; evaluate rffmpeg in slice 15 only with a measured need. iGPU on the main pod first |
 | O7 | Where secret values live (D3) | Kubernetes Secrets, leader-written |
 | O8 | Egress NetworkPolicy | Not in W050 scope; ingress default-deny only |
-| O9 | Shared folders without a NAS (D4) | Longhorn RWX on 1 node; recommend a NAS at 2+ nodes |
+| O9 | Shared folders without a NAS (D4) | **Decided:** the machine's own disk; those apps don't move. A NAS/NFS share is optional on any topology |
 | O10 | G1/G2 ordering (D6) | G1 and G2 before slice 3 |
 | O11 | Chat adapters and agent-hermes ship a host binary | Publish them as OCI images in `release.yml` before wave B |
 | O12 | Namespaces | `wildstone-system`, `wildstone-apps`, `wildstone-host` |

@@ -85,7 +85,7 @@ Lint renders the package in **every variant that changes a need**, not only with
 
 1. **Every mapped device is labelled.** A device source that matches no `devices` entry is an error. Lint fills each device param with a unique placeholder (`/dev/lint-<param>`), so it can tell which param produced which mapping.
 2. **`relocate: true` is refused** on a component that maps an `identity` device in any variant. It is allowed for `class` and `any-node` devices.
-3. **`relocate: true` with a host folder is an error, read-only or not,** because the folder (and the files in it) isn't on the other machine. Jellyfin reads `/srv/wildstone/media` read-only, and moved without it, it would show an empty library. The exception is Keystone's own managed config under `/etc/wildstone`: Keystone renders it, so it can deliver it to whichever machine runs the component. Once W050 D4 (shared storage) is decided, this rule may allow folders the package reaches through a shared-storage requirement (§9 decision 5).
+3. **`relocate: true` with a host folder** is allowed only when the folder comes from a param the household fills in (`source: directory`), so that they can point it at their NAS/NFS share (W050 D4). Lint tells the two apart the same way it does for devices: it fills each `source: directory` param with a placeholder. A fixed path written in the template is an error, read-only or not, because it is only on one machine's disk. Jellyfin reads its library read-only, and moved without it, it would show an empty library. Keystone's own managed config under `/etc/wildstone` is the exception: Keystone renders it and can deliver it to any machine. Whether a given install may actually move is the household-policy check in §8: every such folder must be on the share.
 4. **`relocate: true` with host networking** is a **warning, not an error.** Host networking needs a machine, not necessarily *this* machine, but LAN discovery and fixed ports often assume one. The author confirms by setting `relocate: true` on purpose, and the warning stays in lint output.
 5. **`copies: many` is refused** on a component with any read-write mount, volume or host folder. This is a starting restriction. A later, reviewed exception (for example, a database the package proves is shared-safe) is out of scope.
 6. **`copies: many` is refused with host networking or an `identity` device**, because two copies would fight over one port or one stick.
@@ -144,7 +144,13 @@ devices:
   - { param: gpu_device, kind: class, class: gpu }
 ```
 
-The GPU is a type of device, so on its own it would allow `relocate: true` on any machine labelled `gpu`. But Jellyfin also reads the media folder from the host, so rule 3 refuses `relocate: true` until D4 is decided. Until then, the honest declaration is the GPU label alone, and Jellyfin stays put. After D4, adding `deployment: { components: [{ name: jellyfin, relocate: true }] }` lets it move to another GPU machine that can see the shared media.
+The GPU is a type of device, so on its own it would allow `relocate: true` on any machine labelled `gpu`. Jellyfin also reads its media folder from the host, but that folder comes from the `media_path` param (`source: directory`), so rule 3 allows `relocate: true`. The household gets the choice to let it move only if `media_path` is on their NAS/NFS share (§8). On a machine's own disk it stays put.
+
+```yaml
+deployment:
+  components:
+    - { name: jellyfin, relocate: true }
+```
 
 **Main plus workers, `photos-immich`:**
 
@@ -185,7 +191,7 @@ This **fails** rule 2 in the "every device filled" variant, because the Coral is
 This section is recorded here so it stays separate. It is implemented in the multi-node slices, not now.
 
 - **Policy per installed capability:**
-  - `keepRunning`: restart on another machine if this one is lost. Offered only if every `main` component has `relocate: true`.
+  - `keepRunning`: restart on another machine if this one is lost. Offered only if every `main` component has `relocate: true` **and** every host folder it mounts resolves to the household's NAS/NFS share (a `NetworkMount`), not the machine's own disk.
   - `copies`: N. Offered only for components with `copies: many`.
   - `workers`: where workers may run. Offered only for `role: worker` components.
 - **Defaults:** `keepRunning: off`, `copies: 1`, workers on the main component's machine. That is exactly today's behaviour.
@@ -198,7 +204,7 @@ This section is recorded here so it stays separate. It is implemented in the mul
 2. **Param-dependent packages: leave the field out.** Frigate (Coral) and Zigbee (USB stick) declare no `relocate`, and there is no condition language. This can be revisited if it is missed.
 3. **Host networking: a warning is enough** (rule 4). There is no second switch.
 4. **Free-text params that change needs: refused.** Lint rule 10: if a free-text param changes a component's needs (a device, host networking or a host folder), it must become an `enum:` or a device param. Lint detects this by rendering the param empty and with a placeholder.
-5. **Host folders before D4: refused.** Until W050 D4 (shared storage) is decided, rule 3 refuses `relocate: true` for every component that mounts a host folder. Read-only folders are included, because a read-only library on the wrong machine is just as empty. Keystone-managed `/etc/wildstone` config is the exception.
+5. **Host folders: only on a share.** A component that mounts a host folder may move only if that folder is on the household's NAS/NFS share. Read-only folders are included, because a read-only library on the wrong machine is just as empty. Keystone-managed `/etc/wildstone` config is the exception. *D4, decided the same day:* a share is optional on any topology; without one, folders stay on the machine's own disk and those apps stay put. Rule 3 and §8 implement this.
 
 ## 10. Acceptance (from #179)
 
