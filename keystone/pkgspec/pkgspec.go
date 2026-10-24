@@ -463,6 +463,12 @@ type Package struct {
 	// the same as "everyone": what it grants is decided by the
 	// entitlement rows, which default to deny.
 	AccessGroups []string `yaml:"accessGroups,omitempty" json:"accessGroups,omitempty"`
+	// Devices labels every device a template can map, and Deployment
+	// says what each component can safely do across machines
+	// (deployment.go). Both optional; informational until a multi-node
+	// backend reads them.
+	Devices    []DeviceDecl    `yaml:"devices,omitempty" json:"devices,omitempty"`
+	Deployment *DeploymentSpec `yaml:"deployment,omitempty" json:"deployment,omitempty"`
 }
 
 // ImageSet names images whose versions are not independent — refreshing
@@ -564,6 +570,10 @@ func (p *Package) Validate() error {
 		if !named {
 			return &ValidationError{Field: "params", Msg: "an instanced package must declare a required \"instance\" param"}
 		}
+	}
+
+	if err := validateDeployment(p); err != nil {
+		return err
 	}
 
 	for i, param := range p.Params {

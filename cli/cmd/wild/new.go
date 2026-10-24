@@ -90,6 +90,12 @@ func runNew(args []string) int {
 		fmt.Fprintln(os.Stderr, "wild pkg new: lint could not run:", err)
 		return 1
 	}
+	for _, issue := range issues {
+		if issue.Warning {
+			fmt.Fprintln(os.Stderr, issue.String())
+		}
+	}
+	issues = pkgtool.Failures(issues)
 	if len(issues) == 0 {
 		fmt.Println("lint: clean")
 		return 0

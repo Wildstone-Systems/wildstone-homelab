@@ -453,6 +453,29 @@ metadata:
   exclusive: true      # pihole and adguard both want :53
 ```
 
+### Saying how it may run across machines: `devices` and `deployment`
+
+Two optional fields describe a package for a future multi-node backend: what it needs from a machine, and what it can safely do. The rules are in the [package deployment capabilities contract](../docs/design/package-deployment-capabilities-contract.md). Nothing reads them yet; the Docker backend runs everything on its one node.
+
+**Don't add them to catalog packages yet.** A Keystone older than this release can't parse them, so the catalog adopts them a release later. Until then, lint checks them only in packages that use them.
+
+```yaml
+devices:                                         # label every device a template can map
+  - { param: usb_device, kind: identity }        # this exact stick: can't move
+  - { param: gpu_device, kind: class, class: gpu }  # any machine with a GPU
+  - { path: /dev/net/tun, kind: any-node }       # every machine has one
+deployment:                                      # unlisted Containers: one copy, doesn't move
+  components:
+    - { name: it-tools, copies: many, relocate: true }
+```
+
+Lint renders the package with defaults, with every labelled device param filled, and with each `enum:` value. In every variant it refuses:
+- `relocate: true` with a specific device, or with a host folder written into the template (take it from a `source: directory` param instead, so the household can put it on their NAS/NFS share);
+- `copies: many` with any read-write mount, with host networking, or with a specific device;
+- a free-text param that switches on a device, host networking or a host folder (make it an `enum:`).
+
+`relocate: true` with host networking is a warning, not a failure: check that the app doesn't rely on LAN discovery or a fixed port.
+
 ### Declare the shape of a param, not just its description
 
 ```yaml

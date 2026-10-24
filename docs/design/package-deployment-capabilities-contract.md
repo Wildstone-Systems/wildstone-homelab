@@ -184,6 +184,7 @@ This **fails** rule 2 in the "every device filled" variant, because the Coral is
   2. Add the fields to catalog packages **in the next release or later**, so every supported Keystone can already parse them.
   3. Bump each changed package's patch version, as the version-lock test requires.
 - **#178 is not merged, so nothing needs migrating.** Its useful parts carry over: the lint plumbing, the scaffold change, the README section and the per-package survey. The 64-package edit becomes `devices` labels on the 6 packages that map devices, plus `deployment` blocks only where an author is confident. Everything else keeps the defaults, which is what it does today.
+- **Lint is opt-in during the first release.** Rules 1–10 run only for a package that declares `devices` or `deployment`. Enforcing rule 1 on every package before the catalog can carry the fields would fail the whole catalog. When the catalog adopts the fields, lint requires them of every package that maps a device.
 - **No runtime reads these fields** until a multi-node backend slice does, and that slice must cite this contract.
 
 ## 8. Household policy (outside the package)
