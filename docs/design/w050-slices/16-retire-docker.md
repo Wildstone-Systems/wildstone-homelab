@@ -1,52 +1,32 @@
-# W050 slice 16: retire the Docker backend
+# W050 slice 16: Docker retirement after supported upgrade and recovery proof
 
-## Implementation review amendment — 2026-10-24
-
-Additional dependencies: #168 migration/rollback path, #170 production multi-node acceptance, and #180 evidence. Before removal, prove supported deployment topologies and replacement restore, including an existing Docker household upgrade. Catalog translation coverage alone is not sufficient. Keep compatibility until an explicit supported-upgrade/deprecation decision.
-
-This supersedes conflicting scope, ordering and acceptance language below. See [revised proof gates](../w050-migration-plan.md#implementation-review-and-proof-gates--2026-10-24). No runtime work is authorized by this amendment.
-
-
-> Tracked in #172 (labels `W050`, `POST Alpha`, `agent:blocked`). This file is the source draft; the issue is the live copy.
+> Tracked in #172. Source draft; the issue is the live execution copy. Post-alpha; owner scheduling of bounded work remains required. See the [execution gates](../w050-migration-plan.md#revised-execution-gates).
 
 ## Goal
 
-Remove Docker code and CI once every package and every supported install runs on k3s.
-
-## User-visible outcome
-
-Release notes: Docker installs must move (slice 12 tooling) before upgrading past version X.
+Remove Docker implementation only after supported households can migrate and recover.
 
 ## Scope
 
-- Delete `wardstone/internal/agent/docker.go`, Docker translator, `EnsureDockerNetwork`, `ingressaddr.go` Docker path, `host.docker.internal` rendering.
-- Proto: mark Docker-only arms deprecated, then reserved (keep numbers).
-- Installer: remove Docker install and `--skip-docker`.
-- CI: drop Docker legs of e2e and exit drill.
-- Docs: install, recovery, migration.
-
-## Non-goals
-
-Talos.
+- Remove Docker-only client/translator/network/address paths after compatibility evidence.
+- Deprecate then reserve proto numbers; remove Docker installer/CI legs only when no supported path relies on them.
+- Retain bounded migration tooling for supported upgrade window; document last Docker-capable release and replacement restore.
 
 ## Dependencies
 
-Slices 10 and 13 complete; one release with a deprecation warning.
+#166, #168, #169, #170 and owner-accepted #180; explicit deprecation/upgrade decision and at least one warning release.
 
 ## Acceptance criteria
 
-- [ ] No `docker` reference in Go code outside migration tooling.
-- [ ] e2e and exit drill (k3s) green.
-- [ ] Upgrade from the last Docker-capable release refused with a clear message if packages are still on Docker.
+- [ ] Supported single/multi-node topology evidence accepted, including actual management and package replacement restore.
+- [ ] Existing Docker household upgrade/migration/rollback proven; refuse incompatible upgrade with clear remediation.
+- [ ] No Docker references outside supported migration path; k3s e2e and exit drill pass.
+- [ ] Owner accepts retirement/deprecation decision; revise returns to affected #168/#170/#172 child and retains Docker support.
 
-## Risks
+## Non-goals
 
-Households that never moved; keep the migration tool in one more release.
+Talos or deletion based only on catalog translation success.
 
-## Size
+## Size and decomposition
 
-**M.** Mostly deletion.
-
-## ADR amendment
-
-ADR-W050 status note.
+M; deletion follows evidence, not just code coverage.

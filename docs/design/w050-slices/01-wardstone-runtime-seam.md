@@ -1,56 +1,32 @@
-# W050 slice 1: Wardstone runtime seam + package `availability` (#151)
+# W050 slice 1: Wardstone Docker encapsulation and package capability review
 
-## Implementation review amendment — 2026-10-24
-
-Preserve PR #177 as per-node Docker encapsulation with unchanged behavior. Its Docker-shaped result types are not the Kubernetes workload contract and the future backend need not implement Docker primitives. PR #178 is informational only and requires #179 capability/policy review before merge; if already merged, resolve through a compatible follow-up before runtime use. Do not treat array order, absence of volumes, or host networking as proof of replica safety, selected policy, or exact hardware identity. Acceptance of W050 does not schedule further runtime work.
-
-This supersedes conflicting scope, ordering and acceptance language below. See [revised proof gates](../w050-migration-plan.md#implementation-review-and-proof-gates--2026-10-24). No runtime work is authorized by this amendment.
-
-
-> Additions to existing issue #151 (posted as a comment there). This file is the source draft; the issue is the live copy.
+> Tracked in #151. Source draft; the issue is the live execution copy. Post-alpha; owner scheduling of bounded work remains required. See the [execution gates](../w050-migration-plan.md#revised-execution-gates).
 
 ## Goal
 
-Put all Docker Engine calls in Wardstone behind one interface and let packages declare `availability`. No behaviour change.
+Isolate Docker calls without changing behavior; review deployment metadata separately.
 
-## User-visible outcome
+## Scope
 
-None. Package pages may show "Can move to another machine: yes/no" later; not in this slice.
-
-## Scope (additions to #151 in **bold**)
-
-- `wardstone/internal/agent/`: interface `runtimeBackend` with the 13 Docker client methods (`docker.go:172-498`) **and the raw `DELETE` at `ops.go:708`**. Callers: `ops.go`, `seed.go:75`, `diskspace.go:30`.
-- **Say plainly:** this seam is per node. The cluster-wide seam is slice 2.
-- `keystone/pkgspec/pkgspec.go`: optional `availability: [pinned|failover|replicated|offload]`, first value is the default.
-- `keystone/pkgtool/lint.go`: **defaults and checks:**
-  - a device mapping or `networkMode: host` → must be `pinned`;
-  - any Volume mounted read-write → `replicated` refused;
-  - no Volume and no host path → may offer `replicated`.
-- Set the field on all 73 packages using the survey in the plan (§5).
-
-## Non-goals
-
-Kubernetes code; placement; Console changes.
+- #177 merged as 97628db: runtimeBackend wraps Docker calls, including raw removal; preserve pre-check ordering and host/runtime separation.
+- Docker-shaped result types remain internal to the Docker implementation contract; Kubernetes need not emulate them.
+- Keep #178 a draft until #179 specifies capabilities versus selected policy, conservative defaults and parameter-dependent placement. Do not define the replacement schema in this slice.
+- Packages without workloads need no placement metadata. Catalog edits and lint follow #179, not blanket defaults from volume/device heuristics.
 
 ## Dependencies
 
-None (can run beside slice 0).
+None for the completed encapsulation. Draft #178 requires owner acceptance of #179 before merge; #158 may proceed independently when scheduled.
 
 ## Acceptance criteria
 
-- [ ] #151's list.
-- [ ] `grep -n 'a\.docker\.' wardstone/internal/agent/*.go` matches only the Docker backend file.
-- [ ] Lint tests: each value; `replicated` + RW volume refused; device without `pinned` refused.
-- [ ] Every package declares `availability` (lint fails otherwise).
+- [ ] Completed Docker refactor retains gofmt, vet, race-test, e2e and exit-drill evidence from #177.
+- [ ] Owner accepts #179 and #178 reflects it before merge; metadata remains informational until a separately tested runtime consumes it.
+- [ ] Lint tests cover reviewed parameter variants; array order and absence of volumes never establish production replica safety.
 
-## Risks
+## Non-goals
 
-Low. Refactor touches the most security-sensitive op (`ensureContainer`); keep the pre-check order (`ops.go:535-640`) intact.
+Kubernetes implementation, placement behavior and Console changes.
 
-## Size
+## Size and decomposition
 
-**M.** Mechanical refactor plus one field and 73 small package edits.
-
-## ADR amendment
-
-No (ADR-W005 package format gains a field; note it in the format doc).
+M; Docker portion complete, metadata portion pending #179.

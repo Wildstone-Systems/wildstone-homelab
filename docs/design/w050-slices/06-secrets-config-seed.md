@@ -1,56 +1,35 @@
-# W050 slice 6: secrets, ConfigFiles and SeedFiles on k3s
+# W050 slice 6: Cluster secrets, configuration and seed files
 
-## Implementation review amendment — 2026-10-24
-
-Before implementation, review secret continuity in #180. Specify the canonical source, how a newly elected leader obtains existing values and versions, and recovery of datastore encryption keys plus the off-host export bundle. A new leader must never generate a replacement for an existing secret because its local node store is empty. Add a secret-bearing workload and export/import test across leader change to #180. Rotation restart strategy follows the workload's singleton/replica safety; no universal zero-downtime claim.
-
-This supersedes conflicting scope, ordering and acceptance language below. See [revised proof gates](../w050-migration-plan.md#implementation-review-and-proof-gates--2026-10-24). No runtime work is authorized by this amendment.
-
-
-> Tracked in #162 (labels `W050`, `POST Alpha`, `agent:blocked`). This file is the source draft; the issue is the live copy.
+> Tracked in #162. Source draft; the issue is the live execution copy. Post-alpha; owner scheduling of bounded work remains required. See the [execution gates](../w050-migration-plan.md#revised-execution-gates).
 
 ## Goal
 
-Packages that need generated secrets, rendered config files or first-run seed files run on k3s without Keystone ever reading a secret value.
-
-## User-visible outcome
-
-`metrics-grafana` (ConfigFile, Secret, OidcClient, Volume) runs on the new engine with login working. Rotating a secret restarts it with a rolling restart.
+Deliver secret/config/seed data without Keystone receiving secret values or losing secret identity on leader change.
 
 ## Scope
 
-- `EnsureClusterSecret`: leader generates or imports the value from its node store and writes a Kubernetes Secret (encrypted at rest). Keystone gets existence + version only, as today (`keystone/reconcile/secret.go`).
-- `secret/<name>` env → `secretKeyRef`.
-- `EnsureClusterConfig`: ConfigFile → ConfigMap, or Secret when it contains `secret/` refs (materialized by the leader, `materialize.go` forms incl. `pbkdf2:`).
-- Config digest → pod-template annotation (replaces `configdigest.go` spec-hash folding).
-- SeedFile → init container with a new Wildstone seeder image (Go, static, no shell): O_EXCL write from a mounted ConfigMap into the PVC; existence observed via `ObserveWorkload`.
-- Secret export/import bundle (`ExportSecretBundle`/`ImportSecretBundle`) works on k3s through the leader.
-- Release: seeder image in `release.yml`.
-
-## Non-goals
-
-OidcClient into a k3s Authelia (slice 9); identity move.
+- Define canonical secret source, leader access, versions, export/import and datastore encryption-key recovery; missing local state must never regenerate an existing value.
+- Implement typed cluster secret/config operations with scoped credentials; secretKeyRef, ConfigMap/Secret materialization and digest-triggered restart.
+- Restart on rotation follows the workload strategy: singleton Recreate includes outage; replicated workloads may roll only when declared safe.
+- SeedFile uses fixed Go init image, O_EXCL semantics and observed completion; user edits survive reconcile.
+- Use a selected proof service or isolated fixture for secret coverage. Grafana is an optional integration fixture, not a fourth service migration in #129.
 
 ## Dependencies
 
-Slice 5. ADR-W012 amendment accepted.
+#161; owner acceptance of ADR-W012 custody amendment and #180 secret continuity contract before implementation. #180 fault evidence follows this slice, avoiding a dependency cycle.
 
 ## Acceptance criteria
 
-- [ ] Unit: Keystone never receives a secret value (existing red-team tests extended to cluster ops).
-- [ ] e2e: grafana login works; rotating its secret causes one rolling restart.
-- [ ] e2e: SeedFile written once; a user edit survives a reconcile and a pod restart.
-- [ ] Recovery: export bundle on k3s, import on a fresh install, secret versions match.
-- [ ] Audit log never contains Secret data (`wardstone/internal/agent/audit.go` cases).
+- [ ] Keystone receives existence/version only; audit logs contain no secret values.
+- [ ] Rotation preserves declared versions and performs the applicable restart strategy; login works for the chosen fixture.
+- [ ] Seed is written once and user edits survive reconcile/restart.
+- [ ] Fresh import preserves values/versions and required key recovery; #180 tests the same secret across leader change.
+- [ ] Empty local store cannot replace an existing secret; unavailability yields an explicit blocked state.
 
-## Risks
+## Non-goals
 
-Secret material now lives in the cluster datastore; limit RBAC to the leader and kubelet.
+Identity relocation, extra proof-service migrations, universal zero-downtime rotation.
 
-## Size
+## Size and decomposition
 
-**L.** Three kinds, a new image and a security-sensitive amendment.
-
-## ADR amendment
-
-**ADR-W012** (where values live on k3s).
+L; custody review, typed operations and seeder image.

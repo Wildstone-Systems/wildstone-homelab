@@ -1,57 +1,36 @@
-# W050 slice 10: Keystone as the `management` failover package
+# W050 slice 10: Management bootstrap, failover and independent recovery
 
-## Implementation review amendment — 2026-10-24
-
-Add #180 safety-contract review as a prerequisite to implementation. Before offering household migration, prove actual Keystone failover and recovery on the early test topology, beyond the management fixture in #180. wild-recover must diagnose and perform documented bootstrap/restore when Keystone is stopped, corrupt or unschedulable; a proxy to its API is insufficient. Define behavior with cluster API/storage unavailable and exercise the off-host kit. Prove secret continuity, single-writer behavior under partition, and resumption without replaying stale approvals. Priority/Guaranteed QoS reduce eviction risk; they do not guarantee survival of host/PV disk exhaustion. Reserve capacity for OS, Kubernetes and storage as well as management.
-
-This supersedes conflicting scope, ordering and acceptance language below. See [revised proof gates](../w050-migration-plan.md#implementation-review-and-proof-gates--2026-10-24). No runtime work is authorized by this amendment.
-
-
-> Tracked in #166 (labels `W050`, `POST Alpha`, `agent:blocked`). This file is the source draft; the issue is the live copy.
+> Tracked in #166. Source draft; the issue is the live execution copy. Post-alpha; owner scheduling of bounded work remains required. See the [execution gates](../w050-migration-plan.md#revised-execution-gates).
 
 ## Goal
 
-Keystone (API, Console, Statefile, runtime DB) runs as a pod with one writer, guaranteed resources and top priority, bootstrapped by the installer and then managed through Plans.
-
-## User-visible outcome
-
-- Nothing visible normally. Under memory pressure, apps are evicted before management.
-- `wild-recover` on a machine works when the website does not.
+Run Keystone as a singleton management package and prove recovery when Keystone cannot start.
 
 ## Scope
 
-- OCI image for Keystone in `release.yml`.
-- `management` package: `replicas: 1`, `Recreate`, PVC `ReadWriteOncePod`, PriorityClass `wildstone-management`, requests = limits.
-- `keystone-bootstrap.yml`: one-time local apply through Wardstone; Keystone adopts it as a package.
-- `LoadBalancer` Service `:9440` on kube-vip for Wardstone; CA pinning unchanged.
-- Migration from host Keystone: import Job copying `/var/lib/wildstone/keystone`; old dir kept read-only.
-- Keystone-native packages (`knowledge-wildstone`, `workspace-wildstone`, `filedrop-wildstone`, `homepage-wildstone`) get their shared-folder PVCs.
-- `wild-recover` host CLI through the local Wardstone (ADR-W033 A7).
-
-## Non-goals
-
-Keystone failover between nodes (slice 14).
+- Ship Keystone OCI image and management package: one replica, Recreate, RWOP, PriorityClass and CPU/memory requests=limits.
+- Fixed local bootstrap applies once, then Keystone adopts approved state; migrate host data through import Job retaining old directory read-only.
+- Wardstone reaches management Service on kube-vip with CA pinning; Keystone-native shared folders use PVCs.
+- wild-recover supports diagnosis and fixed bootstrap/restore without a running Keystone API. Define off-host recovery when cluster API/storage is unavailable.
+- Prove actual Keystone failover, old-node return, partition single-writer safety, secret/revocation continuity and stale-approval protection on early topology.
+- Reserve OS/Kubernetes/storage capacity and test pressure. Priority/QoS reduce risk, not a guarantee against node or PV disk exhaustion.
 
 ## Dependencies
 
-Slices 7 and 9; ADR-W051 accepted.
+#163 and #165; ADR-W051 accepted; #180 authority/secret/recovery contracts reviewed before implementation. #180 fixture proof precedes household migration; actual Keystone evidence here is required before #169.
 
 ## Acceptance criteria
 
-- [ ] e2e: fresh k3s install brings Keystone up as a pod; join token and CA fingerprint printed as today.
-- [ ] e2e: host-Keystone → pod migration keeps Plans, owners, secrets versions.
-- [ ] Fault (W051 gate 2): app memory hog → app evicted, Keystone stays.
-- [ ] Only one Keystone pod can mount the volume (RWOP test).
-- [ ] Exit drill restores management recovery set.
+- [ ] Fresh bootstrap and host-to-pod migration preserve Plans, owners, CA, secrets and versions.
+- [ ] Power loss and network partition of actual management node produce no concurrent writers; recovery preserves revocations and rejects stale approvals.
+- [ ] Stopped, corrupt and unschedulable Keystone recover via documented host/off-host procedure, with no dependency on household SSO/ingress.
+- [ ] Memory/disk-pressure tests record reachability, limits and failure modes rather than claiming unconditional survival.
+- [ ] Exit drill restores complete management recovery set; owner accepts evidence before household migration.
 
-## Risks
+## Non-goals
 
-Chicken-and-egg during bootstrap; keep the bootstrap path fixed and tested in CI.
+Full Console multi-node onboarding and rolling-update productization (#170); automatic destructive reset.
 
-## Size
+## Size and decomposition
 
-**L.** New image, bootstrap path and data migration.
-
-## ADR amendment
-
-**ADR-W051 §4.1** additions (RWOP, bootstrap then adopt).
+L/XL tracker; split image/bootstrap, import, host recovery and actual failover tests.

@@ -257,15 +257,22 @@ under these limits:
 - The ground rules now also bind cluster credentials, admission policy
   and playbooks, not only the Wardstone wire format.
 
-## Implementation amendment — 2026-10-24
+## Amendments
 
-The Kubernetes direction remains accepted. The [migration plan's implementation review and proof gates](../design/w050-migration-plan.md#implementation-review-and-proof-gates--2026-10-24) supersede conflicting implementation details below.
+### A1. Implementation proof gates and safety contracts (2026-10-24, #181)
 
-- Preserve Docker encapsulation in #177; #178 availability is informational and requires #179 capability/policy review. Placement, relocation, replica safety, component workers and selected policy must not be conflated.
-- Start with a small disposable deployment and 1–3 service migrations (#129), including backup/replacement restore and reverse migration preserving new writes. Prove multi-node safety early (#180) before catalog waves (#169); #170 remains later productization.
-- Keystone owns product-level desired state; runtime controllers implement it. A Lease is not fencing. Define stale-operation rejection, leadership-loss cancellation and replay-safe execution. Bootstrap/break-glass administrator authority is separate from scoped runtime reconciliation; only loading cluster-admin while leader is not revocation. Admission does not constrain an unrestricted administrator who can change it.
-- Review canonical secret source and handover/key recovery before cluster secrets. Prove single-writer storage and partition recovery, not just node-power loss. Node count and short tolerations alone establish no availability guarantee.
-- Singleton Recreate updates incur an outage; failed updates do not retain the terminated old pod. Rollback requires data/schema compatibility or validated restore.
-- Recovery must work when Keystone cannot start, with an off-host path for cluster/storage failure. Actual Keystone recovery is required before household migration.
+The Kubernetes direction remains accepted. This amendment changes the implementation details above for the reasons below; see the [migration plan gates](../design/w050-migration-plan.md#revised-execution-gates) for acceptance evidence and revision routes.
 
-This revision changes planning and acceptance requirements only; no runtime experiment is authorized without a scheduled bounded issue and owner-selected disposable target.
+- **Implementation state:** #177 merged as `97628db`, completing Docker-only encapsulation. #178 is a draft pending owner acceptance of #179; no runtime behavior is inferred from metadata. This preserves completed work without freezing the future contract.
+- **Capabilities:** #179 reviews placement, relocation, replica safety, workers and selected policy separately. This prevents a single availability list from selecting unsafe defaults; the schema is drafted separately.
+- **Proof order:** #129 is a small disposable deployment with 1–3 service migrations, backup/replacement restore and rollback preserving new writes. #180 proves multi-node safety before #169 waves; #170 remains later productization. This resolves architectural uncertainty before catalog investment.
+- **Authority:** Keystone owns product desired state and approvals; Kubernetes controllers implement that intent. Separate scoped runtime reconciliation credentials from bootstrap/break-glass administration, because retained server root/admin kubeconfigs remain authority even when not loaded by the leader.
+- **Lease versus fencing:** a Lease coordinates election, not exclusive effective authority. #180 must define leadership-loss cancellation, stale/in-flight rejection, revision checks and replay-safe resumption, because an old leader may still act during a partition.
+- **Admission:** runtime credentials cannot change policies/RBAC or mint host grants. Admission constrains malformed runtime output; it does not contain an unrestricted administrator who can alter it.
+- **Secrets:** review canonical custody, cross-leader access, versions and encryption-key/off-host recovery before implementation. Missing local state must not regenerate an existing secret, because leadership can move between nodes.
+- **Storage:** prove detach/reattach, partition and returning-node single-writer behavior. RWOP and short eviction timeouts alone do not establish safe or fast recovery.
+- **Availability claims:** quorum, healthy replicas, eligible capacity and independent dependency/failure domains determine protection. Node count alone is insufficient.
+- **Rollout:** singleton Recreate updates have an outage and cannot retain the terminated old pod on failure. Image rollback requires declared data/schema compatibility or validated restore alongside.
+- **Recovery:** host diagnostics and fixed bootstrap/restore must work when Keystone cannot start, with an off-host procedure for unavailable cluster API/storage. Actual Keystone recovery must pass before household migration; a proxy to its API is insufficient.
+
+No runtime experiment is authorized by this amendment without a scheduled bounded issue and an owner-selected disposable target.

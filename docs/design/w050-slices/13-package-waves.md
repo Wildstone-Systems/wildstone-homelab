@@ -1,54 +1,34 @@
-# W050 slice 13: package migration waves
+# W050 slice 13: Catalog migration waves after safety proof
 
-## Implementation review amendment — 2026-10-24
-
-**Additional hard blocker: #180 passes with owner evidence; #129 accepted; #179 contract reviewed.** Broad catalog migration must not precede the multi-node safety/storage proof. Actual Keystone recovery (#166) and household migration tooling remain prerequisites. Split waves into bounded package children when scheduled; no automatic mass migration. The 1–3 proof-service migrations happen earlier and do not count as catalog-wave authorization.
-
-This supersedes conflicting scope, ordering and acceptance language below. See [revised proof gates](../w050-migration-plan.md#implementation-review-and-proof-gates--2026-10-24). No runtime work is authorized by this amendment.
-
-
-> Tracked in #169 (labels `W050`, `POST Alpha`, `agent:blocked`). This file is the source draft; the issue is the live copy.
+> Tracked in #169. Source draft; the issue is the live execution copy. Post-alpha; owner scheduling of bounded work remains required. See the [execution gates](../w050-migration-plan.md#revised-execution-gates).
 
 ## Goal
 
-Every package with a workload translates to k3s, passes admission and the e2e install-verify-remove check, ordered easy → hard.
+Expand catalog support only after the small deployment and early fault proof are accepted.
 
-## User-visible outcome
+## Scope
 
-More packages offer "Install on the new engine" / "Move to the new engine".
-
-## Waves
-
-- **Wave A (easy, 21):** the §5.5 list. Mostly config: availability, probes (#39), limits (#41).
-- **Wave B (medium, 31):** database apps (§5.3), media and shared folders (§5.4, needs D4: NFS CSI / Longhorn RWX), LAN-port packages (`mqtt-mosquitto`, `dns-*`, `code-gitea`, `downloads-qbittorrent`, `sync-syncthing`), host-binary packages (§5.6, needs O11 images). Add `sqlite` hooks where missing (#40).
-- **Wave C (rest):** anything left from §5.1/§5.2 not done in slices 9 and 11.
-
-## Scope per package
-
-`availability`, probes, `resources`, translation golden test, admission test, e2e install → ready → front door → remove (the #28 harness).
-
-## Non-goals
-
-`replicated`/`offload` behaviour (slice 15).
+- Split waves into bounded package children when scheduled; initial 1–3 proof services do not authorize catalog migration.
+- Wave A: easy packages from plan survey, with reviewed capability declarations, probes and limits.
+- Wave B: database/shared-folder/LAN-port/host-binary packages; require consistency hooks and supported storage/image paths.
+- Wave C: remaining infrastructure/host-bound packages after their dedicated support.
+- Per package: parameter-aware capability lint, translation/admission test, install/readiness/front-door/remove and backup/restore when stateful.
 
 ## Dependencies
 
-Slices 11 and 12; wave B also needs D4 and O11.
+Owner accepts #129, #179 and #180; #166 actual Keystone recovery, #167 host-bound support and #168 household tooling complete. Wave B also needs D4 shared-storage and O11 image decisions.
 
 ## Acceptance criteria
 
-- [ ] CI lint: every package that claims `k3s` translates and passes admission in k3d.
-- [ ] Nightly QEMU e2e covers each package at least weekly (rotating).
-- [ ] Owner checklist for packages that need real hardware or a NAS.
+- [ ] Owner records gate acceptance and migration support before first catalog-wave implementation.
+- [ ] Each claimed backend passes translation/admission and package lifecycle; stateful packages pass consistent backup/restore.
+- [ ] Rotating VM coverage plus owner evidence for real devices/NAS; unsupported variants remain explicitly unsupported.
+- [ ] Failure revises the affected package child, or #129/#180 when the architecture assumption failed; downstream rollout stays paused.
 
-## Risks
+## Non-goals
 
-Long tail of app quirks (UIDs, `fsGroup`, read-only rootfs).
+First multi-node experiment, mass live migration, replica/offload feature implementation.
 
-## Size
+## Size and decomposition
 
-**3 × L.** Wave A is small per package but many packages; B carries the storage work.
-
-## ADR amendment
-
-No.
+3 × L tracker; split waves and packages.
