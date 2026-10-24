@@ -165,9 +165,9 @@ func (s *Server) applyAuthored(member string, ch authored) (int, error) {
 	// told to look and try again rather than told they succeeded. A lock
 	// over the Statefile is the real answer and is not this PR's to
 	// introduce.
-	head, err := s.State.Head()
+	head, code, err := s.statefileWritable()
 	if err != nil {
-		return http.StatusInternalServerError, err
+		return code, err
 	}
 	if head != ch.BasedOn {
 		return http.StatusConflict, fmt.Errorf(

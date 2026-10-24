@@ -16,6 +16,7 @@ import (
 
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/plan"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/policy"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/resource"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/runtimedb"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/statefile"
 )
@@ -88,9 +89,15 @@ func (in *Ingestor) Tick() (Result, error) {
 	// First contact with a repo that already has history: validate and
 	// adopt as baseline. There is no prior accepted tree to revert to, so
 	// an invalid tree here is an error the operator must fix, not a
-	// revert.
+	// revert. The committed tree is what is validated, never the working
+	// files, and standing policy applies here as it does to every later
+	// adoption: a tree first seen is not exempt from the rules.
 	if marker == "" {
-		if _, err := in.State.Load(); err != nil {
+		tree, err := in.State.LoadAt(head)
+		if err == nil {
+			err = in.checkPolicy(log, head, tree, nil)
+		}
+		if err != nil {
 			in.event(log, "statefile.invalid", head, err.Error())
 			return Result{}, fmt.Errorf("ingest: initial statefile tree is invalid: %w", err)
 		}
@@ -106,10 +113,11 @@ func (in *Ingestor) Tick() (Result, error) {
 		return Result{}, err
 	}
 
-	// Validate the foreign tree. Load parses AND validates via
-	// resource.Unmarshal (strict YAML + Validate), so any schema failure
-	// lands here.
-	newTree, err := in.State.Load()
+	// Validate the foreign tree: the committed tree at head, not the
+	// working files, which may hold edits nobody has committed. LoadAt
+	// parses AND validates via resource.Unmarshal (strict YAML +
+	// Validate), so any schema failure lands here.
+	newTree, err := in.State.LoadAt(head)
 	if err != nil {
 		return in.revert(log, marker, head, subject, err)
 	}
@@ -121,22 +129,9 @@ func (in *Ingestor) Tick() (Result, error) {
 
 	// Standing invariants (ADR-W009 A1): repo access does not outrank
 	// policy — a policy-invalid hand edit is reverted like a
-	// schema-invalid one. Exemption uses are surfaced as events.
-	if in.Policy != nil {
-		violations, exempted := in.Policy.Validate(policy.Change{
-			Proposed: newTree, Current: oldTree, Principal: oobPrincipal,
-		})
-		for _, v := range exempted {
-			in.event(log, "policy.exempted", head, v.String())
-		}
-		if len(violations) > 0 {
-			msgs := make([]string, 0, len(violations))
-			for _, v := range violations {
-				msgs = append(msgs, v.String())
-			}
-			perr := fmt.Errorf("violates standing policy: %s", strings.Join(msgs, "; "))
-			return in.revert(log, marker, head, subject, perr)
-		}
+	// schema-invalid one.
+	if err := in.checkPolicy(log, head, newTree, oldTree); err != nil {
+		return in.revert(log, marker, head, subject, err)
 	}
 
 	// Valid: record the delta as an auto-approved plan — approved because
@@ -174,6 +169,28 @@ func (in *Ingestor) Tick() (Result, error) {
 	}
 	in.event(log, "statefile.oob-accepted", head, subject)
 	return Result{Outcome: OutcomeAccepted, Head: head, PlanID: planID}, nil
+}
+
+// checkPolicy validates a candidate tree against the standing invariants
+// (ADR-W009 A1). Exemption uses are surfaced as events.
+func (in *Ingestor) checkPolicy(log *slog.Logger, head string, proposed, current []resource.Resource) error {
+	if in.Policy == nil {
+		return nil
+	}
+	violations, exempted := in.Policy.Validate(policy.Change{
+		Proposed: proposed, Current: current, Principal: oobPrincipal,
+	})
+	for _, v := range exempted {
+		in.event(log, "policy.exempted", head, v.String())
+	}
+	if len(violations) == 0 {
+		return nil
+	}
+	msgs := make([]string, 0, len(violations))
+	for _, v := range violations {
+		msgs = append(msgs, v.String())
+	}
+	return fmt.Errorf("violates standing policy: %s", strings.Join(msgs, "; "))
 }
 
 // revert restores the last accepted tree with a structured commit naming

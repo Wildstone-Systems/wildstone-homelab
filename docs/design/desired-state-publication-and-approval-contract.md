@@ -3,8 +3,9 @@
 - **Issue:** old private issue 521
 - **Coordinator:** [#130](https://github.com/Wildstone-Systems/wildstone-homelab/issues/130)
 - **Evidence base:** `e33a88036231e4c94ef95e6a2dbaffe985fcfdd4` (`main`, 2026-10-16)
-- **Status:** proposed for review; not an accepted ADR or implementation authority
-- **Would amend:** ADR-W007 A4/A6 and ADR-W008 A1/A2 if accepted
+- **Status:** accepted 2026-10-24 by the maintainer (#157), with the §8 answers recorded in ADR-W007 A8
+- **Amends:** ADR-W007 A4/A6 (A8) and ADR-W008 A1/A2 (A2a)
+- **Delivery:** 0a immutable reads (done), then 0c bounded approval, then 0b shared publisher
 
 This proposal defines the selected foundation boundary authorized by #580:
 the immutable desired-state revision Keystone accepts, how an approved change
@@ -436,5 +437,5 @@ layering rewrite.
    new accepted ADR that explicitly supersedes their publication and
    tick-authority clauses.
 
-Until those decisions are accepted, the safe next step is review of this
-proposal, not schema migration or runtime implementation.
+**Answered 2026-10-24 (#157):** 1 yes; 2 yes; 3 yes; 4 yes; 5 amend
+ADR-W007/W008 in place (ADR-W007 A8, ADR-W008 A2a).

@@ -15,6 +15,7 @@ import (
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/research"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/resource"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/runtimedb"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/statefile"
 )
 
 // maxProposalBytes bounds a plan-proposal body; a legitimate proposal is
@@ -244,9 +245,9 @@ func (s *Server) approvePlan(r *http.Request, id principal.Identity) (any, int, 
 		defer s.researchServiceMu.Unlock()
 	}
 
-	head, err := s.State.Head()
+	head, code, err := s.statefileWritable()
 	if err != nil {
-		return nil, http.StatusInternalServerError, err
+		return nil, code, err
 	}
 	if head != stored.BasedOnHead {
 		if err := s.DB.TransitionPlan(planID, runtimedb.PlanSuperseded, ""); err != nil {
@@ -308,6 +309,47 @@ func (s *Server) approvePlan(r *http.Request, id principal.Identity) (any, int, 
 		return nil, http.StatusInternalServerError, err
 	}
 	return viewPlan(rec), http.StatusOK, nil
+}
+
+// statefileWritable returns the accepted revision when a Statefile write
+// may start from it, or a status and reason when it may not.
+//
+// A write is file puts plus `git add -A` plus a commit, so it takes
+// whatever else is in the working tree and on the branch with it. With an
+// accepted-revision source wired (production), two things therefore stop
+// it until they resolve, and neither supersedes the Plan:
+//   - a commit nobody has accepted yet, which the ingestion loop has still
+//     to validate; and
+//   - uncommitted edits, which nobody has reviewed at all.
+//
+// Without one, the working tree is desired state by definition and
+// neither check applies.
+func (s *Server) statefileWritable() (string, int, error) {
+	rev, err := s.State.AcceptedRevision()
+	if errors.Is(err, statefile.ErrNoAcceptedRevision) {
+		return "", http.StatusServiceUnavailable, fmt.Errorf("desired state has not been accepted yet; try again in a moment")
+	}
+	if err != nil {
+		return "", http.StatusInternalServerError, err
+	}
+	if s.State.Accepted == nil {
+		return rev, 0, nil
+	}
+	head, err := s.State.Head()
+	if err != nil {
+		return "", http.StatusInternalServerError, err
+	}
+	if head != rev {
+		return "", http.StatusConflict, fmt.Errorf("the Statefile has a commit that has not been accepted yet; try again once it has been checked")
+	}
+	dirty, err := s.State.Dirty()
+	if err != nil {
+		return "", http.StatusInternalServerError, err
+	}
+	if dirty {
+		return "", http.StatusConflict, fmt.Errorf("the Statefile has uncommitted edits; commit or discard them, then try again")
+	}
+	return rev, 0, nil
 }
 
 // planDecider is who may decide a Plan (ADR-W033 E2/E3, ADR-W007 A2):

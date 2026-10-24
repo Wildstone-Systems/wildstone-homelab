@@ -1,6 +1,6 @@
 # ADR-W007: Keystone core — public API, principals, runtime DB, Statefile ingestion
 
-- **Status:** accepted; amended by ADR-W033; A4 amended (migration baseline, #231)
+- **Status:** accepted; amended by ADR-W033; A4 amended (migration baseline, #231); A4/A6 amended (accepted revision and shared publication, #157)
 - **Relates to:** architecture proposal §3/§6/§9.2, implementation scope E2
 - **Governed by:** ADR-W033 where they overlap.
 - **Audience:** decision record AND implementation spec for E2, written so
@@ -224,6 +224,45 @@ kind registry via reflection and emits TypeScript definitions
 Console cannot drift from the schema silently. CI regenerates and fails on
 diff. No protoc, no OpenAPI toolchain at MVP; the generator is ~200 lines
 we own.
+
+### A8. Amendment (2026-10-24, #157): the accepted revision
+
+Amends A4 (`statefile_head`) and A6. Adopts the
+[desired-state publication and bounded-approval contract](../design/desired-state-publication-and-approval-contract.md),
+with the maintainer's answers to its §8:
+
+1. **The runtime DB selects the accepted revision.** `statefile_head` is
+   the accepted revision: the one immutable commit that is desired state.
+   The Statefile branch and working files are a human-editable mirror,
+   never authority. An uncommitted edit, or a commit the ingestion loop
+   has not yet checked, reaches neither a node nor a proposal.
+2. **Out-of-band edits keep auto-approval** (A6), but only after the same
+   schema and standing-policy checks as an API change, run against the
+   **committed** tree, including on first adoption.
+3. **An approved `update` does not cover a recomputed `create` or
+   `delete`**, even when the final spec is the same.
+4. **Each approved Plan gets its own outcome** (amends ADR-W008 A2).
+
+Delivered in three parts, so each can be reviewed alone:
+
+- **0a, immutable reads (implemented).** `statefile.Store.Load` and
+  `Snapshot` read the accepted revision when an accepted-revision source
+  is wired (production); ingestion validates `LoadAt(head)`, never the
+  working files, and applies policy on first adoption; API approval and
+  the household tracker writer wait (HTTP 409, the Plan stays proposed)
+  while the branch carries an unaccepted commit or the working tree has
+  uncommitted edits, since their `git add -A` commit would otherwise take
+  those edits with it.
+- **0c, bounded approval (pending).** Approval names exact
+  `(kind, name, action, digest, max risk)` entries; the reconciler
+  authorizes a Medium/High step only when one matches. Rules 3 and 4.
+- **0b, one publisher (pending).** API approval, the tracker writer and
+  ingestion share one `DesiredStatePublisher` with a durable journal and
+  internal Git refs, so a crash between the Git and SQLite steps recovers
+  to either the old or the new accepted revision.
+
+Until 0b, the Git commit and the `statefile_head` update are still two
+steps; the contract's §3 recovery table is not yet implemented.
 
 # Part B — Invariants (binding)
 

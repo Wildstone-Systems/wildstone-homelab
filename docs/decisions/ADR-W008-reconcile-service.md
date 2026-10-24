@@ -1,6 +1,6 @@
 # ADR-W008: Reconcile service — plan execution, drift cadence, observed status
 
-- **Status:** accepted
+- **Status:** accepted; A1/A2 amended (accepted revision, bounded approval, per-Plan outcomes, #157)
 - **Relates to:** ADR-W004 (engine semantics, unchanged), ADR-W007 (plan
   records, runtime DB, events), implementation scope E3
 - **Audience:** decision record AND implementation spec for the E3
@@ -40,6 +40,24 @@ drift repairs apply immediately (ADR-W004 A4 drift classes).
 The service records at most ONE open drift proposal at a time (a
 proposed plan with principal `system/drift`): re-proposing the same
 drift every tick would flood the plan list.
+
+### A2a. Amendment (2026-10-24, #157)
+
+Amends A1 and A2, per ADR-W007 A8 and the
+[publication and bounded-approval contract](../design/desired-state-publication-and-approval-contract.md):
+
+- **A1:** "the CURRENT desired state" is the **accepted revision**, read
+  as one immutable snapshot per tick; the tick reports which revision it
+  used (`TickOutcome.Revision`). A repository with history but no
+  accepted revision pauses the loop rather than converging to an empty
+  tree. *(Implemented in 0a.)*
+- **A2:** an approved Plan no longer authorizes every Medium/High step in
+  the tick. A Medium/High step runs only when it matches an entry of a
+  live approval envelope (same resource, action and desired digest, risk
+  no higher than reviewed); anything else becomes a fresh pending
+  preview. Low-risk drift repair keeps its own authority and is reported
+  as drift repair. Each queued Plan gets its own outcome instead of one
+  shared verdict. *(Pending: 0c.)*
 
 ### A3. Node grouping and connectivity
 

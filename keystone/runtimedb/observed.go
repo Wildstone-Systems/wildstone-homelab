@@ -92,8 +92,11 @@ func (db *DB) ListObserved() ([]Observed, error) {
 
 // ---------------------------------------------------------- statefile head
 
-// StatefileHead returns the last Statefile commit hash Keystone wrote or
-// accepted, or "" if none has been recorded yet (fresh install).
+// StatefileHead returns the accepted revision: the last Statefile commit
+// Keystone wrote or accepted, or "" if none has been recorded yet (fresh
+// install). It is the only commit that is desired state (ADR-W007 A6,
+// ADR-W008 A1 as amended); the branch head may be ahead of it until the
+// ingestion loop has checked what was committed there.
 func (db *DB) StatefileHead() (string, error) {
 	var head string
 	err := db.sql.QueryRow(`SELECT head FROM statefile_head WHERE id = 1`).Scan(&head)

@@ -54,17 +54,11 @@ func (s *Server) consoleCommitmentCall(
 		if s.State == nil {
 			return nil, http.StatusServiceUnavailable, fmt.Errorf("this is not ready yet")
 		}
-		// HEAD FIRST, THEN THE STATE, which is the order the portal
-		// chain reads them in and the order that matters: the same
-		// race can then only make a current read look stale, costing
-		// a retry rather than losing somebody's work. Without the head
-		// the supersede-on-drift check sees no basis and refuses every
-		// write with a 409.
-		at, err := s.State.Head()
-		if err != nil {
-			return nil, http.StatusInternalServerError, fmt.Errorf("reading statefile head: %w", err)
-		}
-		desired, err := s.State.Load()
+		// The revision and the state in one read, as the portal chain
+		// reads them: a write commits only while the accepted revision
+		// is still this one. Without it the supersede-on-drift check
+		// sees no basis and refuses every write with a 409.
+		at, desired, err := s.State.Snapshot()
 		if err != nil {
 			return nil, http.StatusInternalServerError, fmt.Errorf("reading desired state: %w", err)
 		}
