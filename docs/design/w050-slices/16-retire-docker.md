@@ -1,6 +1,6 @@
 # W050 slice 16: retire the Docker backend
 
-> Draft issue body. Plan: §3 ("Gone" rows).
+> Tracked in #172 (labels `W050`, `POST Alpha`, `agent:blocked`). This file is the source draft; the issue is the live copy.
 
 ## Goal
 

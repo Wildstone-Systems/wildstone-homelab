@@ -1,6 +1,6 @@
 # W050 slice 2: Keystone backend seam + typed cluster ops
 
-> Draft issue body. Plan: §3.2, §10.
+> Tracked in #158 (labels `W050`, `POST Alpha`, `agent:blocked`). This file is the source draft; the issue is the live copy.
 
 ## Goal
 

@@ -1,6 +1,6 @@
 # W050 slice 9: ingress and identity on k3s, per-hostname cutover
 
-> Draft issue body. Plan: §6.8, §6.10.
+> Tracked in #165 (labels `W050`, `POST Alpha`, `agent:blocked`). This file is the source draft; the issue is the live copy.
 
 ## Goal
 

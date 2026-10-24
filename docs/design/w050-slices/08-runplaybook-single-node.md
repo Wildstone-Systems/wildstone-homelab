@@ -1,6 +1,6 @@
 # W050 slice 8: host updates on one node (`RunPlaybook`)
 
-> Draft issue body. Plan: §6.1.
+> Tracked in #164 (labels `W050`, `POST Alpha`, `agent:blocked`). This file is the source draft; the issue is the live copy.
 
 ## Goal
 

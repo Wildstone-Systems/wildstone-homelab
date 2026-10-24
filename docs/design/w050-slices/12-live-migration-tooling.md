@@ -1,6 +1,6 @@
 # W050 slice 12: live-install migration tooling
 
-> Draft issue body. Plan: §6.10.
+> Tracked in #168 (labels `W050`, `POST Alpha`, `agent:blocked`). This file is the source draft; the issue is the live copy.
 
 ## Goal
 

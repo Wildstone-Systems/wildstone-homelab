@@ -1,6 +1,6 @@
 # W050 slice 4: first stateless package on k3s (`tools-it-tools`)
 
-> Draft issue body. Plan: §4, §6.8 "coexistence trick".
+> Tracked in #160 (labels `W050`, `POST Alpha`, `agent:blocked`). This file is the source draft; the issue is the live copy.
 
 ## Goal
 

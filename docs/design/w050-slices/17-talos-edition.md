@@ -1,6 +1,6 @@
 # W050 slice 17: Talos edition (much later)
 
-> Draft issue body. ADR-W050 §2.6.
+> Tracked in #173 (labels `W050`, `POST Alpha`, `agent:blocked`). This file is the source draft; the issue is the live copy.
 
 ## Goal
 

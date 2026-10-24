@@ -1,6 +1,6 @@
 # W050 slice 6: secrets, ConfigFiles and SeedFiles on k3s
 
-> Draft issue body. Plan: §4, D3/O7, §11 (W012).
+> Tracked in #162 (labels `W050`, `POST Alpha`, `agent:blocked`). This file is the source draft; the issue is the live copy.
 
 ## Goal
 

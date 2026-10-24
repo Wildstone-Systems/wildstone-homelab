@@ -1,6 +1,6 @@
 # W050 slice 3: engine on one node
 
-> Draft issue body. Plan: §6.1–6.2, §6.5.
+> Tracked in #159 (labels `W050`, `POST Alpha`, `agent:blocked`). This file is the source draft; the issue is the live copy.
 
 ## Goal
 

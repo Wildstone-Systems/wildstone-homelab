@@ -1,6 +1,6 @@
 # W050 slice 5: volumes on Longhorn + Uptime Kuma + rolling update
 
-> Draft issue body. Plan: §4 (`Volume`), §6.4, §6.6.
+> Tracked in #161 (labels `W050`, `POST Alpha`, `agent:blocked`). This file is the source draft; the issue is the live copy.
 
 ## Goal
 

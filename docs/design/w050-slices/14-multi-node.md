@@ -1,6 +1,6 @@
 # W050 slice 14: multi-node
 
-> Draft issue body (expect to split into 14a join/placement/failover and 14b rolling host updates/leader handover). Plan: §6.2, §6.4, ADR-W050 §2.5, §2.8.
+> Tracked in #170 (labels `W050`, `POST Alpha`, `agent:blocked`). This file is the source draft; the issue is the live copy.
 
 ## Goal
 

@@ -1,6 +1,6 @@
 # W050 slice 11: host-bound packages (devices, labels, `pinned`, host networking)
 
-> Draft issue body. Plan: §5.2, §6.5, §6.7.
+> Tracked in #167 (labels `W050`, `POST Alpha`, `agent:blocked`). This file is the source draft; the issue is the live copy.
 
 ## Goal
 

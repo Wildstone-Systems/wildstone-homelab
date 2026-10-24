@@ -1,6 +1,6 @@
 # W050 slice 15: `replicated` and `offload`
 
-> Draft issue body. Plan: §6.4, O5, O6.
+> Tracked in #171 (labels `W050`, `POST Alpha`, `agent:blocked`). This file is the source draft; the issue is the live copy.
 
 ## Goal
 

@@ -1,6 +1,6 @@
 # W050 slice 1: Wardstone runtime seam + package `availability` (#151)
 
-> Draft amendment to existing issue #151 (do not open a new issue). Plan: §10.
+> Additions to existing issue #151 (posted as a comment there). This file is the source draft; the issue is the live copy.
 
 ## Goal
 

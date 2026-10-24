@@ -1,6 +1,6 @@
 # W050 slice 0: accepted revision and bounded approval (#128 G1/G2)
 
-> Draft issue body. Not created on GitHub. Labels when approved: `W050`, `POST Alpha`, `agent:blocked`.
+> Tracked in #157 (labels `W050`, `POST Alpha`, `agent:blocked`). This file is the source draft; the issue is the live copy.
 > Plan: [`../w050-migration-plan.md`](../w050-migration-plan.md) §10.
 
 ## Goal

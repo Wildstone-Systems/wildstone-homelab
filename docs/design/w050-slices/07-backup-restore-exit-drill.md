@@ -1,6 +1,6 @@
 # W050 slice 7: backup Jobs, hooks, restore and exit drill on k3s
 
-> Draft issue body. Plan: §6.6.
+> Tracked in #163 (labels `W050`, `POST Alpha`, `agent:blocked`). This file is the source draft; the issue is the live copy.
 
 ## Goal
 

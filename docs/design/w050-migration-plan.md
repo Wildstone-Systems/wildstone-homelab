@@ -1,9 +1,9 @@
 # W050 migration plan: from Docker to Kubernetes (k3s)
 
-- **Status:** proposed plan for owner review. Documentation only. No implementation, runtime change or GitHub issue is authorized by this document.
+- **Status:** proposed plan for owner review. Documentation only. No implementation or runtime change is authorized by this document. Slice issues exist (all `agent:blocked`) so the owner can schedule them.
 - **Date:** 2026-10-24, against `main` at `5a81358`.
 - **Governed by:** [ADR-W050](../decisions/ADR-W050-multi-node-runtime-kubernetes-engine-host-providers-editions.md) (accepted). Respects [ADR-W051](../decisions/ADR-W051-failure-domains-and-recovery.md) (proposed) as requirements.
-- **Draft issue bodies:** [`w050-slices/`](w050-slices/), one file per slice.
+- **Slice issues:** [`w050-slices/`](w050-slices/), one file per slice; created on GitHub as #157 (slice 0), #151 (slice 1, existing) and #158–#173 (slices 2–17).
 - **Evidence rule:** claims cite `path:line` on `5a81358`. Anything marked **(inferred)** was not verified in code or on a machine; it is for #129 or the slice to prove.
 
 ## Contents
@@ -464,26 +464,26 @@ Per package, as a Plan with named steps (slice 12):
 
 **Sizes:** S ≈ ≤ 1 week, M ≈ 1–3 weeks, L ≈ 3–6 weeks, XL ≈ 6+ weeks (part-time maintainer with an agent; **inferred**).
 
-| # | Slice | Size | Needs ADR change | Draft |
-|---|---|---|---|---|
-| 0 | Prerequisites: accepted revision + bounded approval (#128 G1/G2) | L | No | [00](w050-slices/00-prerequisites-g1-g2.md) |
-| 1 | Wardstone runtime seam + `availability` field (#151) | M | No | [01](w050-slices/01-wardstone-runtime-seam.md) |
-| 2 | Keystone backend seam + typed cluster ops (design + Docker-only refactor) | L | ADR-W003 amendment (new arms) | [02](w050-slices/02-keystone-backend-seam.md) |
-| 3 | Engine on one node: signed playbooks, k3s, add-ons, admission, leader | L | ADR-W014 amendment (Ansible step) | [03](w050-slices/03-engine-bootstrap-single-node.md) |
-| 4 | First stateless package on k3s (`tools-it-tools`) behind Docker Caddy | M | No | [04](w050-slices/04-first-stateless-package.md) |
-| 5 | Volumes on Longhorn + `monitoring` (Uptime Kuma) + rolling update | M | No | [05](w050-slices/05-volumes-and-uptime-kuma.md) |
-| 6 | Secrets, ConfigFiles, SeedFiles on k3s | L | **ADR-W012** amendment | [06](w050-slices/06-secrets-config-seed.md) |
-| 7 | Backup Jobs, hooks, restore, exit drill on k3s | L | ADR-W018 note | [07](w050-slices/07-backup-restore-exit-drill.md) |
-| 8 | Host updates on one node: `RunPlaybook` | M | No (W050 §2.7 covers it) | [08](w050-slices/08-runplaybook-single-node.md) |
-| 9 | Ingress + identity on k3s, per-hostname cutover | XL | No | [09](w050-slices/09-ingress-identity.md) |
-| 10 | Keystone as the `management` failover package | L | ADR-W051 acceptance | [10](w050-slices/10-keystone-in-cluster.md) |
-| 11 | Host-bound packages: devices, labels, `pinned`, host networking | XL | No | [11](w050-slices/11-host-bound-packages.md) |
-| 12 | Live-install migration tooling (per package, with rollback) | L | `docs/migration.md` update | [12](w050-slices/12-live-migration-tooling.md) |
-| 13 | Package migration waves A / B / C | 3 × L | No | [13](w050-slices/13-package-waves.md) |
-| 14 | Multi-node: join, placement, failover, rolling host updates, leader handover | XL | Possibly (2-node wording) | [14](w050-slices/14-multi-node.md) |
-| 15 | `replicated` and `offload` | L | No | [15](w050-slices/15-replicated-offload.md) |
-| 16 | Retire the Docker backend | M | ADR-W050 status note | [16](w050-slices/16-retire-docker.md) |
-| 17 | Talos edition | XL | New ADR | [17](w050-slices/17-talos-edition.md) |
+| # | Slice | Size | Needs ADR change | Draft | Issue |
+|---|---|---|---|---|---|
+| 0 | Prerequisites: accepted revision + bounded approval (#128 G1/G2) | L | No | [00](w050-slices/00-prerequisites-g1-g2.md) | #157 |
+| 1 | Wardstone runtime seam + `availability` field (#151) | M | No | [01](w050-slices/01-wardstone-runtime-seam.md) | #151 |
+| 2 | Keystone backend seam + typed cluster ops (design + Docker-only refactor) | L | ADR-W003 amendment (new arms) | [02](w050-slices/02-keystone-backend-seam.md) | #158 |
+| 3 | Engine on one node: signed playbooks, k3s, add-ons, admission, leader | L | ADR-W014 amendment (Ansible step) | [03](w050-slices/03-engine-bootstrap-single-node.md) | #159 |
+| 4 | First stateless package on k3s (`tools-it-tools`) behind Docker Caddy | M | No | [04](w050-slices/04-first-stateless-package.md) | #160 |
+| 5 | Volumes on Longhorn + `monitoring` (Uptime Kuma) + rolling update | M | No | [05](w050-slices/05-volumes-and-uptime-kuma.md) | #161 |
+| 6 | Secrets, ConfigFiles, SeedFiles on k3s | L | **ADR-W012** amendment | [06](w050-slices/06-secrets-config-seed.md) | #162 |
+| 7 | Backup Jobs, hooks, restore, exit drill on k3s | L | ADR-W018 note | [07](w050-slices/07-backup-restore-exit-drill.md) | #163 |
+| 8 | Host updates on one node: `RunPlaybook` | M | No (W050 §2.7 covers it) | [08](w050-slices/08-runplaybook-single-node.md) | #164 |
+| 9 | Ingress + identity on k3s, per-hostname cutover | XL | No | [09](w050-slices/09-ingress-identity.md) | #165 |
+| 10 | Keystone as the `management` failover package | L | ADR-W051 acceptance | [10](w050-slices/10-keystone-in-cluster.md) | #166 |
+| 11 | Host-bound packages: devices, labels, `pinned`, host networking | XL | No | [11](w050-slices/11-host-bound-packages.md) | #167 |
+| 12 | Live-install migration tooling (per package, with rollback) | L | `docs/migration.md` update | [12](w050-slices/12-live-migration-tooling.md) | #168 |
+| 13 | Package migration waves A / B / C | 3 × L | No | [13](w050-slices/13-package-waves.md) | #169 |
+| 14 | Multi-node: join, placement, failover, rolling host updates, leader handover | XL | Possibly (2-node wording) | [14](w050-slices/14-multi-node.md) | #170 |
+| 15 | `replicated` and `offload` | L | No | [15](w050-slices/15-replicated-offload.md) | #171 |
+| 16 | Retire the Docker backend | M | ADR-W050 status note | [16](w050-slices/16-retire-docker.md) | #172 |
+| 17 | Talos edition | XL | New ADR | [17](w050-slices/17-talos-edition.md) | #173 |
 
 **Changes from the starting skeleton, and why:**
 - **Added slice 2** (Keystone seam): the reconciler is per-node and Docker-shaped ([§3.2](#32-keystone)); doing this inside slice 4 would make it XL and hard to review.

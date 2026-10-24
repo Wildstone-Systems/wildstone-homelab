@@ -1,6 +1,6 @@
 # W050 slice 13: package migration waves
 
-> Draft issue body (one issue per wave). Plan: §5.
+> Tracked in #169 (labels `W050`, `POST Alpha`, `agent:blocked`). This file is the source draft; the issue is the live copy.
 
 ## Goal
 
