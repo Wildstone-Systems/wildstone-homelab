@@ -228,9 +228,11 @@ type Config struct {
 }
 
 type Agent struct {
-	cfg    Config
-	log    *slog.Logger
-	docker *dockerClient
+	cfg Config
+	log *slog.Logger
+	// runtime is the node's container runtime; the Docker Engine client
+	// is the only one (runtime.go).
+	runtime runtimeBackend
 
 	// execSelf performs (or, in tests, stands in for) the re-exec that
 	// takes effect after a promoted self-update — see selfUpdate and the
@@ -287,7 +289,7 @@ func New(cfg Config) (*Agent, error) {
 	if err != nil {
 		return nil, err
 	}
-	a := &Agent{cfg: cfg, log: cfg.Logger.With("node", cfg.NodeID), docker: docker}
+	a := &Agent{cfg: cfg, log: cfg.Logger.With("node", cfg.NodeID), runtime: docker}
 	if cfg.ExecSelf != nil {
 		a.execSelf = cfg.ExecSelf
 	} else {
