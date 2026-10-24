@@ -19,16 +19,25 @@ Wildstone is two binaries plus a CLI:
 
 ## 1. Install Keystone
 
-On the Keystone host, as one line:
+The quickest path is the guided install. On the Keystone host, from a
+terminal, as one line:
+
+```sh
+curl -fsSLO https://github.com/Wildstone-Systems/wildstone-homelab/releases/latest/download/install.sh && sudo bash install.sh
+```
+
+With no `--role` it asks a few questions and sets up the whole
+household — see [Installing interactively](#installing-interactively).
+Keep the two steps: do not pipe this one into `bash`. The installer
+pairs the host as its own node by re-running its own file, which a
+piped script does not have, and the questions need a terminal.
+
+The rest of this page is the manual path, for automation or for setting
+things up step by step. Add `--role keystone`:
 
 ```sh
 curl -fsSLO https://github.com/Wildstone-Systems/wildstone-homelab/releases/latest/download/install.sh && sudo bash install.sh --role keystone
 ```
-
-This downloads the latest release's installer, then runs it. Keep the
-two steps: do not pipe this one into `bash`. A Keystone install pairs
-the host as its own node by re-running its own file, which a piped
-script does not have.
 
 The repository and its releases are public, so no GitHub token is
 needed. To install a specific release rather than the latest, add

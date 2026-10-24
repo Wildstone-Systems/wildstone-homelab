@@ -33,16 +33,18 @@ chiefly moving a real household onto it, is tracked in the
 
 ## Install
 
-On a Linux host, as one line:
+On a Linux host, from a terminal, as one line:
 
 ```sh
-curl -fsSLO https://github.com/Wildstone-Systems/wildstone-homelab/releases/latest/download/install.sh && sudo bash install.sh --role keystone
+curl -fsSLO https://github.com/Wildstone-Systems/wildstone-homelab/releases/latest/download/install.sh && sudo bash install.sh
 ```
 
 The installer verifies every download against the release's
 `checksums.txt`, asks you to accept the AGPL-3.0 licence, and walks you
-through setup. [docs/install.md](docs/install.md) covers joining more
-machines, pinning a version, and air-gapped installs.
+through setup: Docker, optional Tailscale, your account, time zone and
+services. [docs/install.md](docs/install.md) covers the manual
+`--role` install, joining more machines, pinning a version, and
+air-gapped installs.
 
 ## Documentation
 
