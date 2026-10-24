@@ -1,8 +1,8 @@
 # Security policy
 
-Wildstone is pre-alpha software that runs privileged agents on your
-hosts. Treat every release accordingly until the alpha exit criteria
-(the road-to-alpha tracker) are met.
+Wildstone is alpha software that runs privileged agents on your hosts.
+Treat every release accordingly: expect breaking changes between
+releases, and keep backups you have tested.
 
 ## Reporting a vulnerability
 

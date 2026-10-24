@@ -17,6 +17,7 @@ User and operator docs (E13, ADR-W018):
 - `migration.md` — dogfood migration runbook and cutover rules.
 - `friction-log.md` — dogfood friction and alpha-exit cleanup.
 - `repository-settings.md` — the GitHub repository and organization settings, rulesets, and Sponsors setup.
+- `releasing.md` — cutting a release, checking it, and recovering a release that published without assets.
 
 The original design brief (`00-design-brief-v0.1.md`) and architecture proposal (`01-architecture-proposal.md`) remain in the maintainer's private reference deployment repo and are not published.
 

@@ -27,17 +27,25 @@ because they require CI checks that cannot pass until Actions is on.
 
 ## Actions (Settings → Actions → General)
 
-- **Actions permissions:** allow actions created by GitHub. Nothing else
-  is needed: every third-party tool CI runs is a checksum-pinned
-  download, not an action.
+- **Actions permissions:** "Allow Wildstone-Systems, and select
+  non-Wildstone-Systems, actions and reusable workflows", with **Allow
+  actions created by GitHub** ticked. Every workflow uses GitHub's own
+  `actions/*` (checkout, setup-go, setup-node, setup-python,
+  upload-artifact); nothing else is needed, because every third-party
+  tool CI runs is a checksum-pinned download, not an action. Set it in
+  the **organization's** Actions settings as well as the repository's:
+  an organization policy overrides the repository.
+
+  Getting this wrong does not fail a step — it fails every workflow
+  before it starts. The run shows **Startup failure** with no jobs, and
+  the run page names the actions that "are not allowed". A startup
+  failure cannot be re-run; push again once the setting is fixed (for a
+  release, see [releasing.md](releasing.md)).
 - **Fork pull request workflows:** require approval for all external
   contributors. Read the `.github/workflows/` diff before approving.
 - **Workflow permissions:** read repository contents only, and do not
   let Actions create or approve pull requests. `release.yml` asks for
   `contents: write` itself.
-
-Keep Actions disabled while the repository is private: hosted runners
-are metered on a private repository and free on a public one.
 
 ## Advanced Security (Settings → Advanced Security)
 
@@ -66,7 +74,8 @@ has run CI on `main` at least once so the checks exist.
   merging a pull request, never by pushing.
 - `.github/rulesets/release-tags.json` — a published `v*` tag cannot be
   moved or deleted, so the release an installer verified stays the
-  release. Admins can bypass to correct a mistake.
+  release. Admins can bypass to correct a mistake; see
+  [releasing.md](releasing.md) for when that is needed.
 
 The exit drill (`exit-drill.yml`) is not a required check: it takes up
 to 45 minutes and runs weekly regardless. A red drill is still a
