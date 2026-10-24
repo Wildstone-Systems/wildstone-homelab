@@ -8,6 +8,7 @@ import (
 	wsv1 "github.com/Wildstone-Systems/wildstone-homelab/proto/gen/wardstone/v1"
 
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/plan"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/reconcile"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/resource"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/runtimedb"
 )
@@ -281,5 +282,28 @@ func TestDigestSurvivesTheStatefile(t *testing.T) {
 	}
 	if got, want := plan.Digest(back[0]), plan.Digest(c); got != want || got == "" {
 		t.Fatalf("digest after the round trip = %q, reviewed %q", got, want)
+	}
+}
+
+// A Plan that deletes a resource on an offline node waits for that node.
+// The resource is no longer desired and no pass ran there, so only its
+// observed row still places it; without that the Plan would read as
+// converged and lose its delete authority before the delete happened.
+func TestDeleteOnAnOfflineNodeWaits(t *testing.T) {
+	// web keeps n2 a node with agent work, so the offline pass is skipped.
+	l, db, _, _ := boundedHarness(t, map[string]string{"web": "n2"})
+	if err := db.UpsertObserved(runtimedb.Observed{Kind: "Container", Name: "gone", Node: "n2", Healthy: true}); err != nil {
+		t.Fatal(err)
+	}
+	l.Rec.SeedManaged("n2", []reconcile.ManagedRef{{Kind: resource.KindContainer, Name: "gone"}})
+	l.Connected = func(node string) bool { return node != "n2" }
+	id := approve(t, db, reviewedDelete(t, resource.KindContainer, "gone"))
+
+	out, err := l.Tick(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st := stateOf(t, db, id); st != runtimedb.PlanApplying {
+		t.Fatalf("delete plan on an offline node = %s (tick %+v); want still applying", st, out)
 	}
 }

@@ -173,11 +173,14 @@ func (nr *nodeResult) record(o *reconcile.Outcome) {
 }
 
 // resourceNodes says which node each resource lives on: the node a pass
-// planned it on, else the node desired state places it. A resource that
-// is in neither (a delete that has already converged) has no home and
-// needs nothing.
-func resourceNodes(desired []resource.Resource, results map[string]*nodeResult) map[string]string {
+// planned it on, else the node desired state places it, else the node its
+// observed row records (a delete target, which desired no longer holds).
+// A resource in none of them has already gone and needs nothing.
+func resourceNodes(placements map[string]string, desired []resource.Resource, results map[string]*nodeResult) map[string]string {
 	homes := map[string]string{}
+	for k, node := range placements {
+		homes[k] = node
+	}
 	for _, r := range desired {
 		homes[resKey(r.Kind, r.Metadata.Name)] = r.Metadata.Node
 	}

@@ -295,6 +295,16 @@ func (l *Loop) Tick(ctx context.Context) (TickOutcome, error) {
 		return out, err
 	}
 
+	// Where each resource the runtime DB knows of lives, read before any
+	// pass edits the rows. A resource a Plan deletes is no longer desired,
+	// and on a node that is offline or whose pass errors no step names it
+	// either; this is what still places it, so the Plan waits for that
+	// node instead of reading as converged.
+	placements, err := l.observedPlacements()
+	if err != nil {
+		return out, err
+	}
+
 	groups := groupByNode(desired)
 	// A node whose desired set became empty still needs a pass, or its
 	// deletions are never planned (the engine tracks what it manages per
@@ -423,7 +433,7 @@ func (l *Loop) Tick(ctx context.Context) (TickOutcome, error) {
 	// Each Plan gets its own verdict (ADR-W008 A2a): what happened to the
 	// resources IT reviewed, not to the whole tree. The Statefile is never
 	// reverted on failure: desired stays desired and the next tick retries.
-	homes := resourceNodes(desired, results)
+	homes := resourceNodes(placements, desired, results)
 	deferred := false
 	var failedPlans []string
 	for _, p := range auth.plans {
@@ -470,6 +480,19 @@ func (l *Loop) Tick(ctx context.Context) (TickOutcome, error) {
 			"backoff_streak", l.failStreak.Load())
 	} else {
 		l.failStreak.Store(0)
+	}
+	return out, nil
+}
+
+// observedPlacements maps resKey to the node its observed row records.
+func (l *Loop) observedPlacements() (map[string]string, error) {
+	rows, err := l.DB.ListObserved()
+	if err != nil {
+		return nil, fmt.Errorf("loop: loading observed placements: %w", err)
+	}
+	out := make(map[string]string, len(rows))
+	for _, row := range rows {
+		out[resKey(resource.Kind(row.Kind), row.Name)] = row.Node
 	}
 	return out, nil
 }
