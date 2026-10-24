@@ -23,10 +23,10 @@ The original design brief (`00-design-brief-v0.1.md`) and architecture proposal 
 ## Deployment, terminology and application management proposals
 
 - [Glossary](glossary.md) — existing terms and separately marked proposed management terms.
-- [ADR-W051](decisions/ADR-W051-proxmox-first-deployment-and-recovery.md) — proposed Proxmox-first deployment and recovery direction; VM/LXC selection remains open.
+- [ADR-W051](decisions/ADR-W051-failure-domains-and-recovery.md) — proposed failure domains and recovery under ADR-W050: management isolation, packages as recovery groups, readiness-ordered restart, bounded remediation.
 - [Application Management Contract 0.1](design/application-management-contract-v0.1.md) — draft operational facets and authority boundaries, not a new wire protocol or executable schema.
 - [Package comparison](design/application-management-contract-v0.1-comparison.md) — source-based application matrix and unresolved runtime verification.
-- [Migration review](design/proxmox-deployment-migration-review.md) — investigation order, candidate dispositions and acceptance gates; no feature removal or cutover approved.
+- [Failure-domain review](design/failure-domain-recovery-review.md) — investigation order, candidate dispositions and acceptance gates; no feature removal or cutover approved.
 - [Documentation review](design/documentation-refresh-2026-10-22.md) — what was refreshed, source baseline and limits.
 - [Disk and recovery guardrails](operations/disk-and-recovery.md) — existing operator setup for capacity, mounts and external observation.
 

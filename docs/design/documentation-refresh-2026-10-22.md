@@ -53,8 +53,7 @@ second integration system.
 ## Remaining work
 
 ADR-W051 and contract 0.1 need maintainer review and acceptance/decomposition.
-VM/LXC selection, resource measurements, startup/readiness guarantees, provider
-permissions, storage backup coverage and application recovery conformance need
-isolated experiments. See the [migration review](proxmox-deployment-migration-review.md).
+Resource measurements, startup/readiness guarantees, storage backup coverage and application recovery conformance need
+isolated experiments. See the [failure-domain review](failure-domain-recovery-review.md).
 The historical implementation scope and older design notes are not current
 release certification, and this review is not a full security audit.

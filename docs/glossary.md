@@ -28,7 +28,7 @@ Related: [contract draft](design/application-management-contract-v0.1.md).
 | Connection | Person/Agent conversation-route binding governed by ADR-W033 and amendments. Not a blanket grant or a network socket. |
 | Wardstone node | Enrolled workload execution environment. May be a Linux guest; not necessarily a physical Proxmox node. |
 | Proxmox node | Hypervisor host managed by Proxmox. Several Wardstone nodes may share its failure domain. |
-| Host | Context-dependent machine boundary; qualify it as hypervisor, Linux workload node or management guest in deployment docs. |
+| Host | Context-dependent machine boundary; qualify it as hypervisor, Linux workload node or Kubernetes node in deployment docs. |
 | Domain adapter | Existing service-domain query/action implementation using integration declarations and the work queue. Distinct from the broader proposed management lifecycle adapter. |
 
 ## Proposed management terms
@@ -37,9 +37,9 @@ Related: [contract draft](design/application-management-contract-v0.1.md).
 | --- | --- |
 | Application Management Contract | Versioned semantics for application management, independent of adapter transport or hosting backend. Draft specification; not an industry standard. |
 | Application adapter | Translation from common management operations to supported application-specific behavior, composed with existing declarative machinery where possible. No executable extension mechanism is authorized by this name. |
-| Infrastructure provider | Translation and scoped execution for a hosting backend, such as Proxmox or Docker; exact interface remains proposed. Different from a package that provides a trait. |
+| Infrastructure provider | Translation and scoped execution for a hosting backend: a runtime backend (Docker, k3s) or a host provider (`LinuxHost`, `TalosHost`) per ADR-W050; exact interface remains proposed. Different from a package that provides a trait. |
 | Management facet | Optional area of the contract, such as identity or recovery. Avoid calling this a capability where it would conflict with the existing user-facing meaning. |
-| Recovery group | Components and data that must be recovered coherently, often an application plus its dedicated database. Not necessarily one container or one guest. |
+| Recovery group | Components and data that must be recovered coherently, often an application plus its dedicated database. In Wildstone this is one package (ADR-W051), not necessarily one container, pod or guest. |
 | Failure domain | Resources subject to a common failure, such as a VM, physical host, power source, or storage pool. |
 | Guest | VM or Proxmox-managed LXC environment. An LXC guest is different from Docker installed directly on the Proxmox host. |
 | Runtime state | Whether a guest or process is running; does not establish application readiness. |

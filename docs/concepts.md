@@ -628,8 +628,9 @@ Today a Wardstone node is an enrolled execution environment, not a Proxmox
 physical node or a claim of high availability. Multiple guests may share one
 physical failure domain. The installer does not provision the guests.
 
-[ADR-W051](decisions/ADR-W051-proxmox-first-deployment-and-recovery.md)
-proposes independent management and application recovery groups. The
+[ADR-W051](decisions/ADR-W051-failure-domains-and-recovery.md)
+proposes independent management and packages as recovery groups, under the
+accepted [ADR-W050](decisions/ADR-W050-multi-node-runtime-kubernetes-engine-host-providers-editions.md) runtime. The
 [Application Management Contract 0.1](design/application-management-contract-v0.1.md)
 proposes common operational facets; it complements existing package traits
 and service-domain adapters. Both remain drafts. A provider manages approved

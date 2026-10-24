@@ -16,7 +16,7 @@ Contract version, Package schema version, package release, and upstream applicat
 
 The operator reports Wildstone and managed services sharing one VM. Guest failure removes application access, management, and much of the diagnostic visibility together. Following a power outage, the VM returned without essential access services recovering correctly. These are operator observations, not independently reproduced failures; unavailability does not establish data loss.
 
-The proposed [ADR-W051](../decisions/ADR-W051-proxmox-first-deployment-and-recovery.md) evaluates an independent management guest and application recovery groups, VM versus LXC placement, startup dependencies, host power recovery prerequisites, and external monitoring. This contract does not select that topology or authorize migration. A shared host or storage pool remains a shared failure domain.
+The proposed [ADR-W051](../decisions/ADR-W051-failure-domains-and-recovery.md) sets requirements for independent management and packages as recovery groups on ADR-W050's runtime, readiness-ordered startup, host power recovery prerequisites, and external monitoring. This contract does not select that topology or authorize migration. A shared host or storage pool remains a shared failure domain.
 
 ## Required foundation and optional facets
 

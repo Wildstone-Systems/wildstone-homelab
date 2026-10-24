@@ -233,14 +233,14 @@ ADR-W006/W017; the red-team suite (`keystone/butler/redteam_test.go`,
   Wildstone-owned resources from hand edits on the node; drift repair
   reverts what it observes, Low-risk only.
 
-## Proposed Proxmox boundary (not implemented)
+## Proposed failure-domain and Proxmox boundary (not implemented)
 
-[ADR-W051](decisions/ADR-W051-proxmox-first-deployment-and-recovery.md)
-introduces an evaluation, not new credentials or execution authority. A future
-provider needs scoped API privileges, resource ownership, exact reviewed Plans,
-idempotency and fencing. Direct hypervisor Docker is not the proposed default.
-An LXC shares the host kernel; a VM has a different guest boundary. Neither
-protects against shared power/storage failure. Guest backups must explicitly
+[ADR-W051](decisions/ADR-W051-failure-domains-and-recovery.md)
+introduces requirements, not new credentials or execution authority. Under
+ADR-W050, Proxmox (if used) only hosts k3s node VMs: no Proxmox HA for
+workloads, no Docker or k3s directly on the hypervisor by default, and no
+Proxmox credentials for the Butler. Several VMs on one machine do not protect
+against shared power/storage failure. Guest backups must explicitly
 account for external mounts, passthrough and application-consistent state.
 
 Keep management recovery independent of household SSO and keep an external

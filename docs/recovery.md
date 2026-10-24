@@ -20,7 +20,7 @@ application, external mount, radio or hypervisor configuration can recover.
 The current installer does not rebuild Proxmox itself or configure guest
 autostart. Keep hypervisor, storage and network prerequisites separately.
 See [disk/recovery guardrails](operations/disk-and-recovery.md) and proposed
-[ADR-W051](decisions/ADR-W051-proxmox-first-deployment-and-recovery.md).
+[ADR-W051](decisions/ADR-W051-failure-domains-and-recovery.md).
 No new automatic repair or destructive-reset authority is granted here.
 
 ## The whole-site contract
