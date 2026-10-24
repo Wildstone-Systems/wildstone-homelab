@@ -14,7 +14,7 @@ historical issue/PR references in older ADRs are not silently renumbered.
 
 This review refreshes README and its install, vision, concepts, recovery,
 threat-model and implementation-scope entry points, plus the documentation
-index. It adds proposed ADR-W050 and an investigation/decomposition seed.
+index. It adds proposed ADR-W051 and an investigation/decomposition seed.
 It does not implement guest provisioning, migration, a new package schema,
 automatic remediation or an application adapter runtime.
 
@@ -52,7 +52,7 @@ second integration system.
 
 ## Remaining work
 
-ADR-W050 and contract 0.1 need maintainer review and acceptance/decomposition.
+ADR-W051 and contract 0.1 need maintainer review and acceptance/decomposition.
 VM/LXC selection, resource measurements, startup/readiness guarantees, provider
 permissions, storage backup coverage and application recovery conformance need
 isolated experiments. See the [migration review](proxmox-deployment-migration-review.md).

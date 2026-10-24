@@ -69,7 +69,7 @@ should not also remove every way to diagnose it. Keep management small,
 resource ownership explicit, and application data recoverable with keys and
 instructions that survive the lost host.
 
-[ADR-W050](decisions/ADR-W050-proxmox-first-deployment-and-recovery.md)
+[ADR-W051](decisions/ADR-W051-proxmox-first-deployment-and-recovery.md)
 proposes independent management and application recovery groups on Proxmox.
 The placement remains under review; neither a cluster nor Kubernetes is a
 prerequisite for the product goal. The [management contract](design/application-management-contract-v0.1.md)

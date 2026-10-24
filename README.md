@@ -32,7 +32,7 @@ Docker; Keystone and workload services can share a host, and additional
 Linux nodes can enroll separately. On Proxmox, use a Linux guest for the
 existing installation path; this is not a Proxmox-host installer.
 
-[ADR-W050](docs/decisions/ADR-W050-proxmox-first-deployment-and-recovery.md)
+[ADR-W051](docs/decisions/ADR-W051-proxmox-first-deployment-and-recovery.md)
 proposes a simple Proxmox-first experience with independent management and
 application recovery groups. VM versus LXC placement and guest provisioning
 remain under review. Native LXC management and automatic cluster failover are

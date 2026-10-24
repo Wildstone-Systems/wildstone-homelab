@@ -2,7 +2,7 @@
 
 Status: proposed investigation; no production migration or removal authorized.
 Date: 2026-10-22. Baseline: `60df9dcbc1daa99d43f7692eb83f7d72f7070956`.
-Companions: [ADR-W050](../decisions/ADR-W050-proxmox-first-deployment-and-recovery.md), [contract](application-management-contract-v0.1.md), [package comparison](application-management-contract-v0.1-comparison.md).
+Companions: [ADR-W051](../decisions/ADR-W051-proxmox-first-deployment-and-recovery.md), [contract](application-management-contract-v0.1.md), [package comparison](application-management-contract-v0.1-comparison.md).
 
 ## Review queue
 

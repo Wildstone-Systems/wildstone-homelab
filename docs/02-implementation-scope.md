@@ -29,7 +29,7 @@ ADRs W042/W043; the older “voice remains post-v1” text is not their status.
 For current implementation planning use issues, source and revision-specific
 validation evidence. Do not reinterpret old PR numbers as public-repo issues.
 
-Proposed [ADR-W050](decisions/ADR-W050-proxmox-first-deployment-and-recovery.md),
+Proposed [ADR-W051](decisions/ADR-W051-proxmox-first-deployment-and-recovery.md),
 [management contract 0.1](design/application-management-contract-v0.1.md),
 [package comparison](design/application-management-contract-v0.1-comparison.md)
 and [migration review](design/proxmox-deployment-migration-review.md) capture

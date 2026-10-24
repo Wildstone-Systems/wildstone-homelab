@@ -23,7 +23,7 @@ The original design brief (`00-design-brief-v0.1.md`) and architecture proposal 
 ## Deployment, terminology and application management proposals
 
 - [Glossary](glossary.md) — existing terms and separately marked proposed management terms.
-- [ADR-W050](decisions/ADR-W050-proxmox-first-deployment-and-recovery.md) — proposed Proxmox-first deployment and recovery direction; VM/LXC selection remains open.
+- [ADR-W051](decisions/ADR-W051-proxmox-first-deployment-and-recovery.md) — proposed Proxmox-first deployment and recovery direction; VM/LXC selection remains open.
 - [Application Management Contract 0.1](design/application-management-contract-v0.1.md) — draft operational facets and authority boundaries, not a new wire protocol or executable schema.
 - [Package comparison](design/application-management-contract-v0.1-comparison.md) — source-based application matrix and unresolved runtime verification.
 - [Migration review](design/proxmox-deployment-migration-review.md) — investigation order, candidate dispositions and acceptance gates; no feature removal or cutover approved.

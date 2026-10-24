@@ -235,7 +235,7 @@ ADR-W006/W017; the red-team suite (`keystone/butler/redteam_test.go`,
 
 ## Proposed Proxmox boundary (not implemented)
 
-[ADR-W050](decisions/ADR-W050-proxmox-first-deployment-and-recovery.md)
+[ADR-W051](decisions/ADR-W051-proxmox-first-deployment-and-recovery.md)
 introduces an evaluation, not new credentials or execution authority. A future
 provider needs scoped API privileges, resource ownership, exact reviewed Plans,
 idempotency and fencing. Direct hypervisor Docker is not the proposed default.

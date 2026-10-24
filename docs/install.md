@@ -3,7 +3,7 @@
 Reviewed 2026-10-22 against `60df9dcbc1daa99d43f7692eb83f7d72f7070956`.
 Canonical public repository: [Wildstone-Systems/wildstone-homelab](https://github.com/Wildstone-Systems/wildstone-homelab).
 These instructions describe the existing Linux/systemd installer, not the
-proposed Proxmox provisioning workflow. See [ADR-W050](decisions/ADR-W050-proxmox-first-deployment-and-recovery.md).
+proposed Proxmox provisioning workflow. See [ADR-W051](decisions/ADR-W051-proxmox-first-deployment-and-recovery.md).
 
 ## Choose the existing installation path
 

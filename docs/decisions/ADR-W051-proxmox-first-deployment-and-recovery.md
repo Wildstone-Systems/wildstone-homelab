@@ -1,7 +1,8 @@
-# ADR-W050: Proxmox-first deployment and recovery architecture
+# ADR-W051: Proxmox-first deployment and recovery architecture
 
 - **Status:** proposed; requires maintainer acceptance. No migration or runtime change is authorized.
 - **Date:** 2026-10-22
+- **Renumbered:** from ADR-W050 on 2026-10-24, after the accepted [ADR-W050](ADR-W050-multi-node-runtime-kubernetes-engine-host-providers-editions.md) (multi-node runtime) took that number. Where the two differ on runtime, placement or Proxmox's role, ADR-W050 governs; this proposal must be reconciled with it before acceptance.
 - **Baseline:** `60df9dcbc1daa99d43f7692eb83f7d72f7070956` in `Wildstone-Systems/wildstone-homelab`.
 - **Related:** ADR-W003, W004, W005, W014, W018, W033, W045 and W049; [management contract](../design/application-management-contract-v0.1.md), [glossary](../glossary.md), [migration review](../design/proxmox-deployment-migration-review.md).
 
