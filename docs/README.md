@@ -27,6 +27,7 @@ The original design brief (`00-design-brief-v0.1.md`) and architecture proposal 
 - [Application Management Contract 0.1](design/application-management-contract-v0.1.md) — draft operational facets and authority boundaries, not a new wire protocol or executable schema.
 - [Package comparison](design/application-management-contract-v0.1-comparison.md) — source-based application matrix and unresolved runtime verification.
 - [Failure-domain review](design/failure-domain-recovery-review.md) — investigation order, candidate dispositions and acceptance gates; no feature removal or cutover approved.
+- [W050 migration plan](design/w050-migration-plan.md): proposed Docker → k3s plan in 18 vertical slices, with coupling inventory, package survey, target architecture and [draft slice issues](design/w050-slices/); planning only, no implementation authorized.
 - [Documentation review](design/documentation-refresh-2026-10-22.md) — what was refreshed, source baseline and limits.
 - [Disk and recovery guardrails](operations/disk-and-recovery.md) — existing operator setup for capacity, mounts and external observation.
 
