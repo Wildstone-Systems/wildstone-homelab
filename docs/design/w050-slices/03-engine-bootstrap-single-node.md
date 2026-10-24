@@ -16,7 +16,7 @@ A fresh Ubuntu/Debian machine runs k3s with the W050 add-ons, installed by signe
 - `deploy/ansible/`: `prereqs.yml`, `k3s-server.yml`, `engine-addons.yml`, `wardstone.yml`; vendored, pinned manifests for Longhorn, kube-vip, NFS CSI, Intel GPU and generic device plugins.
 - `playbooks.manifest` + ed25519 signature in `release.yml`; verification in `install.sh` and Wardstone.
 - k3s flags per plan §6.1; secrets encryption on; Traefik/ServiceLB/local-storage off.
-- Admission: PSA labels on namespaces; VAP set from plan §6.5; RBAC denying exec/attach.
+- Admission: PSA labels on namespaces; VAP set from plan §6.5, bound to `wildstone-apps` and `wildstone-host`; RBAC denying exec/attach.
 - Wardstone: Lease election (`wildstone-leader`), admin kubeconfig loaded only by the holder; `HostFacts` reports edition and k3s version; `SystemdUnitStatus` allowlist adds `k3s`.
 - Measure RAM/CPU/disk idle (feeds #129).
 

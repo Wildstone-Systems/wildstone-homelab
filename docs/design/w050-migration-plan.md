@@ -375,13 +375,15 @@ Two layers, as today:
 
 1. **Keystone policy** (`keystone/policy/policy.go:22-32`) at proposal time. Unchanged; add rules for `availability`.
 2. **Cluster admission** at apply time, so even a compromised leader template cannot run a privileged pod:
-   - Pod Security Admission: `restricted` on app namespaces (`wildstone-apps`), `privileged` only on `kube-system`, `longhorn-system`, `wildstone-system`.
-   - ValidatingAdmissionPolicy (CEL), bound to `wildstone-apps`:
-     - refuse `privileged`, `hostPID`, `hostIPC`;
-     - refuse `hostNetwork`, `hostPath`, extra capabilities, device resources **unless** the namespace is `wildstone-host` *and* the pod carries `wildstone.dev/host-access` naming a signed package whose manifest digest the leader registered (#38);
-     - `hostPath` only for the paths in `hostSystemMounts` (`wardstone/internal/agent/devices.go:93-99`), read-only;
-     - capabilities only from `keystone/resource/hostaccess.go` `ContainerCapabilities`;
-     - images must be digest-pinned (`@sha256:`), like `ops.go:536`.
+   - Pod Security Admission: `restricted` on `wildstone-apps`; `privileged` on `kube-system`, `longhorn-system`, `wildstone-system` and `wildstone-host`. PSA cannot express "host network for this one package only", so `wildstone-host` relies on the policy below, not on PSA.
+   - ValidatingAdmissionPolicy (CEL), bound to **both** `wildstone-apps` and `wildstone-host` (and to any namespace labelled `wildstone.dev/managed=true`):
+     - everywhere: refuse `privileged`, `hostPID`, `hostIPC`; images must be digest-pinned (`@sha256:`), like `ops.go:536`;
+     - in `wildstone-apps`: refuse `hostNetwork`, `hostPath`, added capabilities and device resources outright;
+     - in `wildstone-host`: allow only the grants the pod's `wildstone.dev/host-access` annotation names, and only when that names a signed package whose manifest digest the leader registered (#38). Each grant is still narrowed:
+       - `hostPath` only for the paths in `hostSystemMounts` (`wardstone/internal/agent/devices.go:93-99`), read-only, same path inside;
+       - capabilities only from `keystone/resource/hostaccess.go` `ContainerCapabilities`;
+       - device resources only those the package declares;
+       - a pod in `wildstone-host` without a valid annotation is refused, so the namespace is never a blanket exemption.
    - Refuse `pods/exec`, `pods/attach`, `pods/portforward` for every subject except the break-glass role (#127) via RBAC (no one else is bound to it) plus a VAP on `CONNECT`.
 - **Namespaces:** `wildstone-system` (leader, Keystone), `wildstone-apps` (normal packages), `wildstone-host` (pinned host-access packages). One namespace per package was considered; it makes NetworkPolicy simpler but multiplies RBAC. Recommendation: shared namespaces + per-package NetworkPolicy by label.
 
@@ -444,7 +446,13 @@ Per package, as a Plan with named steps (slice 12):
 4. **Copy data:** a one-time Job mounts the old Docker volume path read-only (`hostPath`, admission exemption scoped to this Job and to `/var/lib/docker/volumes/<owned-name>/_data`) and copies into the new PVC. Size and checksum are compared.
 5. **Start on k3s**, wait for readiness.
 6. **Cut over the hostname:** one Route change (Docker Caddy → `cluster/` upstream, or k3s Caddy after slice 9). Atomic per hostname (`docs/migration.md:10-24`).
-7. **Hold** the Docker volume for N days (default 14); **rollback** = scale k3s to 0, start Docker containers, revert Route. After N days a separate Plan deletes the old volume.
+7. **Hold** the Docker volume for N days (default 14). After N days a separate Plan deletes the old volume.
+8. **Rollback (move back)** must not lose writes made on k3s after cutover. The Docker volume is frozen at step 3, so rollback is a mirror of steps 2–6, not a restart:
+   1. back up the k3s copy (restic Job) and check it;
+   2. stop the k3s workload (scale to 0) so nothing writes;
+   3. reverse-copy Job: PVC → the held Docker volume (read-write `hostPath`, same scoped exemption as step 4), after keeping the frozen copy as `<volume>-premigration` until the Plan finishes; compare size and checksums;
+   4. start the Docker containers, wait for readiness, revert the Route.
+   - If the reverse copy fails, the Plan stops with k3s scaled to 0 and the Route unchanged; restarting k3s is the safe recovery. Docker is never started against the frozen pre-migration data.
 
 - **Identity migrates exactly once** (two-masters rule): LLDAP + Authelia move in one Plan in slice 9; no dual running.
 - **Ingress moves exactly once:** kube-vip takes `:80/:443` in the same Plan that stops Docker Caddy.

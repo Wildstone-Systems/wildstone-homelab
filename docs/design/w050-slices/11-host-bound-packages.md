@@ -31,7 +31,7 @@ Slice 6 (SeedFiles for Home Assistant).
 
 ## Acceptance criteria
 
-- [ ] k3d admission tests: host network refused without exemption; allowed with a signed digest.
+- [ ] k3d admission tests, with the policy bound to `wildstone-apps` and `wildstone-host`: host network refused in `wildstone-apps`; refused in `wildstone-host` without a valid signed annotation; allowed in `wildstone-host` with one; a `hostPath` outside `hostSystemMounts` or an unlisted capability refused even with a valid annotation.
 - [ ] QEMU e2e with an emulated USB serial device (`-device usb-serial`) **(inferred feasible)**: Zigbee2MQTT pod lands on the labeled node.
 - [ ] Home Assistant LAN discovery and BlueZ checked on owner hardware (evidence record).
 - [ ] Unplugging the stick: pod Pending with reason shown in Console.
