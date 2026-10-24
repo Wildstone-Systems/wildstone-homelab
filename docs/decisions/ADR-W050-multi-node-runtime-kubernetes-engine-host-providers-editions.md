@@ -137,7 +137,9 @@ break-glass (#127).
 
 1. An approved Plan changes the image version.
 2. Kubernetes replaces one copy at a time, waiting for its health check.
-3. A Pod Disruption Budget keeps the package's minimum copies running.
+3. Workload rollout limits (`maxUnavailable`, `maxSurge`) keep the
+   package's minimum copies running. A Pod Disruption Budget does not
+   limit rolling updates; it guards evictions such as node drains.
 4. A failed health check stops the rollout; old copies keep serving and
    the Plan offers a rollback.
 
