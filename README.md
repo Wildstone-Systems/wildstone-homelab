@@ -10,26 +10,40 @@ AI operator (the Butler).
 
 The modern home is full of other people's computers. Wildstone is the
 counter-move: the home lab as household infrastructure, coordinated by a
-Butler whose loyalty is enforced by construction — it can read and
-propose, and structurally cannot act without human approval. Data stays
-home; power stays with the household. Read [docs/vision.md](docs/vision.md).
+Butler with scoped tools and explicit authority. Infrastructure proposals
+require human approval; permitted household actions use their own checked
+grants and confirmation rules. Local operation and household control are
+central to the design. Read [docs/vision.md](docs/vision.md).
 
 ## Status
 
 **Alpha.** [`v0.1.13-alpha`](https://github.com/Wildstone-Systems/wildstone-homelab/releases/tag/v0.1.13-alpha)
-is the first public release. The MVP epics (E1–E13) are implemented:
-privileged agent, control plane, plan-mediated reconciliation, policy
-engine, signed capability packages, backups with a weekly
-total-host-loss exit drill in CI, secrets, installer, CLI, web console,
-and the Butler (sessions, diagnostics, injection-hardening red-team
-suite).
+is the first public release. The repository contains the control plane
+and host agent, declarative packages, policy and Plan handling,
+installer, Console/CLI, household and Agent services, and local/off-site
+backup and recovery code.
 
-It installs and runs, but expect rough edges and frequent changes.
-Package quality varies — some capabilities are well tested, others are
-still experimental — and upgrades between alpha releases may need
-manual steps. Back up anything you can't afford to lose. What remains,
-chiefly moving a real household onto it, is tracked in the
-[alpha tracker](https://github.com/Wildstone-Systems/wildstone-homelab/issues/13).
+It installs and runs, but implementation does not establish production
+readiness or that every package has passed live installation and
+restore testing: some capabilities are well tested, others are still
+experimental, and upgrades between alpha releases may need manual
+steps. Back up anything you can't afford to lose. See the
+[alpha tracker](https://github.com/Wildstone-Systems/wildstone-homelab/issues/13)
+and [documentation review](docs/design/documentation-refresh-2026-10-22.md).
+
+### Deployment today and proposed direction
+
+Today the installer installs Linux systemd services. Workload nodes need
+Docker; Keystone and workload services can share a host, and additional
+Linux nodes can enroll separately. On Proxmox, use a Linux guest for the
+existing installation path; this is not a Proxmox-host installer.
+
+[ADR-W051](docs/decisions/ADR-W051-failure-domains-and-recovery.md)
+(proposed) sets failure-domain and recovery requirements on top of the
+accepted [ADR-W050](docs/decisions/ADR-W050-multi-node-runtime-kubernetes-engine-host-providers-editions.md)
+runtime: independent management, packages as recovery groups and
+readiness-ordered restart. Kubernetes placement and automatic failover are
+not shipped features. No migration or feature removal is authorized by the draft.
 
 ## Install
 
@@ -53,24 +67,27 @@ air-gapped installs.
 - [docs/install.md](docs/install.md) — installing (from a release).
 - [docs/releasing.md](docs/releasing.md) — cutting a release.
 - [docs/recovery.md](docs/recovery.md) — the recovery contract and
-  total-host-loss runbook, proven weekly by `scripts/exit-drill.sh`.
-- [docs/threat-model.md](docs/threat-model.md) — the threat model
-  against as-built.
+  total-host-loss runbook, with scoped local and S3 CI drills.
+- [docs/threat-model.md](docs/threat-model.md) — selected trust boundaries, implementation evidence and residual risks.
 - [docs/02-implementation-scope.md](docs/02-implementation-scope.md) —
-  the epic/milestone scope; [docs/decisions/](docs/decisions/) — the
+  historical epic scope and current planning guidance; [docs/decisions/](docs/decisions/) — the
   W-series ADRs.
+- [docs/glossary.md](docs/glossary.md) — shared vocabulary, with proposed terms marked.
+- [Application Management Contract 0.1](docs/design/application-management-contract-v0.1.md) — proposed operational contract and [package comparison](docs/design/application-management-contract-v0.1-comparison.md).
+- [docs/README.md](docs/README.md) — full documentation index and authority order.
 
 ## Layout
 
 | Path | Contents |
 |---|---|
 | `proto/` | gRPC + resource schemas — the contract everything else consumes; versioned first |
-| `wardstone/` | Privileged host agent (`wardstoned`): the only component that touches the host |
+| `wardstone/` | Privileged host agent (`wardstoned`): typed workload execution boundary |
 | `keystone/` | Control plane: API, Reconciler, Capability Engine, Policy Engine, Statefile, Butler |
 | `cli/` | `wild` — the CLI client |
 | `console/` | Web UI (TypeScript/React) |
 | `packages/` | Capability packages (data) and the package toolchain |
-| `installer/` | Bootstrap installer and preflight checks |
+| `scripts/install.sh` | Release installer, interactive setup and node enrollment |
+| `installer/` | Installer background documentation |
 | `testing/` | e2e harness, scrubbed fixtures, restore-drill runner |
 | `docs/` | Product docs and Wildstone ADRs (as they migrate from the reference repo) |
 
@@ -89,7 +106,7 @@ air-gapped installs.
    property of the wire format, not a policy hope.
 3. **Console, CLI, and Butler use the same public API.** No private
    UI-only or AI-only endpoints.
-4. **Every intentional change is a Plan.** No unmediated write path.
+4. **Infrastructure desired-state changes use Plans.** Agent, household and opt-in host actions retain their own scoped authorization and confirmation checks; no Agent may approve its own infrastructure Plan.
 
 ## Building
 

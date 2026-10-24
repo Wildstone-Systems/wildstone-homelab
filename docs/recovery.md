@@ -1,8 +1,27 @@
 # Recovery runbook
 
-This is the operator's copy of the recovery contract the weekly exit
-drill executes (`scripts/exit-drill.sh`, ADR-W018). If the drill is
-green, this document is known to work end-to-end.
+Reviewed 2026-10-22 against `60df9dcbc1daa99d43f7692eb83f7d72f7070956`.
+The local and S3-only CI drills (`scripts/exit-drill.sh` and
+`scripts/offsite-exit-drill.sh`, `.github/workflows/exit-drill.yml`) exercise
+defined recovery fixtures on pull requests, weekly and on demand. A passing
+run is evidence for that revision and fixture, not proof that every installed
+application, external mount, radio or hypervisor configuration can recover.
+
+## Choose the failure being recovered
+
+| Failure | First response | Evidence of recovery |
+| --- | --- | --- |
+| One application unavailable | Capture status/logs and dependency/storage state; use the existing approved action path for any restart | Application readiness and real client operation, not just a running container |
+| Suspected database corruption | Preserve original bytes and stop blind retries; select a compatible backup and restore alongside | Database/application consistency, supported version, login and data checks before cutover |
+| Workload guest/node lost | Rebuild prerequisites, rejoin and restore the affected recovery group | Storage, identity and network bindings plus application checks |
+| Management lost | Use the whole-site kit, quarantine and fenced recovery below | One active coordinator; reconciled revocations; restored application access |
+| Physical host/storage lost | Recover onto surviving/replacement infrastructure with off-host backups and keys | External monitoring plus management and workload validation |
+
+The current installer does not rebuild Proxmox itself or configure guest
+autostart. Keep hypervisor, storage and network prerequisites separately.
+See [disk/recovery guardrails](operations/disk-and-recovery.md) and proposed
+[ADR-W051](decisions/ADR-W051-failure-domains-and-recovery.md).
+No new automatic repair or destructive-reset authority is granted here.
 
 ## The whole-site contract
 
@@ -149,7 +168,7 @@ and performs precisely the sequence above. The final comparison is on the
 canary bytes restored from S3; retaining a local repository cannot make that
 drill pass.
 
-### The fourth recovery input before durable Butler ships
+### Durable Agent state and restore quarantine
 
 ADR-W030 adds recoverable Butler runtime state: task/step ledgers,
 conversations and selected memory, bindings and identity-link projections,
@@ -157,7 +176,7 @@ grants and immediate denials, routines/procedures, access settings,
 delivery state, structured work traces/feedback labels, and evaluator/config
 versions. Its encrypted off-host backup or replica must publish a
 measured recovery point; replication lag is possible data loss, not proof of
-zero loss. Secrets remain separately re-entered from the password manager.
+zero loss. Node secrets covered by the whole-site sealed bundle can be imported on fresh nodes. Personal credentials and other excluded values must be re-entered through their supported flows; retain the offline kit and password-manager records.
 
 Restoring that state starts Butler in quarantine. No memory retrieval, task or
 routine dispatch, ingestion, or proactive delivery occurs until current
@@ -416,8 +435,11 @@ An S3 server on your home network over plain `http://` needs
 cryptographically gone with the house: the endpoint and bucket, the
 bucket key, and every off-site password.
 
-Not yet built (tracked under #407): the monthly restore drill and
-integrity checks for the off-site copy, and Console screens.
+The off-site engine includes scheduled integrity checks and alongside restore
+drills (`keystone/backup/offsite.go`, with regression coverage in
+`offsite_test.go`). Inspect actual ledger results; these are not a substitute
+for application-level restore validation or evidence that every Console
+workflow is complete.
 
 ### NAS shares and folders
 
@@ -523,13 +545,18 @@ of a disk smaller than 80 GiB). Set your own per plan with
   still runs backups that add little, but a run may then use at most
   half of what is left.
 
-## Losing a host: the restore procedure
+## Legacy/manual reconstruction from a Statefile replica
 
-Mirrors the drill phase-for-phase.
+This narrower procedure reconstructs declared resources from a surviving
+Statefile and application repositories. It does **not** recover the complete
+runtime DB, grants, Connections or durable Agent state. Prefer the whole-site
+kit procedure above for a current installation; do not treat this legacy path
+as an equivalent total-site restore. Preserve the old management state and
+fence the previous coordinator before rebuilding.
 
-**Host-level setup is not restored.** Everything Wildstone manages is
-rebuilt from the Statefile and the restic repository, but anything that
-lives on the host *underneath* Wildstone is yours to redo:
+**Host prerequisites are not reconstructed by Statefile replay.** Declared
+resources can be rebuilt, but durable management state and excluded secrets
+need their own recovery path. Anything underneath Wildstone is also yours to redo:
 
 - **Docker** on every node — the installer puts it back for you.
 - **The tailnet join**, if the host was on one. Not in the Statefile,
