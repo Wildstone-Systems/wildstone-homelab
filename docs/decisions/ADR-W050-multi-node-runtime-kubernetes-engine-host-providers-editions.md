@@ -1,6 +1,7 @@
 # ADR-W050: Multi-node runtime — a Kubernetes engine, host providers and two editions
 
-- **Status:** proposed; design direction, not yet implemented. Post-alpha.
+- **Status:** accepted by the maintainer on 2026-10-24; design direction, not yet implemented. Post-alpha.
+- **Acceptance evidence:** maintainer acceptance after the proposal merged in #152. Implementation is authorized only through bounded issues the owner schedules (first #151, then #129); both stay `agent:blocked` until then.
 - **Relates to:** ADR-W002 (Proxmox test isolation), ADR-W003 (Wardstone
   protocol, no `Exec(string)`), ADR-W004/W008 (resources, Plans,
   reconcile), ADR-W005 (package format), ADR-W014 (installer bootstrap),
