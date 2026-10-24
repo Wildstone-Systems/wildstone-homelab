@@ -375,3 +375,89 @@ func TestUncommittedEditIsNotIngested(t *testing.T) {
 		t.Fatalf("Tick = %+v, %v; want no change", res, err)
 	}
 }
+
+// History that no longer contains the accepted revision (a reset or a
+// rebase by hand) is a conflict: nothing is accepted or reverted, and it
+// is reported once rather than every tick (contract §4.5).
+func TestDivergedHistoryIsAConflictNotAnEdit(t *testing.T) {
+	in, state := harness(t)
+	accepted := seed(t, in, state)
+	// Rewrite history: a new root commit the accepted one is not part of.
+	humanGit(t, state.Root, "checkout", "-q", "--orphan", "rewrite")
+	writeFile(t, filepath.Join(state.Root, "volume", "other.yaml"), []byte("x: y\n"))
+	humanGit(t, state.Root, "add", "-A")
+	humanGit(t, state.Root, "commit", "-qm", "start over")
+
+	for i := 0; i < 2; i++ {
+		res, err := in.Tick()
+		if err != nil || res.Outcome != OutcomeDiverged {
+			t.Fatalf("tick %d = %+v, %v; want diverged", i, res, err)
+		}
+	}
+	if marker, _ := in.DB.StatefileHead(); marker != accepted {
+		t.Fatalf("a diverged branch moved the accepted revision to %s", marker)
+	}
+	n := 0
+	events, _ := in.DB.EventsAfter(0, 50)
+	for _, e := range events {
+		if e.Type == "statefile.diverged" {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("diverged reported %d times, want once", n)
+	}
+}
+
+// A branch left behind the accepted revision (a mirror interrupted by a
+// crash) is caught up, not mistaken for an edit.
+func TestBranchBehindTheAcceptedRevisionIsCaughtUp(t *testing.T) {
+	in, state := harness(t)
+	seed(t, in, state)
+	ahead, err := state.BuildCandidate(mustHead(t, state), []resource.Resource{volume("photos")}, nil, "test", "", "add photos")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := in.DB.SetStatefileHead(ahead); err != nil {
+		t.Fatal(err)
+	}
+	res, err := in.Tick()
+	if err != nil || res.Outcome != OutcomeNoChange {
+		t.Fatalf("tick = %+v, %v; want a quiet catch-up", res, err)
+	}
+	if head := mustHead(t, state); head != ahead {
+		t.Fatalf("branch = %s, want caught up to %s", head, ahead)
+	}
+}
+
+// A revert is a new commit with the accepted tree on top of the foreign
+// one, fast-forwarded: an unrelated uncommitted file survives it.
+func TestRevertKeepsUnrelatedUncommittedFiles(t *testing.T) {
+	in, state := harness(t)
+	seed(t, in, state)
+	writeFile(t, filepath.Join(state.Root, "volume", "bad.yaml"), []byte("apiVersion: wildstone.dev/v1\nkind: Rootkit\nmetadata:\n  name: bad\n"))
+	humanGit(t, state.Root, "add", "-A")
+	humanGit(t, state.Root, "commit", "-qm", "oops")
+	note := filepath.Join(state.Root, "NOTES.md")
+	writeFile(t, note, []byte("mine\n"))
+
+	res, err := in.Tick()
+	if err != nil || res.Outcome != OutcomeReverted {
+		t.Fatalf("tick = %+v, %v; want reverted", res, err)
+	}
+	if _, err := os.Stat(note); err != nil {
+		t.Fatalf("the revert discarded an unrelated uncommitted file: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(state.Root, "volume", "bad.yaml")); !os.IsNotExist(err) {
+		t.Fatalf("the reverted file is still in the working tree: %v", err)
+	}
+}
+
+func mustHead(t *testing.T, state *statefile.Store) string {
+	t.Helper()
+	head, err := state.Head()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return head
+}

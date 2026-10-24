@@ -109,15 +109,17 @@ func (db *DB) StatefileHead() (string, error) {
 	return head, nil
 }
 
-// SetStatefileHead records the Statefile commit hash Keystone just wrote
-// or accepted (ADR-W007 A6).
+// SetStatefileHead records an accepted revision without a publication:
+// the pre-journal path, kept for fixtures. It clears the recorded digest
+// and publication, which describe a different revision now. Production
+// writes go through AcceptPublication (ADR-W007 A8).
 func (db *DB) SetStatefileHead(head string) error {
 	if head == "" {
 		return fmt.Errorf("runtimedb: statefile head required")
 	}
 	_, err := db.sql.Exec(
 		`INSERT INTO statefile_head (id, head) VALUES (1, ?)
-		 ON CONFLICT (id) DO UPDATE SET head = excluded.head`, head)
+		 ON CONFLICT (id) DO UPDATE SET head = excluded.head, tree_digest = '', publication_id = ''`, head)
 	if err != nil {
 		return fmt.Errorf("runtimedb: setting statefile head: %w", err)
 	}

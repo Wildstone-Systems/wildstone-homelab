@@ -258,13 +258,35 @@ Delivered in three parts, so each can be reviewed alone:
   a Medium/High step only when one matches the accepted content, and
   each Plan gets its own outcome. Rules 3 and 4; details in ADR-W008
   A2a, including why risk is recorded but not compared.
-- **0b, one publisher (pending).** API approval, the tracker writer and
-  ingestion share one `DesiredStatePublisher` with a durable journal and
-  internal Git refs, so a crash between the Git and SQLite steps recovers
-  to either the old or the new accepted revision.
+- **0b, one publisher (implemented).** API approval, the tracker writer
+  and ingestion publish through `keystone/publish`:
+  - **Journal.** `statefile_publications` (`prepared → accepted →
+    mirrored`, or `abandoned`, migration 0108). `statefile_head` also
+    records the accepted tree digest and the publication that set it.
+  - **Candidates.** Built with git plumbing and a private index from the
+    accepted tree, never from the working files, and made reachable by
+    `refs/wildstone/publications/<id>` before they can be selected. The
+    refs are kept, so `git bundle --all` carries every accepted revision.
+  - **Acceptance.** One SQLite transaction compares the expected revision,
+    selects the candidate and moves the Plan (`approved` for an Owner's
+    Plan or an out-of-band edit, `applied` for a tracker edit). A losing
+    concurrent publication changes nothing and its Plan is superseded.
+  - **Mirror.** The branch catches up by fast-forward (`reset --keep`):
+    never rewound, and local edits survive where they do not conflict.
+    Ingestion's revert is now a commit on top of the foreign one, so it no
+    longer rewrites the working files.
+  - **Recovery** runs at startup before ingestion, reconciliation or any
+    publication: prepared rows are abandoned and their refs removed,
+    accepted-but-unmirrored rows are mirrored, and an accepted revision
+    that is missing or does not match its recorded tree leaves desired
+    state unreadable, with the reason, instead of falling back.
+  - **Divergence.** A branch that no longer contains the accepted revision
+    is reported once (`statefile.diverged`) and neither accepted nor
+    reverted (contract §4.5). A branch behind it is fast-forwarded.
 
-Until 0b, the Git commit and the `statefile_head` update are still two
-steps; the contract's §3 recovery table is not yet implemented.
+Not done here: deleting refs of superseded revisions (they are kept;
+retention is a later decision), and DB-owned projection authority
+(contract D5's third predicate), which no current path needs.
 
 # Part B — Invariants (binding)
 

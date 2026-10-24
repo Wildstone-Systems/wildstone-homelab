@@ -29,6 +29,7 @@ import (
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/catalog"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/policy"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/principal"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/publish"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/reconcile"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/redact"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/research"
@@ -174,6 +175,11 @@ type Server struct {
 	// routable SAN exists, which leaves the field blank rather than
 	// suggesting an address nothing can reach.
 	APIURL string
+
+	// Publisher is the one writer of desired state (ADR-W007 A8). New
+	// builds one; cmd/keystone replaces it with the instance ingestion
+	// shares, so both serialize on the same lock.
+	Publisher *publish.Publisher
 
 	// ManagedPrefix is where ConfigFiles are rendered on a node, wired
 	// from -managed-prefix. Needed here because a secret can be read
@@ -383,6 +389,7 @@ func New(p *principal.Store, db *runtimedb.DB, state *statefile.Store, log *slog
 		Log:        log,
 		Policy:     policy.NewEngine(nil),
 		Automation: &automation.Engine{DB: db, State: state, Log: log},
+		Publisher:  &publish.Publisher{State: state, DB: db, Log: log},
 		limiter:    newLimiter(),
 	}
 }

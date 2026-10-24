@@ -334,15 +334,25 @@ func scanPlan(row rowScanner) (PlanRecord, error) {
 // decisions (approve/reject); pass "" for machine transitions
 // (applying/applied/failed/superseded by the reconciler).
 func (db *DB) TransitionPlan(id string, to PlanState, resolvedBy string) error {
-	seq, err := parsePlanID(id)
-	if err != nil {
-		return err
-	}
 	tx, err := db.sql.Begin()
 	if err != nil {
 		return fmt.Errorf("runtimedb: transition plan: %w", err)
 	}
 	defer tx.Rollback()
+	if err := transitionPlanTx(tx, id, to, resolvedBy); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// transitionPlanTx is TransitionPlan inside a caller's transaction, so a
+// Plan can move in the same commit as the change it describes (see
+// AcceptPublication).
+func transitionPlanTx(tx *sql.Tx, id string, to PlanState, resolvedBy string) error {
+	seq, err := parsePlanID(id)
+	if err != nil {
+		return err
+	}
 	var cur string
 	err = tx.QueryRow(`SELECT state FROM plans WHERE seq = ?`, seq).Scan(&cur)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -370,5 +380,5 @@ func (db *DB) TransitionPlan(id string, to PlanState, resolvedBy string) error {
 	if err != nil {
 		return fmt.Errorf("runtimedb: transition plan: %w", err)
 	}
-	return tx.Commit()
+	return nil
 }

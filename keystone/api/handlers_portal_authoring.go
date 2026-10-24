@@ -33,6 +33,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -42,8 +43,10 @@ import (
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/plan"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/policy"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/principal"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/publish"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/resource"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/runtimedb"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/statefile"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/upkeep"
 )
 
@@ -190,27 +193,22 @@ func (s *Server) applyAuthored(member string, ch authored) (int, error) {
 			_ = s.DB.TransitionPlan(planID, runtimedb.PlanFailed, who)
 		}
 	}()
-	for _, res := range ch.Put {
-		if err := s.State.Put(res); err != nil {
-			return http.StatusInternalServerError, err
-		}
-	}
+	deletes := make([]statefile.ResourceRef, 0, len(ch.Delete))
 	for _, d := range ch.Delete {
-		if err := s.State.Delete(resource.Kind(d.Kind), d.Name); err != nil {
-			return http.StatusInternalServerError, err
+		deletes = append(deletes, statefile.ResourceRef{Kind: resource.Kind(d.Kind), Name: d.Name})
+	}
+	// The same publisher as an Owner's approval, for its serialization and
+	// recovery only: the record becomes applied in the acceptance
+	// transaction, so it is never a queued Plan and grants the reconciler
+	// no authority.
+	if _, err := s.Publisher.Publish(publish.Request{
+		Source: runtimedb.SourceHouseholdAudit, PlanID: planID, PlanTo: runtimedb.PlanApplied, ResolvedBy: who,
+		Expected: head, Put: ch.Put, Delete: deletes, Who: who, Why: ch.Summary,
+	}); err != nil {
+		if errors.Is(err, publish.ErrSuperseded) {
+			return http.StatusConflict, fmt.Errorf(
+				"somebody else changed what the house tracks while you were editing; take another look and try again")
 		}
-	}
-	if err := s.State.Commit(who, planID, ch.Summary); err != nil {
-		return http.StatusInternalServerError, err
-	}
-	newHead, err := s.State.Head()
-	if err != nil {
-		return http.StatusInternalServerError, err
-	}
-	if err := s.DB.SetStatefileHead(newHead); err != nil {
-		return http.StatusInternalServerError, err
-	}
-	if err := s.DB.TransitionPlan(planID, runtimedb.PlanApplied, who); err != nil {
 		return http.StatusInternalServerError, err
 	}
 	applied = true
