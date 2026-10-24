@@ -33,13 +33,6 @@ type joinTokenResponse struct {
 	// Install is the ready-to-paste node install command (ADR-W014 A2),
 	// with the gateway address, token and CA pin already filled in.
 	Install string `json:"install"`
-	// InstallPrivateRepo is the same install for as long as this
-	// repository is private: an anonymous `curl` cannot reach a private
-	// repo's release assets, so the emitted one-liner 404s and the
-	// operator is left debugging GitHub instead of pairing a node. Both
-	// forms are returned rather than one guessed form — Keystone cannot
-	// see whether its own release repo is public.
-	InstallPrivateRepo string `json:"installPrivateRepo"`
 	// InstallNotes are the things the command itself cannot say: what
 	// --node-id defaults to, and what to substitute if Keystone does not
 	// know its own reachable address.
@@ -168,25 +161,23 @@ func (s *Server) mintJoinToken(r *http.Request, id principal.Identity) (any, int
 		s.Log.Error("join-token event append failed", "err", err)
 	}
 
-	public, private, notes := s.installCommands(token)
+	install, notes := s.installCommand(token)
 	return joinTokenResponse{
-		JoinToken:          token,
-		CAFingerprint:      s.CAFingerprint,
-		ExpiresInSec:       int64(ttl.Seconds()),
-		Install:            public,
-		InstallPrivateRepo: private,
-		InstallNotes:       notes,
+		JoinToken:     token,
+		CAFingerprint: s.CAFingerprint,
+		ExpiresInSec:  int64(ttl.Seconds()),
+		Install:       install,
+		InstallNotes:  notes,
 	}, http.StatusCreated, nil
 }
 
-// installCommands composes the pairing instructions this endpoint hands
+// installCommand composes the pairing instructions this endpoint hands
 // back. The point of minting a token from Keystone is that Keystone knows
 // everything the node install needs — the address, the token, the CA
 // fingerprint — so anything left for the operator to fill in is a step
-// where pairing can fail. Two forms come back because exactly one thing
-// here is unknowable from inside the process: whether the release repo is
-// public.
-func (s *Server) installCommands(token string) (public, private string, notes []string) {
+// where pairing can fail. The release repository is public, so one
+// anonymous one-liner is enough.
+func (s *Server) installCommand(token string) (install string, notes []string) {
 	addr := s.GatewayAddr
 	if addr == "" {
 		addr = addrPlaceholder
@@ -197,21 +188,13 @@ func (s *Server) installCommands(token string) (public, private string, notes []
 	if s.CAFingerprint != "" {
 		args += " --ca-fingerprint " + s.CAFingerprint
 	}
-	public = fmt.Sprintf(
+	install = fmt.Sprintf(
 		"curl -fsSL https://github.com/%s/releases/latest/download/install.sh | sudo bash -s -- %s",
-		releaseRepo, args)
-	// The private form deliberately fetches install.sh with an
-	// authenticated client first: the `curl` in the public one-liner is
-	// anonymous even when GH_TOKEN is set, so piping it straight to bash
-	// 404s on a private repo before the installer ever runs.
-	private = fmt.Sprintf(
-		"gh release download --repo %s --pattern install.sh\n"+
-			"sudo GH_TOKEN=<pat> bash ./install.sh %s",
 		releaseRepo, args)
 	notes = append(notes,
 		"--node-id defaults to the new host's short hostname; pass --node-id <id> to choose it.",
 		"The join token is single-use and expires; mint a fresh one for each node.")
-	return public, private, notes
+	return install, notes
 }
 
 // containerLogs (ADR-W015 A2): GET /api/v1/nodes/{node}/containers/
