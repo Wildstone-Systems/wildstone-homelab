@@ -110,6 +110,62 @@ func TestMirrorOnlyFastForwards(t *testing.T) {
 	}
 }
 
+// A person who commits between Mirror's ancestry check and its branch
+// update keeps their commit and its file: the update is conditional on the
+// head Mirror checked.
+func TestMirrorDoesNotDropAConcurrentCommit(t *testing.T) {
+	s, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, _ := s.BuildCandidate("", []resource.Resource{volume("data")}, nil, "test", "", "add data")
+	if err := s.Mirror(first); err != nil {
+		t.Fatal(err)
+	}
+	second, _ := s.BuildCandidate(first, []resource.Resource{volume("photos")}, nil, "test", "", "add photos")
+	var human string
+	mirrorRace = func() {
+		humanCommit(t, s, "NOTES.md", "mine\n")
+		human, _ = s.Head()
+	}
+	defer func() { mirrorRace = nil }()
+	if err := s.Mirror(second); !errors.Is(err, ErrDiverged) {
+		t.Fatalf("Mirror racing a commit = %v, want ErrDiverged", err)
+	}
+	if head, _ := s.Head(); head != human {
+		t.Fatalf("head = %s, want the human commit %s", head, human)
+	}
+	if _, err := os.Stat(filepath.Join(s.Root, "NOTES.md")); err != nil {
+		t.Fatalf("the human's file is gone: %v", err)
+	}
+}
+
+// A local edit to a file the accepted revision also changes stops the
+// mirror, and the branch stays where it was rather than ahead of the files.
+func TestMirrorBlockedByALocalEditLeavesTheBranch(t *testing.T) {
+	s, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, _ := s.BuildCandidate("", []resource.Resource{volume("data")}, nil, "test", "", "add data")
+	if err := s.Mirror(first); err != nil {
+		t.Fatal(err)
+	}
+	second, _ := s.BuildCandidate(first, nil, []ResourceRef{{Kind: resource.KindVolume, Name: "data"}}, "test", "", "drop data")
+	if err := os.WriteFile(filepath.Join(s.Root, "volume", "data.yaml"), []byte("edited\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Mirror(second); err == nil {
+		t.Fatal("Mirror overwrote a local edit")
+	}
+	if head, _ := s.Head(); head != first {
+		t.Fatalf("head = %s, want it left at %s", head, first)
+	}
+	if b, _ := os.ReadFile(filepath.Join(s.Root, "volume", "data.yaml")); string(b) != "edited\n" {
+		t.Fatalf("local edit = %q", b)
+	}
+}
+
 func TestPublicationRefsAreCompareAndSwap(t *testing.T) {
 	s, err := New(t.TempDir())
 	if err != nil {

@@ -250,8 +250,30 @@ func (s *Store) Mirror(accepted string) error {
 		}
 		return nil
 	}
-	if _, err := s.gitWith(ctx, nil, nil, "reset", "--keep", accepted); err != nil {
+	if mirrorRace != nil {
+		mirrorRace()
+	}
+	// The branch moves only if it still holds the head checked above: a
+	// person may commit at any moment, and the publisher's lock does not
+	// cover them. The ref moves first, conditionally, and the files follow
+	// with a two-way merge that keeps local edits (as reset --keep would);
+	// if the files cannot follow, the ref goes back the same way.
+	if _, err := s.gitWith(ctx, nil, nil, "update-ref", "HEAD", accepted, head); err != nil {
+		if now, herr := s.Head(); herr == nil && now != head {
+			return ErrDiverged
+		}
+		return fmt.Errorf("statefile: mirroring %s: %w", accepted, err)
+	}
+	_, _ = s.gitWith(ctx, nil, nil, "update-index", "-q", "--refresh")
+	if _, err := s.gitWith(ctx, nil, nil, "read-tree", "-m", "-u", head, accepted); err != nil {
+		if _, rerr := s.gitWith(ctx, nil, nil, "update-ref", "HEAD", head, accepted); rerr != nil {
+			return fmt.Errorf("statefile: mirroring %s: %w (and restoring the branch: %v)", accepted, err, rerr)
+		}
 		return fmt.Errorf("statefile: mirroring %s: %w", accepted, err)
 	}
 	return nil
 }
+
+// mirrorRace, when set by a test, runs between Mirror's ancestry check and
+// its branch update: where a concurrent human commit would land.
+var mirrorRace func()
