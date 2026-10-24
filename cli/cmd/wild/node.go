@@ -14,7 +14,6 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"strings"
 	"text/tabwriter"
 	"time"
 )
@@ -62,33 +61,23 @@ func runNode(args []string) int {
 
 // joinTokenResponse mirrors POST /api/v1/join-tokens.
 type joinTokenResponse struct {
-	JoinToken          string   `json:"joinToken"`
-	CAFingerprint      string   `json:"caFingerprint"`
-	ExpiresInSec       int64    `json:"expiresInSec"`
-	Install            string   `json:"install"`
-	InstallPrivateRepo string   `json:"installPrivateRepo"`
-	InstallNotes       []string `json:"installNotes"`
+	JoinToken     string   `json:"joinToken"`
+	CAFingerprint string   `json:"caFingerprint"`
+	ExpiresInSec  int64    `json:"expiresInSec"`
+	Install       string   `json:"install"`
+	InstallNotes  []string `json:"installNotes"`
 }
 
 // printPairing renders the instructions rather than the JSON envelope.
 // The whole value of minting from Keystone is that it hands back a
 // command you can paste; printing it inside a JSON object made the
-// operator extract it by hand first, and hid the private-repo form the
-// paste actually needs while this repo is private.
+// operator extract it by hand first.
 func printPairing(r joinTokenResponse) {
 	fmt.Printf("Join token minted; it is single-use and expires in %s.\n", time.Duration(r.ExpiresInSec)*time.Second)
 	fmt.Println()
 	fmt.Println("Run this on the new node:")
 	fmt.Println()
 	fmt.Println("  " + r.Install)
-	if r.InstallPrivateRepo != "" {
-		fmt.Println()
-		fmt.Println("While this repository is private, use instead:")
-		fmt.Println()
-		for _, line := range strings.Split(r.InstallPrivateRepo, "\n") {
-			fmt.Println("  " + line)
-		}
-	}
 	for _, n := range r.InstallNotes {
 		fmt.Println()
 		fmt.Println("Note: " + n)

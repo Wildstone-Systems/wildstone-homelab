@@ -60,13 +60,11 @@ func TestMintJoinToken(t *testing.T) {
 	if !strings.Contains(strings.Join(out.InstallNotes, "\n"), addrPlaceholder) {
 		t.Fatalf("notes = %q, want the placeholder explained", out.InstallNotes)
 	}
-	// The private-repo form is what actually works while this repo is
-	// private: install.sh fetched with an authenticated client, not piped
-	// from an anonymous curl that 404s.
-	if strings.Contains(out.InstallPrivateRepo, "curl") ||
-		!strings.Contains(out.InstallPrivateRepo, "gh release download") ||
-		!strings.Contains(out.InstallPrivateRepo, "--join-token "+fakeToken) {
-		t.Fatalf("private install = %q", out.InstallPrivateRepo)
+	// The release repository is public, so the one command fetches the
+	// latest installer anonymously; no token-based form is needed.
+	if !strings.Contains(out.Install, "https://github.com/"+releaseRepo+"/releases/latest/download/install.sh") ||
+		strings.Contains(out.Install, "GH_TOKEN") {
+		t.Fatalf("install command = %q, want the anonymous latest-release installer", out.Install)
 	}
 
 	// An advertised gateway address is filled in, leaving nothing to edit.
