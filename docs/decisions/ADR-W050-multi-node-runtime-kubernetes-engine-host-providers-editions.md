@@ -256,3 +256,16 @@ under these limits:
 - Each edition needs its own CI and exit drill once Talos exists.
 - The ground rules now also bind cluster credentials, admission policy
   and playbooks, not only the Wardstone wire format.
+
+## Implementation amendment — 2026-10-24
+
+The Kubernetes direction remains accepted. The [migration plan's implementation review and proof gates](../design/w050-migration-plan.md#implementation-review-and-proof-gates--2026-10-24) supersede conflicting implementation details below.
+
+- Preserve Docker encapsulation in #177; #178 availability is informational and requires #179 capability/policy review. Placement, relocation, replica safety, component workers and selected policy must not be conflated.
+- Start with a small disposable deployment and 1–3 service migrations (#129), including backup/replacement restore and reverse migration preserving new writes. Prove multi-node safety early (#180) before catalog waves (#169); #170 remains later productization.
+- Keystone owns product-level desired state; runtime controllers implement it. A Lease is not fencing. Define stale-operation rejection, leadership-loss cancellation and replay-safe execution. Bootstrap/break-glass administrator authority is separate from scoped runtime reconciliation; only loading cluster-admin while leader is not revocation. Admission does not constrain an unrestricted administrator who can change it.
+- Review canonical secret source and handover/key recovery before cluster secrets. Prove single-writer storage and partition recovery, not just node-power loss. Node count and short tolerations alone establish no availability guarantee.
+- Singleton Recreate updates incur an outage; failed updates do not retain the terminated old pod. Rollback requires data/schema compatibility or validated restore.
+- Recovery must work when Keystone cannot start, with an off-host path for cluster/storage failure. Actual Keystone recovery is required before household migration.
+
+This revision changes planning and acceptance requirements only; no runtime experiment is authorized without a scheduled bounded issue and owner-selected disposable target.

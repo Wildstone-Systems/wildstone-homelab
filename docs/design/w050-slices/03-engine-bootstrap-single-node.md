@@ -1,5 +1,12 @@
 # W050 slice 3: engine on one node
 
+## Implementation review amendment — 2026-10-24
+
+Before runtime implementation, review the authority contract in #180: separate installer/break-glass administration from scoped runtime reconciliation credentials; policies/RBAC and grant registration must not be writable by ordinary runtime credentials. Root on server nodes remains privileged; loading an admin kubeconfig only while elected does not revoke it on leadership loss. Admission is a guard against malformed workloads, not unrestricted administrator compromise. Start with add-ons needed by the 1–3 proof services; defer device plugins until a service needs them. Measure actual baseline resource use.
+
+This supersedes conflicting scope, ordering and acceptance language below. See [revised proof gates](../w050-migration-plan.md#implementation-review-and-proof-gates--2026-10-24). No runtime work is authorized by this amendment.
+
+
 > Tracked in #159 (labels `W050`, `POST Alpha`, `agent:blocked`). This file is the source draft; the issue is the live copy.
 
 ## Goal

@@ -1,5 +1,12 @@
 # W050 slice 15: `replicated` and `offload`
 
+## Implementation review amendment — 2026-10-24
+
+Blocked additionally by #179. Replicas and optional worker components are separate dimensions from placement/recovery; do not freeze offload as an exclusive availability mode. Require application-specific safety declarations and measured utility. Separate replicated stateless rollout tests from worker/offload experiments.
+
+This supersedes conflicting scope, ordering and acceptance language below. See [revised proof gates](../w050-migration-plan.md#implementation-review-and-proof-gates--2026-10-24). No runtime work is authorized by this amendment.
+
+
 > Tracked in #171 (labels `W050`, `POST Alpha`, `agent:blocked`). This file is the source draft; the issue is the live copy.
 
 ## Goal

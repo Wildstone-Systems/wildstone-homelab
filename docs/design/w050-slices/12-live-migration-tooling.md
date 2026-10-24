@@ -1,5 +1,12 @@
 # W050 slice 12: live-install migration tooling
 
+## Implementation review amendment — 2026-10-24
+
+Split a bounded proof child EARLY after #163: migrate the 1–3 services selected in #129 behind Docker ingress; preserve new writes on reverse migration and inject copy/cutover failures. This proof does not depend on full identity migration #165. The full household UI, identity/ingress migration and general migration tooling retain later dependencies. Source services must be stopped/quiesced during the final consistent copy; estimate and disclose outage. A pre-copy can reduce it but needs a final synchronized copy. Checksums alone do not prove database/application consistency.
+
+This supersedes conflicting scope, ordering and acceptance language below. See [revised proof gates](../w050-migration-plan.md#implementation-review-and-proof-gates--2026-10-24). No runtime work is authorized by this amendment.
+
+
 > Tracked in #168 (labels `W050`, `POST Alpha`, `agent:blocked`). This file is the source draft; the issue is the live copy.
 
 ## Goal

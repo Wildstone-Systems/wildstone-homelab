@@ -1,5 +1,12 @@
 # W050 slice 1: Wardstone runtime seam + package `availability` (#151)
 
+## Implementation review amendment — 2026-10-24
+
+Preserve PR #177 as per-node Docker encapsulation with unchanged behavior. Its Docker-shaped result types are not the Kubernetes workload contract and the future backend need not implement Docker primitives. PR #178 is informational only and requires #179 capability/policy review before merge; if already merged, resolve through a compatible follow-up before runtime use. Do not treat array order, absence of volumes, or host networking as proof of replica safety, selected policy, or exact hardware identity. Acceptance of W050 does not schedule further runtime work.
+
+This supersedes conflicting scope, ordering and acceptance language below. See [revised proof gates](../w050-migration-plan.md#implementation-review-and-proof-gates--2026-10-24). No runtime work is authorized by this amendment.
+
+
 > Additions to existing issue #151 (posted as a comment there). This file is the source draft; the issue is the live copy.
 
 ## Goal

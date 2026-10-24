@@ -1,5 +1,12 @@
 # W050 slice 14: multi-node
 
+## Implementation review amendment — 2026-10-24
+
+Early architectural proof is extracted to #180, which must NOT depend on #169 or this issue. This issue remains production join/placement/update productization after catalog work. Reuse proof evidence and expand acceptance tests; split join/placement/failover and rolling updates into bounded children. Node count alone does not establish availability: require healthy control-plane quorum, storage replicas on independent failure domains, eligible capacity, and no dependency single points. Banner wording must reflect measured protection, not blanket "any one machine can fail".
+
+This supersedes conflicting scope, ordering and acceptance language below. See [revised proof gates](../w050-migration-plan.md#implementation-review-and-proof-gates--2026-10-24). No runtime work is authorized by this amendment.
+
+
 > Tracked in #170 (labels `W050`, `POST Alpha`, `agent:blocked`). This file is the source draft; the issue is the live copy.
 
 ## Goal

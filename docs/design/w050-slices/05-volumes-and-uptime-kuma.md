@@ -1,5 +1,12 @@
 # W050 slice 5: volumes on Longhorn + Uptime Kuma + rolling update
 
+## Implementation review amendment — 2026-10-24
+
+Depends additionally on #179 before availability is consumed. Correct rollout semantics: singleton stateful workloads use Recreate, with an explicitly stated outage. A failed new version does NOT keep the terminated old pod serving. Test failure reporting and an explicit rollback Plan. Rollback must account for schema/data migrations: image rollback only when backward compatibility is declared and proven; otherwise validated restore alongside before cutover. Replicated stateless rolling-update continuity is tested separately. Do not advertise automatic failover from metadata alone.
+
+This supersedes conflicting scope, ordering and acceptance language below. See [revised proof gates](../w050-migration-plan.md#implementation-review-and-proof-gates--2026-10-24). No runtime work is authorized by this amendment.
+
+
 > Tracked in #161 (labels `W050`, `POST Alpha`, `agent:blocked`). This file is the source draft; the issue is the live copy.
 
 ## Goal
@@ -30,7 +37,7 @@ Slice 4.
 ## Acceptance criteria
 
 - [ ] e2e: install, add a monitor, reboot VM, monitor still there.
-- [ ] e2e: image update to a known-bad digest stops, old pod keeps serving, rollback Plan restores.
+- [ ] e2e: image update to a known-bad digest reports failure and the declared outage; a compatible rollback Plan restores service.
 - [ ] Removing the package keeps the PVC until a separate High-risk Plan deletes it (same as Docker volumes today).
 
 ## Risks

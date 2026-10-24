@@ -1,5 +1,12 @@
 # W050 slice 8: host updates on one node (`RunPlaybook`)
 
+## Implementation review amendment — 2026-10-24
+
+This issue contributes host-update evidence to #129; it does not by itself complete the recommendation. #129 closes only after the complete 1–3-service deployment/migration/recovery report and owner decision, including #163 backup/restore evidence and a bounded migration proof. Keep absent evidence explicitly unproven.
+
+This supersedes conflicting scope, ordering and acceptance language below. See [revised proof gates](../w050-migration-plan.md#implementation-review-and-proof-gates--2026-10-24). No runtime work is authorized by this amendment.
+
+
 > Tracked in #164 (labels `W050`, `POST Alpha`, `agent:blocked`). This file is the source draft; the issue is the live copy.
 
 ## Goal

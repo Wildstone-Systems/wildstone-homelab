@@ -1,5 +1,12 @@
 # W050 slice 2: Keystone backend seam + typed cluster ops
 
+## Implementation review amendment — 2026-10-24
+
+Docker-only extraction may proceed when scheduled, preserving Plans and ordering. Do not require a Kubernetes backend to emulate Docker result types. Keep typed cluster operation design provisional until the 1–3-service proof (#129) informs it. Review #179 and #180's authority, stale-operation, revision-binding and idempotency contracts before freezing wire operations. A Kubernetes Lease is coordination, not fencing.
+
+This supersedes conflicting scope, ordering and acceptance language below. See [revised proof gates](../w050-migration-plan.md#implementation-review-and-proof-gates--2026-10-24). No runtime work is authorized by this amendment.
+
+
 > Tracked in #158 (labels `W050`, `POST Alpha`, `agent:blocked`). This file is the source draft; the issue is the live copy.
 
 ## Goal

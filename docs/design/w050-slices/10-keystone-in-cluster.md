@@ -1,5 +1,12 @@
 # W050 slice 10: Keystone as the `management` failover package
 
+## Implementation review amendment — 2026-10-24
+
+Add #180 safety-contract review as a prerequisite to implementation. Before offering household migration, prove actual Keystone failover and recovery on the early test topology, beyond the management fixture in #180. wild-recover must diagnose and perform documented bootstrap/restore when Keystone is stopped, corrupt or unschedulable; a proxy to its API is insufficient. Define behavior with cluster API/storage unavailable and exercise the off-host kit. Prove secret continuity, single-writer behavior under partition, and resumption without replaying stale approvals. Priority/Guaranteed QoS reduce eviction risk; they do not guarantee survival of host/PV disk exhaustion. Reserve capacity for OS, Kubernetes and storage as well as management.
+
+This supersedes conflicting scope, ordering and acceptance language below. See [revised proof gates](../w050-migration-plan.md#implementation-review-and-proof-gates--2026-10-24). No runtime work is authorized by this amendment.
+
+
 > Tracked in #166 (labels `W050`, `POST Alpha`, `agent:blocked`). This file is the source draft; the issue is the live copy.
 
 ## Goal

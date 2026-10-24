@@ -6,6 +6,48 @@
 - **Slice issues:** [`w050-slices/`](w050-slices/), one file per slice; created on GitHub as #157 (slice 0), #151 (slice 1, existing) and #158–#173 (slices 2–17).
 - **Evidence rule:** claims cite `path:line` on `5a81358`. Anything marked **(inferred)** was not verified in code or on a machine; it is for #129 or the slice to prove.
 
+## Implementation review and proof gates — 2026-10-24
+
+This section supersedes conflicting ordering, defaults, authority and acceptance claims elsewhere in this plan. Issue numbers and slice numbers remain stable; slice order is no longer a strict execution sequence. Historical code inventory remains evidence against the cited revision, not a fresh code audit.
+
+### Work already in progress
+At review time #177 and #178 are open, not merged. Preserve #177 as Docker encapsulation; Docker-shaped types are not the Kubernetes contract. #178 remains informational and requires capability review #179 before merge (or a compatible follow-up before runtime use if it merges meanwhile).
+
+### Revised execution gates
+1. Bounded approvals/accepted revisions (#157); Docker encapsulation (#151/#177); package capability contract (#179); Docker-only Keystone extraction (#158). Cluster wire design stays provisional until proof evidence.
+2. **Small disposable single-node deployment, 1–3 service migrations (#129).** Use tools-it-tools, monitoring/Uptime Kuma, optionally Mealie or the Postgres fixture. Docker Caddy/identity may remain. Prove install, authenticated reachability, persistence, update failure, backup, replacement restore, and forward/reverse migration preserving new writes. Split an early proof child from #168 after #163; it does not require full #165 ingress migration. No broad catalog or live household migration.
+3. #129 owns the pass/revise/reject recommendation after #159–#164 evidence and the bounded migration proof. #164 contributes host-update evidence; it cannot close the evaluation alone. Full identity relocation is later and must not silently become a prerequisite for this small proof.
+4. **Early three-node safety and recovery proof (#180)** using the same limited services and a management fixture. Depends on #157–#159, #161–#163 and #179 review, not #169/#170. Prove partitions as well as powered-off nodes, stale leadership/operations, secret continuity and storage ownership. Owner-operated disposable evidence is required; three VMs on one host do not prove hardware/power independence.
+5. Core migration and actual Keystone bootstrap/failover/offline recovery (#165/#166), bounded host-bound work (#167), household migration tooling (#168). Actual Keystone failure tests must pass before household migration is offered.
+6. Catalog waves (#169) only after accepted #129 and #180 evidence, capability review, management recovery and migration tooling. #170 is later production multi-node productization, not the first architecture experiment. Split large trackers into bounded implementation children when scheduled.
+7. Retire Docker (#172) only after migration/rollback and supported topology acceptance (#168/#170/#180), deprecation and replacement-restore evidence. Replica and worker capabilities (#171) remain separate; Talos stays deferred.
+
+### Capability contract (#179)
+Placement requirements, supported relocation, replica safety, worker components, and selected household policy are distinct. Do not use availability array order as a production replica default. No volume does not prove statelessness. Device identity differs from a device class: a specific radio may pin an app, while a GPU workload may relocate to another eligible GPU. Host networking alone does not prove exact-node affinity. Default-parameter rendering is insufficient for conditional hardware access. Review a small compatible schema evolution before rewriting the catalog.
+
+### Authority, storage and recovery contract (#180)
+- Keystone is the sole product-level desired-state/approval authority; Kubernetes controllers implement that intent. Bootstrap and emergency recovery are explicit audited exceptions.
+- A Lease coordinates leadership; it is not fencing. Define cancellation, stale/in-flight request handling, revision checks, replay/idempotency and safe resumption before promising one effective writer.
+- Separate administrative bootstrap/break-glass credentials from least-privilege runtime credentials. Server root/admin kubeconfigs remain authority regardless of who currently loads them. Runtime credentials must not alter admission/RBAC or mint their own signed-package grants. Admission protects against malformed workloads; it is not a security boundary against unrestricted cluster-admin compromise.
+- Specify canonical secret storage, leader handover access, version continuity, export/import and encryption-key recovery. A missing local leader store must never regenerate existing secrets.
+- Prove storage detach/reattach and partition behavior; RWOP plus short tolerations is not a complete fencing contract. State measured downtime instead of deriving it from eviction timeout.
+- Host recovery must diagnose/rebuild/restore when Keystone cannot run, with a documented off-host kit when cluster API/storage is unavailable. A proxy to Keystone is not this recovery path.
+- Resource priorities reduce risk but do not guarantee management survival of node/PV disk exhaustion. Reserve OS, Kubernetes and storage capacity and test pressure explicitly.
+
+### Rollout and migration corrections
+Singleton stateful workloads use Recreate with a declared outage. A failed update cannot keep the already terminated old pod serving. Rollback requires declared schema/data compatibility or validated restore alongside; old image selection alone is insufficient. Replicated stateless continuity is a separate test. Secret rotation uses the applicable workload strategy.
+
+Final consistent data copy requires writers stopped/quiesced; estimate and disclose outage. Pre-copy may reduce it but needs final synchronization and application consistency checks. The initial 1–3-service migration proof is intentionally earlier and smaller than general household migration tooling.
+
+### Sources for safety assumptions
+- [client-go leader election explicitly disclaims fencing](https://pkg.go.dev/k8s.io/client-go/tools/leaderelection).
+- [Longhorn node failure and volume attachment](https://longhorn.io/docs/1.13.0/high-availability/node-failure/).
+- [Kubernetes force-delete warning](https://kubernetes.io/docs/reference/kubectl/generated/kubectl_delete/).
+- [Kubernetes node-pressure eviction](https://kubernetes.io/docs/concepts/scheduling-eviction/node-pressure-eviction/).
+
+No runtime change, merge, or test deployment is executed by this documentation revision. Remaining implementation issues retain their scheduling restrictions.
+
+
 ## Contents
 
 1. [Summary in plain language](#1-summary-in-plain-language)

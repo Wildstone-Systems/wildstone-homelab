@@ -1,5 +1,12 @@
 # W050 slice 6: secrets, ConfigFiles and SeedFiles on k3s
 
+## Implementation review amendment — 2026-10-24
+
+Before implementation, review secret continuity in #180. Specify the canonical source, how a newly elected leader obtains existing values and versions, and recovery of datastore encryption keys plus the off-host export bundle. A new leader must never generate a replacement for an existing secret because its local node store is empty. Add a secret-bearing workload and export/import test across leader change to #180. Rotation restart strategy follows the workload's singleton/replica safety; no universal zero-downtime claim.
+
+This supersedes conflicting scope, ordering and acceptance language below. See [revised proof gates](../w050-migration-plan.md#implementation-review-and-proof-gates--2026-10-24). No runtime work is authorized by this amendment.
+
+
 > Tracked in #162 (labels `W050`, `POST Alpha`, `agent:blocked`). This file is the source draft; the issue is the live copy.
 
 ## Goal

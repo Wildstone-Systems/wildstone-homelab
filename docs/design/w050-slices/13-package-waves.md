@@ -1,5 +1,12 @@
 # W050 slice 13: package migration waves
 
+## Implementation review amendment — 2026-10-24
+
+**Additional hard blocker: #180 passes with owner evidence; #129 accepted; #179 contract reviewed.** Broad catalog migration must not precede the multi-node safety/storage proof. Actual Keystone recovery (#166) and household migration tooling remain prerequisites. Split waves into bounded package children when scheduled; no automatic mass migration. The 1–3 proof-service migrations happen earlier and do not count as catalog-wave authorization.
+
+This supersedes conflicting scope, ordering and acceptance language below. See [revised proof gates](../w050-migration-plan.md#implementation-review-and-proof-gates--2026-10-24). No runtime work is authorized by this amendment.
+
+
 > Tracked in #169 (labels `W050`, `POST Alpha`, `agent:blocked`). This file is the source draft; the issue is the live copy.
 
 ## Goal

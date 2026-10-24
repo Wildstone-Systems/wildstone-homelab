@@ -1,5 +1,12 @@
 # W050 slice 16: retire the Docker backend
 
+## Implementation review amendment — 2026-10-24
+
+Additional dependencies: #168 migration/rollback path, #170 production multi-node acceptance, and #180 evidence. Before removal, prove supported deployment topologies and replacement restore, including an existing Docker household upgrade. Catalog translation coverage alone is not sufficient. Keep compatibility until an explicit supported-upgrade/deprecation decision.
+
+This supersedes conflicting scope, ordering and acceptance language below. See [revised proof gates](../w050-migration-plan.md#implementation-review-and-proof-gates--2026-10-24). No runtime work is authorized by this amendment.
+
+
 > Tracked in #172 (labels `W050`, `POST Alpha`, `agent:blocked`). This file is the source draft; the issue is the live copy.
 
 ## Goal
