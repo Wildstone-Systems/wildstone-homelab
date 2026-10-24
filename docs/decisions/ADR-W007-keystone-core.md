@@ -271,8 +271,11 @@ Delivered in three parts, so each can be reviewed alone:
     selects the candidate and moves the Plan (`approved` for an Owner's
     Plan or an out-of-band edit, `applied` for a tracker edit). A losing
     concurrent publication changes nothing and its Plan is superseded.
-  - **Mirror.** The branch catches up by fast-forward (`reset --keep`):
-    never rewound, and local edits survive where they do not conflict.
+  - **Mirror.** The branch catches up by fast-forward only: a
+    compare-and-swap `update-ref` against the head it checked, so a
+    concurrent human commit is never dropped, then a two-way `read-tree`
+    for the files. Never rewound, and local edits survive where they do
+    not conflict.
     Ingestion's revert is now a commit on top of the foreign one, so it no
     longer rewrites the working files.
   - **Recovery** runs at startup before ingestion, reconciliation or any

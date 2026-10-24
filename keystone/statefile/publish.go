@@ -208,8 +208,8 @@ func (s *Store) IsAncestor(ancestor, descendant string) (bool, error) {
 // Mirror brings the branch and working files to accepted by fast-forward.
 // It never rewinds: a branch holding commits accepted does not contain is
 // ErrDiverged, and is left as it is. Local edits survive where they do
-// not conflict (`git reset --keep`); a conflicting one stops the mirror,
-// which recovery retries.
+// not conflict; a conflicting one stops the mirror, which recovery
+// retries.
 func (s *Store) Mirror(accepted string) error {
 	head, err := s.Head()
 	if err != nil {
