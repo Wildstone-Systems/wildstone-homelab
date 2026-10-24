@@ -203,7 +203,7 @@ func TestAQuarantinedDeleteStaysVisible(t *testing.T) {
 	// A delete is High risk and waits for a human, so each pass runs on an
 	// approved plan — which is how a real removal reaches the agent.
 	for i := 0; i < 6; i++ {
-		id, err := db.InsertPlan("op", "", "remove stuck", "high", `{"x":1}`)
+		id, err := db.InsertPlan("op", "", "remove stuck", "high", reviewedDelete(t, "Container", "stuck"))
 		if err != nil {
 			t.Fatal(err)
 		}

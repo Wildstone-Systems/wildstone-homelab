@@ -52,12 +52,47 @@ Amends A1 and A2, per ADR-W007 A8 and the
   accepted revision pauses the loop rather than converging to an empty
   tree. *(Implemented in 0a.)*
 - **A2:** an approved Plan no longer authorizes every Medium/High step in
-  the tick. A Medium/High step runs only when it matches an entry of a
-  live approval envelope (same resource, action and desired digest, risk
-  no higher than reviewed); anything else becomes a fresh pending
-  preview. Low-risk drift repair keeps its own authority and is reported
-  as drift repair. Each queued Plan gets its own outcome instead of one
-  shared verdict. *(Pending: 0c.)*
+  the tick. *(Implemented in 0c.)*
+  - **Entries.** Every Plan step records the digest of the resource it
+    produces (`plan.PlanStep.Digest`, sha256 of the canonical YAML). The
+    steps a Plan stored when it was reviewed are its approval entries.
+  - **Coverage.** A Medium/High step runs only when some approved or
+    applying Plan has an entry with the same kind, name and action and,
+    for a create or update, a digest equal to the accepted revision's
+    content for that resource. A delete is covered only while the
+    accepted revision no longer holds the resource. An entry without a
+    digest (recorded before this amendment) covers nothing.
+  - **Knock-on restarts are reviewed, not assumed.** A change can
+    restart containers it does not edit: a new Route or OIDC client
+    rewrites files the proxy and the identity provider mount, or gives
+    the proxy a new host alias. `reconcile.DependentRestarts` predicts
+    those from the same functions observe uses, and proposals and
+    ingestion add them to the Plan as "restart X" steps the Owner sees
+    and approves. A restart the prediction misses is held as drift,
+    never run unreviewed.
+  - **Jobs.** A Job has no create at reconcile time (an absent run and a
+    stale one both plan an Update, meaning "run this spec"), so a
+    reviewed Job create covers that run. Every other kind keeps the
+    strict rule: a reviewed update never covers a create or delete.
+  - **Risk is recorded, not compared.** The reviewer saw risk graded
+    between two desired states; the reconciler grades against observed
+    reality, where an out-of-date container is an empty placeholder, so
+    an image update to a container with mounts grades High at reconcile
+    time. The digest pins the reviewed content instead. This departs
+    from contract D4's "risk no higher than reviewed" for that reason.
+  - **Per node, still all or nothing.** If any Medium/High step on a
+    node is not covered, nothing on that node applies; the uncovered
+    steps become one drift proposal carrying exactly those steps, bound
+    to the accepted digests. Approving it authorizes those steps and
+    nothing else; a change in the held drift supersedes it.
+  - **Per-Plan outcomes.** Each queued Plan resolves from its own
+    resources: it waits while a node it needs is deferred or held for
+    approval, fails when one of its own steps did not apply, and applies
+    when its resources have converged. Work it did not review never
+    decides it.
+  - **Attribution.** An applied pass that included a reviewed step is
+    `reconcile.applied`; one that did not is `drift.repaired`, even on a
+    tick with Plans queued.
 
 ### A3. Node grouping and connectivity
 

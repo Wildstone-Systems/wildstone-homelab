@@ -44,8 +44,8 @@ var selfDrivenPrincipals = map[string]bool{
 }
 
 // Loop wires the service's dependencies. Rec must have Applier (and any
-// Providers) configured; Loop owns Rec.Approve — callers must leave it
-// nil (see Tick).
+// Providers) configured; Loop owns Rec.Authorize — callers must leave it
+// and Rec.Approve nil (see Tick).
 type Loop struct {
 	State *statefile.Store
 	DB    *runtimedb.DB
@@ -68,14 +68,6 @@ type Loop struct {
 	// that parses them. nil disables seeding entirely, which is the
 	// posture every existing test is in.
 	AccessGroups map[string][]string
-
-	// allowMediumHigh is consulted by the Approve callback installed on
-	// Rec: true only while a plan tick is executing human-approved
-	// changes (ADR-W008 A2). Loop is the only driver of Rec, so this is
-	// a mode switch, not a synchronization point; atomic keeps it honest
-	// if a caller ever runs Tick concurrently by mistake.
-	allowMediumHigh atomic.Bool
-	installed       bool
 
 	// failStreak counts consecutive Ticks that failed (a non-empty
 	// TickOutcome.Failed or a Tick error) — the input to Run's backoff
@@ -135,6 +127,9 @@ type TickOutcome struct {
 	// Blocked lists resources set aside this tick after failing the same
 	// way repeatedly (F60), so the rest of the plan could proceed.
 	Blocked []reconcile.BlockedResource
+	// Waiting are the queued plans left applying: a node they need was
+	// offline, or held by Medium/High work nobody approved.
+	Waiting []string
 }
 
 // Tick runs one service pass (ADR-W008 A1–A5).
@@ -142,10 +137,6 @@ func (l *Loop) Tick(ctx context.Context) (TickOutcome, error) {
 	log := l.Log
 	if log == nil {
 		log = slog.Default()
-	}
-	if !l.installed {
-		l.Rec.Approve = func(*plan.Plan) bool { return l.allowMediumHigh.Load() }
-		l.installed = true
 	}
 	quarantined := false
 	if err := l.DB.CheckQuarantine(); err != nil {
@@ -228,6 +219,13 @@ func (l *Loop) Tick(ctx context.Context) (TickOutcome, error) {
 			}
 		}
 	}
+	// What the accepted revision says each resource is, before any
+	// projection below edits the copy. An approval is bound to these
+	// digests (ADR-W008 A2a), so household facts projected into a
+	// resource never make a reviewed step look different, and never make
+	// an unreviewed one look reviewed.
+	accepted := acceptedDigests(desired)
+
 	// Entitlements become directory memberships here, on a COPY of
 	// desired state, before anything is grouped or planned (§4, slice
 	// 8). Every tick, recomputed from scratch, so a hand-removed
@@ -276,9 +274,15 @@ func (l *Loop) Tick(ctx context.Context) (TickOutcome, error) {
 	}
 	// Plans are intents, not scripts (ADR-W008 A1): approval already
 	// committed the change, so executing them means converging to the
-	// Statefile now, with Medium/High steps authorized by that approval.
-	l.allowMediumHigh.Store(planTick)
-	defer l.allowMediumHigh.Store(false)
+	// accepted revision now. What an approval authorizes is exactly the
+	// steps it reviewed, at the digests it reviewed (ADR-W008 A2a): a
+	// Medium/High step nobody approved holds its node, however many other
+	// Plans are approved this tick.
+	auth, err := newAuthority(queuedPlans, accepted)
+	if err != nil {
+		return out, err
+	}
+	l.Rec.Authorize = auth.covers
 	// A failed Delete is recorded unhealthy because the resource is still
 	// present but not in desired state. Startup deliberately does not seed
 	// unhealthy observations into the Reconciler, so an applying plan that
@@ -308,22 +312,24 @@ func (l *Loop) Tick(ctx context.Context) (TickOutcome, error) {
 	}
 
 	var failures []string
-	deferred := false
+	var unauthorized []plan.PlanStep
+	results := map[string]*nodeResult{}
 	acting := map[string]bool{}
 	// Nodes this tick did not actually get to. Their status rows are the
 	// only durable record of what the reconciler manages there — the
 	// managed set is seeded from them on restart (F76) — so a node that
 	// was skipped must keep every row it has.
 	unvisited := map[string]bool{}
-	pendingDrift := false
 	for _, g := range groups {
+		nr := &nodeResult{}
+		results[g.node] = nr
 		if g.node != "" && l.Connected != nil && !l.Connected(g.node) && hasAgentKinds(g.resources) {
+			// An offline node says nothing about whether its state can
+			// converge. A Plan with work there stays applying, so a
+			// reconnect retries it without another approval or an
+			// unrelated Statefile commit (#323).
+			nr.deferred = true
 			if planTick {
-				// Approval committed desired state, but an offline node says
-				// nothing about whether that state can converge. Keep the plan
-				// applying so a reconnect retries it without another approval
-				// or an unrelated Statefile commit (#323).
-				deferred = true
 				l.event("reconcile.deferred-offline", g.node, "plan remains retryable", nil)
 			} else {
 				l.event("reconcile.skipped-offline", g.node, "", nil)
@@ -333,16 +339,20 @@ func (l *Loop) Tick(ctx context.Context) (TickOutcome, error) {
 		}
 		outcome, err := l.Rec.Reconcile(ctx, g.node, g.resources)
 		if err != nil {
-			if planTick && g.node != "" && l.Connected != nil && !l.Connected(g.node) {
-				deferred = true
+			if g.node != "" && l.Connected != nil && !l.Connected(g.node) {
+				nr.deferred = true
 				unvisited[g.node] = true
-				l.event("reconcile.deferred-offline", g.node, "plan interrupted; retry pending", nil)
+				if planTick {
+					l.event("reconcile.deferred-offline", g.node, "plan interrupted; retry pending", nil)
+				}
 				continue
 			}
+			nr.failed = err.Error()
 			failures = append(failures, fmt.Sprintf("node %s: %v", g.node, err))
 			unvisited[g.node] = true
 			continue
 		}
+		nr.record(outcome)
 		l.recordObserved(g, outcome)
 		for _, st := range outcome.Plan.Steps {
 			acting[string(st.Kind)+"/"+st.Name] = true
@@ -360,24 +370,32 @@ func (l *Loop) Tick(ctx context.Context) (TickOutcome, error) {
 				map[string]string{"kind": string(b.Kind), "name": b.Name})
 		}
 		switch {
-		case planTick && g.node != "" && l.Connected != nil && !l.Connected(g.node):
+		case g.node != "" && l.Connected != nil && !l.Connected(g.node):
 			// The operation may have landed before the session disappeared.
 			// Preserve the applying plan and let a fresh observation decide;
 			// never turn transport uncertainty into rollback or a terminal
 			// plan verdict.
-			deferred = true
-			l.event("reconcile.deferred-offline", g.node, "plan interrupted; retry pending", nil)
+			nr.deferred = true
+			if planTick {
+				l.event("reconcile.deferred-offline", g.node, "plan interrupted; retry pending", nil)
+			}
 		case planTick && outcome.Retryable:
-			deferred = true
+			nr.deferred = true
 			l.event("reconcile.deferred", g.node, outcome.Incident, nil)
 		case outcome.Incident != "":
+			nr.failed = outcome.Incident
 			failures = append(failures, fmt.Sprintf("node %s: %s", g.node, outcome.Incident))
 		case outcome.Rolledback:
+			nr.failed = "health gate failed, rolled back"
 			failures = append(failures, fmt.Sprintf("node %s: health gate failed, rolled back", g.node))
 		case outcome.PendingApproval:
-			pendingDrift = true
+			nr.pending = true
+			unauthorized = append(unauthorized, outcome.Unauthorized...)
 		case len(outcome.Plan.Steps) > 0 && outcome.Applied:
-			if planTick {
+			// Attributed to what authorized it: a step a Plan reviewed is
+			// that Plan's work; anything else is drift repair under its
+			// own Low-risk policy, whether or not a Plan was queued.
+			if auth.reviewedAny(outcome.Plan.Steps) {
 				l.event("reconcile.applied", g.node, outcome.Plan.Summary,
 					map[string]string{"steps": fmt.Sprint(len(outcome.Plan.Steps))})
 			} else {
@@ -402,31 +420,41 @@ func (l *Loop) Tick(ctx context.Context) (TickOutcome, error) {
 	l.pruneObserved(desired, acting, unvisited)
 
 	out.Failed = strings.Join(failures, "; ")
-	if planTick && deferred {
-		// At least one target disappeared before convergence could be
-		// established. Every queued plan remains applying and will be loaded
-		// again on the next tick. Do not publish a partial terminal verdict.
-		out.Failed = ""
-	} else if planTick {
-		// One target tree, one uniform verdict for every plan that
-		// described it (ADR-W008 A2). The Statefile is not reverted on
-		// failure: desired stays desired and the next tick retries.
-		to := runtimedb.PlanApplied
-		if out.Failed != "" {
-			to = runtimedb.PlanFailed
-			l.event("reconcile.failed", "", out.Failed, map[string]string{"plans": strings.Join(out.PlanIDs, ",")})
-		}
-		for _, p := range queuedPlans {
-			if err := l.DB.TransitionPlan(p.ID, to, ""); err != nil {
+	// Each Plan gets its own verdict (ADR-W008 A2a): what happened to the
+	// resources IT reviewed, not to the whole tree. The Statefile is never
+	// reverted on failure: desired stays desired and the next tick retries.
+	homes := resourceNodes(desired, results)
+	deferred := false
+	var failedPlans []string
+	for _, p := range auth.plans {
+		switch p.verdict(homes, results) {
+		case verdictWait:
+			deferred = true
+			out.Waiting = append(out.Waiting, p.id)
+		case verdictFailed:
+			failedPlans = append(failedPlans, p.id)
+			if err := l.DB.TransitionPlan(p.id, runtimedb.PlanFailed, ""); err != nil {
+				return out, err
+			}
+		default:
+			if err := l.DB.TransitionPlan(p.id, runtimedb.PlanApplied, ""); err != nil {
 				return out, err
 			}
 		}
-	} else if out.Failed != "" {
-		l.event("reconcile.failed", "", out.Failed, nil)
+	}
+	if out.Failed != "" {
+		attrs := map[string]string(nil)
+		if len(failedPlans) > 0 {
+			attrs = map[string]string{"plans": strings.Join(failedPlans, ",")}
+		}
+		l.event("reconcile.failed", "", out.Failed, attrs)
 	}
 
-	if pendingDrift && !planTick {
-		id, err := l.proposeDrift(revision)
+	// Medium/High work nobody approved becomes one exact preview a human
+	// can approve, on drift ticks and plan ticks alike: a queued Plan no
+	// longer carries it through.
+	if len(unauthorized) > 0 {
+		id, err := l.proposeDrift(revision, unauthorized, accepted)
 		if err != nil {
 			return out, err
 		}
@@ -491,10 +519,26 @@ func (l *Loop) seedPendingDeletes(records []runtimedb.PlanRecord) error {
 	return nil
 }
 
-// proposeDrift records Medium/High drift as a proposed system/drift plan
-// for a human to approve through the API — at most one open at a time
-// (ADR-W008 A2).
-func (l *Loop) proposeDrift(head string) (string, error) {
+// proposeDrift records Medium/High work nobody approved as a proposed
+// system/drift plan for a human to approve through the API — at most one
+// open at a time (ADR-W008 A2).
+//
+// The proposal carries the exact steps it would authorize (ADR-W008
+// A2a): each held step, bound to the content the accepted revision holds
+// for it. Approving it permits those effects and nothing else; drift that
+// changes after it was raised is a different proposal.
+func (l *Loop) proposeDrift(head string, held []plan.PlanStep, accepted map[string]string) (string, error) {
+	steps := make([]plan.PlanStep, 0, len(held))
+	for _, st := range held {
+		if st.Action != plan.ActionDelete {
+			// Bind to the Statefile's content, not the projected copy the
+			// pass diffed: covers() compares against the accepted revision.
+			st.Digest = accepted[resKey(st.Kind, st.Name)]
+		}
+		steps = append(steps, st)
+	}
+	sort.Slice(steps, func(i, j int) bool { return stepKey(steps[i]) < stepKey(steps[j]) })
+
 	open, err := l.DB.PlansInState(runtimedb.PlanProposed)
 	if err != nil {
 		return "", err
@@ -503,27 +547,24 @@ func (l *Loop) proposeDrift(head string) (string, error) {
 		if p.Principal != driftPrincipal {
 			continue
 		}
-		// The open proposal only speaks for the desired state it was
-		// computed from. Approval refuses one whose base has moved and
-		// supersedes it there (F28) — but until someone clicked approve,
-		// this dedupe kept returning early and no fresh proposal was ever
-		// raised, so the drift stayed unrepairable and the only visible
-		// artifact was a plan that 409s when you finally act on it
+		// The open proposal only speaks for the desired state and the exact
+		// steps it was computed from. Approval refuses one whose base has
+		// moved and supersedes it there (F28) — but until someone clicked
+		// approve, this dedupe kept returning early and no fresh proposal
+		// was ever raised, so the drift stayed unrepairable and the only
+		// visible artifact was a plan that 409s when you finally act on it
 		// (defect B). Supersede it here instead: the operator's one
 		// available action stops being the one that cannot work.
 		var stored plan.StoredProposal
-		if err := json.Unmarshal([]byte(p.PlanJSON), &stored); err == nil && stored.BasedOnHead == head {
-			return "", nil // still speaks for the current desired state
+		if err := json.Unmarshal([]byte(p.PlanJSON), &stored); err == nil && stored.BasedOnHead == head && sameSteps(stored.Plan, steps) {
+			return "", nil // still speaks for exactly this drift
 		}
 		if err := l.DB.TransitionPlan(p.ID, runtimedb.PlanSuperseded, ""); err != nil {
 			return "", err
 		}
-		l.event("drift.superseded", "", "statefile moved since this drift proposal", map[string]string{"plan": p.ID})
+		l.event("drift.superseded", "", "statefile or drift changed since this drift proposal", map[string]string{"plan": p.ID})
 	}
 	summary := "drift repair requires approval (Medium/High risk)"
-	// The concrete diff re-materializes on the approving tick
-	// (level-triggered), so the proposal carries no steps.
-	//
 	// BasedOnHead must be the accepted revision, not "": approval refuses a
 	// proposal whose base has moved, and no head ever equals "", so an
 	// unset field made every drift repair permanently unapprovable and
@@ -531,22 +572,45 @@ func (l *Loop) proposeDrift(head string) (string, error) {
 	//
 	// Put and Delete stay empty, and that is correct — desired state did
 	// not drift, reality did. Approving this commits no documents; what
-	// it does is make the next tick a plan tick, which authorizes the
-	// Medium/High steps that perform the repair.
+	// it does is authorize exactly these steps on the next tick.
+	reviewed := plan.WithSteps(plan.Plan{Summary: summary}, steps)
 	stored, err := json.Marshal(plan.StoredProposal{
 		BasedOnHead: head,
 		Summary:     summary,
+		Plan:        &reviewed,
 		Drift:       true,
 	})
 	if err != nil {
 		return "", err
 	}
-	id, err := l.DB.InsertPlan(driftPrincipal, "", summary, "medium+", string(stored))
+	id, err := l.DB.InsertPlan(driftPrincipal, "", summary, reviewed.OverallRisk.String(), string(stored))
 	if err != nil {
 		return "", err
 	}
 	l.event("drift.pending-approval", "", summary, map[string]string{"plan": id})
 	return id, nil
+}
+
+func stepKey(st plan.PlanStep) string {
+	return fmt.Sprintf("%s/%s/%s/%s/%s", st.Kind, st.Name, st.Action, st.Digest, st.Risk)
+}
+
+// sameSteps reports whether a stored drift proposal covers exactly steps.
+func sameSteps(p *plan.Plan, steps []plan.PlanStep) bool {
+	if p == nil || len(p.Steps) != len(steps) {
+		return false
+	}
+	have := make([]string, len(p.Steps))
+	for i, st := range p.Steps {
+		have[i] = stepKey(st)
+	}
+	sort.Strings(have)
+	for i, st := range steps {
+		if have[i] != stepKey(st) {
+			return false
+		}
+	}
+	return true
 }
 
 // recordObserved upserts observed status per desired resource (ADR-W008

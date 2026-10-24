@@ -5,6 +5,8 @@
 package plan
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"reflect"
@@ -139,6 +141,24 @@ type PlanStep struct {
 	Reverse     *ResourceOp `json:"reverse,omitempty"`
 	Risk        RiskGrade   `json:"risk"`
 	BlastRadius string      `json:"blastRadius"`
+	// Digest identifies the resource a create or update produces: the
+	// sha256 of its canonical YAML (Digest). An approval covers a step
+	// only at this digest (ADR-W008 A2a), so a later edit to the same
+	// resource is not covered by the review of an earlier one. Empty for
+	// a delete, which produces no resource.
+	Digest string `json:"digest,omitempty"`
+}
+
+// Digest is the canonical identity of a resource's desired content: the
+// sha256 of resource.Marshal. "" when the resource cannot be marshaled,
+// which covers nothing.
+func Digest(r resource.Resource) string {
+	data, err := resource.Marshal(r)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(data)
+	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
 // Plan is the artifact produced by Diff: an ordered list of steps plus an
@@ -350,7 +370,7 @@ func newStep(action Action, want, have resource.Resource) PlanStep {
 		r = have
 	}
 	risk, blast := grade(action, want, have)
-	return PlanStep{
+	step := PlanStep{
 		Description: describe(action, r),
 		Kind:        r.Kind,
 		Name:        r.Metadata.Name,
@@ -358,6 +378,10 @@ func newStep(action Action, want, have resource.Resource) PlanStep {
 		Risk:        risk,
 		BlastRadius: blast,
 	}
+	if action != ActionDelete {
+		step.Digest = Digest(want)
+	}
+	return step
 }
 
 func describe(action Action, r resource.Resource) string {

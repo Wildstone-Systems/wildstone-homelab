@@ -253,9 +253,11 @@ Delivered in three parts, so each can be reviewed alone:
   while the branch carries an unaccepted commit or the working tree has
   uncommitted edits, since their `git add -A` commit would otherwise take
   those edits with it.
-- **0c, bounded approval (pending).** Approval names exact
-  `(kind, name, action, digest, max risk)` entries; the reconciler
-  authorizes a Medium/High step only when one matches. Rules 3 and 4.
+- **0c, bounded approval (implemented).** A Plan's reviewed steps are
+  its approval entries (kind, name, action, digest); the reconciler runs
+  a Medium/High step only when one matches the accepted content, and
+  each Plan gets its own outcome. Rules 3 and 4; details in ADR-W008
+  A2a, including why risk is recorded but not compared.
 - **0b, one publisher (pending).** API approval, the tracker writer and
   ingestion share one `DesiredStatePublisher` with a durable journal and
   internal Git refs, so a crash between the Git and SQLite steps recovers

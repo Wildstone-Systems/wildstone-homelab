@@ -72,7 +72,7 @@ func TestFailureBackoff(t *testing.T) {
 	}
 	// One offline plan remains applying and each deferred retry doubles the
 	// delay. The plan is not made terminal merely because transport is down.
-	id, err := db.InsertPlan("op", "", "deploy", "low", `{"x":1}`)
+	id, err := db.InsertPlan("op", "", "deploy", "low", reviewedUpdate(t, container))
 	if err != nil {
 		t.Fatal(err)
 	}

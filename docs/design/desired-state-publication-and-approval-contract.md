@@ -5,7 +5,7 @@
 - **Evidence base:** `e33a88036231e4c94ef95e6a2dbaffe985fcfdd4` (`main`, 2026-10-16)
 - **Status:** accepted 2026-10-24 by the maintainer (#157), with the §8 answers recorded in ADR-W007 A8
 - **Amends:** ADR-W007 A4/A6 (A8) and ADR-W008 A1/A2 (A2a)
-- **Delivery:** 0a immutable reads (done), then 0c bounded approval, then 0b shared publisher
+- **Delivery:** 0a immutable reads (done), 0c bounded approval (done; risk recorded but not compared, see ADR-W008 A2a), then 0b shared publisher
 
 This proposal defines the selected foundation boundary authorized by #580:
 the immutable desired-state revision Keystone accepts, how an approved change

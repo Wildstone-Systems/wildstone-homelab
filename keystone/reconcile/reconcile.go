@@ -127,6 +127,11 @@ type Outcome struct {
 	// Approve callback (or one that returned false) authorized it — in
 	// that case nothing in Plan was applied at all.
 	PendingApproval bool
+	// Unauthorized lists the Medium/High steps that held the plan, when
+	// Authorize decided it step by step. Each is a resource, an action and
+	// a digest nobody has approved yet: the drift proposal's exact
+	// content.
+	Unauthorized []plan.PlanStep
 
 	// AppHealth maps "Container/<name>" to the container's OWN
 	// healthcheck, verbatim from Docker, for the containers that declare
@@ -220,6 +225,11 @@ type Reconciler struct {
 	// require explicit approval") — every Medium/High plan comes back as
 	// Outcome.PendingApproval with nothing applied.
 	Approve func(*plan.Plan) bool
+	// Authorize, when set, replaces Approve with a per-step decision
+	// (ADR-W008 A2a): every Medium/High step must be authorized on its
+	// own, or nothing in the plan applies and the unauthorized steps are
+	// reported in Outcome.Unauthorized. Low steps never ask.
+	Authorize func(plan.PlanStep) bool
 
 	// ReloadFn is the Route-apply reload seam (ADR-W004 A1: "a reload op
 	// seam"). nil (the default) is a no-op, and for the shipped ingress
@@ -660,12 +670,24 @@ func (r *Reconciler) Reconcile(ctx context.Context, nodeID string, desired []res
 	}
 
 	// ADR-W004 A3: Low auto-applies; Medium/High require explicit
-	// approval, default deny. This gate is evaluated once for the whole
-	// plan (OverallRisk = max over steps), not per step — a plan that
-	// mixes a Low container create with a High volume delete is either
-	// approved and applied in full or not applied at all.
+	// approval, default deny. The plan still applies in full or not at
+	// all — a plan that mixes a Low container create with a High volume
+	// delete never applies only the create. What ADR-W008 A2a changes is
+	// what counts as approval: with Authorize set, each Medium/High step
+	// must be approved itself, so an approval of one change cannot carry
+	// an unrelated one through with it.
 	if p.OverallRisk > plan.RiskLow {
-		if r.Approve == nil || !r.Approve(p) {
+		if r.Authorize != nil {
+			for _, st := range p.Steps {
+				if st.Risk > plan.RiskLow && !r.Authorize(st) {
+					outcome.Unauthorized = append(outcome.Unauthorized, st)
+				}
+			}
+			if len(outcome.Unauthorized) > 0 {
+				outcome.PendingApproval = true
+				return outcome, nil
+			}
+		} else if r.Approve == nil || !r.Approve(p) {
 			outcome.PendingApproval = true
 			return outcome, nil
 		}
