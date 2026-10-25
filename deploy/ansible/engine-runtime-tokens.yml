@@ -1,0 +1,76 @@
+# Mint and rotate scoped runtime tokens (W050 slice 3c, safety contract #180
+# §1). The signed bootstrap playbook runs as root; the host services only
+# receive their own TokenRequest credentials, never the admin kubeconfig.
+# Required: wildstone_node_id, the Kubernetes node name on this host.
+# Set wildstone_keystone_here=true only on the host running Keystone.
+- name: Wildstone engine runtime credentials
+  hosts: localhost
+  connection: local
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Require an explicit Kubernetes node name
+      ansible.builtin.assert:
+        that:
+          - wildstone_node_id is defined
+          - wildstone_node_id | default('') is match('^[a-z0-9]([-a-z0-9.]{0,51}[a-z0-9])?$')
+        fail_msg: "Set wildstone_node_id to this host's Kubernetes node name."
+        quiet: true
+
+    - name: Select only this host's runtime identities
+      ansible.builtin.set_fact:
+        wildstone_token_accounts: "{{ ['wardstone-' ~ wildstone_node_id] + (['keystone'] if (wildstone_keystone_here | default(false) | bool) else []) }}"
+
+    - name: Require the bootstrap-created ServiceAccounts
+      ansible.builtin.command:
+        argv: [k3s, kubectl, -n, wildstone-system, get, serviceaccount, "{{ item }}", -o, name]
+      loop: "{{ wildstone_token_accounts }}"
+      changed_when: false
+
+    - name: Token rotation program directory
+      ansible.builtin.file:
+        path: /usr/local/lib/wildstone
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Install the token rotation program
+      ansible.builtin.copy:
+        src: files/rotate-engine-token.sh
+        dest: /usr/local/lib/wildstone/rotate-engine-token.sh
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Install the token rotation service
+      ansible.builtin.template:
+        src: templates/wildstone-runtime-token@.service.j2
+        dest: /etc/systemd/system/wildstone-runtime-token@.service
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Install the token rotation timer
+      ansible.builtin.template:
+        src: templates/wildstone-runtime-token@.timer.j2
+        dest: /etc/systemd/system/wildstone-runtime-token@.timer
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Mint or refresh each runtime token
+      ansible.builtin.command:
+        argv: [/usr/local/lib/wildstone/rotate-engine-token.sh, "{{ item }}"]
+      loop: "{{ wildstone_token_accounts }}"
+      register: wildstone_token_rotation
+      changed_when: wildstone_token_rotation.stdout != 'current'
+      no_log: true
+
+    - name: Enable and start token rotation timers
+      ansible.builtin.systemd:
+        name: "wildstone-runtime-token@{{ item }}.timer"
+        enabled: true
+        state: started
+        daemon_reload: true
+      loop: "{{ wildstone_token_accounts }}"

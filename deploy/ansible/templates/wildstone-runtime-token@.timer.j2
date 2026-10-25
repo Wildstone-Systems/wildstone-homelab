@@ -1,0 +1,11 @@
+# Managed by Wildstone (engine-runtime-tokens.yml).
+[Unit]
+Description=Keep Wildstone Kubernetes token for %i current
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+Unit=wildstone-runtime-token@%i.service
+
+[Install]
+WantedBy=timers.target
