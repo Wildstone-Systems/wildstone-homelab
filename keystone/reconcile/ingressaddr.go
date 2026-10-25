@@ -24,8 +24,6 @@ package reconcile
 import (
 	"context"
 
-	wsv1 "github.com/Wildstone-Systems/wildstone-homelab/proto/gen/wardstone/v1"
-
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/resource"
 )
 
@@ -86,11 +84,7 @@ func (r *Reconciler) refreshIngressAddrs(ctx context.Context, nodeID string, des
 	}
 	var addrs []string
 	for _, name := range names {
-		res, err := r.Applier.Apply(ctx, nodeID, &wsv1.Operation{
-			Op: &wsv1.Operation_InspectContainer{
-				InspectContainer: &wsv1.InspectContainer{Name: name},
-			},
-		})
+		res, err := r.Applier.Apply(ctx, nodeID, docker.inspectContainer(name))
 		if err != nil {
 			continue
 		}

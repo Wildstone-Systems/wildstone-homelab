@@ -322,7 +322,7 @@ func inspectResultForTest(hash string, running bool, status string, code int32) 
 //	lldap-provision-groups  RestartPolicy=unless-stopped  ExitCode=0  RestartCount=11
 func TestJobIsCreatedWithRestartNo(t *testing.T) {
 	spec := &resource.JobSpec{Run: resource.ContainerSpec{Image: testDigestImage}}
-	op := containerEnsureOp("bootstrap", jobRunSpec(spec), ContainerNetwork, "", nil).GetEnsureContainer()
+	op := docker.ensureContainer("bootstrap", jobRunSpec(spec), ContainerNetwork, "", nil).GetEnsureContainer()
 	if got := op.GetRestartPolicy(); got != "no" {
 		t.Errorf("a Job is created with restart policy %q, want \"no\" — empty is not good enough, "+
 			"the agent turns empty into \"unless-stopped\" and a job that exited 0 is restarted forever", got)

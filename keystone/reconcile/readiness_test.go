@@ -29,7 +29,7 @@ func TestDDGSDependencyObservationFailsClosed(t *testing.T) {
 			desired := containerResource("ddgs", testDigestImage)
 			// Obtain the receipt from the same operation sent to Wardstone, rather
 			// than inventing a test-only hash. Full gateway lifecycle is tested too.
-			labels := containerEnsureOp("ddgs", desired.Container, ContainerNetwork, "", nil).GetEnsureContainer().GetLabels()
+			labels := docker.ensureContainer("ddgs", desired.Container, ContainerNetwork, "", nil).GetEnsureContainer().GetLabels()
 			got := &wsv1.InspectContainerResult{Running: true, Image: testDigestImage, Labels: labels, Status: "running", AppHealth: "healthy"}
 			a := &readinessApplier{reply: &wsv1.OpResult{Result: &wsv1.OpResult_InspectContainer{InspectContainer: got}}}
 			ctx, cancel := context.WithCancel(context.Background())
