@@ -131,6 +131,17 @@ Kept unchanged: the observed failures, separating management from apps, recovery
 - Open: PriorityClass values, the external observer (second node or off-site check), how packages declare a corruption signal, and numeric recovery targets.
 - No automatic HA, native LXC support or universal application adapter is claimed to exist.
 
-## Implementation review clarification — 2026-10-24
+## Amendments
+
+### A1. Implementation review clarification (2026-10-24, #181)
 
 Status remains proposed. Follow the [W050 revised proof gates](../design/w050-migration-plan.md#implementation-review-and-proof-gates--2026-10-24), #179 and #180. Priority and Guaranteed QoS reduce eviction risk but do not guarantee management survives disk/PV exhaustion. RWOP/Recreate do not alone prove partition-safe failover. Host recovery must work when Keystone cannot start and document offline rebuild/restore when cluster API/storage is unavailable; a proxy to Keystone is insufficient. Node-count banners must account for actual quorum, storage replica health, independent failure domains and eligible capacity. Prove the actual management recovery set before household migration is offered.
+
+### A2. Recovery path on a cluster (2026-10-25, #180)
+
+The [multi-node safety contract](../design/w050-multi-node-safety-contract.md) §5–§6, accepted by the owner, sets the recovery path this ADR requires. The status of this ADR is unchanged (proposed).
+
+- **`wild-recover`** is a host binary on every server node. It runs diagnostics, applies the fixed `management` workload and restores Keystone's data with Keystone stopped, corrupt or unschedulable.
+- **An off-host kit** holds the Statefile bundle, runtime DB backup, sealed secret bundle, k3s encryption key, an etcd snapshot and rebuild steps. It is used when the cluster API or storage is gone. A proxy to Keystone is not a recovery path.
+- **One writer per volume,** with no forced detach by Wildstone or by the k3s timer. A stateful app moves only after the owner confirms the lost machine is off.
+- **Pressure is tested:** disk space is reserved for the OS, Kubernetes and storage, and #180 fills a disk to show management survives.

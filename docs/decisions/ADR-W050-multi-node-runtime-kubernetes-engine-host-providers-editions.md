@@ -271,3 +271,18 @@ The Kubernetes direction remains accepted. This amendment changes the implementa
 - **Recovery:** host diagnostics and fixed bootstrap/restore must work when Keystone cannot start, with an off-host procedure for unavailable cluster API/storage. Actual Keystone recovery must pass before household migration; a proxy to its API is insufficient.
 
 No runtime experiment is authorized by this amendment without a scheduled bounded issue and an owner-selected disposable target.
+
+### A2. Authority, fencing, storage and recovery contract (2026-10-25, #180)
+
+The owner accepted the [multi-node safety contract](../design/w050-multi-node-safety-contract.md). It turns A1's authority, Lease, admission, secret, storage and recovery bullets into rules #180's disposable test must prove:
+
+- **Authority:** Keystone holds desired state and approval. Each node's Wardstone has its own least-privilege runtime ServiceAccount. The break-glass admin kubeconfig is never loaded by Keystone or the leader.
+- **Fencing:** Keystone issues a monotonic leader epoch and names the leader's identity in an authority ConfigMap only Keystone can update. A ValidatingAdmissionPolicy checks the requester on every verb, and the epoch on creates and updates. Deletes are stamp-then-delete with a resourceVersion precondition.
+- **In-flight work:** after a leader change, re-observe and re-plan; never resume a stale step list.
+- **Secrets:** ADR-W012 A7.
+- **Storage:** one writer, using `ReadWriteOncePod` and `Recreate`. No forced delete or detach, by Wildstone or by k3s's timed force-detach (disabled at bootstrap). Stateful failover waits for the owner to confirm the machine is off; automatic failover is a later opt-in per app.
+- **Recovery:** `wild-recover` works without Keystone, and an off-host kit rebuilds the cluster (ADR-W051 A2).
+- **Power users:** per-app policy, opt-in automatic failover, read-only cluster access, break-glass changes reported as drift, and bring-your-own storage. Automatic power fencing was declined.
+
+Leader operations (`w050-leader-ops.md`) follow these rules before any is implemented.
+
