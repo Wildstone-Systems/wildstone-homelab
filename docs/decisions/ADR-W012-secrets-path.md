@@ -142,6 +142,17 @@ than restarts; risk grades Medium (service interruption, no data).
 
 The store gains a fourth, still write-only operation: `EraseSecret{name, max_version, nonce}` (protocol minor 22). It refuses a store holding a newer version than `max_version`, overwrites then unlinks the sealed file and its sidecar, re-checks that both are absent, and returns that fact with evidence bound to the nonce (`proto/secreterase`). There is still no operation that returns a value. Personal integration credentials (`pc.` names) are excluded from the recovery export. See ADR-W030 A5.4.
 
+### A7. Amendment (W050, #180): custody on a cluster
+
+Accepted 2026-10-25 in the [multi-node safety contract](../design/w050-multi-node-safety-contract.md) §4. It applies only to apps running on a Kubernetes cluster (ADR-W050). A Docker node keeps A1–A6 unchanged.
+
+- **The canonical value is a Kubernetes Secret,** with k3s secrets-encryption at rest. One leader-changing cluster replaces one node's store, so A1's "exactly one place" becomes the cluster's Secret.
+- **The leader's Wardstone generates it** and writes it straight into the Secret. Keystone still never sees a value and keeps only metadata: name, version, generated-or-provided, and the epoch that created it.
+- **Never regenerate.** A secret Keystone records at version V that is missing or empty is an incident, never a reason to generate a new one. This keeps a new leader with an empty local store from replacing passwords.
+- **Provided values** go from the authenticated request straight to the leader over mTLS and into the Secret, never persisted on the way (as in the ADR-W030 constraints above).
+- **Recovery:** the sealed off-site bundle (ADR-W045 A5) also covers cluster Secrets, and the k3s encryption key is part of the off-host recovery kit. Without both, the secrets are lost, and the Console says so before migration.
+- **Unchanged:** there is still no value-returning operation, and household and personal secrets (ADR-W033) stay ciphertext in Keystone, never in Kubernetes.
+
 # Part B — Work packages
 
 - **W1 (agent):** the encrypted store; the three ops; env
