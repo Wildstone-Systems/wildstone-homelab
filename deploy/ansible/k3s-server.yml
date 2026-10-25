@@ -5,6 +5,8 @@
 # Required variable: k3s_version, a k3s release such as v1.33.5+k3s1
 # (Kubernetes 1.30 or later, for disable-force-detach-on-timeout).
 # The binary is checked against that release's own sha256sum file.
+# Optional: wildstone_vip, the shared API address kube-vip will hold
+# (engine-vip.yml); it is added to the API certificate.
 - name: Wildstone k3s server
   import_playbook: prereqs.yml
 
@@ -18,6 +20,14 @@
     k3s_release_url: "https://github.com/k3s-io/k3s/releases/download/{{ k3s_version | urlencode }}"
     k3s_dir: "/var/lib/wildstone/k3s/{{ k3s_version }}"
   tasks:
+    - name: Require a usable shared API address, if one is set
+      ansible.builtin.assert:
+        that:
+          - wildstone_vip is match('^(25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])){3}$')
+        fail_msg: "wildstone_vip must be an IPv4 address, such as 192.0.2.50."
+        quiet: true
+      when: wildstone_vip | default('')
+
     - name: Require a supported k3s version and architecture
       ansible.builtin.assert:
         that:

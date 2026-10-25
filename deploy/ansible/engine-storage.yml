@@ -1,0 +1,112 @@
+# Longhorn, the engine's replicated block storage (W050 slice 3b-3, plan
+# D4). Run after engine-addons.yml. The manifest is vendored and checked
+# against its recorded sha256; it is applied with every image it names
+# pinned by digest, after each was pulled (vars/engine-versions.yml).
+- name: Wildstone engine storage
+  hosts: localhost
+  connection: local
+  become: true
+  gather_facts: false
+  vars_files:
+    - vars/engine-versions.yml
+  tasks:
+    - name: Check the vendored Longhorn manifest
+      ansible.builtin.stat:
+        path: "{{ playbook_dir }}/{{ longhorn_manifest }}"
+        checksum_algorithm: sha256
+      register: wildstone_longhorn_manifest
+
+    - name: Refuse a Longhorn manifest that isn't the reviewed one
+      ansible.builtin.assert:
+        that:
+          - wildstone_longhorn_manifest.stat.exists
+          - wildstone_longhorn_manifest.stat.checksum == longhorn_manifest_sha256
+        fail_msg: "{{ longhorn_manifest }} does not match its recorded sha256; nothing was applied."
+        quiet: true
+
+    # Pull every image by digest first: a digest that no longer exists
+    # fails here, before anything is applied.
+    - name: Pull each Longhorn image by digest
+      ansible.builtin.command: >-
+        k3s ctr -n k8s.io images pull
+        {{ (item.ref | regex_replace(':[^:/]+$', '')) ~ '@' ~ item.digest }}
+      loop: "{{ longhorn_images }}"
+      loop_control:
+        label: "{{ item.ref }}"
+      register: wildstone_pull
+      changed_when: false
+      retries: 3
+      delay: 10
+      until: wildstone_pull.rc == 0
+
+    - name: Longhorn manifest with every image pinned by digest
+      ansible.builtin.template:
+        src: templates/longhorn.yaml.j2
+        dest: /etc/wildstone/k3s/longhorn.yaml
+        mode: "0600"
+
+    - name: Read the pinned manifest back
+      ansible.builtin.slurp:
+        src: /etc/wildstone/k3s/longhorn.yaml
+      register: wildstone_longhorn_pinned
+
+    - name: Refuse any Longhorn image left without its digest
+      ansible.builtin.assert:
+        that:
+          - wildstone_unpinned | length == 0
+        fail_msg: "Images without a recorded digest: {{ wildstone_unpinned | unique | list }}"
+        quiet: true
+      vars:
+        wildstone_unpinned: "{{ wildstone_longhorn_pinned.content | b64decode | regex_findall('longhornio/[a-z0-9-]+:[A-Za-z0-9._-]+(?!@sha256:|[A-Za-z0-9._-])') }}"
+
+    - name: Apply Longhorn
+      ansible.builtin.command: >-
+        k3s kubectl apply --server-side --field-manager=wildstone-longhorn
+        -f /etc/wildstone/k3s/longhorn.yaml
+      changed_when: false
+
+    - name: Wait for the Longhorn manager on every node
+      ansible.builtin.command: k3s kubectl -n longhorn-system rollout status daemonset/longhorn-manager --timeout=600s
+      changed_when: false
+
+    - name: Wait for the Longhorn driver deployer
+      ansible.builtin.command: k3s kubectl -n longhorn-system rollout status deployment/longhorn-driver-deployer --timeout=600s
+      changed_when: false
+
+    - name: Wait for the Longhorn CSI driver to register
+      ansible.builtin.command: k3s kubectl get csidriver driver.longhorn.io
+      register: wildstone_csi
+      changed_when: false
+      failed_when: false
+      retries: 60
+      delay: 10
+      until: wildstone_csi.rc == 0
+
+    - name: Require the Longhorn CSI driver
+      ansible.builtin.assert:
+        that: wildstone_csi.rc == 0
+        fail_msg: "Longhorn's CSI driver never registered: {{ wildstone_csi.stderr | default('') }}"
+        quiet: true
+
+    - name: List the cluster's nodes
+      ansible.builtin.command: k3s kubectl get nodes -o jsonpath={.items[*].metadata.name}
+      register: wildstone_nodes
+      changed_when: false
+
+    - name: Count nodes for the replica setting
+      ansible.builtin.set_fact:
+        wildstone_runtime_nodes: "{{ wildstone_nodes.stdout.split() }}"
+
+    - name: Wildstone storage class manifest
+      ansible.builtin.template:
+        src: templates/longhorn-storageclass.yaml.j2
+        dest: /etc/wildstone/k3s/longhorn-storageclass.yaml
+        mode: "0600"
+
+    # A storage class's parameters can't change after it exists, so it is
+    # created once; adding nodes later doesn't silently change it.
+    - name: Create the Wildstone storage class if it is missing
+      ansible.builtin.command: k3s kubectl create -f /etc/wildstone/k3s/longhorn-storageclass.yaml
+      register: wildstone_sc
+      changed_when: wildstone_sc.rc == 0
+      failed_when: wildstone_sc.rc != 0 and 'AlreadyExists' not in wildstone_sc.stderr

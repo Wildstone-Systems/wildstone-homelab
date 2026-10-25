@@ -1,4 +1,4 @@
-# Trying the k3s engine on a throwaway machine (W050 slices 3a and 3b)
+# Trying the k3s engine on a throwaway machine (W050 slice 3)
 
 This installs a single k3s server, using Wildstone's signed playbooks and reviewed flags, on a machine you can delete afterwards. It's the first hands-on check for [#159](https://github.com/Wildstone-Systems/wildstone-homelab/issues/159) and feeds [#129](https://github.com/Wildstone-Systems/wildstone-homelab/issues/129).
 
@@ -11,12 +11,15 @@ This installs a single k3s server, using Wildstone's signed playbooks and review
   - installs host prerequisites and a pinned k3s binary, checked against that release's own checksum file;
   - starts k3s with: secrets encryption, kernel-default protection, Pod Security defaults, traefik/servicelb/local-storage off, and **timed force-detach off** (safety contract #180 §5);
   - creates the `wildstone-system`, `wildstone-apps` (restricted) and `wildstone-host` namespaces;
-  - creates the **leader fence** (safety contract #180 §2): the authority record (`wildstone-authority`, starting at epoch 0, so nothing is allowed to write yet), the `wildstone-leader-fence` admission policy, a `wardstone-<node>` runtime account per node and a narrow `keystone` account.
-- **Doesn't (yet):** run Wardstone's leader election (the code is in slice 3b-2; it's wired into Wardstone in 3c), Longhorn and kube-vip (3b-3), or any app. Keystone and Docker are untouched.
+  - creates the **leader fence** (safety contract #180 §2): the authority record (`wildstone-authority`, starting at epoch 0, so nothing is allowed to write yet), the `wildstone-leader-fence` admission policy, a `wardstone-<node>` runtime account per node and a narrow `keystone` account;
+  - installs **Longhorn v1.13.0** from a vendored, checksum-checked manifest, applied with every image pinned by digest, and a `wildstone-longhorn` storage class that **keeps data when a claim is deleted** (Retain);
+  - optionally, **kube-vip v1.2.4**: one shared address for the Kubernetes API, if you give it a free address.
+- **Doesn't (yet):** run Wardstone's leader election (the code is in slice 3b-2; it's wired into Wardstone in 3c), or any app. Keystone and Docker are untouched.
 
 ## You need
 
-- A new VM: Ubuntu 24.04 or 26.04, or Debian 12, x86_64 or arm64, 2 vCPU, 4 GB RAM, 20 GB disk, internet access. (First tested on Ubuntu 26.04 with k3s v1.37.1+k3s1; see #159.)
+- A new VM: Ubuntu 24.04 or 26.04, or Debian 12, x86_64 or arm64, 2 vCPU, 4 GB RAM, 20 GB disk, internet access. Longhorn needs about 1 GB of that RAM.
+- For kube-vip (optional): a **free IPv4 address on the VM's own network** that nothing else uses, for example one outside your router's DHCP range, and the name of the VM's network interface (`ip -br addr`, often `eth0` or `ens18`). (First tested on Ubuntu 26.04 with k3s v1.37.1+k3s1; see #159.)
 - On the VM: `git`, `ansible-core` (`sudo apt install -y git ansible-core`), and Go 1.26 to build one small tool. You can also build the tool elsewhere and copy it over.
 
 ## Steps
@@ -50,9 +53,13 @@ This installs a single k3s server, using Wildstone's signed playbooks and review
 
    ```sh
    sudo scripts/engine-try.sh "$PUB" /tmp/playbooks v1.33.5+k3s1
+   # or, with kube-vip on a free address:
+   sudo scripts/engine-try.sh "$PUB" /tmp/playbooks v1.33.5+k3s1 192.0.2.50 eth0
    ```
 
-   It ends with a "facts for #129" block: the k3s version, node status, namespaces, the fence objects, k3s memory, free RAM and disk used.
+   Longhorn's first start pulls about 1 GB of images and can take several minutes.
+
+   It ends with a "facts for #129" block: the k3s version, node status, namespaces, the fence objects, storage classes, Longhorn's pods, the shared API address (with kube-vip), k3s memory, free RAM and disk used.
 
 6. **Check the leader fence:**
 
@@ -64,6 +71,14 @@ This installs a single k3s server, using Wildstone's signed playbooks and review
    It acts as each identity with `kubectl --as` and plays three leadership terms, including an old leader on another node. It cleans up after itself and puts the epoch back. Every line should say `PASS`, and the last line should read `0 failed`.
 
    `--rebind` also reproduces a known problem (contract §2.6). After the fence's binding is deleted and re-created, the API server keeps using a frozen copy of the authority record. It should print `PASS  the barrier stays shut` and `INFO  ... the fence is frozen open`, then **restart k3s** and show the fence working again. Report that whole section.
+
+7. **Check storage:**
+
+   ```sh
+   sudo scripts/engine-storage-check.sh
+   ```
+
+   In `wildstone-apps`, it creates a claim, writes from one pod and reads from the next. It also shows that a second pod can't use the claim at the same time, and that deleting the claim keeps the data. It cleans up afterwards. Every line should say `PASS`.
 
 ## Checks to run afterwards
 
@@ -79,6 +94,9 @@ This installs a single k3s server, using Wildstone's signed playbooks and review
 | An extra file never runs | `echo "- hosts: all" > /tmp/playbooks/extra.yml`, then step 5 | `a file is not in the signed manifest` |
 | The leader fence holds | step 6, `engine-fence-check.sh` | `42 passed, 0 failed` |
 | The frozen record is caught | step 6, `--rebind` | `46 passed, 0 failed`, with `the barrier stays shut` and `frozen open` |
+| Storage works and keeps data | step 7 | `7 passed, 0 failed` |
+| Longhorn runs what was reviewed | `sudo k3s kubectl -n longhorn-system get pods -o jsonpath='{..image}' \| tr ' ' '\n' \| sort -u` | every image is `name:tag@sha256:...`, with the digests in `deploy/ansible/vars/engine-versions.yml` |
+| The shared address answers (kube-vip) | `sudo k3s kubectl --server https://<vip>:6443 get --raw /readyz` | `ok`; the certificate covers the address |
 | The epoch is never reset | step 5 again, then `sudo k3s kubectl -n wildstone-system get cm wildstone-authority -o jsonpath='{.data}'` | the recap shows `changed=0`, and the record is unchanged |
 
 The privileged pod for the restricted check:
@@ -108,6 +126,6 @@ Delete the VM. That's the clean way. If you must keep the VM:
 
 ```sh
 sudo systemctl disable --now k3s
-sudo rm -rf /usr/local/bin/k3s /etc/systemd/system/k3s.service /etc/rancher/k3s /etc/wildstone/k3s /var/lib/wildstone/k3s /var/lib/rancher
+sudo rm -rf /usr/local/bin/k3s /etc/systemd/system/k3s.service /etc/rancher/k3s /etc/wildstone/k3s /var/lib/wildstone/k3s /var/lib/rancher /var/lib/longhorn
 sudo reboot   # clears k3s's network rules and mounts
 ```

@@ -1,0 +1,47 @@
+# kube-vip: one stable address for the Kubernetes API (W050 slice 3b-3).
+# Runs only when wildstone_vip is set: a free IPv4 address on the
+# servers' network, plus wildstone_vip_interface, the interface that
+# network is on. k3s-server.yml must have run with the same wildstone_vip,
+# so the API certificate covers it.
+- name: Wildstone engine API address
+  hosts: localhost
+  connection: local
+  become: true
+  gather_facts: false
+  vars_files:
+    - vars/engine-versions.yml
+  tasks:
+    - name: Skip without an address
+      ansible.builtin.meta: end_play
+      when: not (wildstone_vip | default(''))
+
+    - name: Require a usable address and interface
+      ansible.builtin.assert:
+        that:
+          - wildstone_vip is match('^(25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])){3}$')
+          - wildstone_vip_interface is defined
+          - wildstone_vip_interface is match('^[A-Za-z0-9_.:-]{1,15}$')
+        fail_msg: "Set wildstone_vip to a free IPv4 address and wildstone_vip_interface to its interface (for example eth0)."
+        quiet: true
+
+    - name: kube-vip manifest
+      ansible.builtin.template:
+        src: templates/kube-vip.yaml.j2
+        dest: /etc/wildstone/k3s/kube-vip.yaml
+        mode: "0600"
+
+    - name: Apply kube-vip
+      ansible.builtin.command: k3s kubectl apply --server-side --field-manager=wildstone-bootstrap -f /etc/wildstone/k3s/kube-vip.yaml
+      changed_when: false
+
+    - name: Wait for kube-vip
+      ansible.builtin.command: k3s kubectl -n kube-system rollout status daemonset/kube-vip-ds --timeout=300s
+      changed_when: false
+
+    - name: Wait for the API to answer on the shared address
+      ansible.builtin.command: k3s kubectl --server https://{{ wildstone_vip }}:6443 get --raw /readyz
+      register: wildstone_vip_ready
+      changed_when: false
+      retries: 30
+      delay: 2
+      until: wildstone_vip_ready.rc == 0

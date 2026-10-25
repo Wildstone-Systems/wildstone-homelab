@@ -1,0 +1,123 @@
+# Managed by Wildstone. kube-vip {{ kube_vip_version }}: one stable address
+# for the Kubernetes API, {{ wildstone_vip }}, held by one server at a time
+# and announced by ARP on {{ wildstone_vip_interface }} (W050 slice 3b-3).
+# Only the control-plane address: Service load balancing is off.
+#
+# Shaped like `kube-vip manifest daemonset --controlplane --arp
+# --leaderElection --inCluster --taint` generates, with the image by
+# digest and the permissions cut to what the control-plane path uses.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kube-vip
+  namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: wildstone-kube-vip
+rules:
+  # kube-vip watches nodes and labels the one holding the address.
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: wildstone-kube-vip
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: wildstone-kube-vip
+subjects:
+  - kind: ServiceAccount
+    name: kube-vip
+    namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: wildstone-kube-vip
+  namespace: kube-system
+rules:
+  # Its own election for who holds the address.
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "watch", "create", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: wildstone-kube-vip
+  namespace: kube-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: wildstone-kube-vip
+subjects:
+  - kind: ServiceAccount
+    name: kube-vip
+    namespace: kube-system
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: kube-vip-ds
+  namespace: kube-system
+  labels:
+    app.kubernetes.io/name: kube-vip-ds
+    app.kubernetes.io/version: {{ kube_vip_version }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kube-vip-ds
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kube-vip-ds
+        app.kubernetes.io/version: {{ kube_vip_version }}
+    spec:
+      serviceAccountName: kube-vip
+      hostNetwork: true
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: node-role.kubernetes.io/control-plane
+                    operator: Exists
+      tolerations:
+        - effect: NoSchedule
+          operator: Exists
+        - effect: NoExecute
+          operator: Exists
+      containers:
+        - name: kube-vip
+          image: "{{ kube_vip_image }}"
+          imagePullPolicy: IfNotPresent
+          args: ["manager"]
+          env:
+            - name: vip_nodename
+              valueFrom:
+                fieldRef: {fieldPath: spec.nodeName}
+            - {name: vip_arp, value: "true"}
+            - {name: port, value: "6443"}
+            - {name: vip_interface, value: "{{ wildstone_vip_interface }}"}
+            - {name: vip_subnet, value: "32"}
+            - {name: cp_enable, value: "true"}
+            - {name: cp_namespace, value: kube-system}
+            - {name: svc_enable, value: "false"}
+            - {name: vip_leaderelection, value: "true"}
+            - {name: vip_leasename, value: plndr-cp-lock}
+            - {name: vip_leaseduration, value: "5"}
+            - {name: vip_renewdeadline, value: "3"}
+            - {name: vip_retryperiod, value: "1"}
+            - {name: address, value: "{{ wildstone_vip }}"}
+          securityContext:
+            capabilities:
+              add: [NET_ADMIN, NET_RAW]
+              drop: [ALL]
+          resources:
+            requests: {cpu: 10m, memory: 32Mi}
+            limits: {memory: 128Mi}

@@ -1,0 +1,20 @@
+# Managed by Wildstone. The storage class Wildstone's apps use (W050 plan
+# D4, slice 3b-3). It differs from Longhorn's own "longhorn" class on
+# purpose:
+#   - Retain: deleting a claim never deletes the data (ADR-W008's volume
+#     rule); removing a volume is its own reviewed step.
+#   - one replica per node, up to three, fixed when the class is created;
+#   - WaitForFirstConsumer, so a volume is placed where its app runs.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: wildstone-longhorn
+provisioner: driver.longhorn.io
+reclaimPolicy: Retain
+allowVolumeExpansion: true
+volumeBindingMode: WaitForFirstConsumer
+parameters:
+  numberOfReplicas: "{{ [wildstone_runtime_nodes | length, 3] | min }}"
+  staleReplicaTimeout: "30"
+  fsType: ext4
+  dataLocality: best-effort
