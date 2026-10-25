@@ -26,7 +26,7 @@
           - wildstone_vip is match('^(25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])){3}$')
         fail_msg: "wildstone_vip must be an IPv4 address, such as 192.0.2.50."
         quiet: true
-      when: wildstone_vip | default('')
+      when: (wildstone_vip | default('') | length) > 0
 
     - name: Require a supported k3s version and architecture
       ansible.builtin.assert:
