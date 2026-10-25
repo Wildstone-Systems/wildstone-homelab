@@ -119,9 +119,7 @@ func classifyJob(inspect *wsv1.InspectContainerResult, wantHash string) jobState
 // job that gives up — leaves a half-provisioned system that no amount
 // of fixing the underlying problem will converge.
 func (r *Reconciler) observeJob(ctx context.Context, nodeID string, k resKey, want resource.Resource, isDesired bool, cfgContents map[string]string, hostAliases []string) (resource.Resource, bool, error) {
-	res, err := r.Applier.Apply(ctx, nodeID, &wsv1.Operation{Op: &wsv1.Operation_InspectContainer{
-		InspectContainer: &wsv1.InspectContainer{Name: k.Name},
-	}})
+	res, err := r.Applier.Apply(ctx, nodeID, docker.inspectContainer(k.Name))
 	if err != nil {
 		return resource.Resource{}, false, fmt.Errorf("observe job %s: %w", k.Name, err)
 	}
@@ -205,7 +203,7 @@ func (r *Reconciler) applyJobStep(ctx context.Context, nodeID string, step plan.
 			return sr
 		}
 		digest := configDigest(r.ManagedPrefix, run, cfgContents)
-		res, err := r.retryDispatch(ctx, nodeID, containerEnsureOp(step.Name, run, ContainerNetwork, digest, aliases))
+		res, err := r.retryDispatch(ctx, nodeID, docker.ensureContainer(step.Name, run, ContainerNetwork, digest, aliases))
 		if err != nil {
 			sr.Error = err.Error()
 			return sr
@@ -241,12 +239,8 @@ func (r *Reconciler) applyJobStep(ctx context.Context, nodeID string, step plan.
 		return sr
 
 	case plan.ActionDelete:
-		r.retryDispatch(ctx, nodeID, &wsv1.Operation{Op: &wsv1.Operation_StopContainer{ //nolint:errcheck
-			StopContainer: &wsv1.StopContainer{Name: step.Name},
-		}})
-		res, err := r.retryDispatch(ctx, nodeID, &wsv1.Operation{Op: &wsv1.Operation_RemoveContainer{
-			RemoveContainer: &wsv1.RemoveContainer{Name: step.Name, Force: true},
-		}})
+		r.retryDispatch(ctx, nodeID, docker.stopContainer(step.Name)) //nolint:errcheck
+		res, err := r.retryDispatch(ctx, nodeID, docker.removeContainer(step.Name, true))
 		if err != nil {
 			sr.Error = err.Error()
 			return sr
@@ -296,9 +290,7 @@ func (r *Reconciler) jobGateParams() (int, time.Duration) {
 func (r *Reconciler) waitJobFinished(ctx context.Context, nodeID, name, wantHash string) (jobState, int32) {
 	attempts, backoff := r.jobGateParams()
 	for i := 0; i < attempts; i++ {
-		res, err := r.Applier.Apply(ctx, nodeID, &wsv1.Operation{Op: &wsv1.Operation_InspectContainer{
-			InspectContainer: &wsv1.InspectContainer{Name: name},
-		}})
+		res, err := r.Applier.Apply(ctx, nodeID, docker.inspectContainer(name))
 		if err == nil && res.GetError() == nil {
 			inspect := res.GetInspectContainer()
 			switch st := classifyJob(inspect, wantHash); st {

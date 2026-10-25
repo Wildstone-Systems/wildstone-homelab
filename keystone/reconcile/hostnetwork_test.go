@@ -18,7 +18,7 @@ import (
 // ContainerNetwork).
 func TestContainerEnsureOpCarriesHostNetwork(t *testing.T) {
 	host := &resource.ContainerSpec{Image: testDigestImage, NetworkMode: resource.NetworkModeHost}
-	ec := containerEnsureOp("hub", host, containerNetworkFor(host), "", nil).GetEnsureContainer()
+	ec := docker.ensureContainer("hub", host, containerNetworkFor(host), "", nil).GetEnsureContainer()
 	if ec.GetNetworkMode() != wsv1.ContainerNetworkMode_CONTAINER_NETWORK_MODE_HOST {
 		t.Errorf("network_mode = %v, want HOST", ec.GetNetworkMode())
 	}
@@ -27,7 +27,7 @@ func TestContainerEnsureOpCarriesHostNetwork(t *testing.T) {
 	}
 
 	bridge := &resource.ContainerSpec{Image: testDigestImage}
-	ec = containerEnsureOp("hub", bridge, containerNetworkFor(bridge), "", nil).GetEnsureContainer()
+	ec = docker.ensureContainer("hub", bridge, containerNetworkFor(bridge), "", nil).GetEnsureContainer()
 	if ec.GetNetworkMode() != wsv1.ContainerNetworkMode_CONTAINER_NETWORK_MODE_UNSPECIFIED {
 		t.Errorf("network_mode = %v, want UNSPECIFIED for a spec that never asked", ec.GetNetworkMode())
 	}

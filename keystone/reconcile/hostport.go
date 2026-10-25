@@ -87,9 +87,7 @@ func (r *Reconciler) refuseIfHostPortTaken(ctx context.Context, nodeID string, w
 	// holding its port must still be caught. Any failure to inspect (not
 	// found, foreign, transport) means there is no host-networked container
 	// of ours to credit it to.
-	if res, err := r.Applier.Apply(ctx, nodeID, &wsv1.Operation{Op: &wsv1.Operation_InspectContainer{
-		InspectContainer: &wsv1.InspectContainer{Name: want.Metadata.Name},
-	}}); err == nil && res.GetError() == nil && res.GetInspectContainer().GetRunning() &&
+	if res, err := r.Applier.Apply(ctx, nodeID, docker.inspectContainer(want.Metadata.Name)); err == nil && res.GetError() == nil && res.GetInspectContainer().GetRunning() &&
 		res.GetInspectContainer().GetNetworkMode() == resource.NetworkModeHost {
 		return ""
 	}

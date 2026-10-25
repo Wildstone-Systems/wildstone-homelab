@@ -5,7 +5,6 @@ import (
 	"errors"
 
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/resource"
-	wsv1 "github.com/Wildstone-Systems/wildstone-homelab/proto/gen/wardstone/v1"
 )
 
 // VerifyRunningContainer performs only a fresh, owned-container inspection. It
@@ -35,9 +34,7 @@ func (r *Reconciler) VerifyRunningContainer(ctx context.Context, node, name stri
 	hash := specHash(want.Container, ContainerNetwork,
 		configDigest(r.ManagedPrefix, want.Container, managedConfigContents(r.ManagedPrefix, byKey)),
 		r.hostAliasesForNode(node, byKey))
-	res, err := r.Applier.Apply(ctx, node, &wsv1.Operation{Op: &wsv1.Operation_InspectContainer{
-		InspectContainer: &wsv1.InspectContainer{Name: name},
-	}})
+	res, err := r.Applier.Apply(ctx, node, docker.inspectContainer(name))
 	if err != nil || ctx.Err() != nil || res.GetError() != nil {
 		return unavailable
 	}

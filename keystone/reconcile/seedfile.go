@@ -74,13 +74,7 @@ func (r *Reconciler) applySeedFileStep(ctx context.Context, nodeID string, step 
 		return sr
 	}
 
-	res, err := r.retryDispatch(ctx, nodeID, &wsv1.Operation{Op: &wsv1.Operation_SeedVolumeFile{
-		SeedVolumeFile: &wsv1.SeedVolumeFile{
-			Volume:  want.SeedFile.Volume,
-			Path:    want.SeedFile.Path,
-			Content: []byte(want.SeedFile.Content),
-		},
-	}})
+	res, err := r.retryDispatch(ctx, nodeID, docker.seedVolumeFile(want.SeedFile.Volume, want.SeedFile.Path, []byte(want.SeedFile.Content)))
 	if err != nil {
 		sr.Error = err.Error()
 		return sr
@@ -123,9 +117,7 @@ func (r *Reconciler) observeSeedFile(ctx context.Context, nodeID string, k resKe
 		return resource.Resource{}, false, nil
 	}
 
-	res, err := r.Applier.Apply(ctx, nodeID, &wsv1.Operation{Op: &wsv1.Operation_StatVolumeFile{
-		StatVolumeFile: &wsv1.StatVolumeFile{Volume: want.SeedFile.Volume, Path: want.SeedFile.Path},
-	}})
+	res, err := r.Applier.Apply(ctx, nodeID, docker.statVolumeFile(want.SeedFile.Volume, want.SeedFile.Path))
 	if err != nil {
 		return resource.Resource{}, false, fmt.Errorf("observe seed file %s: %w", k.Name, err)
 	}

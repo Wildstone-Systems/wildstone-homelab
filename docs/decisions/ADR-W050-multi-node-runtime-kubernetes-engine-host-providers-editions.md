@@ -258,7 +258,7 @@ under these limits:
 
 The Kubernetes direction remains accepted. This amendment changes the implementation details above for the reasons below; see the [migration plan gates](../design/w050-migration-plan.md#revised-execution-gates) for acceptance evidence and revision routes.
 
-- **Implementation state:** #177 merged as `97628db`, completing Docker-only encapsulation. G2 passed when the owner accepted #179 in merged #182. #178 is open, no longer a draft, and implements release 1 devices/deployment parser support and opt-in lint with no catalog edits or runtime behavior.
+- **Implementation state:** #177 merged as `97628db`, completing Docker-only encapsulation. G2 passed when the owner accepted #179 in merged #182. #178 merged as `c6860f4` and implements release 1 devices/deployment parser support and opt-in lint with no catalog edits or runtime behavior.
 - **Capabilities:** §2.3 and the [accepted package deployment capabilities contract](../design/package-deployment-capabilities-contract.md), including §9 owner decisions, govern implementation. Refer there instead of duplicating schema requirements in this amendment.
 - **Proof order:** #129 is a small disposable deployment with 1–3 service migrations, backup/replacement restore and rollback preserving new writes. #180 proves multi-node safety before #169 waves; #170 remains later productization. This resolves architectural uncertainty before catalog investment.
 - **Authority:** Keystone owns product desired state and approvals; Kubernetes controllers implement that intent. Separate scoped runtime reconciliation credentials from bootstrap/break-glass administration, because retained server root/admin kubeconfigs remain authority even when not loaded by the leader.

@@ -23,7 +23,7 @@ func TestContainerEnsureOpCarriesHostIP(t *testing.T) {
 		Image: "caddy@sha256:df7f1c2fb114453b951de51a98efc010db1655a92c2e86be6706714e2417a78d",
 		Ports: []string{"100.64.0.1:8443:80", "127.0.0.1:9000:9000", "80:80"},
 	}
-	got := containerEnsureOp("caddy-private", spec, ContainerNetwork, "", nil).GetEnsureContainer().GetPorts()
+	got := docker.ensureContainer("caddy-private", spec, ContainerNetwork, "", nil).GetEnsureContainer().GetPorts()
 	want := []struct {
 		ip        string
 		host, ctr uint32
@@ -94,7 +94,7 @@ func TestContainerEnsureOpCarriesHostAccess(t *testing.T) {
 		Devices: []resource.DeviceMapping{{Source: "/dev/ttyUSB0"}, {Source: "/dev/dri", Target: "/dev/dri"}},
 		CapAdd:  []string{"NET_ADMIN"},
 	}
-	ec := containerEnsureOp("pihole", spec, ContainerNetwork, "", nil).GetEnsureContainer()
+	ec := docker.ensureContainer("pihole", spec, ContainerNetwork, "", nil).GetEnsureContainer()
 	ports := ec.GetPorts()
 	if len(ports) != 3 {
 		t.Fatalf("got %d bindings, want 3", len(ports))
@@ -145,7 +145,7 @@ func TestContainerEnsureOpCarriesHardening(t *testing.T) {
 		Resources:       &resource.ContainerResources{Memory: "4g", Cpus: "2", PidsLimit: 512},
 		ShmSize:         "1g",
 	}
-	ec := containerEnsureOp("hermes", spec, ContainerNetwork, "", nil).GetEnsureContainer()
+	ec := docker.ensureContainer("hermes", spec, ContainerNetwork, "", nil).GetEnsureContainer()
 	if !ec.GetReadOnlyRootfs() {
 		t.Error("read_only_rootfs did not reach the op")
 	}
