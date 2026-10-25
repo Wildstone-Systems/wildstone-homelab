@@ -30,4 +30,7 @@ Cluster client, runtime capability consumption, final wire-contract freeze or mu
 
 ## Size and decomposition
 
-L; split mechanical extraction from operation design if needed.
+L, split three ways:
+- **2a, merged in #184:** the Docker translator (`keystone/reconcile/docker.go`). Every Docker-shaped operation is built there, with an ordering test and a structural test.
+- **2b:** the provisional operation design, [`w050-leader-ops.md`](../w050-leader-ops.md). No proto change.
+- **2c, after #180's contract review:** the cluster target and a `FakeCluster` recorder for the reviewed operations, with no real client.
