@@ -77,18 +77,6 @@ func (a Authority) Issue(ctx context.Context, leader string) (uint64, error) {
 	if !runtimeIdentity.MatchString(leader) {
 		return 0, fmt.Errorf("clusterauthority: %q is not a Wardstone runtime identity", leader)
 	}
-	// The Lease decides who may ask; an epoch for anyone else would fence
-	// out the node that won.
-	l, err := a.Leases.GetLease(ctx, LeaseNamespace, LeaseName)
-	if err != nil {
-		if kubeapi.IsNotFound(err) {
-			return 0, ErrNotHolder
-		}
-		return 0, fmt.Errorf("clusterauthority: reading the leader Lease: %w", err)
-	}
-	if l.Spec.HolderIdentity != leader {
-		return 0, fmt.Errorf("%w: it is held by %q", ErrNotHolder, l.Spec.HolderIdentity)
-	}
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		cm, err := a.Records.GetConfigMap(ctx, Namespace, Name)
 		if err != nil {
@@ -100,6 +88,14 @@ func (a Authority) Issue(ctx context.Context, leader string) (uint64, error) {
 		current, err := strconv.ParseUint(cm.Data["epoch"], 10, 64)
 		if err != nil {
 			return 0, fmt.Errorf("%w: epoch %q", ErrBadRecord, cm.Data["epoch"])
+		}
+		// The Lease decides who may ask; an epoch for anyone else would
+		// fence out the node that won. It is checked on every attempt,
+		// after the record is read: if the write below then succeeds, the
+		// record didn't move since this node was seen holding the Lease,
+		// and a node that wins later asks later and writes over it.
+		if err := a.holds(ctx, leader); err != nil {
+			return 0, err
 		}
 		epoch, err := a.Store.IssueLeaderEpoch(leader, current)
 		if err != nil {
@@ -117,4 +113,19 @@ func (a Authority) Issue(ctx context.Context, leader string) (uint64, error) {
 		return epoch, nil
 	}
 	return 0, fmt.Errorf("clusterauthority: the authority record kept changing; gave up after %d attempts", maxAttempts)
+}
+
+// holds checks that leader holds the leader Lease now.
+func (a Authority) holds(ctx context.Context, leader string) error {
+	l, err := a.Leases.GetLease(ctx, LeaseNamespace, LeaseName)
+	if err != nil {
+		if kubeapi.IsNotFound(err) {
+			return ErrNotHolder
+		}
+		return fmt.Errorf("clusterauthority: reading the leader Lease: %w", err)
+	}
+	if l.Spec.HolderIdentity != leader {
+		return fmt.Errorf("%w: it is held by %q", ErrNotHolder, l.Spec.HolderIdentity)
+	}
+	return nil
 }

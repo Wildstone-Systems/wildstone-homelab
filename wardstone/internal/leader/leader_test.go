@@ -18,10 +18,12 @@ const (
 	idB = "system:serviceaccount:wildstone-system:wardstone-node-b"
 )
 
-// partitionable cuts one node off from the API server.
+// partitionable cuts one node off from the API server. With slow set,
+// updates hang until their context ends instead of failing fast.
 type partitionable struct {
 	LeaseClient
 	down atomic.Bool
+	slow atomic.Bool
 }
 
 var errPartitioned = errors.New("partitioned")
@@ -34,6 +36,10 @@ func (p *partitionable) GetLease(ctx context.Context, ns, name string) (*kubeapi
 }
 
 func (p *partitionable) UpdateLease(ctx context.Context, l *kubeapi.Lease) (*kubeapi.Lease, error) {
+	if p.slow.Load() {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
 	if p.down.Load() {
 		return nil, errPartitioned
 	}
@@ -339,5 +345,44 @@ func TestTermNeverServesWithoutAnEpoch(t *testing.T) {
 	waitFor(t, "an incident", 3*time.Second, func() bool { return incidents.Load() > 0 })
 	if served.Load() {
 		t.Fatal("a term served without an epoch")
+	}
+}
+
+// A renewal that hangs must not stretch the term past the renew deadline
+// (Codex review on #192): the term ends RenewDeadline after the last
+// successful renewal started, well before the Lease could expire.
+func TestSlowRenewalsCantOutliveTheDeadline(t *testing.T) {
+	srv := kubeapitest.New()
+	defer srv.Close()
+	c := &partitionable{LeaseClient: srv.Client(idA)}
+	e := fast(c, idA)
+	// A renewal that starts late in the window is the case that used to
+	// run long: the attempt started at last+RetryPeriod and had a whole
+	// RenewDeadline of its own.
+	e.RetryPeriod = 200 * time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var leading atomic.Bool
+	stopped := make(chan time.Time, 1)
+	go func() {
+		_ = e.Run(ctx, func(c context.Context) error {
+			leading.Store(true)
+			<-c.Done()
+			stopped <- time.Now()
+			return nil
+		})
+	}()
+	waitFor(t, "leadership", 2*time.Second, leading.Load)
+	time.Sleep(200 * time.Millisecond)
+	c.slow.Store(true)
+	select {
+	case at := <-stopped:
+		l := srv.Lease(LeaseNamespace, LeaseName)
+		last := l.Spec.RenewTime.Time
+		if held := at.Sub(last); held > e.RenewDeadline+100*time.Millisecond {
+			t.Fatalf("the term lasted %v after the last renewal; the deadline is %v", held, e.RenewDeadline)
+		}
+	case <-time.After(e.LeaseDuration):
+		t.Fatal("the term outlived the Lease")
 	}
 }

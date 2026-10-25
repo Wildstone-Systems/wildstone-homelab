@@ -53,6 +53,8 @@ type Elector struct {
 	// timestamps, so clock skew between nodes doesn't matter.
 	observed   *kubeapi.Lease
 	observedAt time.Time
+	// renewedAt is when the last successful acquire or renew started.
+	renewedAt time.Time
 }
 
 // Defaults, as in Kubernetes' own controllers.
@@ -136,32 +138,42 @@ func (e *Elector) acquire(ctx context.Context) error {
 }
 
 // hold renews the Lease until lead returns (returned=true, with its
-// error), leadership is lost, or ctx ends.
+// error), leadership is lost, or ctx ends. Leadership ends at an absolute
+// deadline, RenewDeadline after the start of the last successful renewal:
+// a renewal attempt can't run past it, and the term ends the moment it
+// passes, even mid-attempt. Others can't take over before LeaseDuration
+// after they saw that renewal, which is later.
 func (e *Elector) hold(ctx context.Context, done <-chan error) (err error, returned bool) {
-	lastRenew := time.Now()
+	renewBy := e.renewedAt.Add(e.RenewDeadline)
 	t := time.NewTicker(e.RetryPeriod)
 	defer t.Stop()
 	for {
+		deadline := time.NewTimer(time.Until(renewBy))
 		select {
 		case err := <-done:
+			deadline.Stop()
 			return err, true
 		case <-ctx.Done():
+			deadline.Stop()
+			return nil, false
+		case <-deadline.C:
 			return nil, false
 		case <-t.C:
 		}
-		rctx, cancel := context.WithTimeout(ctx, e.RenewDeadline)
+		deadline.Stop()
+		rctx, cancel := context.WithDeadline(ctx, renewBy)
 		held, _ := e.try(rctx)
 		cancel()
 		if held {
-			lastRenew = time.Now()
+			renewBy = e.renewedAt.Add(e.RenewDeadline)
 			continue
 		}
-		// Someone else holds it now, or the renew deadline passed
-		// without a renewal: stop before they may start.
+		// Someone else holds it now, or the deadline passed during the
+		// attempt: stop before they may start.
 		if e.observed != nil && e.observed.Spec.HolderIdentity != e.Identity && e.observed.Spec.HolderIdentity != "" {
 			return nil, false
 		}
-		if time.Since(lastRenew) >= e.RenewDeadline {
+		if !time.Now().Before(renewBy) {
 			return nil, false
 		}
 	}
@@ -188,6 +200,7 @@ func (e *Elector) try(ctx context.Context) (held bool, err error) {
 			return false, err
 		}
 		e.observe(created, now)
+		e.renewedAt = now
 		return true, nil
 	}
 	if err != nil {
@@ -217,6 +230,7 @@ func (e *Elector) try(ctx context.Context) (held bool, err error) {
 		return false, err
 	}
 	e.observe(out, now)
+	e.renewedAt = now
 	return true, nil
 }
 

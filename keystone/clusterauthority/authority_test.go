@@ -164,3 +164,35 @@ func TestIssueOnlyToTheLeaseHolder(t *testing.T) {
 		t.Fatalf("the holder's issue = %d, %v", e, err)
 	}
 }
+
+// stolen is a Records where, between A's read and A's write, B wins the
+// Lease and publishes its own epoch (Codex review on #192).
+type stolen struct {
+	Records
+	srv   *kubeapitest.Server
+	raced bool
+}
+
+func (r *stolen) UpdateConfigMap(ctx context.Context, cm *kubeapi.ConfigMap) (*kubeapi.ConfigMap, error) {
+	if !r.raced {
+		r.raced = true
+		hold(r.srv, nodeB)
+		r.srv.PutConfigMap(kubeapi.ConfigMap{
+			Metadata: kubeapi.ObjectMeta{Namespace: Namespace, Name: Name},
+			Data:     map[string]string{"epoch": "2", "leader": nodeB},
+		})
+	}
+	return r.Records.UpdateConfigMap(ctx, cm)
+}
+
+func TestIssueRefusesALeaderThatLostTheLeaseMidWrite(t *testing.T) {
+	srv, a := setup(t, "0")
+	hold(srv, nodeA)
+	a.Records = &stolen{Records: a.Records, srv: srv}
+	if e, err := a.Issue(context.Background(), nodeA); !errors.Is(err, ErrNotHolder) {
+		t.Fatalf("A after losing the Lease: epoch %d, err %v; want ErrNotHolder", e, err)
+	}
+	if got := record(t, srv); got["epoch"] != "2" || got["leader"] != nodeB {
+		t.Fatalf("the winner was fenced out: record %v", got)
+	}
+}
