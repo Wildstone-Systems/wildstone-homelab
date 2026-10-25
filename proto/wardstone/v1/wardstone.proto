@@ -36,6 +36,12 @@ service KeystoneGateway {
   // taken from RenewRequest or the CSR subject, so a node cannot renew its
   // way into a different identity.
   rpc Renew(RenewRequest) returns (RenewResponse);
+
+  // IssueLeaderEpoch asks Keystone to advance the cluster authority after
+  // this node wins the leader Lease. Keystone derives the node from the
+  // verified mTLS certificate, checks the Lease and writes the authority
+  // record. The request carries no selectable leader identity.
+  rpc IssueLeaderEpoch(IssueLeaderEpochRequest) returns (IssueLeaderEpochResponse);
 }
 
 // ---------------------------------------------------------------- bootstrap
@@ -1249,4 +1255,11 @@ message HomeAutomationReadinessResult {
   repeated NodeInterface interfaces = 2;
   // In a fixed order: the check names above, each once per subject.
   repeated ReadinessCheck checks = 3;
+}
+
+// Leadership RPC (minor 28). Identity comes only from the mTLS peer.
+message IssueLeaderEpochRequest {}
+
+message IssueLeaderEpochResponse {
+  uint64 epoch = 1;
 }

@@ -39,11 +39,13 @@ import (
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/butlerlive"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/butlerstore"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/catalog"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/clusterauthority"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/consoleauth"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/domestic"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/gateway"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/householdtz"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/ingest"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/kubeapi"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/policy"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/principal"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/publish"
@@ -103,6 +105,9 @@ func main() {
 	joinTokens := flag.String("join-tokens", "", "comma-separated one-time join tokens (dev/test; MintJoinToken is the production path)")
 	hosts := flag.String("hosts", "localhost,127.0.0.1", "comma-separated SANs for the gateway certificate")
 	dataDir := flag.String("data-dir", "/var/lib/wildstone/keystone", "directory persisting the CA, op-signing key, join tokens, Statefile, and runtime DB across restarts")
+	engineAPI := flag.String("engine-api", "", "local Kubernetes API URL for leader epoch issuance; empty disables cluster authority")
+	engineCA := flag.String("engine-ca", "", "Kubernetes API CA PEM, required with -engine-api")
+	engineToken := flag.String("engine-token", "", "path to the root-owned scoped Keystone token, required with -engine-api")
 	ingestEvery := flag.Duration("ingest-interval", 15*time.Second, "how often to check the Statefile for out-of-band edits")
 	reconcileEvery := flag.Duration("reconcile-interval", 30*time.Second, "how often the reconcile service ticks (ADR-W008)")
 	managedPrefix := flag.String("managed-prefix", "/etc/wildstone", "managed-file prefix Route/OidcClient fragments render under (must be a Wardstone ManagedPrefix)")
@@ -188,7 +193,7 @@ func main() {
 		Speech:            speechRtr,
 		NodeID:            strings.TrimSpace(*nodeID),
 	}
-	if err := run(*listen, *apiListen, *joinTokens, *hosts, *dataDir, *ingestEvery, *reconcileEvery, *managedPrefix, *backupEvery, *resticImage, *consoleDir, *catalogDir, *wallpaperDir, butlerCfg, householdCfg, log); err != nil {
+	if err := run(*listen, *apiListen, *joinTokens, *hosts, *dataDir, *ingestEvery, *reconcileEvery, *managedPrefix, *backupEvery, *resticImage, *consoleDir, *catalogDir, *wallpaperDir, butlerCfg, householdCfg, engineConfig{API: *engineAPI, CA: *engineCA, Token: *engineToken}, log); err != nil {
 		fmt.Fprintln(os.Stderr, "keystone:", err)
 		os.Exit(1)
 	}
@@ -290,7 +295,21 @@ func coordinatorHolder(dataDir string) string {
 	return host + ":" + abs
 }
 
-func run(listen, apiListen, joinTokens, hosts, dataDir string, ingestEvery, reconcileEvery time.Duration, managedPrefix string, backupEvery time.Duration, resticImage, consoleDir, catalogDir, wallpaperDir string, butlerCfg butlerConfig, householdCfg householdConfig, log *slog.Logger) error {
+type engineConfig struct{ API, CA, Token string }
+
+type coordinatorEpochIssuer struct {
+	issuer gateway.EpochIssuer
+	active func() bool
+}
+
+func (i coordinatorEpochIssuer) Issue(ctx context.Context, leader string) (uint64, error) {
+	if !i.active() {
+		return 0, fmt.Errorf("cluster authority requires the active Keystone coordinator")
+	}
+	return i.issuer.Issue(ctx, leader)
+}
+
+func run(listen, apiListen, joinTokens, hosts, dataDir string, ingestEvery, reconcileEvery time.Duration, managedPrefix string, backupEvery time.Duration, resticImage, consoleDir, catalogDir, wallpaperDir string, butlerCfg butlerConfig, householdCfg householdConfig, engineCfg engineConfig, log *slog.Logger) error {
 	lis, err := net.Listen("tcp", listen)
 	if err != nil {
 		return err
@@ -299,7 +318,7 @@ func run(listen, apiListen, joinTokens, hosts, dataDir string, ingestEvery, reco
 	if err != nil {
 		return err
 	}
-	return serve(lis, apiLis, joinTokens, hosts, dataDir, ingestEvery, reconcileEvery, managedPrefix, backupEvery, resticImage, consoleDir, catalogDir, wallpaperDir, butlerCfg, householdCfg, log, os.Stdout)
+	return serve(lis, apiLis, joinTokens, hosts, dataDir, ingestEvery, reconcileEvery, managedPrefix, backupEvery, resticImage, consoleDir, catalogDir, wallpaperDir, butlerCfg, householdCfg, engineCfg, log, os.Stdout)
 }
 
 // householdConfig carries the household automation flags into serve
@@ -675,8 +694,28 @@ func withConsole(apiHandler http.Handler, dir string, uiReachable func(*http.Req
 // serve wires and runs both planes over already-bound listeners —
 // separated from run so the boot integration test can use :0 listeners.
 // bootstrapOut receives the one-time admin token on first start.
-func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEvery, reconcileEvery time.Duration, managedPrefix string, backupEvery time.Duration, resticImage, consoleDir, catalogDir, wallpaperDir string, butlerCfg butlerConfig, householdCfg householdConfig, log *slog.Logger, bootstrapOut io.Writer) error {
-	// recordNode is bound once the runtime DB is open, a few lines below.
+func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEvery, reconcileEvery time.Duration, managedPrefix string, backupEvery time.Duration, resticImage, consoleDir, catalogDir, wallpaperDir string, butlerCfg butlerConfig, householdCfg householdConfig, engineCfg engineConfig, log *slog.Logger, bootstrapOut io.Writer) error {
+	if engineCfg.API == "" && (engineCfg.CA != "" || engineCfg.Token != "") || engineCfg.API != "" && (engineCfg.CA == "" || engineCfg.Token == "") {
+		return fmt.Errorf("-engine-api, -engine-ca and -engine-token must be set together")
+	}
+	db, err := runtimedb.Open(filepath.Join(dataDir, "keystone.db"))
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	var coordinating bool
+	var epochIssuer gateway.EpochIssuer
+	if engineCfg.API != "" {
+		client, err := kubeapi.New(engineCfg.API, engineCfg.CA, engineCfg.Token)
+		if err != nil {
+			return fmt.Errorf("cluster authority client: %w", err)
+		}
+		epochIssuer = coordinatorEpochIssuer{
+			issuer: clusterauthority.Authority{Store: db, Records: client, Leases: client},
+			active: func() bool { return coordinating },
+		}
+	}
+	// recordNode is bound after gateway creation, before it starts serving.
 	// The indirection is safe without synchronisation: the gateway cannot
 	// deliver a node event before gw.Serve, which is the last statement in
 	// this function, long after the assignment.
@@ -690,10 +729,11 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	}
 	var recordNode func(gateway.NodeEvent)
 	gw, err := gateway.New(gateway.Config{
-		JoinTokens: splitNonEmpty(joinTokens),
-		Hosts:      splitNonEmpty(hosts),
-		DataDir:    dataDir,
-		Logger:     log,
+		EpochIssuer: epochIssuer,
+		JoinTokens:  splitNonEmpty(joinTokens),
+		Hosts:       splitNonEmpty(hosts),
+		DataDir:     dataDir,
+		Logger:      log,
 		OnNodeEvent: func(e gateway.NodeEvent) {
 			if recordNode != nil {
 				recordNode(e)
@@ -703,12 +743,6 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	if err != nil {
 		return err
 	}
-
-	db, err := runtimedb.Open(filepath.Join(dataDir, "keystone.db"))
-	if err != nil {
-		return err
-	}
-	defer db.Close()
 
 	// The single active coordinator lease (ADR-W030 A11), taken before
 	// anything can dispatch: durable work is only ever written by the
@@ -731,7 +765,7 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	// different host is PromoteCoordinator, an explicit act that fences
 	// the old epoch.
 	lease, leaseErr := db.AcquireCoordinator(coordinatorHolder(dataDir))
-	coordinating := leaseErr == nil
+	coordinating = leaseErr == nil
 	switch {
 	case coordinating:
 		log.Info("coordinator lease held", "holder", lease.Holder, "epoch", lease.Epoch,

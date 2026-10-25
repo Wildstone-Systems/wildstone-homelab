@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/Wildstone-Systems/wildstone-homelab/wardstone/internal/agent"
@@ -31,6 +32,9 @@ func main() {
 	dataDir := flag.String("data-dir", "/var/lib/wildstone/wardstone", "directory for node identity and the secret store (must NOT be under a managed prefix)")
 	joinToken := flag.String("join-token", "", "one-time join token (first run only)")
 	caFingerprint := flag.String("ca-fingerprint", "", "hex sha256 of Keystone's CA certificate DER; pins the join against MITM (recommended in production; see `keystone` startup log). Empty falls back to trust-on-first-use.")
+	engineAPIs := flag.String("engine-apis", "", "comma-separated local Kubernetes API URLs, one for every server; empty disables leader election")
+	engineCA := flag.String("engine-ca", "", "Kubernetes API CA PEM, required with -engine-apis")
+	engineToken := flag.String("engine-token", "", "path to this node's scoped Wardstone token, required with -engine-apis")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
 
@@ -41,13 +45,24 @@ func main() {
 
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	cfg := agent.Config{
-		NodeID:        *nodeID,
-		KeystoneAddr:  *keystone,
-		DataDir:       *dataDir,
-		JoinToken:     *joinToken,
-		CAFingerprint: *caFingerprint,
-		Version:       version,
-		Logger:        log,
+		NodeID:          *nodeID,
+		KeystoneAddr:    *keystone,
+		DataDir:         *dataDir,
+		JoinToken:       *joinToken,
+		CAFingerprint:   *caFingerprint,
+		EngineCAFile:    *engineCA,
+		EngineTokenFile: *engineToken,
+		Version:         version,
+		Logger:          log,
+	}
+	if *engineAPIs != "" {
+		for _, addr := range strings.Split(*engineAPIs, ",") {
+			if strings.TrimSpace(addr) == "" {
+				fmt.Fprintln(os.Stderr, "wardstoned: -engine-apis contains an empty API URL")
+				os.Exit(2)
+			}
+			cfg.EngineAPIs = append(cfg.EngineAPIs, strings.TrimSpace(addr))
+		}
 	}
 
 	// Self-update health gate (ADR-W003 W5): must run BEFORE agent.New/Run.
