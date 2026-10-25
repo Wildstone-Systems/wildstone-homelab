@@ -1,0 +1,119 @@
+# A single k3s server with the reviewed flags (W050 slice 3, #159; safety
+# contract #180). Idempotent. Docker and the Docker-based Wildstone keep
+# running beside it; k3s brings its own containerd.
+#
+# Required variable: k3s_version, a k3s release such as v1.33.5+k3s1
+# (Kubernetes 1.30 or later, for disable-force-detach-on-timeout).
+# The binary is checked against that release's own sha256sum file.
+- name: Wildstone k3s server
+  import_playbook: prereqs.yml
+
+- name: Install and start k3s
+  hosts: localhost
+  connection: local
+  become: true
+  gather_facts: true
+  vars:
+    k3s_arch_suffix: "{{ {'x86_64': '', 'aarch64': '-arm64'}[ansible_facts['architecture']] | default('unsupported') }}"
+    k3s_release_url: "https://github.com/k3s-io/k3s/releases/download/{{ k3s_version | urlencode }}"
+    k3s_dir: "/var/lib/wildstone/k3s/{{ k3s_version }}"
+  tasks:
+    - name: Require a supported k3s version and architecture
+      ansible.builtin.assert:
+        that:
+          - k3s_version is defined
+          - k3s_version is match('^v1\.(3[0-9]|[4-9][0-9])\.[0-9]+\+k3s[0-9]+$')
+          - k3s_arch_suffix != 'unsupported'
+        fail_msg: >-
+          Set k3s_version to a k3s release of Kubernetes 1.30 or later (for example -e k3s_version=v1.33.5+k3s1),
+          on x86_64 or aarch64.
+
+    - name: Download directory
+      ansible.builtin.file:
+        path: "{{ k3s_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Download the release checksums
+      ansible.builtin.get_url:
+        url: "{{ k3s_release_url }}/sha256sum{{ '-arm64' if k3s_arch_suffix else '-amd64' }}.txt"
+        dest: "{{ k3s_dir }}/sha256sum.txt"
+        mode: "0644"
+
+    - name: Read the expected checksum for this architecture
+      ansible.builtin.command:
+        argv: [awk, '$2 == "k3s{{ k3s_arch_suffix }}" { print $1 }', "{{ k3s_dir }}/sha256sum.txt"]
+      register: k3s_expected
+      changed_when: false
+      failed_when: k3s_expected.stdout | length != 64
+
+    - name: Download k3s and check it
+      ansible.builtin.get_url:
+        url: "{{ k3s_release_url }}/k3s{{ k3s_arch_suffix }}"
+        dest: "{{ k3s_dir }}/k3s"
+        checksum: "sha256:{{ k3s_expected.stdout }}"
+        mode: "0755"
+
+    - name: Install the checked binary
+      ansible.builtin.copy:
+        src: "{{ k3s_dir }}/k3s"
+        dest: /usr/local/bin/k3s
+        mode: "0755"
+        remote_src: true
+      notify: Restart k3s
+
+    - name: Configuration directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0700"
+      loop: [/etc/rancher/k3s, /etc/wildstone/k3s]
+
+    - name: Pod Security defaults
+      ansible.builtin.template:
+        src: templates/pod-security.yaml.j2
+        dest: /etc/wildstone/k3s/pod-security.yaml
+        mode: "0600"
+      notify: Restart k3s
+
+    - name: Configure k3s
+      ansible.builtin.template:
+        src: templates/k3s-config.yaml.j2
+        dest: /etc/rancher/k3s/config.yaml
+        mode: "0600"
+      notify: Restart k3s
+
+    - name: Install the k3s service unit
+      ansible.builtin.template:
+        src: templates/k3s.service.j2
+        dest: /etc/systemd/system/k3s.service
+        mode: "0644"
+      notify: Restart k3s
+
+    - name: Start k3s
+      ansible.builtin.systemd:
+        name: k3s
+        enabled: true
+        state: started
+        daemon_reload: true
+
+  handlers:
+    - name: Restart k3s
+      ansible.builtin.systemd:
+        name: k3s
+        state: restarted
+        daemon_reload: true
+
+- name: Wait for the node
+  hosts: localhost
+  connection: local
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Node is Ready
+      ansible.builtin.command: k3s kubectl wait --for=condition=Ready node --all --timeout=30s
+      register: k3s_ready
+      retries: 20
+      delay: 10
+      until: k3s_ready.rc == 0
+      changed_when: false

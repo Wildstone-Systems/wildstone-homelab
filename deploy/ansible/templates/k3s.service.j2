@@ -1,0 +1,24 @@
+# Managed by Wildstone (deploy/ansible/k3s-server.yml).
+[Unit]
+Description=Lightweight Kubernetes (Wildstone engine)
+Documentation=https://docs.k3s.io
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=notify
+KillMode=process
+Delegate=yes
+LimitNOFILE=1048576
+LimitNPROC=infinity
+LimitCORE=infinity
+TasksMax=infinity
+TimeoutStartSec=0
+Restart=always
+RestartSec=5s
+ExecStartPre=-/sbin/modprobe br_netfilter
+ExecStartPre=-/sbin/modprobe overlay
+ExecStart=/usr/local/bin/k3s server
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,23 @@
+# Managed by Wildstone. Pod Security levels (W050 plan §6.5): apps are held
+# to restricted; host-bound work (devices, host networking) gets its own
+# namespace so the exception is visible and narrow.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: wildstone-system
+  labels:
+    pod-security.kubernetes.io/enforce: baseline
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: wildstone-apps
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: wildstone-host
+  labels:
+    pod-security.kubernetes.io/enforce: privileged

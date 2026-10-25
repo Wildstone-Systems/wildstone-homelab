@@ -1,0 +1,21 @@
+# Engine add-ons for the first server (W050 slice 3, #159). This first part
+# creates the Wildstone namespaces with their Pod Security levels. Longhorn,
+# kube-vip, the runtime ServiceAccounts and the fencing admission policy
+# follow in slice 3b.
+- name: Wildstone engine add-ons
+  hosts: localhost
+  connection: local
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Namespaces manifest
+      ansible.builtin.template:
+        src: templates/namespaces.yaml.j2
+        dest: /etc/wildstone/k3s/namespaces.yaml
+        mode: "0600"
+
+    - name: Apply namespaces
+      ansible.builtin.command: k3s kubectl apply --server-side --field-manager=wildstone-bootstrap -f /etc/wildstone/k3s/namespaces.yaml
+      # Server-side apply of the same file is a no-op, so a rerun changes
+      # nothing; it reports "serverside-applied" either way.
+      changed_when: false
