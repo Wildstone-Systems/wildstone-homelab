@@ -6,6 +6,58 @@
 - **Slice issues:** [`w050-slices/`](w050-slices/), one file per slice; created on GitHub as #157 (slice 0), #151 (slice 1, existing) and #158–#173 (slices 2–17).
 - **Evidence rule:** claims cite `path:line` on `5a81358`. Anything marked **(inferred)** was not verified in code or on a machine; it is for #129 or the slice to prove.
 
+## Implementation review and proof gates — 2026-10-24
+
+Issue and slice numbers remain stable identifiers, not an execution sequence. The gates below and §7 define the current dependencies and decision exits. Historical code inventory remains evidence against the cited revision, not a fresh code audit.
+
+### Work already in progress
+#177 merged as `97628db`: Docker-only encapsulation is complete. Docker-shaped types are not the Kubernetes contract. G2 passed: the owner accepted #179 in merged #182. #178 is open and no longer a draft; it implements release 1 parser support and opt-in lint for `devices`/`deployment`, with no catalog edits or runtime effect.
+
+### Revised execution gates
+
+The maintainer/owner records **pass, revise, or reject** in the named issue. A passing test is necessary evidence, not implicit owner acceptance or scheduling. Revise reopens the specified work; reject pauses dependent migration. No new gate is added automatically.
+
+| Gate | Decides | Evidence that passes | Revise returns to / what may proceed |
+|---|---|---|---|
+| G1 — foundation (#157/#151/#158) | Owner schedules bounded refactors and accepts their PRs | #177 merged; #157 immutable-revision/bounded-approval crash and concurrency tests; #158 unchanged Plans, Docker ordering, e2e and exit drill | Failed refactor returns to #157 or #158. **#158 may start after merged #177 when scheduled, in parallel with #179**; it does not consume availability or wait for deployment proof. |
+| G2 — capability contract (#179) — **PASSED 2026-10-24** | Owner accepted #179 in merged #182 | [Accepted contract](package-deployment-capabilities-contract.md), including §9 owner decisions; #178 now implements release 1 parser support and opt-in lint for devices/deployment, with no catalog edits | Contract gate is complete. Implementation findings return to #178; changes to accepted semantics require an explicit contract amendment. #158 continues independently. |
+| G3 — small single-node proof (#129) | Owner records pass/revise/reject in #129 | Small disposable deployment with **1–3 migrated services**, including Uptime Kuma as the stateful case; tools-it-tools and one optional Mealie/Postgres fixture. For each selected service: forward migration, new write where stateful, rollback preserving it, install/update/reboot/front-door results and measured outage. Stateful case also passes consistent backup and replacement restore. #159–#164 and early #168 proof evidence complete. | Return to failing #159–#164 or early #168 child; reopen #179 if semantics failed. Reject stops core/catalog migration. #164 alone cannot close #129. Docker identity may remain. |
+| G4 — early multi-node safety (#180) | Owner accepts reproducible disposable-cluster evidence in #180 | G1–G3 passed; same limited service set plus management fixture on three node VMs. Power loss, partition, old-node return, stale leader/apply, single-writer storage, secret continuity and backup placement pass; topology/versions/outage/data-loss measured. Contract review happens before implementation, fault evidence after #163. | Return to #180 contract/harness or failing #159/#161/#162/#163 child; reopen #179 if capability assumptions fail. No #169 or #170 dependency. VMs on one host establish no independent hardware/power protection. |
+| G5 — core and household migration (#165/#166/#168) | Owner accepts core recovery and supported household migration evidence | G3/G4 accepted; ingress/identity cutover, actual Keystone power-loss/partition/secret-revocation continuity, host/off-host recovery without Keystone, and household migration rollback proven; #167 covers required hardware variants | Return to failing #165/#166/#167/#168 child. Actual Keystone recovery is required before household migration is offered; fixture success alone is insufficient. |
+| G6 — catalog and production multi-node (#169/#170) | Owner accepts each bounded wave and supported topology | G2–G5 passed; package lifecycle/admission/backup evidence for each wave; then Console join, role conversion, rolling host updates, safe leader handover and truthful protection status | Return to affected package/#169/#170 child; architectural failures reopen #180. Wave support is not mass migration approval. |
+| G7 — retirement and optional expansion (#172/#171/#173) | Owner explicitly accepts deprecation/upgrade decision; separately schedules optional features | #168/#169/#170 evidence, supported single/multi-node replacement restore, existing Docker upgrade/rollback and warning release before #172. #171 requires #179/#170 plus replica/worker-specific tests. Talos needs #172 and a new accepted ADR. | Return to #168/#170/#172 and retain Docker compatibility on retirement failure; replica/worker failures return to #171; Talos to #173. Optional expansion is not a prerequisite for Docker retirement. |
+
+Authority and secret-custody design portions of #180 are reviewed **before** #159/#162 implementation; its fault evidence is collected **after** those slices. This separates design prerequisites from test completion and avoids a cycle.
+
+### Capability contract (#179)
+
+See the [accepted package deployment capabilities contract](package-deployment-capabilities-contract.md), including its §9 owner decisions (accepted in #182; G2 passed).
+
+### Authority, storage and recovery contract (#180)
+- Keystone is the sole product-level desired-state/approval authority; Kubernetes controllers implement that intent. Bootstrap and emergency recovery are explicit audited exceptions.
+- A Lease coordinates leadership; it is not fencing. Define cancellation, stale/in-flight request handling, revision checks, replay/idempotency and safe resumption before promising one effective writer.
+- Separate administrative bootstrap/break-glass credentials from least-privilege runtime credentials. Server root/admin kubeconfigs remain authority regardless of who currently loads them. Runtime credentials must not alter admission/RBAC or mint their own signed-package grants. Admission protects against malformed workloads; it is not a security boundary against unrestricted cluster-admin compromise.
+- Specify canonical secret storage, leader handover access, version continuity, export/import and encryption-key recovery. A missing local leader store must never regenerate existing secrets.
+- Prove storage detach/reattach and partition behavior; RWOP plus short tolerations is not a complete fencing contract. State measured downtime instead of deriving it from eviction timeout.
+- Host recovery must diagnose/rebuild/restore when Keystone cannot run, with a documented off-host kit when cluster API/storage is unavailable. A proxy to Keystone is not this recovery path.
+- Resource priorities reduce risk but do not guarantee management survival of node/PV disk exhaustion. Reserve OS, Kubernetes and storage capacity and test pressure explicitly.
+
+### Rollout and migration corrections
+Singleton stateful workloads use Recreate with a declared outage. A failed update cannot keep the already terminated old pod serving. Rollback requires declared schema/data compatibility or validated restore alongside; old image selection alone is insufficient. Replicated stateless continuity is a separate test. Secret rotation uses the applicable workload strategy.
+
+Final consistent data copy requires writers stopped/quiesced; estimate and disclose outage. Pre-copy may reduce it but needs final synchronization and application consistency checks. The initial 1–3-service migration proof is intentionally earlier and smaller than general household migration tooling.
+
+### Sources for safety assumptions
+
+Checked 2026-10-24. Longhorn's official latest URL resolved to the 1.13.0 node-failure page on this date; this is documentation evidence, not a supported runtime version selection.
+- [client-go leader election explicitly disclaims fencing](https://pkg.go.dev/k8s.io/client-go/tools/leaderelection).
+- [Longhorn node failure and volume attachment](https://longhorn.io/docs/latest/high-availability/node-failure/).
+- [Kubernetes force-delete warning](https://kubernetes.io/docs/reference/kubectl/generated/kubectl_delete/).
+- [Kubernetes node-pressure eviction](https://kubernetes.io/docs/concepts/scheduling-eviction/node-pressure-eviction/).
+
+No runtime change, merge, or test deployment is executed by this documentation revision. Remaining implementation issues retain their scheduling restrictions.
+
+
 ## Contents
 
 1. [Summary in plain language](#1-summary-in-plain-language)
@@ -44,7 +96,7 @@
 
 **The size of the job.** 18 slices (0–17), roughly 12–18 months of part-time work for one maintainer with an agent **(inferred estimate)**. Each slice leaves `main` releasable with the Docker backend still working.
 
-**The order, in one line.** Fix approval scope (0) → two refactors that change nothing (1, 2) → k3s on one machine (3) → apps on it, from simplest to hardest (4–11) → tools to move live households (12) → all packages (13) → several machines (14, 15) → remove Docker (16) → Talos (17, much later).
+**The order, in one line.** Foundation refactors and parallel capability review → small single-node deployment with 1–3 service migrations → accepted #129 report → early multi-node safety proof #180 → core/management recovery and household tooling → catalog waves and production multi-node → Docker retirement; workers/Talos remain separately scheduled.
 
 **The biggest surprise from reading the code.** #151 puts the seam *inside Wardstone*. That is necessary but not enough. Keystone's reconciler is per-node and speaks Docker's language: it names a node for every resource (`keystone/reconcile/loop/loop.go:685-696`), creates a Docker network (`keystone/reconcile/reconcile.go:1775-1790`), stamps spec-hash labels (`reconcile.go:1727`) and reads Docker container IPs (`keystone/reconcile/ingressaddr.go`). The k3s leader works on the whole cluster, not one node. So a **second, Keystone-side seam** is needed (slice 2) before any k3s code.
 
@@ -57,10 +109,10 @@ Short list. Full list with recommendations in [§9](#9-risks-and-open-decisions)
 | # | Decision | Recommendation | Blocks |
 |---|---|---|---|
 | D1 | Accept the two-seam design (Wardstone seam #151 **and** Keystone seam, slice 2) | Accept; amend #151's scope note | Slices 1–2 |
-| D2 | New typed wire ops for the leader (`ApplyWorkload`, `RunJob`, `RunPlaybook`, …), never raw YAML | Accept. A "send this manifest" op is `Exec(string)` in disguise | Slice 2 |
-| D3 | Where secret values live on k3s | Kubernetes Secrets, encrypted at rest, written only by the leader. Needs an ADR-W012 amendment ([§11](#11-proposed-adr-amendments)) | Slice 6 |
+| D2 | Typed cluster operations; no raw manifest/command op | Draft in #158; review authority before runtime implementation, refine from #129 evidence | Runtime operation implementation; not Docker-only #158 |
+| D3 | Canonical secret source, handover and key recovery | Review #180 custody contract and amend ADR-W012 before #162 | Slice 6 |
 | D4 | Shared host folders (`/srv/wildstone/media`, …) on k3s | **Decided 2026-10-24:** a NAS or NFS share is optional on any topology. With one, shared folders live on it (NFS CSI, `ReadWriteMany`) and may move. Without one, they stay on their machine's own disk (a local PersistentVolume under the managed prefix); on several machines those apps stay on that machine. See [§6.6](#66-storage-and-backup) | Slices 5, 13 |
-| D5 | Owner-operated test runner | The PR template says every job stays on a GitHub-hosted runner. Multi-node tests need an exception or a manual owner run | Slice 14 |
+| D5 | Owner-operated test runner | Owner-run disposable cluster evidence under ADR-W002; no hosted-agent homelab access | #180 and slice 14 |
 | D6 | #128 G1/G2 before slice 3 | Yes. The leader will act on approvals across machines | Slice 3 |
 | D7 | Accept ADR-W051 (with the small changes in §11) | Accept before slice 10 | Slice 10 |
 
@@ -69,7 +121,7 @@ Short list. Full list with recommendations in [§9](#9-risks-and-open-decisions)
 ## 3. Docker coupling inventory
 
 **Legend:**
-- **Seam:** moves behind the runtime-backend interface; a k3s implementation is added beside it.
+- **Seam:** Docker dependencies are encapsulated; the Kubernetes workload contract is designed separately and need not emulate Docker methods.
 - **Rewrite:** has no Docker-free shape and needs new code for k3s.
 - **Host:** stays a per-node Wardstone host operation on every backend.
 - **Gone:** disappears with the Docker backend (slice 16).
@@ -105,7 +157,7 @@ Short list. Full list with recommendations in [§9](#9-risks-and-open-decisions)
 | `keystone/reconcile/applier.go:19-40` | `Applier.Apply(nodeID, op)` | **Seam:** add a target type (node or cluster). Leader ops go to "cluster" |
 | `keystone/reconcile/reconcile.go:552-790` `Reconcile(nodeID)` | Per-node observe → diff → approve → apply | **Seam (slice 2):** backend-neutral steps; a per-backend *translator* builds ops |
 | `reconcile.go:1503-1700` container step + health gate | `EnsureContainer`, then polls `InspectContainer`/`ContainerStats` | **Rewrite** for k3s: `ApplyWorkload` + rollout status + readiness probe (#39) |
-| `reconcile.go:1727` `specHash`, `configdigest.go` | Spec-hash label so config changes recreate the container | **Rewrite:** pod-template annotation `wildstone.dev/config-digest` triggers a rolling restart |
+| `reconcile.go:1727` `specHash`, `configdigest.go` | Spec-hash label so config changes recreate the container | **Rewrite:** pod-template annotation `wildstone.dev/config-digest` triggers a restart using the workload's reviewed strategy |
 | `reconcile.go:1775-1790` `ensureNodePrereqs` | Creates the `wildstone` Docker network | **Gone** on k3s |
 | `reconcile.go:1872` `containerEnsureOp` | Builds the Docker-shaped op | **Seam:** Docker translator; k3s translator builds `WorkloadSpec` |
 | `reconcile.go:2101-2107` | Route probe skips `container/<name>` upstreams (no Docker IP) | **Better on k3s:** leader can probe the Service |
@@ -128,7 +180,7 @@ Short list. Full list with recommendations in [§9](#9-risks-and-open-decisions)
 | `keystone/butler/tools_hostops.go:115-290` | `host.container_logs/stats/restart/prune_images/unit_status/disk_usage` | **Rename:** `app.logs`, `app.usage`, `app.restart`, `node.prune_images`, … (#66) |
 | `keystone/domestic/hostops.go`, `keystone/butler/reader.go` | Same host ops | Same as above |
 | `keystone/api/handlers_nodes.go:217` | `GET /nodes/{node}/containers/{name}/logs` | Add `GET /apps/{package}/logs`; keep old route for Docker |
-| `keystone/api/handlers_secrets.go:328-331`, `handlers_personal_credentials.go:572-575` | Rotation restarts a container with Stop + Remove | **Seam:** "restart workload" op; k3s does a rolling restart |
+| `keystone/api/handlers_secrets.go:328-331`, `handlers_personal_credentials.go:572-575` | Rotation restarts a container with Stop + Remove | **Seam:** "restart workload" op; k3s follows the workload's reviewed restart strategy |
 | `keystone/api/handlers_probes.go` | Node probes | **Host:** unchanged |
 | `keystone/internal/fakenode/fakenode.go:79-310` | Fake Docker node for tests | Add a fake cluster (fake leader) beside it |
 | `keystone/policy/policy.go:22-32` | Semantic rules (auth, secrets, backup, upstream) | Unchanged; admission is a second, runtime layer |
@@ -152,7 +204,7 @@ Short list. Full list with recommendations in [§9](#9-risks-and-open-decisions)
 
 ## 4. Resource kinds → Kubernetes objects
 
-"Leader" means the elected Wardstone that holds cluster-admin. "Host op" stays on the node's own Wardstone.
+"Leader" means the elected Wardstone using scoped runtime reconciliation credentials; bootstrap/break-glass administration remains separate. "Host op" stays on the node's own Wardstone.
 
 | Kind | Kubernetes objects | Stays a Wardstone host op | Difficulty |
 |---|---|---|---|
@@ -194,7 +246,7 @@ Collected by scanning every `packages/*/package.yaml` on `5a81358` (73 packages)
 
 **Difficulty rules:** *easy* = one container, no host access, no hook. *Medium* = database or hook, several containers, Jobs, LAN ports, shared folders or host binaries. *Hard* = host networking, devices, D-Bus or core infrastructure.
 
-**Availability rules:** declared value(s) first; the default is in **bold**. `n/a` = no workload (Keystone-native or config only).
+**Historical survey notation:** candidate modes/defaults from the original inventory appear below (bold was the proposed default); they are not accepted deployment policy. The [accepted contract](package-deployment-capabilities-contract.md) governs current capabilities/defaults; the candidate modes below are historical inventory, not the current schema. `n/a` means no workload.
 
 ### 5.1 Core infrastructure
 
@@ -335,13 +387,12 @@ All read or write `/srv/wildstone/media` or `/downloads` (shared between package
 
 ### 6.2 Wardstone leader
 
-- **Election:** a `coordination.k8s.io/v1` Lease `wildstone-leader` in namespace `wildstone-system`. Every Wardstone runs the elector; only the holder loads cluster-admin.
-- **Credentials:** the admin kubeconfig stays root-only on server nodes (`/etc/rancher/k3s/k3s.yaml`, mode 0600). Non-leaders use a narrow ServiceAccount that can only read/update the Lease and its own Node labels. Agent-only nodes can never become leader (they have no admin kubeconfig) **(design choice)**.
-- **Lease timing:** lease 15 s, renew 10 s, retry 2 s (client-go defaults). Takeover after ~15 s.
-- **Handover on drain:** before its own node is cordoned, the leader releases the Lease (`ReleaseOnCancel`) and waits until another holder is seen, then the new leader continues the rollout from the Plan's recorded step. The rollout state lives in Keystone (the Plan), not in the leader.
-- **Keystone with no leader:** status "Cluster changes paused: no coordinator". Plans with cluster steps queue, host-only ops still work, apps keep running. Shown per node in the Console.
-- **How it applies:** server-side apply with field manager `wildstone-leader`, from typed `WorkloadSpec` → fixed Go templates. No Helm at runtime.
-- **Drift:** a watch on objects with `managed-by: wildstone`; changes not made by the field manager are reported to Keystone as drift (a Plan), the same as `ForeignDrift` today. The leader reverts only when the Plan says so (no new automatic authority, W051 §4.5). Objects without the label are never touched.
+- **Election:** server-node Wardstones coordinate through a Kubernetes Lease in wildstone-system. Lease timing is a tunable detection input, not a failover guarantee.
+- **Authority:** installer/break-glass administrator credentials are separate from least-privilege runtime reconciliation. Runtime credentials cannot alter RBAC/admission or register their own signed-package grants. Server root and retained admin kubeconfigs remain administrator authority.
+- **Leadership loss:** #180 defines cancellation, stale/in-flight request rejection, accepted-revision binding, delete preconditions and replay-safe resumption. A Lease alone does not fence old writers.
+- **Handover:** cancel/drain old leader work before release; resume exact recorded approved steps only after establishing valid authority. Fault tests include a still-powered partitioned old leader.
+- **No leader:** cluster changes pause; running apps remain under Kubernetes. Host-only operations retain their existing bounded authority.
+- **Apply and drift:** typed specs produce fixed objects through server-side apply. Owned-object drift is reported as a Plan and reverted only with the required approval; labels are ownership metadata, not authorization by themselves.
 
 ### 6.3 Keystone in the cluster
 
@@ -355,31 +406,28 @@ All read or write `/srv/wildstone/media` or `/downloads` (shared between package
   3. `keystone-bootstrap.yml` asks the local Wardstone (local socket, root only) to apply the fixed `management` workload once.
   4. Keystone starts, creates its CA, prints the join token as today.
   5. Keystone records `management` in the Statefile as an installed package with the same revision. From here every change is a Plan.
-- **Break-glass:** the host CLI (`keystone owner …`) must work when ingress is down. On k3s it becomes `wild-recover`, a host binary that talks to Keystone's pod through the local Wardstone, not through Caddy **(design choice; ADR-W033 A7)**.
+- **Break-glass:** the host CLI (`keystone owner …`) must work when ingress is down. On k3s it becomes `wild-recover`, a host binary supporting diagnostics and fixed bootstrap/restore even when Keystone cannot start. When cluster API or storage is unavailable, use documented off-host rebuild/restore; a proxy to Keystone alone is insufficient (ADR-W033 A7; #166).
 - **Migration from host Keystone:** stop the systemd unit, copy `/var/lib/wildstone/keystone` into the PVC with a one-time import Job, start the pod, keep the old directory read-only until the owner confirms (slice 10).
 
-### 6.4 Placement and `availability`
+### 6.4 Placement and deployment capabilities
 
-| Value | Kubernetes shape |
-|---|---|
-| `pinned` | `nodeSelector` on a Wardstone label (`wildstone.dev/has-zigbee=true`) or `kubernetes.io/hostname`; `Recreate` |
-| `failover` | `replicas: 1`, `Recreate`, Longhorn RWO volume, short `tolerationSeconds` for node loss (30 s instead of 300 s) **(to tune in slice 14)** |
-| `replicated` | `replicas: N`, `RollingUpdate` with `maxUnavailable: 0, maxSurge: 1`, PDB `minAvailable: 1`, soft pod anti-affinity |
-| `offload` | main Deployment (`failover`) + a worker Deployment with its own selector (slice 15) |
+#179 defines the reviewed contract; this plan does not choose a replacement schema. The historical survey in §5 records candidate modes, not deployment defaults or proof of safety.
 
-The household toggle "Keep this running if a machine fails" chooses `failover` (on) vs. `pinned` to the current node (off).
+Placement requirements, supported relocation, replica safety, component workers and selected household policy are separate. A specific radio and a hardware class differ; host networking does not inherently pin a workload to one exact machine. Default-render-only lint is insufficient for conditional device parameters.
+
+Singleton workloads use Recreate with declared outage; eligible replicated stateless components may use RollingUpdate and PDBs. Worker topology is a separate application capability. Storage ownership, capacity and full dependency readiness are checked before offering relocation; measure end-to-end recovery in #180, not from tolerationSeconds alone.
 
 ### 6.5 Policy and admission
 
 Two layers, as today:
 
 1. **Keystone policy** (`keystone/policy/policy.go:22-32`) at proposal time. Unchanged; add rules for `availability`.
-2. **Cluster admission** at apply time, so even a compromised leader template cannot run a privileged pod:
+2. **Cluster admission** at apply time, to reject malformed workload output from runtime translation. Runtime credentials cannot change these controls; unrestricted administrator compromise is outside this boundary:
    - Pod Security Admission: `restricted` on `wildstone-apps`; `privileged` on `kube-system`, `longhorn-system`, `wildstone-system` and `wildstone-host`. PSA cannot express "host network for this one package only", so `wildstone-host` relies on the policy below, not on PSA.
    - ValidatingAdmissionPolicy (CEL), bound to **both** `wildstone-apps` and `wildstone-host` (and to any namespace labelled `wildstone.dev/managed=true`):
      - everywhere: refuse `privileged`, `hostPID`, `hostIPC`; images must be digest-pinned (`@sha256:`), like `ops.go:536`;
      - in `wildstone-apps`: refuse `hostNetwork`, `hostPath`, added capabilities and device resources outright;
-     - in `wildstone-host`: allow only the grants the pod's `wildstone.dev/host-access` annotation names, and only when that names a signed package whose manifest digest the leader registered (#38). Each grant is still narrowed:
+     - in `wildstone-host`: allow only the grants the pod's `wildstone.dev/host-access` annotation names, and only when that names a signed package whose manifest digest an independently authorized admission registrar verified (#38); runtime workload credentials cannot register their own grants. Each grant is still narrowed:
        - `hostPath` only for the paths in `hostSystemMounts` (`wardstone/internal/agent/devices.go:93-99`), read-only, same path inside;
        - capabilities only from `keystone/resource/hostaccess.go` `ContainerCapabilities`;
        - device resources only those the package declares;
@@ -471,65 +519,58 @@ Per package, as a Plan with named steps (slice 12):
 | # | Slice | Size | Needs ADR change | Draft | Issue |
 |---|---|---|---|---|---|
 | 0 | Prerequisites: accepted revision + bounded approval (#128 G1/G2) | L | No | [00](w050-slices/00-prerequisites-g1-g2.md) | #157 |
-| 1 | Wardstone runtime seam + `availability` field (#151) | M | No | [01](w050-slices/01-wardstone-runtime-seam.md) | #151 |
+| 1 | Wardstone Docker encapsulation (merged #177) + devices/deployment parser and opt-in lint (#178) | M | ADR-W005 A5 / accepted #179 contract | [01](w050-slices/01-wardstone-runtime-seam.md) | #151 |
 | 2 | Keystone backend seam + typed cluster ops (design + Docker-only refactor) | L | ADR-W003 amendment (new arms) | [02](w050-slices/02-keystone-backend-seam.md) | #158 |
 | 3 | Engine on one node: signed playbooks, k3s, add-ons, admission, leader | L | ADR-W014 amendment (Ansible step) | [03](w050-slices/03-engine-bootstrap-single-node.md) | #159 |
 | 4 | First stateless package on k3s (`tools-it-tools`) behind Docker Caddy | M | No | [04](w050-slices/04-first-stateless-package.md) | #160 |
-| 5 | Volumes on Longhorn + `monitoring` (Uptime Kuma) + rolling update | M | No | [05](w050-slices/05-volumes-and-uptime-kuma.md) | #161 |
+| 5 | Volumes on Longhorn + `monitoring` singleton update/rollback | M | No | [05](w050-slices/05-volumes-and-uptime-kuma.md) | #161 |
 | 6 | Secrets, ConfigFiles, SeedFiles on k3s | L | **ADR-W012** amendment | [06](w050-slices/06-secrets-config-seed.md) | #162 |
 | 7 | Backup Jobs, hooks, restore, exit drill on k3s | L | ADR-W018 note | [07](w050-slices/07-backup-restore-exit-drill.md) | #163 |
 | 8 | Host updates on one node: `RunPlaybook` | M | No (W050 §2.7 covers it) | [08](w050-slices/08-runplaybook-single-node.md) | #164 |
 | 9 | Ingress + identity on k3s, per-hostname cutover | XL | No | [09](w050-slices/09-ingress-identity.md) | #165 |
 | 10 | Keystone as the `management` failover package | L | ADR-W051 acceptance | [10](w050-slices/10-keystone-in-cluster.md) | #166 |
 | 11 | Host-bound packages: devices, labels, `pinned`, host networking | XL | No | [11](w050-slices/11-host-bound-packages.md) | #167 |
-| 12 | Live-install migration tooling (per package, with rollback) | L | `docs/migration.md` update | [12](w050-slices/12-live-migration-tooling.md) | #168 |
+| 12 | Early bounded migration proof, then household tooling (separate children) | L | `docs/migration.md` update | [12](w050-slices/12-live-migration-tooling.md) | #168 |
 | 13 | Package migration waves A / B / C | 3 × L | No | [13](w050-slices/13-package-waves.md) | #169 |
-| 14 | Multi-node: join, placement, failover, rolling host updates, leader handover | XL | Possibly (2-node wording) | [14](w050-slices/14-multi-node.md) | #170 |
+| 14 | Production multi-node after early #180 proof: join, placement, rolling updates | XL | Possibly (2-node wording) | [14](w050-slices/14-multi-node.md) | #170 |
 | 15 | `replicated` and `offload` | L | No | [15](w050-slices/15-replicated-offload.md) | #171 |
 | 16 | Retire the Docker backend | M | ADR-W050 status note | [16](w050-slices/16-retire-docker.md) | #172 |
 | 17 | Talos edition | XL | New ADR | [17](w050-slices/17-talos-edition.md) | #173 |
 
-**Changes from the starting skeleton, and why:**
+**Execution order:** use the [gate table](#revised-execution-gates), not ascending slice numbers. #179 capability review runs alongside Docker-only #158. #129 acceptance includes the early #168 proof and does not wait for #165. #180 is the first multi-node proof; #170 is later productization.
+
+| Gate work outside numbered slices | Required before |
+|---|---|
+| #179 capability/policy contract — passed in #182 | #178 release 1 implementation; later runtime consumers cite accepted contract |
+| Early #168 migration-proof child | #129 acceptance; no #165 prerequisite |
+| #180 authority/custody design review | #159/#162 runtime implementation |
+| #180 fault evidence, after #129 | Core household cutover and #169 catalog waves |
+
+**Decomposition rationale:**
 - **Added slice 2** (Keystone seam): the reconciler is per-node and Docker-shaped ([§3.2](#32-keystone)); doing this inside slice 4 would make it XL and hard to review.
 - **Split "first package" into 4 and 5:** `tools-it-tools` has no volume or secret, so slice 4 proves only the apply path. Uptime Kuma needs a volume; that becomes slice 5.
 - **Moved `RunPlaybook` to its own slice (8):** #129 asks for an OS update as a Plan step on one node; it does not need multi-node.
 - **Added Keystone-in-cluster as its own slice (10):** it has its own bootstrap and data move ([§6.3](#63-keystone-in-the-cluster)).
 - **Ingress/identity moved after storage and backup:** the coexistence trick ([§6.8](#68-networking-and-identity)) lets apps move first, so the riskiest cutover happens once, with backups proven.
 
-**Dependency graph:**
+**Proof and rollout graph (G1 includes parallel #158/#179 as described above):**
 
 ```mermaid
-graph TD
-  S0[0 G1/G2] --> S3
-  S1[1 Wardstone seam] --> S2[2 Keystone seam]
-  S2 --> S3[3 Engine on one node]
-  S3 --> S4[4 Stateless app]
-  S4 --> S5[5 Volumes + Uptime Kuma]
-  S5 --> S6[6 Secrets/config/seed]
-  S5 --> S7[7 Backup + exit drill]
-  S6 --> S7
-  S3 --> S8[8 RunPlaybook one node]
-  S6 --> S9[9 Ingress + identity]
-  S7 --> S9
-  S9 --> S10[10 Keystone in cluster]
-  S7 --> S10
-  S6 --> S11[11 Host-bound]
-  S7 --> S12[12 Live migration tooling]
-  S9 --> S12
-  S12 --> S13[13 Package waves]
-  S11 --> S13
-  S10 --> S14[14 Multi-node]
-  S8 --> S14
-  S13 --> S14
-  S14 --> S15[15 replicated/offload]
-  S13 --> S16[16 Retire Docker]
-  S10 --> S16
-  S16 --> S17[17 Talos]
+flowchart TD
+  F["G1 foundation"] --> P["G3 small proof #129"]
+  C["G2 passed: contract #179"] --> P
+  P --> M["G4 fault proof #180"]
+  M --> R["G5 core recovery"]
+  R --> W["G6 catalog #169"]
+  W --> N["G6 production #170"]
+  N --> D["G7 retire Docker #172"]
+  N --> O["Optional workers #171"]
+  D --> T["Optional Talos #173"]
 ```
 
-**Mapping to #129:** slices 3–8 together are #129's proof. #129's "recommendation for owner review" is written at the end of slice 8, before slice 9 starts. If #129 says no, slices 9+ stop and only 0–2 (useful on their own) stay.
+**Mapping to #129:** slices 3–8 provide evidence; the early #168 proof adds forward/reverse migration preserving new state. The owner accepts the complete report in #129. A revise outcome returns to the failing slice/child; reject stops core/catalog migration. #164 alone does not close evaluation.
 
-**Alpha:** none of this gates alpha (#13, #15). Slices 0–2 can land on the Docker backend at any time after alpha.
+**Alpha:** this roadmap does not gate alpha. Merged #177 remains useful Docker encapsulation; all remaining work requires explicit bounded scheduling.
 
 ---
 
@@ -545,7 +586,7 @@ graph TD
 | Package translation lint: every package translates and passes admission | GitHub-hosted, k3d | k3s | every PR touching `packages/` |
 | e2e smoke in a QEMU VM (`testing/e2e`, `.github/workflows/e2e.yml`) | GitHub-hosted (KVM) | Docker **and** k3s (matrix) | manual + nightly |
 | Exit drill (`exit-drill.yml`) | GitHub-hosted | Docker (today) + k3s in a QEMU VM | weekly + PRs touching backup |
-| Multi-node (3 VMs), failover, rolling host update, power-loss | Owner-operated (Proxmox, `testing/e2e/proxmox.go`, #16) | k3s | before each slice-14+ merge, run by the owner |
+| Multi-node (3 VMs), failover, rolling host update, power-loss | Owner-operated (Proxmox, `testing/e2e/proxmox.go`, #16) | k3s | for #180 early proof and before each production multi-node merge, run by the owner |
 
 - **Why k3d for policy tests:** fast (≈ 30 s start), real API server and admission. It cannot test Longhorn (needs iSCSI on the host) or kube-vip, so those stay in the QEMU VM path.
 - **Why QEMU for e2e and drills:** real k3s with systemd, Longhorn and reboot; already works on hosted runners (`testing/e2e/README.md`).
@@ -586,62 +627,40 @@ graph TD
 | O4 | Two-node households | Supported, "partial" banner; k3s stays single server (SQLite) at 2 nodes; recommend a third small node for real HA |
 | O5 | Caddy copies | One `failover` copy until shared certificate storage is proven (W050 §5) |
 | O6 | Jellyfin transcode offload | Defer; evaluate rffmpeg in slice 15 only with a measured need. iGPU on the main pod first |
-| O7 | Where secret values live (D3) | Kubernetes Secrets, leader-written |
+| O7 | Secret custody and handover (D3) | Review #180 canonical source, versions, key recovery and ADR-W012 before #162 |
 | O8 | Egress NetworkPolicy | Not in W050 scope; ingress default-deny only |
 | O9 | Shared folders without a NAS (D4) | **Decided:** the machine's own disk; those apps don't move. A NAS/NFS share is optional on any topology |
 | O10 | G1/G2 ordering (D6) | G1 and G2 before slice 3 |
 | O11 | Chat adapters and agent-hermes ship a host binary | Publish them as OCI images in `release.yml` before wave B |
 | O12 | Namespaces | `wildstone-system`, `wildstone-apps`, `wildstone-host` |
 | O13 | Test runner (D5) | Owner runs multi-node tests manually; no self-hosted runner |
-| O14 | Agent-only nodes as leader | No: only server nodes can lead |
+| O14 | Agent-only nodes as leader | Server-only election initially; reviewed scoped runtime credentials, not leader-only loading of admin |
 
 ---
 
 ## 10. The first three slices in detail
 
-### Slice 0: accepted revision and bounded approval (#128 G1/G2)
+Use the current drafts as the detailed implementation specifications; these links avoid duplicating scope and defaults here.
 
-- **Why first:** the leader will act on an approval across machines. Today one approved Plan lets every Medium/High step in that tick through (`keystone/reconcile/loop/loop.go:267`), and approvals and file writes are not one transaction (`docs/audit/findings/566-iac-architecture.md:97-98`).
-- **G1:** every apply runs against an immutable accepted revision (Git commit ID) of the Statefile, not the working tree.
-- **Contract:** [`desired-state-publication-and-approval-contract.md`](desired-state-publication-and-approval-contract.md) already proposes both; slice 0 implements it.
-- **G2:** an approval names exact (kind, name, action, spec digest) tuples. The reconciler applies Medium/High steps only when the tuple matches.
-- **Done when:** concurrent-approval and crash tests in `keystone/reconcile/loop` prove an unrelated drift step is not applied; e2e and exit drill pass.
-- **Size L:** touches Plans, approvals, loop and Statefile; needs careful tests.
+- [Slice 0: immutable accepted revision and bounded approvals](w050-slices/00-prerequisites-g1-g2.md), #157.
+- [Slice 1: completed Docker encapsulation and accepted capability contract implementation](w050-slices/01-wardstone-runtime-seam.md), #151/#177/#178/#179.
+- [Slice 2: Docker-only Keystone extraction and provisional typed operation design](w050-slices/02-keystone-backend-seam.md), #158. This may proceed alongside #179 when scheduled.
 
-### Slice 1: Wardstone runtime seam + `availability` (#151)
-
-- **Scope:** `wardstone/internal/agent/`: a `runtimeBackend` interface with the 13 methods the Docker client exposes today (`docker.go:172-498`: inspect, create, start, stop, logs, pull, remove, stats, volumeInspect/Create, networkInspect/Create, pruneImages), plus the raw `DELETE` at `ops.go:708`. `ops.go`, `seed.go:75`, `diskspace.go:30` call the interface. `keystone/pkgspec/pkgspec.go`: optional `availability: [..]` with lint in `keystone/pkgtool/lint.go`.
-- **Recommended additions to #151:**
-  - say plainly that the seam is per-node and the cluster-wide seam is slice 2;
-  - default rules: device or host network → `pinned`; any Volume → `failover`; no Volume and no state → `replicated, failover`;
-  - lint: `replicated` refused when any container mounts a Volume read-write (covers SQLite without parsing images).
-- **Done when:** #151's own acceptance list, plus `grep -n "a.docker\." wardstone/internal/agent/*.go` finds nothing outside the Docker backend file.
-- **Size M:** mechanical refactor + one schema field + 73 package edits.
-
-### Slice 2: Keystone backend seam + typed cluster ops
-
-- **Scope:**
-  - `keystone/reconcile`: split into *diff/approve* (unchanged) and a `Translator` per backend that turns steps into ops. Move Docker-only code (`ensureNodePrereqs`, `specHash`, `containerEnsureOp`, `ingressaddr.go`, host aliases) into the Docker translator.
-  - `keystone/reconcile/loop/loop.go:685-696`: add a "cluster" group for resources whose package runs on k3s (empty until slice 4).
-  - `keystone/backup`: no change (seam exists at `backup.go:59`).
-  - `proto/wardstone/v1/wardstone.proto`: **design only, reserved field numbers** for `ApplyWorkload`, `DeleteWorkload`, `ObserveWorkload`, `WorkloadLogs`, `RestartWorkload`, `RunJob`, `ObserveJob`, `EnsureClusterSecret`, `EnsureClusterConfig`, `CordonDrain`, `Uncordon`, `RunPlaybook`. Each is a typed message; none carries free YAML or a command string.
-  - `keystone/internal/fakenode`: a `FakeCluster` that records leader ops.
-- **Done when:** reconcile output and Plans are byte-identical on every existing test; a new test shows the Docker translator is the only producer of Docker-shaped ops; proto reserves numbers with comments.
-- **Size L:** `reconcile.go` is 2,308 lines with many Docker assumptions.
+See the [gate table](#revised-execution-gates) for decision-makers, evidence and revision routes. The historic inventory uses the cited code revision; it is not a new implementation audit.
 
 ---
 
 ## 11. Proposed ADR amendments
 
-Do not edit the ADRs in this PR. Proposed for the owner:
+ADR-W050 A1 records this review's decisions. Further protocol, custody, installer and recovery amendments below remain owner decisions before their implementation slices:
 
 | ADR | Proposed change | Reason |
 |---|---|---|
 | **W050 §3 step 1** | "Runtime seam" covers **two seams**: Wardstone-internal (#151) and Keystone translator (slice 2) | Keystone's reconciler is per-node and Docker-shaped ([§3.2](#32-keystone)) |
-| **W050 §2.2** | Only **server** nodes may hold the leader Lease | Agent nodes must never hold admin credentials |
+| **W050 A1** | Server-only election; runtime/admin credential split and Lease limitations | Election does not revoke root or fence old operations |
 | **W050 §2.7** | Add the playbook manifest signature and "typed params per playbook, rendered to a file; no free extra-vars" | Closes a gap where `RunPlaybook` params could become a back door |
 | **W003** | New arms (list in slice 2); the rule "no op carries manifests, YAML or commands" | Keeps the no-shell rule meaningful with a cluster API behind it |
-| **W012** | On k3s, secret values are delivered as Kubernetes Secrets (encrypted at rest, written only by the leader); the node store remains the source for export/import | Today values only exist sealed on one node (`wardstone/internal/agent/secrets.go`); pods on any node need them |
+| **W012** | On k3s, secret values are delivered as Kubernetes Secrets (encrypted at rest, written only by the leader); the canonical source and export/import authority must be resolved by the reviewed custody contract | Today values only exist sealed on one node (`wardstone/internal/agent/secrets.go`); pods on any node need them |
 | **W014** | Installer step "install `ansible-core` and run a signed local playbook" | Already in W050 §2.7; W014 should say it |
 | **W018** | Exit drill runs per backend during coexistence | Release-blocker semantics apply to both |
 | **W051 §4.1** | Add: Keystone's volume `ReadWriteOncePod`; Keystone bootstrap by the installer, then adopted as a package | Matches [§6.3](#63-keystone-in-the-cluster) |

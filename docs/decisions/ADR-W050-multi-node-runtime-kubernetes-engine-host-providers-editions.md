@@ -251,3 +251,23 @@ under these limits:
 - Each edition needs its own CI and exit drill once Talos exists.
 - The ground rules now also bind cluster credentials, admission policy
   and playbooks, not only the Wardstone wire format.
+
+## Amendments
+
+### A1. Implementation proof gates and safety contracts (2026-10-24, #181)
+
+The Kubernetes direction remains accepted. This amendment changes the implementation details above for the reasons below; see the [migration plan gates](../design/w050-migration-plan.md#revised-execution-gates) for acceptance evidence and revision routes.
+
+- **Implementation state:** #177 merged as `97628db`, completing Docker-only encapsulation. G2 passed when the owner accepted #179 in merged #182. #178 is open, no longer a draft, and implements release 1 devices/deployment parser support and opt-in lint with no catalog edits or runtime behavior.
+- **Capabilities:** §2.3 and the [accepted package deployment capabilities contract](../design/package-deployment-capabilities-contract.md), including §9 owner decisions, govern implementation. Refer there instead of duplicating schema requirements in this amendment.
+- **Proof order:** #129 is a small disposable deployment with 1–3 service migrations, backup/replacement restore and rollback preserving new writes. #180 proves multi-node safety before #169 waves; #170 remains later productization. This resolves architectural uncertainty before catalog investment.
+- **Authority:** Keystone owns product desired state and approvals; Kubernetes controllers implement that intent. Separate scoped runtime reconciliation credentials from bootstrap/break-glass administration, because retained server root/admin kubeconfigs remain authority even when not loaded by the leader.
+- **Lease versus fencing:** a Lease coordinates election, not exclusive effective authority. #180 must define leadership-loss cancellation, stale/in-flight rejection, revision checks and replay-safe resumption, because an old leader may still act during a partition.
+- **Admission:** runtime credentials cannot change policies/RBAC or mint host grants. Admission constrains malformed runtime output; it does not contain an unrestricted administrator who can alter it.
+- **Secrets:** review canonical custody, cross-leader access, versions and encryption-key/off-host recovery before implementation. Missing local state must not regenerate an existing secret, because leadership can move between nodes.
+- **Storage:** prove detach/reattach, partition and returning-node single-writer behavior. RWOP and short eviction timeouts alone do not establish safe or fast recovery.
+- **Availability claims:** quorum, healthy replicas, eligible capacity and independent dependency/failure domains determine protection. Node count alone is insufficient.
+- **Rollout:** singleton Recreate updates have an outage and cannot retain the terminated old pod on failure. Image rollback requires declared data/schema compatibility or validated restore alongside.
+- **Recovery:** host diagnostics and fixed bootstrap/restore must work when Keystone cannot start, with an off-host procedure for unavailable cluster API/storage. Actual Keystone recovery must pass before household migration; a proxy to its API is insufficient.
+
+No runtime experiment is authorized by this amendment without a scheduled bounded issue and an owner-selected disposable target.

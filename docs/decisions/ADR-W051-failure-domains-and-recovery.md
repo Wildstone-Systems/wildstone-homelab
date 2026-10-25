@@ -130,3 +130,7 @@ Kept unchanged: the observed failures, separating management from apps, recovery
 - A one-machine install still shares host, power and storage. This ADR makes failures contained and recoverable there, not survivable.
 - Open: PriorityClass values, the external observer (second node or off-site check), how packages declare a corruption signal, and numeric recovery targets.
 - No automatic HA, native LXC support or universal application adapter is claimed to exist.
+
+## Implementation review clarification — 2026-10-24
+
+Status remains proposed. Follow the [W050 revised proof gates](../design/w050-migration-plan.md#implementation-review-and-proof-gates--2026-10-24), #179 and #180. Priority and Guaranteed QoS reduce eviction risk but do not guarantee management survives disk/PV exhaustion. RWOP/Recreate do not alone prove partition-safe failover. Host recovery must work when Keystone cannot start and document offline rebuild/restore when cluster API/storage is unavailable; a proxy to Keystone is insufficient. Node-count banners must account for actual quorum, storage replica health, independent failure domains and eligible capacity. Prove the actual management recovery set before household migration is offered.

@@ -1,44 +1,31 @@
-# W050 slice 15: `replicated` and `offload`
+# W050 slice 15: Replicated workloads and optional worker components
 
-> Tracked in #171 (labels `W050`, `POST Alpha`, `agent:blocked`). This file is the source draft; the issue is the live copy.
+> Tracked in #171. Source draft; the issue is the live execution copy. Post-alpha; owner scheduling of bounded work remains required. See the [execution gates](../w050-migration-plan.md#revised-execution-gates).
 
 ## Goal
 
-Stateless packages can run several copies behind one Service; Jellyfin (and possibly Immich ML) can send heavy work to other machines.
-
-## User-visible outcome
-
-- Package setting "Copies: 1 / 2 / 3" when supported.
-- Jellyfin: "Use other machines for video conversion" when measured useful.
+Support safe multiple replicas and separately measured worker offload.
 
 ## Scope
 
-- `replicated`: `replicas`, `RollingUpdate` (`maxUnavailable: 0`, `maxSurge: 1`), PDB, soft anti-affinity; packages from §5.5.
-- `offload`: worker Deployment; evaluate rffmpeg for Jellyfin and Immich ML as a separate Deployment; decide with measurements.
-- Caddy with more than one copy only if shared certificate storage is proven (O5).
-
-## Non-goals
-
-Autoscaling.
+- Replicated workload child: Service, replicas, RollingUpdate, PDB and anti-affinity under reviewed policy.
+- Worker/offload child: distinct main and worker components; evaluate Jellyfin and Immich ML with measurements, without making offload an exclusive placement mode.
+- Caddy replicas require proven shared certificate storage; conservative singleton otherwise.
 
 ## Dependencies
 
-Slice 14.
+#170 and accepted #179 contract; application-specific safety declarations.
 
 ## Acceptance criteria
 
-- [ ] Rolling update of a 2-copy app with zero failed requests (load probe).
-- [ ] Node drain with PDB keeps one copy serving.
-- [ ] Offload measurement report before enabling any offload default.
+- [ ] Two-copy safe app updates without failed requests under a defined load probe; drain/PDB preserves required capacity.
+- [ ] Tests reject unsupported replica counts or incompatible state sharing.
+- [ ] Worker report demonstrates utility before defaults change; placement and recovery remain independently declared.
 
-## Risks
+## Non-goals
 
-Apps that claim statelessness but keep local state.
+Autoscaling or an unreviewed capability schema.
 
-## Size
+## Size and decomposition
 
-**L.** Two shapes plus measurement work.
-
-## ADR amendment
-
-No.
+L tracker; separate replica rollout from worker experiments.

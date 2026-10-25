@@ -1,52 +1,36 @@
-# W050 slice 14: multi-node
+# W050 slice 14: Production multi-node onboarding and rolling host updates
 
-> Tracked in #170 (labels `W050`, `POST Alpha`, `agent:blocked`). This file is the source draft; the issue is the live copy.
+> Tracked in #170. Source draft; the issue is the live execution copy. Post-alpha; owner scheduling of bounded work remains required. See the [execution gates](../w050-migration-plan.md#revised-execution-gates).
 
 ## Goal
 
-A household adds machines from the Console. Apps marked "keep running" restart on another machine when one dies. Host updates roll one machine at a time.
-
-## User-visible outcome
-
-- "Add a machine" shows one installer command. At 2 nodes: "Partly protected" banner. At 3: "Any one machine can fail".
-- "Keep this running if a machine fails" switch per package.
-- "Update all machines, one at a time" Plan.
+Productize proven join, placement/failover and rolling host updates for households.
 
 ## Scope
 
-- Join: Keystone gives the k3s join secret to the new Wardstone after mTLS join; `k3s-agent.yml` or `k3s-server.yml`.
-- At 3 servers: migrate k3s datastore from SQLite to embedded etcd (`--cluster-init`) as a Plan **(inferred: k3s supports this; prove)**.
-- Longhorn copies to 2; `failover` toleration tuning; soft anti-affinity for management.
-- Rolling host updates: `CordonDrain` → `RunPlaybook` → wait Ready + Longhorn rebuilt → `Uncordon`; stop on first failure; servers first for k3s.
-- Leader handover before its own drain; "no coordinator" state in Console.
-- Backup Job placement re-proved with volumes on other nodes.
-- External observer for host loss (W051 §4.7): document an off-site check; second node watches the first.
-
-## Non-goals
-
-`replicated`, `offload`; Talos.
+- Split production onboarding/placement/failover and rolling host updates into bounded children, reusing #180 harness.
+- Join delivers k3s secret after mTLS enrollment; verify SQLite-to-etcd conversion and server roles on the declared topology.
+- Expose actual protection: quorum, healthy storage replicas, eligible capacity, independent failure domains and dependency single points. Node count alone never shows 'any one machine can fail'.
+- Tune failover from measured detection, detach/reattach and readiness time; choose replica counts with evidence.
+- Cordon/drain, signed update, wait Ready plus storage rebuild, uncordon; stop on error, server-first k3s upgrade and safe leader handover.
+- External observer and power-restoration readiness tests include documented topology limitations.
 
 ## Dependencies
 
-Slices 8, 10, 13; ADR-W051 accepted; owner-operated test cluster (#16, D5).
+#164, #166, #169 and accepted #180 proof; ADR-W051 accepted; owner-operated disposable test environment under ADR-W002. #180 never depends on this slice or catalog waves.
 
-## Acceptance criteria (owner-run evidence records)
+## Acceptance criteria
 
-- [ ] Join a second and third node from the Console.
-- [ ] Power off the node running Keystone: one Keystone comes back elsewhere; no second writer (W051 gate 5).
-- [ ] Power off a node running a `failover` app: back within the stated time.
-- [ ] Rolling OS update across 3 nodes with an app staying up.
-- [ ] Leader handover during its own drain; Plan resumes.
-- [ ] Power-loss chain (W051 gate 3) completes with readiness deadlines.
+- [ ] Second/third-node Console join and declared role conversion work.
+- [ ] Power loss, partition and returning-old-node tests preserve one writer and meet measured service/data objectives.
+- [ ] Rolling host update and leader handover resume exact approved steps without stale replay; interruption matches workload policy.
+- [ ] UI protection status follows observed quorum/storage/capacity/dependencies, not node count.
+- [ ] Owner accepts production topology evidence; failures return to #170 child or #180 safety contract.
 
-## Risks
+## Non-goals
 
-Split-brain storage, quorum loss at 2 nodes, untestable in hosted CI.
+Initial architectural proof, replicas/workers, Talos.
 
-## Size
+## Size and decomposition
 
-**XL.** The cluster story itself; split into two issues.
-
-## ADR amendment
-
-Possibly W050 §2.8 wording for 2 nodes after measurements.
+XL tracker; split onboarding/failover and rolling updates.
