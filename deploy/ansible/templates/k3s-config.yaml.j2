@@ -1,0 +1,16 @@
+# Managed by Wildstone (deploy/ansible/k3s-server.yml). Local edits are
+# replaced on the next run.
+write-kubeconfig-mode: "0600"
+secrets-encryption: true
+protect-kernel-defaults: true
+disable:
+  - traefik
+  - servicelb
+  - local-storage
+kube-apiserver-arg:
+  # Cluster-wide Pod Security defaults (k3s hardening guide).
+  - "admission-control-config-file=/etc/wildstone/k3s/pod-security.yaml"
+kube-controller-manager-arg:
+  # Never force-detach a volume on a timer: stateful failover waits for the
+  # owner to confirm the old machine is off (safety contract #180, §5).
+  - "disable-force-detach-on-timeout=true"

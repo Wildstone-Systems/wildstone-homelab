@@ -31,4 +31,7 @@ Apps, Keystone pod, device integration not needed by proof, full multi-node prod
 
 ## Size and decomposition
 
-L; bootstrap, signing and authority checks.
+L, in parts:
+- **3a:** signed playbook set (`wardstone/internal/playbook`, `wild-playbooks`); `prereqs.yml`, `k3s-server.yml` and `engine-addons.yml` (namespaces with Pod Security levels); `scripts/engine-try.sh`; the owner's throwaway-machine guide (`docs/operations/w050-engine-try.md`).
+- **3b:** Longhorn and kube-vip from pinned, vendored manifests; per-node runtime ServiceAccounts and RBAC; the fencing ValidatingAdmissionPolicy; Wardstone Lease election and epoch reporting.
+- **3c:** wiring into `install.sh` and release signing, `HostFacts` engine/leader fields, and the QEMU CI test.

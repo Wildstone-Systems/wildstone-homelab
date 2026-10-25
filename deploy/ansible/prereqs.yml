@@ -1,0 +1,37 @@
+# Host prerequisites for the k3s engine (W050 slice 3, #159).
+# Idempotent; run on every server before k3s-server.yml.
+- name: Wildstone engine prerequisites
+  hosts: localhost
+  connection: local
+  become: true
+  gather_facts: true
+  tasks:
+    - name: Refuse anything but Debian or Ubuntu
+      ansible.builtin.assert:
+        that: ansible_facts['os_family'] == 'Debian'
+        fail_msg: "The engine bootstrap supports Debian and Ubuntu only; this is {{ ansible_facts['distribution'] }}."
+
+    - name: Install packages the engine and its storage need
+      ansible.builtin.apt:
+        name: [curl, open-iscsi, nfs-common]
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    # k3s runs with protect-kernel-defaults, which refuses to start unless
+    # these are already set (the values the kubelet would otherwise change).
+    - name: Kernel settings the kubelet requires
+      ansible.builtin.copy:
+        dest: /etc/sysctl.d/90-wildstone-k3s.conf
+        mode: "0644"
+        content: |
+          vm.panic_on_oom = 0
+          vm.overcommit_memory = 1
+          kernel.panic = 10
+          kernel.panic_on_oops = 1
+      notify: Apply kernel settings
+
+  handlers:
+    - name: Apply kernel settings
+      ansible.builtin.command: sysctl --system
+      changed_when: true
