@@ -71,14 +71,16 @@ const (
 // resource.ContainerSpec or from the deployment declaration and policy;
 // there is no manifest, patch or free-form field to carry anything else.
 type WorkloadSpec struct {
-	Name        string
-	Image       string
-	Command     []string
-	Env         map[string]string
-	Ports       []string
-	Mounts      []resource.Mount
-	Devices     []resource.DeviceMapping
-	Resources   *resource.ContainerResources
+	Name      string
+	Image     string
+	Command   []string
+	Env       map[string]string
+	Ports     []string
+	Mounts    []resource.Mount
+	Devices   []resource.DeviceMapping
+	Resources *resource.ContainerResources
+	// ShmSize is the container's /dev/shm size, as Docker's --shm-size.
+	ShmSize     string
 	HostNetwork bool
 	Security    WorkloadSecurity
 	Replicas    int
@@ -152,6 +154,13 @@ func (clusterTranslator) applyWorkload(r resource.Resource, decl pkgspec.Compone
 		return ClusterRequest{}, fmt.Errorf("cluster: %s: a write needs its accepted revision, plan step and leader epoch", r.Metadata.Name)
 	}
 	spec := r.Container
+	// A Deployment's pods always restart. A spec that asks for anything
+	// else cannot be carried, so it is refused rather than changed.
+	switch spec.Restart {
+	case "", "always", "unless-stopped":
+	default:
+		return ClusterRequest{}, fmt.Errorf("cluster: %s: restart %q has no cluster equivalent; a workload always restarts", r.Metadata.Name, spec.Restart)
+	}
 	replicas := 1
 	if policy.Copies > 1 {
 		if decl.Copies != pkgspec.CopiesMany {
@@ -175,6 +184,7 @@ func (clusterTranslator) applyWorkload(r resource.Resource, decl pkgspec.Compone
 		Mounts:      spec.Mounts,
 		Devices:     spec.Devices,
 		Resources:   spec.Resources,
+		ShmSize:     spec.ShmSize,
 		HostNetwork: spec.HostNetwork(),
 		Security: WorkloadSecurity{
 			ReadOnlyRootfs: spec.ReadOnlyRootfs, NoNewPrivileges: spec.NoNewPrivileges,

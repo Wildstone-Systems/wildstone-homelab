@@ -20,6 +20,8 @@ func clusterContainer() resource.Resource {
 	r.Container.Resources = &resource.ContainerResources{Memory: "512m"}
 	r.Container.ReadOnlyRootfs = true
 	r.Container.CapDrop = []string{"ALL"}
+	r.Container.ShmSize = "1g"
+	r.Container.Restart = "unless-stopped"
 	return r
 }
 
@@ -38,7 +40,7 @@ func TestApplyWorkloadMapsTheContainerAndKeepsTodaysDefaults(t *testing.T) {
 	if w.Image != r.Container.Image || !reflect.DeepEqual(w.Command, r.Container.Command) ||
 		!reflect.DeepEqual(w.Env, r.Container.Env) || !reflect.DeepEqual(w.Ports, r.Container.Ports) ||
 		!reflect.DeepEqual(w.Mounts, r.Container.Mounts) || w.Resources != r.Container.Resources ||
-		!w.Security.ReadOnlyRootfs || !reflect.DeepEqual(w.Security.CapDrop, []string{"ALL"}) {
+		!w.Security.ReadOnlyRootfs || !reflect.DeepEqual(w.Security.CapDrop, []string{"ALL"}) || w.ShmSize != "1g" {
 		t.Fatalf("workload does not carry the container: %+v", w)
 	}
 	if w.Env["TOKEN"] != "secret/app-token" {
@@ -153,4 +155,35 @@ func TestClusterRequestsHaveNoRawPayload(t *testing.T) {
 		}
 	}
 	walk(reflect.TypeOf(ClusterRequest{}), "ClusterRequest")
+}
+
+// Every ContainerSpec field is either carried into the WorkloadSpec or
+// handled on purpose, so a field added to ContainerSpec later fails here
+// until someone decides what the cluster does with it, rather than being
+// dropped from cluster requests without anyone noticing.
+func TestEveryContainerFieldIsCarriedOrHandled(t *testing.T) {
+	carried := map[string]bool{
+		"Image": true, "Env": true, "Ports": true, "Mounts": true, "Command": true,
+		"Devices": true, "CapAdd": true, "CapDrop": true, "ReadOnlyRootfs": true,
+		"NoNewPrivileges": true, "Resources": true, "ShmSize": true, "NetworkMode": true,
+	}
+	handled := map[string]string{
+		"Restart":    "a workload always restarts; any other policy is refused",
+		"RunNetwork": "execution-only metadata for Keystone-run one-shots, never serialized",
+	}
+	tp := reflect.TypeOf(resource.ContainerSpec{})
+	for i := 0; i < tp.NumField(); i++ {
+		name := tp.Field(i).Name
+		if !carried[name] && handled[name] == "" {
+			t.Errorf("ContainerSpec.%s is neither carried into WorkloadSpec nor handled", name)
+		}
+	}
+}
+
+func TestApplyWorkloadRefusesARestartPolicyItCannotCarry(t *testing.T) {
+	r := clusterContainer()
+	r.Container.Restart = "no"
+	if _, err := cluster.applyWorkload(r, pkgspec.ComponentDecl{}, WorkloadPolicy{}, nil, testAuthority); err == nil || !strings.Contains(err.Error(), "restart") {
+		t.Fatalf("err = %v, want a restart refusal", err)
+	}
 }
