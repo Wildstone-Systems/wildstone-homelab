@@ -1,0 +1,13 @@
+# Managed by Wildstone. The authority record (safety contract #180 §2.1).
+# Keystone writes the current leader epoch and the leader's runtime
+# identity here; the fencing admission policy reads it. Bootstrap creates
+# it once, with epoch 0 (no leader, so every runtime write is refused),
+# and never rewrites it: a rerun must not reset Keystone's epoch.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: wildstone-authority
+  namespace: wildstone-system
+data:
+  epoch: "0"
+  leader: ""

@@ -1,0 +1,75 @@
+# Managed by Wildstone. The leader fence (safety contract #180 §2.4).
+# Every write a Wardstone runtime identity makes to a Wildstone object in
+# wildstone-apps must come from the current leader, in the current epoch:
+#   - who: the requester is the leader named in the authority record;
+#   - create and update: the object carries wildstone.dev/epoch = epoch;
+#   - delete: the stored object was stamped with wildstone.dev/delete-epoch
+#     = epoch first (admission sees only the stored object on a delete).
+# Epoch 0 means no leader, so nothing is allowed. A missing or unreadable
+# authority record also refuses everything.
+#
+# It constrains Wardstone only. Kubernetes' own controllers and the k3s
+# admin kubeconfig are not checked here; admission is not a boundary
+# against an administrator (contract §1).
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: wildstone-leader-fence
+spec:
+  failurePolicy: Fail
+  paramKind:
+    apiVersion: v1
+    kind: ConfigMap
+  matchConstraints:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: wildstone-apps
+    resourceRules:
+      - apiGroups: ["apps"]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
+        resources: ["deployments", "statefulsets"]
+      - apiGroups: ["batch"]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
+        resources: ["jobs"]
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
+        resources: ["services", "configmaps", "persistentvolumeclaims", "secrets"]
+  matchConditions:
+    - name: wardstone-runtime
+      expression: "request.userInfo.username.startsWith('system:serviceaccount:wildstone-system:wardstone-')"
+  validations:
+    - expression: >-
+        has(params.data) && 'epoch' in params.data && 'leader' in params.data &&
+        params.data.epoch != '0' && params.data.leader != '' &&
+        request.userInfo.username == params.data.leader
+      message: "refused: only the current leader's Wardstone may write Wildstone objects"
+      reason: Forbidden
+    - expression: >-
+        request.operation == 'DELETE' ||
+        (has(object.metadata.annotations) &&
+         'wildstone.dev/epoch' in object.metadata.annotations &&
+         object.metadata.annotations['wildstone.dev/epoch'] == params.data.epoch)
+      message: "refused: the object's wildstone.dev/epoch is not the current leader epoch"
+      reason: Forbidden
+    - expression: >-
+        request.operation != 'DELETE' ||
+        (has(oldObject.metadata.annotations) &&
+         'wildstone.dev/delete-epoch' in oldObject.metadata.annotations &&
+         oldObject.metadata.annotations['wildstone.dev/delete-epoch'] == params.data.epoch)
+      message: "refused: stamp wildstone.dev/delete-epoch with the current epoch before deleting"
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: wildstone-leader-fence
+spec:
+  policyName: wildstone-leader-fence
+  validationActions: ["Deny"]
+  paramRef:
+    name: wildstone-authority
+    namespace: wildstone-system
+    parameterNotFoundAction: Deny

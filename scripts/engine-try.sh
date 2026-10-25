@@ -42,6 +42,8 @@ echo "== facts for #129 =="
 k3s --version | head -1
 k3s kubectl get nodes -o wide
 k3s kubectl get namespaces -L pod-security.kubernetes.io/enforce
+k3s kubectl get validatingadmissionpolicy,validatingadmissionpolicybinding
+k3s kubectl -n wildstone-system get serviceaccounts,configmap/wildstone-authority
 # k3s renames its main process k3s-server; count both names. The unit's
 # cgroup total also covers containerd and the system pods it started.
 echo "k3s process memory (RSS, MiB): $(ps -o rss= -C k3s-server -C k3s | awk '{s+=$1} END {printf "%.0f", s/1024}')"
