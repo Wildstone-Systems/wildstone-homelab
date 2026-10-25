@@ -12,7 +12,7 @@ This installs a single k3s server, using Wildstone's signed playbooks and review
   - starts k3s with: secrets encryption, kernel-default protection, Pod Security defaults, traefik/servicelb/local-storage off, and **timed force-detach off** (safety contract #180 §5);
   - creates the `wildstone-system`, `wildstone-apps` (restricted) and `wildstone-host` namespaces;
   - creates the **leader fence** (safety contract #180 §2): the authority record (`wildstone-authority`, starting at epoch 0, so nothing is allowed to write yet), the `wildstone-leader-fence` admission policy, a `wardstone-<node>` runtime account per node and a narrow `keystone` account.
-- **Doesn't (yet):** Wardstone leader election and the epoch barrier (slice 3b-2), Longhorn and kube-vip (3b-3), or any app. Keystone and Docker are untouched.
+- **Doesn't (yet):** run Wardstone's leader election (the code is in slice 3b-2; it's wired into Wardstone in 3c), Longhorn and kube-vip (3b-3), or any app. Keystone and Docker are untouched.
 
 ## You need
 
@@ -63,7 +63,7 @@ This installs a single k3s server, using Wildstone's signed playbooks and review
 
    It acts as each identity with `kubectl --as` and plays three leadership terms, including an old leader on another node. It cleans up after itself and puts the epoch back. Every line should say `PASS`, and the last line should read `0 failed`.
 
-   `--rebind` also reproduces a known problem (contract §2.6). After the fence's binding is deleted and re-created, the API server keeps using a frozen copy of the authority record. It should print `the barrier stays shut` and `the fence is frozen open`, then **restart k3s** and show the fence working again. Report both `INFO` lines.
+   `--rebind` also reproduces a known problem (contract §2.6). After the fence's binding is deleted and re-created, the API server keeps using a frozen copy of the authority record. It should print `PASS  the barrier stays shut` and `INFO  ... the fence is frozen open`, then **restart k3s** and show the fence working again. Report that whole section.
 
 ## Checks to run afterwards
 
@@ -77,8 +77,8 @@ This installs a single k3s server, using Wildstone's signed playbooks and review
 | Re-run changes nothing | run step 5 again | Ansible recap shows `changed=0` |
 | A tampered set never runs | `echo "# x" >> /tmp/playbooks/k3s-server.yml`, then step 5 | `a listed file is missing or changed`, and nothing runs |
 | An extra file never runs | `echo "- hosts: all" > /tmp/playbooks/extra.yml`, then step 5 | `a file is not in the signed manifest` |
-| The leader fence holds | step 6, `engine-fence-check.sh` | `40 passed, 0 failed` |
-| The frozen record is caught | step 6, `--rebind` | `44 passed, 0 failed`, plus both `INFO` lines |
+| The leader fence holds | step 6, `engine-fence-check.sh` | `42 passed, 0 failed` |
+| The frozen record is caught | step 6, `--rebind` | `46 passed, 0 failed`, with `the barrier stays shut` and `frozen open` |
 | The epoch is never reset | step 5 again, then `sudo k3s kubectl -n wildstone-system get cm wildstone-authority -o jsonpath='{.data}'` | the recap shows `changed=0`, and the record is unchanged |
 
 The privileged pod for the restricted check:
