@@ -28,19 +28,27 @@ Every rule here is something #180's disposable three-machine test has to prove (
 
 **Why a Lease isn't enough:** Kubernetes leader election tells a Wardstone it is *probably* the leader. Its own docs say it doesn't stop an old leader that hasn't noticed yet. So Wildstone adds a **fencing token** that the Kubernetes API server itself checks.
 
-1. **Keystone issues the epoch.** When a Wardstone wins the Lease, it tells Keystone. Keystone records `leader = <node>, epoch = N+1` in its runtime DB in one transaction, and writes the same epoch to an **authority ConfigMap** in `wildstone-system`. Only Keystone's own narrow ServiceAccount can update that ConfigMap; the runtime ServiceAccount can only read it.
+1. **Keystone issues the epoch.** When a Wardstone wins the Lease, it tells Keystone. Keystone records `leader = <node>, epoch = N+1` in its runtime DB in one transaction. It writes the same two values to an **authority ConfigMap** in `wildstone-system`: the epoch, and the leader's runtime identity. Only Keystone's own narrow ServiceAccount can update that ConfigMap; the runtime ServiceAccounts can only read it.
+   - **Each node has its own runtime ServiceAccount** (`wardstone-<node>`), so the API server can tell which Wardstone sent a request.
 2. **Keystone sends operations only to the current leader,** each stamped with `leader_epoch = N`, `accepted_revision` and `plan_id`/`step_digest` (leader ops §1.3).
 3. **The leader stamps every object it writes** with annotations `wildstone.dev/epoch: N` and `wildstone.dev/revision: <commit>`.
-4. **The API server refuses stale writes.** A ValidatingAdmissionPolicy reads the authority ConfigMap as its parameter. It rejects any create, update or delete of a Wildstone-owned object whose epoch annotation is lower than the current one. An old leader that is still running, but partitioned, gets rejected by the API server itself, not by its own judgement.
+4. **The API server refuses stale writes.** A ValidatingAdmissionPolicy reads the authority ConfigMap as its parameter and checks every request on a Wildstone-owned object:
+   - **Who:** the request's user (`request.userInfo`) must be the current leader's runtime identity. A partitioned old leader on another node is refused for every verb, deletes included, by the API server itself, not by its own judgement.
+   - **Create and update:** the object's `wildstone.dev/epoch` must equal the current epoch. This also refuses stale work from an *earlier term of the same node*, which has the same identity.
+   - **Delete is two steps,** because admission sees only the stored object on a delete (`oldObject`), not the requester's epoch:
+     1. the leader first **stamps** the object with an update that sets `wildstone.dev/delete-epoch: N` (fenced like any update);
+     2. it then deletes with a resourceVersion precondition equal to that stamp's version.
+
+     The policy allows a delete only when the stored `delete-epoch` equals the current epoch. A new leader can therefore delete an object last written in an older epoch: it stamps it first, in its own epoch. An old term can't produce a stamp in the current epoch.
 5. **On losing the Lease, or on any epoch rejection,** the leader cancels all in-flight work and stops writing.
 
-*To prove in #180:* a ValidatingAdmissionPolicy with a ConfigMap parameter really does block a partitioned old leader's write, including deletes. If it doesn't, this section is revised before any cluster operation ships.
+*To prove in #180:* a ValidatingAdmissionPolicy with a ConfigMap parameter really does refuse a partitioned old leader's creates, updates and deletes, and a same-node stale term's writes. The new leader must still be able to stamp and delete an untouched object from the previous epoch. If any of these fails, this section is revised before any cluster operation ships.
 
 ## 3. In-flight work and replays
 
 - **After a leader change, Keystone re-observes; it doesn't resume blindly** (§8 Q5). Steps that were in flight are marked "unknown". The new leader reports the real state, and the reconciler plans from that, under the same accepted revision and the same approval rules (ADR-W008 A2a). A step that is now already done is a no-op.
 - **Replays are harmless by construction.** Server-side apply of the same typed request gives the same objects, and `op_id` identifies a retry.
-- **A delete carries preconditions.** `DeleteWorkload` sends the object's UID and resourceVersion as seen when the Plan was made. Kubernetes refuses the delete if the object has since been replaced. That answers leader-ops question 2.
+- **A delete carries preconditions.** `DeleteWorkload` sends the object's UID as seen when the Plan was made. The leader checks it during the stamp step (§2.4), then deletes with the stamp's resourceVersion as the precondition. Kubernetes refuses the delete if the object has since been replaced or changed. That answers leader-ops question 2.
 - **The accepted revision is checked at both ends.** Keystone sends only operations from the current accepted revision. The leader refuses an operation whose revision is older than the newest it has already applied for that object, which it reads from the revision annotation.
 
 ## 4. Secrets on a cluster
@@ -62,7 +70,9 @@ Today a secret's value lives only in Wardstone's encrypted node store, and Keyst
 ## 5. Storage: one writer, always
 
 - **One-copy components with data** run with `replicas: 1`, `strategy: Recreate` and a `ReadWriteOncePod` claim, so two pods can't both have the volume.
-- **No forced deletes.** Wildstone never force-deletes a pod or force-detaches a volume to make failover happen. Kubernetes warns that force deletion can leave the old process running, and Longhorn won't safely move a volume still attached to an unreachable node.
+- **No forced deletes, by Wildstone or by Kubernetes.** Wildstone never force-deletes a pod or force-detaches a volume to make failover happen. Kubernetes warns that force deletion can leave the old process running, and Longhorn won't safely move a volume still attached to an unreachable node.
+  - **Kubernetes' own timeout is turned off.** By default, the controller manager force-detaches a volume when a pod has failed to delete for six minutes on an unhealthy node, and its docs warn this can corrupt data. The engine bootstrap sets `disable-force-detach-on-timeout` on k3s's controller manager, so the owner gate below can't be bypassed by a timer.
+  - **Longhorn's node-down pod deletion is left at "do nothing",** so Longhorn doesn't delete the stuck pod on its own either.
 - **Failover of a stateful app after a machine is lost** (§8 Q3):
   - **Recommended default:** the Console asks the owner to confirm the machine is really off (*"Is node-2 powered off or unplugged?"*). Only then does the leader remove the lost node's claim on the volume, using Kubernetes' out-of-service taint, and start the app elsewhere.
   - **Opt-in later:** automatic failover, once #180 shows the storage refuses a second writer even when the old machine comes back.
@@ -92,9 +102,9 @@ Today a secret's value lives only in Wardstone's encrypted node store, and Keyst
 
 On three disposable VMs, with the 1–3 services from #129 (tools-it-tools, Uptime Kuma, optionally Mealie or Postgres) plus a management fixture:
 
-1. **Stale leader:** partition the leader while it's still powered. A new leader takes over. The old one's writes, deletes included, are refused by the API server (§2.4).
+1. **Stale leader:** partition the leader while it's still powered. A new leader takes over. The old one's creates, updates and deletes are refused by the API server (§2.4). The new leader can still stamp and delete an untouched object from the previous epoch.
 2. **Mid-apply leader loss:** kill the leader during an `ApplyWorkload`. The new leader re-observes and converges with no duplicate or lost step (§3).
-3. **Single writer:** power off a node running Uptime Kuma. No second copy starts until the owner confirms. Then bring the old node back and show it can't write.
+3. **Single writer:** power off a node running Uptime Kuma. No second copy starts until the owner confirms. Then bring the old node back and show it can't write. Repeat with the node **powered on but partitioned for longer than the six-minute force-detach timeout**: the volume must stay attached to the old node until the owner confirms.
 4. **Secrets:** change leaders, and every secret is still present at the same version. With the store emptied on purpose, Wildstone raises an incident and doesn't regenerate.
 5. **Recovery:** stop Keystone and recover it with `wild-recover`. Then destroy the cluster and rebuild from the off-host kit.
 6. **Pressure:** a full disk on one node leaves management running.
