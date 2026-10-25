@@ -3,10 +3,10 @@
 # together, then re-sign the playbook set.
 #
 # Longhorn: deploy/longhorn.yaml from the v1.13.0 tag of
-# https://github.com/longhorn/longhorn, vendored byte for byte. Each image
-# the manifest names is pulled by the multi-arch index digest below before
-# the manifest is applied, then tagged with the name the manifest uses, so
-# the kubelet (imagePullPolicy IfNotPresent) runs exactly these bits.
+# https://github.com/longhorn/longhorn, vendored byte for byte. It is
+# applied with each image it names rewritten to name:tag@digest, using the
+# multi-arch index digests below (templates/longhorn.yaml.j2), so every
+# pull, now or later, gets exactly these bits.
 longhorn_version: v1.13.0
 longhorn_manifest: vendor/longhorn-v1.13.0.yaml
 longhorn_manifest_sha256: d0f99488e7b2789312d45b0127ce7388df71a971e6fca2085e88635303cc0a1f

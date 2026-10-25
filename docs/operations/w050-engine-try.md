@@ -12,7 +12,7 @@ This installs a single k3s server, using Wildstone's signed playbooks and review
   - starts k3s with: secrets encryption, kernel-default protection, Pod Security defaults, traefik/servicelb/local-storage off, and **timed force-detach off** (safety contract #180 §5);
   - creates the `wildstone-system`, `wildstone-apps` (restricted) and `wildstone-host` namespaces;
   - creates the **leader fence** (safety contract #180 §2): the authority record (`wildstone-authority`, starting at epoch 0, so nothing is allowed to write yet), the `wildstone-leader-fence` admission policy, a `wardstone-<node>` runtime account per node and a narrow `keystone` account;
-  - installs **Longhorn v1.13.0** from a vendored, checksum-checked manifest, with every image pulled by digest first, and a `wildstone-longhorn` storage class that **keeps data when a claim is deleted** (Retain);
+  - installs **Longhorn v1.13.0** from a vendored, checksum-checked manifest, applied with every image pinned by digest, and a `wildstone-longhorn` storage class that **keeps data when a claim is deleted** (Retain);
   - optionally, **kube-vip v1.2.4**: one shared address for the Kubernetes API, if you give it a free address.
 - **Doesn't (yet):** run Wardstone's leader election (the code is in slice 3b-2; it's wired into Wardstone in 3c), or any app. Keystone and Docker are untouched.
 
@@ -95,7 +95,7 @@ This installs a single k3s server, using Wildstone's signed playbooks and review
 | The leader fence holds | step 6, `engine-fence-check.sh` | `42 passed, 0 failed` |
 | The frozen record is caught | step 6, `--rebind` | `46 passed, 0 failed`, with `the barrier stays shut` and `frozen open` |
 | Storage works and keeps data | step 7 | `7 passed, 0 failed` |
-| Longhorn runs what was reviewed | `sudo k3s ctr -n k8s.io images ls \| grep longhornio` | each name shows the digest in `deploy/ansible/vars/engine-versions.yml` |
+| Longhorn runs what was reviewed | `sudo k3s kubectl -n longhorn-system get pods -o jsonpath='{..image}' \| tr ' ' '\n' \| sort -u` | every image is `name:tag@sha256:...`, with the digests in `deploy/ansible/vars/engine-versions.yml` |
 | The shared address answers (kube-vip) | `sudo k3s kubectl --server https://<vip>:6443 get --raw /readyz` | `ok`; the certificate covers the address |
 | The epoch is never reset | step 5 again, then `sudo k3s kubectl -n wildstone-system get cm wildstone-authority -o jsonpath='{.data}'` | the recap shows `changed=0`, and the record is unchanged |
 

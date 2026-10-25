@@ -1,0 +1,10 @@
+{#- The vendored Longhorn manifest with every image pinned: each reviewed
+    "name:tag" becomes "name:tag@digest", in container images and in the
+    manager's and driver deployer's image arguments alike, so any later
+    pull (after image cleanup, or for an on-demand component) is held to
+    the same bits. The vendored file itself stays byte for byte upstream. -#}
+{%- set ns = namespace(text=lookup('ansible.builtin.file', playbook_dir ~ '/' ~ longhorn_manifest)) -%}
+{%- for image in longhorn_images -%}
+{%- set ns.text = ns.text | replace(image.ref, image.ref ~ '@' ~ image.digest) -%}
+{%- endfor -%}
+{{ ns.text }}

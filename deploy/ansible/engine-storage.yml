@@ -1,7 +1,7 @@
 # Longhorn, the engine's replicated block storage (W050 slice 3b-3, plan
 # D4). Run after engine-addons.yml. The manifest is vendored and checked
-# against its recorded sha256; every image it names is pulled by digest
-# before it is applied (vars/engine-versions.yml).
+# against its recorded sha256; it is applied with every image it names
+# pinned by digest, after each was pulled (vars/engine-versions.yml).
 - name: Wildstone engine storage
   hosts: localhost
   connection: local
@@ -24,8 +24,8 @@
         fail_msg: "{{ longhorn_manifest }} does not match its recorded sha256; nothing was applied."
         quiet: true
 
-    # Pull by digest, then give the image the name the manifest uses. The
-    # kubelet then finds it locally and never resolves the tag itself.
+    # Pull every image by digest first: a digest that no longer exists
+    # fails here, before anything is applied.
     - name: Pull each Longhorn image by digest
       ansible.builtin.command: >-
         k3s ctr -n k8s.io images pull
@@ -39,35 +39,30 @@
       delay: 10
       until: wildstone_pull.rc == 0
 
-    - name: Name each image as the manifest does
-      ansible.builtin.command: >-
-        k3s ctr -n k8s.io images tag --force
-        {{ (item.ref | regex_replace(':[^:/]+$', '')) ~ '@' ~ item.digest }}
-        {{ item.ref }}
-      loop: "{{ longhorn_images }}"
-      loop_control:
-        label: "{{ item.ref }}"
-      changed_when: false
+    - name: Longhorn manifest with every image pinned by digest
+      ansible.builtin.template:
+        src: templates/longhorn.yaml.j2
+        dest: /etc/wildstone/k3s/longhorn.yaml
+        mode: "0600"
 
-    - name: List image digests
-      ansible.builtin.command: k3s ctr -n k8s.io images ls
-      register: wildstone_images
-      changed_when: false
+    - name: Read the pinned manifest back
+      ansible.builtin.slurp:
+        src: /etc/wildstone/k3s/longhorn.yaml
+      register: wildstone_longhorn_pinned
 
-    - name: Refuse an image name that points anywhere but its digest
+    - name: Refuse any Longhorn image left without its digest
       ansible.builtin.assert:
         that:
-          - wildstone_images.stdout_lines | select('match', '^' ~ (item.ref | regex_escape) ~ '\s+\S+\s+' ~ (item.digest | regex_escape) ~ '\s') | list | length == 1
-        fail_msg: "{{ item.ref }} does not point at {{ item.digest }}"
+          - wildstone_unpinned | length == 0
+        fail_msg: "Images without a recorded digest: {{ wildstone_unpinned | unique | list }}"
         quiet: true
-      loop: "{{ longhorn_images }}"
-      loop_control:
-        label: "{{ item.ref }}"
+      vars:
+        wildstone_unpinned: "{{ wildstone_longhorn_pinned.content | b64decode | regex_findall('longhornio/[a-z0-9-]+:[A-Za-z0-9._-]+(?!@sha256:|[A-Za-z0-9._-])') }}"
 
     - name: Apply Longhorn
       ansible.builtin.command: >-
         k3s kubectl apply --server-side --field-manager=wildstone-longhorn
-        -f {{ playbook_dir }}/{{ longhorn_manifest }}
+        -f /etc/wildstone/k3s/longhorn.yaml
       changed_when: false
 
     - name: Wait for the Longhorn manager on every node
