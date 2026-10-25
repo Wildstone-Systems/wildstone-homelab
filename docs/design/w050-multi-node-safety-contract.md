@@ -1,7 +1,7 @@
 # W050 multi-node authority, storage, secret and recovery contract
 
 - **Issue:** [#180](https://github.com/Wildstone-Systems/wildstone-homelab/issues/180), the G4 gate in the [W050 plan](w050-migration-plan.md#revised-execution-gates)
-- **Status:** **accepted 2026-10-25 by the owner**: all five §8 recommendations, and the review corrections (requester and stamp fencing for deletes; no timed force-detach). This is the contract #180's test must prove. It still authorizes no deployment, credential or runtime code.
+- **Status:** **accepted 2026-10-25 by the owner**: all five §8 recommendations, and the review corrections (requester and stamp fencing for deletes; no timed force-detach). This is the contract #180's test must prove. It still authorizes no deployment, credential or runtime code. **§2.6 (the epoch barrier) is proposed, not yet accepted.**
 - **Evidence base:** `main` after #185, 2026-10-25.
 - **Answers:** the open questions in [`w050-leader-ops.md`](w050-leader-ops.md) §5 (1, 2 and the secret row) and ADR-W050 A1's authority, Lease, admission, secret, storage and recovery bullets.
 - **Amends:** ADR-W012 (secret custody on a cluster), ADR-W050 (A2), ADR-W051 (recovery path). The amendments are recorded in a follow-up.
@@ -43,6 +43,25 @@ Every rule here is something #180's disposable three-machine test has to prove (
 5. **On losing the Lease, or on any epoch rejection,** the leader cancels all in-flight work and stops writing.
 
 *To prove in #180:* a ValidatingAdmissionPolicy with a ConfigMap parameter really does refuse a partitioned old leader's creates, updates and deletes, and a same-node stale term's writes. The new leader must still be able to stamp and delete an untouched object from the previous epoch. If any of these fails, this section is revised before any cluster operation ships.
+
+### 2.6 The epoch barrier (proposed 2026-10-25, needs owner acceptance)
+
+**Finding (slice 3b, #159):** the fence reads the authority record through the API server's own cache. Tested against a real Kubernetes v1.37.1 API server:
+- normally, a new epoch reaches admission within about 0.2 s;
+- **but after the fence's binding is deleted and re-created while the API server runs, the policy keeps using a frozen copy of the record.** The old leader stayed admitted 30 s+ after leadership moved, even with the record deleted. Only an API server restart cleared it. Changes to the policy object itself still took effect in about 1 s.
+
+`scripts/engine-fence-check.sh --rebind` reproduces it. A rerun of the bootstrap playbook never deletes the binding. A hand delete followed by a rerun, or a future upgrade that re-creates it, would trigger it.
+
+**So the fence needs a check that it can see the current record.** Proposed rule:
+1. After Keystone records epoch N, the new leader sends a **dry-run** write (`dryRun=All`, so nothing is stored) stamped with epoch N to **every server node's local API server**.
+2. Keystone sends no operation in epoch N until every server has admitted that probe. A probe passes only if that API server's fence holds the new leader *and* the new epoch, so a stale or frozen copy keeps it shut.
+3. A barrier that stays shut for 30 s is an incident. The Console says which server is stuck, and the fix is restarting k3s on it. Nothing writes in the meantime.
+
+**Why not something else:**
+- *Keystone writes the epoch into the policy itself,* which does refresh. A policy can't guard edits to another policy (tested), so Keystone could then rewrite the fence. That breaks §1.
+- *Trust the cache and wait a fixed time.* The freeze has no time limit.
+
+A partitioned old leader's own server can't take part in the barrier: on embedded etcd it loses quorum and can't store writes either.
 
 ## 3. In-flight work and replays
 
@@ -102,7 +121,7 @@ Today a secret's value lives only in Wardstone's encrypted node store, and Keyst
 
 On three disposable VMs, with the 1–3 services from #129 (tools-it-tools, Uptime Kuma, optionally Mealie or Postgres) plus a management fixture:
 
-1. **Stale leader:** partition the leader while it's still powered. A new leader takes over. The old one's creates, updates and deletes are refused by the API server (§2.4). The new leader can still stamp and delete an untouched object from the previous epoch.
+1. **Stale leader:** partition the leader while it's still powered. A new leader takes over. The old one's creates, updates and deletes are refused by the API server (§2.4). The new leader can still stamp and delete an untouched object from the previous epoch. The epoch barrier (§2.6) opens on every server before the new leader's first write. *Single-node part shown by `scripts/engine-fence-check.sh` (slice 3b).*
 2. **Mid-apply leader loss:** kill the leader during an `ApplyWorkload`. The new leader re-observes and converges with no duplicate or lost step (§3).
 3. **Single writer:** power off a node running Uptime Kuma. No second copy starts until the owner confirms. Then bring the old node back and show it can't write. Repeat with the node **powered on but partitioned for longer than the six-minute force-detach timeout**: the volume must stay attached to the old node until the owner confirms.
 4. **Secrets:** change leaders, and every secret is still present at the same version. With the store emptied on purpose, Wildstone raises an incident and doesn't regenerate.

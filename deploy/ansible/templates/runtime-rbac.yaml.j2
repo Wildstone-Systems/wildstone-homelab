@@ -1,0 +1,127 @@
+# Managed by Wildstone. Runtime identities (safety contract #180 §1, §2.1).
+#   - wardstone-<node>: one per node, so the API server can tell which
+#     Wardstone sent a request. Writes Wildstone objects in wildstone-apps
+#     (fenced by wildstone-leader-fence), runs the leader Lease, reads the
+#     authority record.
+#   - keystone: updates the authority record, and nothing else.
+# Neither can change RBAC, admission policies or namespaces, exec into or
+# attach to pods, list Secrets, or touch any other namespace.
+{% for node in wildstone_runtime_nodes %}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: wardstone-{{ node }}
+  namespace: wildstone-system
+  labels:
+    wildstone.dev/role: runtime
+    wildstone.dev/node: "{{ node }}"
+automountServiceAccountToken: false
+---
+{% endfor %}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: keystone
+  namespace: wildstone-system
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: wardstone-runtime
+  namespace: wildstone-apps
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["services", "configmaps", "persistentvolumeclaims"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # A generated secret is created once and never regenerated (contract §4).
+  # No list or watch, so a runtime identity can't read every value at once.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "create"]
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "events"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: wardstone-runtime
+  namespace: wildstone-apps
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: wardstone-runtime
+subjects:
+{% for node in wildstone_runtime_nodes %}
+  - kind: ServiceAccount
+    name: wardstone-{{ node }}
+    namespace: wildstone-system
+{% endfor %}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: wardstone-coordination
+  namespace: wildstone-system
+rules:
+  # The Lease decides who asks Keystone for the next epoch. It is not the
+  # fence; the admission policy is (contract §2).
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["create"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    resourceNames: ["wardstone-leader"]
+    verbs: ["get", "watch", "update"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["wildstone-authority"]
+    verbs: ["get", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: wardstone-coordination
+  namespace: wildstone-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: wardstone-coordination
+subjects:
+{% for node in wildstone_runtime_nodes %}
+  - kind: ServiceAccount
+    name: wardstone-{{ node }}
+    namespace: wildstone-system
+{% endfor %}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: keystone-authority
+  namespace: wildstone-system
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["wildstone-authority"]
+    verbs: ["get", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: keystone-authority
+  namespace: wildstone-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: keystone-authority
+subjects:
+  - kind: ServiceAccount
+    name: keystone
+    namespace: wildstone-system

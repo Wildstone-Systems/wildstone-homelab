@@ -1,7 +1,9 @@
-# Engine add-ons for the first server (W050 slice 3, #159). This first part
-# creates the Wildstone namespaces with their Pod Security levels. Longhorn,
-# kube-vip, the runtime ServiceAccounts and the fencing admission policy
-# follow in slice 3b.
+# Engine add-ons for the first server (W050 slice 3, #159):
+#   - the Wildstone namespaces with their Pod Security levels (3a);
+#   - the authority record, the leader fence and the runtime identities
+#     (3b, safety contract #180 §1-§2).
+# Longhorn, kube-vip and Wardstone's Lease election follow in later 3b
+# parts.
 - name: Wildstone engine add-ons
   hosts: localhost
   connection: local
@@ -18,4 +20,57 @@
       ansible.builtin.command: k3s kubectl apply --server-side --field-manager=wildstone-bootstrap -f /etc/wildstone/k3s/namespaces.yaml
       # Server-side apply of the same file is a no-op, so a rerun changes
       # nothing; it reports "serverside-applied" either way.
+      changed_when: false
+
+    - name: Authority record manifest
+      ansible.builtin.template:
+        src: templates/authority.yaml.j2
+        dest: /etc/wildstone/k3s/authority.yaml
+        mode: "0600"
+
+    # Created once, never applied: Keystone owns the epoch after this, and
+    # a rerun must never set it back to 0.
+    - name: Create the authority record if it is missing
+      ansible.builtin.command: k3s kubectl create -f /etc/wildstone/k3s/authority.yaml
+      register: wildstone_authority
+      changed_when: wildstone_authority.rc == 0
+      failed_when: wildstone_authority.rc != 0 and 'AlreadyExists' not in wildstone_authority.stderr
+
+    # The fence goes in before any runtime identity exists, so no runtime
+    # write is ever unfenced.
+    - name: Leader fence manifest
+      ansible.builtin.template:
+        src: templates/fence-policy.yaml.j2
+        dest: /etc/wildstone/k3s/fence-policy.yaml
+        mode: "0600"
+
+    - name: Apply the leader fence
+      ansible.builtin.command: k3s kubectl apply --server-side --field-manager=wildstone-bootstrap -f /etc/wildstone/k3s/fence-policy.yaml
+      changed_when: false
+
+    - name: List the cluster's nodes
+      ansible.builtin.command: k3s kubectl get nodes -o jsonpath={.items[*].metadata.name}
+      register: wildstone_nodes
+      changed_when: false
+
+    - name: Runtime identities, one per node
+      ansible.builtin.set_fact:
+        wildstone_runtime_nodes: "{{ wildstone_nodes.stdout.split() | sort }}"
+
+    - name: Require node names that make valid account names
+      ansible.builtin.assert:
+        that:
+          - wildstone_runtime_nodes | length > 0
+          - wildstone_runtime_nodes | reject('match', '^[a-z0-9]([-a-z0-9.]{0,51}[a-z0-9])?$') | list | length == 0
+        fail_msg: "Node names must be lowercase DNS names of at most 53 characters: {{ wildstone_runtime_nodes }}"
+        quiet: true
+
+    - name: Runtime identities manifest
+      ansible.builtin.template:
+        src: templates/runtime-rbac.yaml.j2
+        dest: /etc/wildstone/k3s/runtime-rbac.yaml
+        mode: "0600"
+
+    - name: Apply runtime identities
+      ansible.builtin.command: k3s kubectl apply --server-side --field-manager=wildstone-bootstrap -f /etc/wildstone/k3s/runtime-rbac.yaml
       changed_when: false
