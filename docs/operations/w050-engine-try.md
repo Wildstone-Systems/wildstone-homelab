@@ -15,7 +15,7 @@ This installs a single k3s server, using Wildstone's signed playbooks and review
 
 ## You need
 
-- A new VM: Ubuntu 24.04 or Debian 12, x86_64 or arm64, 2 vCPU, 4 GB RAM, 20 GB disk, internet access.
+- A new VM: Ubuntu 24.04 or 26.04, or Debian 12, x86_64 or arm64, 2 vCPU, 4 GB RAM, 20 GB disk, internet access. (First tested on Ubuntu 26.04 with k3s v1.37.1+k3s1; see #159.)
 - On the VM: `git`, `ansible-core` (`sudo apt install -y git ansible-core`), and Go 1.26 to build one small tool. You can also build the tool elsewhere and copy it over.
 
 ## Steps

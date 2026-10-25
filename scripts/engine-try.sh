@@ -42,6 +42,9 @@ echo "== facts for #129 =="
 k3s --version | head -1
 k3s kubectl get nodes -o wide
 k3s kubectl get namespaces -L pod-security.kubernetes.io/enforce
-echo "k3s memory (RSS, MiB): $(ps -o rss= -C k3s | awk '{s+=$1} END {printf "%.0f", s/1024}')"
+# k3s renames its main process k3s-server; count both names. The unit's
+# cgroup total also covers containerd and the system pods it started.
+echo "k3s process memory (RSS, MiB): $(ps -o rss= -C k3s-server -C k3s | awk '{s+=$1} END {printf "%.0f", s/1024}')"
+echo "k3s unit memory (cgroup, MiB): $(systemctl show k3s -p MemoryCurrent --value | awk '$1 ~ /^[0-9]+$/ {printf "%.0f", $1/1048576; next} {print "unknown"}')"
 free -m | awk 'NR<=2'
 du -sh /var/lib/rancher 2>/dev/null || true
