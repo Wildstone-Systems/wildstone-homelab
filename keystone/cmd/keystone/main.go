@@ -299,12 +299,12 @@ type engineConfig struct{ API, CA, Token string }
 
 type coordinatorEpochIssuer struct {
 	issuer gateway.EpochIssuer
-	active func() bool
+	check  func() error
 }
 
 func (i coordinatorEpochIssuer) Issue(ctx context.Context, leader string) (uint64, error) {
-	if !i.active() {
-		return 0, fmt.Errorf("cluster authority requires the active Keystone coordinator")
+	if err := i.check(); err != nil {
+		return 0, fmt.Errorf("cluster authority requires the active Keystone coordinator: %w", err)
 	}
 	return i.issuer.Issue(ctx, leader)
 }
@@ -698,12 +698,23 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	if engineCfg.API == "" && (engineCfg.CA != "" || engineCfg.Token != "") || engineCfg.API != "" && (engineCfg.CA == "" || engineCfg.Token == "") {
 		return fmt.Errorf("-engine-api, -engine-ca and -engine-token must be set together")
 	}
+	// Gateway.New used to create this root-owned directory before the DB
+	// opened. Keep first boot working when cluster authority moves the DB
+	// open ahead of gateway creation.
+	if err := os.MkdirAll(dataDir, 0o700); err != nil {
+		return err
+	}
+	if err := os.Chmod(dataDir, 0o700); err != nil {
+		return err
+	}
 	db, err := runtimedb.Open(filepath.Join(dataDir, "keystone.db"))
 	if err != nil {
 		return err
 	}
 	defer db.Close()
 	var coordinating bool
+	var lease runtimedb.CoordinatorLease
+	var leaseErr error
 	var epochIssuer gateway.EpochIssuer
 	if engineCfg.API != "" {
 		client, err := kubeapi.New(engineCfg.API, engineCfg.CA, engineCfg.Token)
@@ -712,7 +723,12 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 		}
 		epochIssuer = coordinatorEpochIssuer{
 			issuer: clusterauthority.Authority{Store: db, Records: client, Leases: client},
-			active: func() bool { return coordinating },
+			check: func() error {
+				if !coordinating {
+					return fmt.Errorf("this process did not acquire the coordinator lease")
+				}
+				return db.CheckCoordinator(lease.Holder, lease.Epoch)
+			},
 		}
 	}
 	// recordNode is bound after gateway creation, before it starts serving.
@@ -764,7 +780,7 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	// checkpoints instead of finding the work orphaned. Handing it to a
 	// different host is PromoteCoordinator, an explicit act that fences
 	// the old epoch.
-	lease, leaseErr := db.AcquireCoordinator(coordinatorHolder(dataDir))
+	lease, leaseErr = db.AcquireCoordinator(coordinatorHolder(dataDir))
 	coordinating = leaseErr == nil
 	switch {
 	case coordinating:
