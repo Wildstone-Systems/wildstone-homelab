@@ -81,5 +81,5 @@ Placement and replicas come from the household policy bounded by the package's d
 
 1. The owner reviews this draft.
 2. #180's contract answers questions 1 and 2 and the secret row.
-3. Then: a cluster target in the reconciler and a `FakeCluster` recorder that records these typed requests (slice 2c, no real client).
+3. Then: a cluster target in the reconciler and a `FakeCluster` recorder that records these typed requests (slice 2c, no real client). The first three operations exist as Go types in `keystone/reconcile/cluster.go`, not as proto.
 4. The first real operation (`ApplyWorkload`) is implemented in slice 3/4, against #129's single-node proof.
