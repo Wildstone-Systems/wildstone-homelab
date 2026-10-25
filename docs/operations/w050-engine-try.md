@@ -61,6 +61,7 @@ This installs a single k3s server, using Wildstone's signed playbooks and review
 | Secrets are encrypted | `sudo k3s secrets-encrypt status` | `Encryption Status: Enabled` |
 | Force-detach timer is off | `sudo journalctl -u k3s \| grep -m1 disable-force-detach-on-timeout` | the flag appears in the controller-manager arguments |
 | Apps are held to restricted | apply the privileged pod below | refused by Pod Security (`violates PodSecurity "restricted"`) |
+| The cluster-wide default applies | apply the same pod with `namespace: default` | refused by Pod Security (`violates PodSecurity "baseline"`): the admission config file was loaded |
 | Re-run changes nothing | run step 5 again | Ansible recap shows `changed=0` |
 | A tampered set never runs | `echo "# x" >> /tmp/playbooks/k3s-server.yml`, then step 5 | `a listed file is missing or changed`, and nothing runs |
 | An extra file never runs | `echo "- hosts: all" > /tmp/playbooks/extra.yml`, then step 5 | `a file is not in the signed manifest` |

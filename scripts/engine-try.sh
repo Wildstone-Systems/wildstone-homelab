@@ -29,7 +29,9 @@ done
 wild-playbooks verify -pub "$pub" "$dir"
 
 run() {
-	ANSIBLE_CONFIG=/dev/null ANSIBLE_NOCOLOR=1 \
+	# The signed set's own ansible.cfg, never one from the working
+	# directory, the home directory or /etc/ansible.
+	ANSIBLE_CONFIG="$dir/ansible.cfg" ANSIBLE_NOCOLOR=1 \
 		ansible-playbook -c local -i localhost, "$dir/$1" -e "k3s_version=$version"
 }
 run k3s-server.yml
