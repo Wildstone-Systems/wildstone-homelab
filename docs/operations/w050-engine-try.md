@@ -95,7 +95,7 @@ This installs a single k3s server, using Wildstone's signed playbooks and review
 | The leader fence holds | step 6, `engine-fence-check.sh` | `42 passed, 0 failed` |
 | The frozen record is caught | step 6, `--rebind` | `46 passed, 0 failed`, with `the barrier stays shut` and `frozen open` |
 | Storage works and keeps data | step 7 | `7 passed, 0 failed` |
-| Longhorn runs what was reviewed | `sudo k3s kubectl -n longhorn-system get pods -o jsonpath='{..image}' \| tr ' ' '\n' \| sort -u` | every image is `name:tag@sha256:...`, with the digests in `deploy/ansible/vars/engine-versions.yml` |
+| Longhorn pod specs use reviewed images | `sudo k3s kubectl -n longhorn-system get pods -o jsonpath='{.items[*].spec.containers[*].image} {.items[*].spec.initContainers[*].image}' \| tr ' ' '\n' \| sort -u` | every container and init-container spec image is `name:tag@sha256:...`, with the digests in `deploy/ansible/vars/engine-versions.yml` |
 | The shared address answers (kube-vip) | `sudo k3s kubectl --server https://<vip>:6443 get --raw /readyz` | `ok`; the certificate covers the address |
 | The epoch is never reset | step 5 again, then `sudo k3s kubectl -n wildstone-system get cm wildstone-authority -o jsonpath='{.data}'` | the recap shows `changed=0`, and the record is unchanged |
 
