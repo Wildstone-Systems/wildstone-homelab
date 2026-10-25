@@ -4,7 +4,7 @@
 - **Status:** **accepted 2026-10-25 by the owner**: all five §8 recommendations, and the review corrections (requester and stamp fencing for deletes; no timed force-detach). This is the contract #180's test must prove. It still authorizes no deployment, credential or runtime code.
 - **Evidence base:** `main` after #185, 2026-10-25.
 - **Answers:** the open questions in [`w050-leader-ops.md`](w050-leader-ops.md) §5 (1, 2 and the secret row) and ADR-W050 A1's authority, Lease, admission, secret, storage and recovery bullets.
-- **Amends:** ADR-W012 (A-cluster, secret custody on a cluster), ADR-W050 (A2), ADR-W051 (recovery path). The amendments are recorded in a follow-up.
+- **Amends:** ADR-W012 (secret custody on a cluster), ADR-W050 (A2), ADR-W051 (recovery path). The amendments are recorded in a follow-up.
 
 With one machine, one Wardstone does everything, and a stale write can't happen. With several machines there's a **leader**: one Wardstone that talks to Kubernetes for everyone. Leaders change when a machine dies or the network splits. This contract says how Wildstone stays safe while that happens:
 - an old leader can't overwrite a newer change;
@@ -119,3 +119,22 @@ Three VMs on one host prove software behaviour, not independent power or hardwar
 3. **Stateful failover:** owner confirms the lost machine is off before a stateful app moves (§5)? **Recommended: yes for now,** with automatic failover as a later opt-in once #180 proves it safe.
 4. **Admin kubeconfig:** kept root-only on server nodes and in the off-host kit, and never loaded by Keystone or the leader? **Recommended: yes.**
 5. **After a leader change:** re-observe and re-plan, rather than resume the old step list (§3)? **Recommended: re-observe.** It's slower by one tick and can't act on a stale picture.
+
+## 9. Power users (accepted 2026-10-25)
+
+A power user gets more ways to see, script and loosen things, never a way around §1–§6. Every change still goes through the same Plan, approval and fencing path.
+
+**Already true today:**
+- **Scripting:** the `wild` CLI and the API do everything the Console does, including the owner's approvals.
+- **Editing desired state:** a hand commit to the Statefile repo is validated, planned, and applied or reverted (ADR-W007 A6, A8).
+- **Packages:** `wild pkg new` plus the `devices`/`deployment` fields say exactly how a package may move or scale (capabilities contract).
+
+**Accepted for the multi-node release:**
+1. **Per-app policy.** The owner sets `keepRunning`, number of copies and worker placement per installed app, up to what the package declares (capabilities contract §8). Changing it is a Plan.
+2. **Automatic stateful failover, opt-in per app.** It's off by default (§8 Q3) and stays unavailable until #180's test passes §7 items 1 and 3. Once available, the owner can switch it on per app; the app then moves without the "is the machine off?" question. The Console says plainly what that trades away.
+3. **Read-only cluster access.** On request, Wildstone issues a read-only kubeconfig (get, list, watch; no Secrets) for `kubectl`, k9s or dashboards. It can't write, so it needs no fencing.
+4. **Break-glass, with drift reporting.** The admin kubeconfig on a server node (§1) still lets the owner do anything. Changes made that way to Wildstone-owned objects are drift. Wildstone reports them as a Plan to revert or adopt, and never treats them as approved.
+5. **Bring your own storage.** Folders can point at the household's NAS or NFS share on any topology (W050 D4), using the same `NetworkMount` as today.
+
+**Declined:** letting Wildstone switch a machine off itself (a smart plug or remote-management power control) to confirm it's down. The owner confirms in person, or opts into item 2.
+
