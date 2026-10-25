@@ -13,7 +13,7 @@
   tasks:
     - name: Skip without an address
       ansible.builtin.meta: end_play
-      when: not (wildstone_vip | default(''))
+      when: (wildstone_vip | default('') | length) == 0
 
     - name: Require a usable address and interface
       ansible.builtin.assert:
