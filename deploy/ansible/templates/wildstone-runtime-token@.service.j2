@@ -1,0 +1,20 @@
+# Managed by Wildstone (engine-runtime-tokens.yml).
+[Unit]
+Description=Rotate Wildstone Kubernetes token for %i
+After=k3s.service
+Requires=k3s.service
+
+[Service]
+Type=oneshot
+User=root
+UMask=0077
+Environment=KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+Environment=HOME=/run/wildstone-token-%i
+RuntimeDirectory=wildstone-token-%i
+RuntimeDirectoryMode=0700
+ExecStart=/usr/local/lib/wildstone/rotate-engine-token.sh %i
+NoNewPrivileges=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/etc/wildstone/k3s
+PrivateTmp=true
