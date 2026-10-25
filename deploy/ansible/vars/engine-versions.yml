@@ -1,0 +1,32 @@
+# Pinned engine add-ons (W050 slice 3b-3, #159). Changing a version is a
+# reviewed change: replace the vendored file, its sha256 and every digest
+# together, then re-sign the playbook set.
+#
+# Longhorn: deploy/longhorn.yaml from the v1.13.0 tag of
+# https://github.com/longhorn/longhorn, vendored byte for byte. Each image
+# the manifest names is pulled by the multi-arch index digest below before
+# the manifest is applied, then tagged with the name the manifest uses, so
+# the kubelet (imagePullPolicy IfNotPresent) runs exactly these bits.
+longhorn_version: v1.13.0
+longhorn_manifest: vendor/longhorn-v1.13.0.yaml
+longhorn_manifest_sha256: d0f99488e7b2789312d45b0127ce7388df71a971e6fca2085e88635303cc0a1f
+longhorn_images:
+  - {ref: docker.io/longhornio/backing-image-manager:v1.13.0, digest: "sha256:49779b9a8ab535f1e86d224f8e2eb5c2c3713b8f1783403fe00612a75de2b3b8"}
+  - {ref: docker.io/longhornio/csi-attacher:v4.13.0, digest: "sha256:fef34c2d823b78da7d6c29fdf0f80d236293b0ac06944d14e8c366add880a4c8"}
+  - {ref: docker.io/longhornio/csi-node-driver-registrar:v2.18.0, digest: "sha256:085f63e62fea391734f5668d9cbb20ac8788a8e7faea83ce2c994f0cc1834fce"}
+  - {ref: docker.io/longhornio/csi-provisioner:v6.3.0, digest: "sha256:2d2694540109d2e8887f62a0bc711aca8d3033e52dddf1c39bb5c65600d9c5af"}
+  - {ref: docker.io/longhornio/csi-resizer:v2.2.1, digest: "sha256:63d0aef25114d4a682b25afa6d9623a3cfcc19aca910269124408476bbe2c6fd"}
+  - {ref: docker.io/longhornio/csi-snapshotter:v8.6.0, digest: "sha256:2bca9ac55170efa61dc50e5cc8d9550373db2e3e5161d82d3fdaac5c25150360"}
+  - {ref: docker.io/longhornio/livenessprobe:v2.20.0, digest: "sha256:d1199b77452bfc11cfc62feb8a266758fe8d72953e97faac8065941e3767f1a3"}
+  - {ref: docker.io/longhornio/longhorn-engine:v1.13.0, digest: "sha256:b0cc5090889d57705acd69c5106492992e84560170ac3bec4a1cc8dd3fe83ca6"}
+  - {ref: docker.io/longhornio/longhorn-instance-manager:v1.13.0, digest: "sha256:fc9e1c15e81988b04c146866ce7010b6df3a70f88302809bf53e19b27d1658a3"}
+  - {ref: docker.io/longhornio/longhorn-manager:v1.13.0, digest: "sha256:7372f3c59239e9a67c0017b3af32fabdf08c4dcc0631140161da9a47e3b142f0"}
+  - {ref: docker.io/longhornio/longhorn-share-manager:v1.13.0, digest: "sha256:53950f78b7af38b8a943c298cd3020622191a4661a13036f69d83c154cc8690d"}
+  - {ref: docker.io/longhornio/longhorn-ui:v1.13.0, digest: "sha256:f22fb0254ae50195c1635ce428dfae26375956b3d7bd39640fae8fe33a236023"}
+  - {ref: docker.io/longhornio/support-bundle-kit:v0.0.98, digest: "sha256:e64a01db35396f967175adcfd0177d2a50e75765c51efe86e55f13f49095d1ae"}
+
+# kube-vip: the control-plane address only (ARP), no Service load
+# balancing. The DaemonSet is Wildstone's own template, shaped like
+# `kube-vip manifest daemonset` v1.2.4 generates, with the image by digest.
+kube_vip_version: v1.2.4
+kube_vip_image: "ghcr.io/kube-vip/kube-vip:v1.2.4@sha256:dde4c0669d9058c74c69c0bc2f0122e26900e1e4b913c03577cb6e4e28083079"

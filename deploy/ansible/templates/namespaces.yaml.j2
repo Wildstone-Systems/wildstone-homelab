@@ -21,3 +21,14 @@ metadata:
   name: wildstone-host
   labels:
     pod-security.kubernetes.io/enforce: privileged
+---
+# Longhorn's manager, CSI plugin and instance managers mount host disks and
+# run privileged; its namespace says so. The vendored Longhorn manifest
+# also declares this namespace, without labels, under its own field
+# manager, so these labels stay.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: longhorn-system
+  labels:
+    pod-security.kubernetes.io/enforce: privileged
