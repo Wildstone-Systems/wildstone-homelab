@@ -35,6 +35,6 @@ L, in parts:
 - **3a:** signed playbook set (`wardstone/internal/playbook`, `wild-playbooks`); `prereqs.yml`, `k3s-server.yml` and `engine-addons.yml` (namespaces with Pod Security levels); `scripts/engine-try.sh`; the owner's throwaway-machine guide (`docs/operations/w050-engine-try.md`).
 - **3b**, in three parts:
   - **3b-1:** the authority record, per-node runtime ServiceAccounts and RBAC, the fencing ValidatingAdmissionPolicy, and `scripts/engine-fence-check.sh`. It found the frozen-record issue (contract §2.6).
-  - **3b-2:** Wardstone Lease election, epoch reporting and the epoch barrier (once §2.6 is accepted).
+  - **3b-2:** Wardstone Lease election, Keystone's epoch issuer and the epoch barrier (`wardstone/internal/leader`, `keystone/clusterauthority`, `keystone/kubeapi`, runtime DB `leader_epochs`). Library code with tests, including one against a real API server; the Wardstone-to-Keystone request and running it in `wardstoned` are 3c.
   - **3b-3:** Longhorn and kube-vip from pinned, vendored manifests.
-- **3c:** wiring into `install.sh` and release signing, `HostFacts` engine/leader fields, and the QEMU CI test.
+- **3c:** wiring into `install.sh` and release signing; running leadership in `wardstoned`, with the Wardstone-to-Keystone epoch request and runtime tokens; `HostFacts` engine/leader fields; and the QEMU CI test.

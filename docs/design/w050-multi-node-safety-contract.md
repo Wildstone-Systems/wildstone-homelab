@@ -1,7 +1,7 @@
 # W050 multi-node authority, storage, secret and recovery contract
 
 - **Issue:** [#180](https://github.com/Wildstone-Systems/wildstone-homelab/issues/180), the G4 gate in the [W050 plan](w050-migration-plan.md#revised-execution-gates)
-- **Status:** **accepted 2026-10-25 by the owner**: all five §8 recommendations, and the review corrections (requester and stamp fencing for deletes; no timed force-detach). This is the contract #180's test must prove. It still authorizes no deployment, credential or runtime code. **§2.6 (the epoch barrier) is proposed, not yet accepted.**
+- **Status:** **accepted 2026-10-25 by the owner**: all five §8 recommendations, and the review corrections (requester and stamp fencing for deletes; no timed force-detach). This is the contract #180's test must prove. It still authorizes no deployment, credential or runtime code. **§2.6 (the epoch barrier) was accepted by the owner on 2026-10-25, after the real-k3s retest on #159 reproduced the frozen record.**
 - **Evidence base:** `main` after #185, 2026-10-25.
 - **Answers:** the open questions in [`w050-leader-ops.md`](w050-leader-ops.md) §5 (1, 2 and the secret row) and ADR-W050 A1's authority, Lease, admission, secret, storage and recovery bullets.
 - **Amends:** ADR-W012 (secret custody on a cluster), ADR-W050 (A2), ADR-W051 (recovery path). The amendments are recorded in a follow-up.
@@ -44,9 +44,9 @@ Every rule here is something #180's disposable three-machine test has to prove (
 
 *To prove in #180:* a ValidatingAdmissionPolicy with a ConfigMap parameter really does refuse a partitioned old leader's creates, updates and deletes, and a same-node stale term's writes. The new leader must still be able to stamp and delete an untouched object from the previous epoch. If any of these fails, this section is revised before any cluster operation ships.
 
-### 2.6 The epoch barrier (proposed 2026-10-25, needs owner acceptance)
+### 2.6 The epoch barrier (accepted 2026-10-25)
 
-**Finding (slice 3b, #159):** the fence reads the authority record through the API server's own cache. Tested against a real Kubernetes v1.37.1 API server:
+**Finding (slice 3b, #159):** the fence reads the authority record through the API server's own cache. Tested against a real Kubernetes v1.37.1 API server, then confirmed on k3s v1.37.1+k3s1 on the owner's throwaway VM:
 - normally, a new epoch reaches admission within about 0.2 s;
 - **but after the fence's binding is deleted and re-created while the API server runs, the policy keeps using a frozen copy of the record.** The old leader stayed admitted 30 s+ after leadership moved, even with the record deleted. Only an API server restart cleared it. Changes to the policy object itself still took effect in about 1 s.
 

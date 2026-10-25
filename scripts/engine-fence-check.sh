@@ -175,6 +175,8 @@ can no "$leader" create configmaps kube-system
 can no "$leader" patch namespaces default
 can yes "$keystone" update configmaps/wildstone-authority wildstone-system
 can no "$keystone" create deployments "$apps"
+can yes "$keystone" get leases/wardstone-leader wildstone-system
+can no "$keystone" update leases/wardstone-leader wildstone-system
 
 echo "== no leader yet (epoch 0): nothing is written =="
 as_keystone_set 0 "" >/dev/null

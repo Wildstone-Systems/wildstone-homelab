@@ -3,7 +3,8 @@
 #     Wardstone sent a request. Writes Wildstone objects in wildstone-apps
 #     (fenced by wildstone-leader-fence), runs the leader Lease, reads the
 #     authority record.
-#   - keystone: updates the authority record, and nothing else.
+#   - keystone: updates the authority record and reads the leader Lease
+#     (to issue an epoch only to its holder), and nothing else.
 # Neither can change RBAC, admission policies or namespaces, exec into or
 # attach to pods, list Secrets, or touch any other namespace.
 {% for node in wildstone_runtime_nodes %}
@@ -111,6 +112,10 @@ rules:
     resources: ["configmaps"]
     resourceNames: ["wildstone-authority"]
     verbs: ["get", "update", "patch"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    resourceNames: ["wardstone-leader"]
+    verbs: ["get"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
