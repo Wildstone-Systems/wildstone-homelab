@@ -259,8 +259,8 @@ verify_engine_runtime() { # service account name
 }
 
 verify_engine_api() { # one URL, no shell/systemd argument separators
-  case "$1" in https://*) ;; *) fail "engine API must use https://" ;; esac
-  case "$1" in *[!a-zA-Z0-9.:/\[\]-]*) fail "engine API URL has unsupported characters" ;; esac
+  [[ "$1" =~ ^https://([a-zA-Z0-9][a-zA-Z0-9.-]*|\[[0-9a-fA-F:]+\]):[0-9]{1,5}$ ]] \
+    || fail "engine API must be https://<host>:<port> without a path or credentials"
 }
 
 if [ -n "$ENGINE_API" ]; then
