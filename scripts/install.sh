@@ -245,6 +245,7 @@ esac
 verify_engine_runtime() { # service account name
   local account="$1" token="/etc/wildstone/k3s/$1.token" timer="wildstone-runtime-token@$1.timer"
   [ -n "$ENGINE_CA" ] || fail "--engine-ca is required with engine leadership"
+  case "$ENGINE_CA" in /*) ;; *) fail "--engine-ca must be an absolute path" ;; esac
   case "$ENGINE_CA" in *[!a-zA-Z0-9._/-]*) fail "engine CA path has unsupported characters" ;; esac
   if [ ! -f "$ENGINE_CA" ] || [ ! -r "$ENGINE_CA" ]; then
     fail "engine CA is missing or unreadable: $ENGINE_CA"
