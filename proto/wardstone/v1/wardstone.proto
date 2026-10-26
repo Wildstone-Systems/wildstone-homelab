@@ -798,6 +798,15 @@ message HostFactsResult {
   // CPU line whenever the machine was idle. An agent from before this
   // field never sets it; zero with it unset still means "not measured".
   bool cpu_measured = 11;
+  // Installed host engine. Empty means the engine was not detected; a
+  // version failure leaves engine_version empty rather than guessing.
+  string engine = 12;
+  string engine_version = 13;
+  // True only while this Wardstone is serving a term after the API barrier
+  // opened. A Lease holder alone is not an active leader.
+  bool engine_leader = 14;
+  // The active local term's epoch, or zero when engine_leader is false.
+  uint64 leader_epoch = 15;
 }
 
 message Health {}

@@ -4714,7 +4714,16 @@ type HostFactsResult struct {
 	// to 0 and read as "not measured" — so the household's card lost its
 	// CPU line whenever the machine was idle. An agent from before this
 	// field never sets it; zero with it unset still means "not measured".
-	CpuMeasured   bool `protobuf:"varint,11,opt,name=cpu_measured,json=cpuMeasured,proto3" json:"cpu_measured,omitempty"`
+	CpuMeasured bool `protobuf:"varint,11,opt,name=cpu_measured,json=cpuMeasured,proto3" json:"cpu_measured,omitempty"`
+	// Installed host engine. Empty means the engine was not detected; a
+	// version failure leaves engine_version empty rather than guessing.
+	Engine        string `protobuf:"bytes,12,opt,name=engine,proto3" json:"engine,omitempty"`
+	EngineVersion string `protobuf:"bytes,13,opt,name=engine_version,json=engineVersion,proto3" json:"engine_version,omitempty"`
+	// True only while this Wardstone is serving a term after the API barrier
+	// opened. A Lease holder alone is not an active leader.
+	EngineLeader bool `protobuf:"varint,14,opt,name=engine_leader,json=engineLeader,proto3" json:"engine_leader,omitempty"`
+	// The active local term's epoch, or zero when engine_leader is false.
+	LeaderEpoch   uint64 `protobuf:"varint,15,opt,name=leader_epoch,json=leaderEpoch,proto3" json:"leader_epoch,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -4824,6 +4833,34 @@ func (x *HostFactsResult) GetCpuMeasured() bool {
 		return x.CpuMeasured
 	}
 	return false
+}
+
+func (x *HostFactsResult) GetEngine() string {
+	if x != nil {
+		return x.Engine
+	}
+	return ""
+}
+
+func (x *HostFactsResult) GetEngineVersion() string {
+	if x != nil {
+		return x.EngineVersion
+	}
+	return ""
+}
+
+func (x *HostFactsResult) GetEngineLeader() bool {
+	if x != nil {
+		return x.EngineLeader
+	}
+	return false
+}
+
+func (x *HostFactsResult) GetLeaderEpoch() uint64 {
+	if x != nil {
+		return x.LeaderEpoch
+	}
+	return 0
 }
 
 type Health struct {
@@ -5202,7 +5239,6 @@ func (x *ListBlockDevicesResult) GetDevices() []*BlockDevice {
 //   - every option must match ^[a-zA-Z0-9._=/-]+$ (no commas/whitespace —
 //     fstab field injection); nosuid and nodev are mandatory and appended
 //     if the caller omitted them.
-//
 // The agent owns a marker-delimited block in /etc/fstab ("# BEGIN
 // wildstone-managed" / "# END wildstone-managed") — lines outside that
 // block are never touched. Ordering: the actual mount is attempted FIRST;
@@ -7887,7 +7923,7 @@ const file_wardstone_v1_wardstone_proto_rawDesc = "" +
 	"\x15ReadManagedFileResult\x12\x18\n" +
 	"\acontent\x18\x01 \x01(\fR\acontent\x12*\n" +
 	"\x11source_sha256_hex\x18\x02 \x01(\tR\x0fsourceSha256Hex\"\v\n" +
-	"\tHostFacts\"\x9c\x03\n" +
+	"\tHostFacts\"\xa3\x04\n" +
 	"\x0fHostFactsResult\x12\x1a\n" +
 	"\bhostname\x18\x01 \x01(\tR\bhostname\x12\x0e\n" +
 	"\x02os\x18\x02 \x01(\tR\x02os\x12\x16\n" +
@@ -7900,7 +7936,11 @@ const file_wardstone_v1_wardstone_proto_rawDesc = "" +
 	"\x13mem_available_bytes\x18\t \x01(\x04R\x11memAvailableBytes\x12(\n" +
 	"\x10cpu_busy_percent\x18\n" +
 	" \x01(\rR\x0ecpuBusyPercent\x12!\n" +
-	"\fcpu_measured\x18\v \x01(\bR\vcpuMeasured\"\b\n" +
+	"\fcpu_measured\x18\v \x01(\bR\vcpuMeasured\x12\x16\n" +
+	"\x06engine\x18\f \x01(\tR\x06engine\x12%\n" +
+	"\x0eengine_version\x18\r \x01(\tR\rengineVersion\x12#\n" +
+	"\rengine_leader\x18\x0e \x01(\bR\fengineLeader\x12!\n" +
+	"\fleader_epoch\x18\x0f \x01(\x04R\vleaderEpoch\"\b\n" +
 	"\x06Health\"6\n" +
 	"\fHealthResult\x12\x0e\n" +
 	"\x02ok\x18\x01 \x01(\bR\x02ok\x12\x16\n" +

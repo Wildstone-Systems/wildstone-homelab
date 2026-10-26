@@ -23,6 +23,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"google.golang.org/grpc"
@@ -166,7 +167,9 @@ import (
 //
 // 28: adds IssueLeaderEpoch, a Wardstone-to-Keystone mTLS RPC with no
 // caller-selected leader identity. Keystone derives it from the peer cert.
-const ProtocolMinor = 28
+// 29: HostFacts reports the installed engine/version and this node's
+// active, barrier-cleared leadership term.
+const ProtocolMinor = 29
 
 // maxUpdateMsgBytes is the gRPC message size cap on both ends of the
 // session/join connections (ADR-W003 W5). SelfUpdate ships the new binary
@@ -239,6 +242,9 @@ type Config struct {
 type Agent struct {
 	cfg Config
 	log *slog.Logger
+	// Zero outside a barrier-cleared leadership term. HostFacts can be
+	// dispatched concurrently with election and reads this atomically.
+	activeLeaderEpoch atomic.Uint64
 	// runtime is the node's container runtime; the Docker Engine client
 	// is the only one (runtime.go).
 	runtime runtimeBackend

@@ -53,6 +53,12 @@ type machineStats struct {
 	Cores       int    `json:"cores,omitempty"`
 	MemoryTotal uint64 `json:"memoryTotalBytes,omitempty"`
 	DiskTotal   uint64 `json:"diskTotalBytes,omitempty"`
+	// Observational status from HostFacts, cached for machineStatsTTL. Never
+	// use it to authorize cluster writes; the live epoch barrier does that.
+	Engine        string `json:"engine,omitempty"`
+	EngineVersion string `json:"engineVersion,omitempty"`
+	EngineLeader  bool   `json:"engineLeader"`
+	LeaderEpoch   uint64 `json:"leaderEpoch,omitempty"`
 	// Node is not sent to the household surface — §7 gives that card no
 	// hostnames — but it is kept here so the cache can tell two
 	// machines apart.
@@ -107,7 +113,9 @@ func (s *Server) machineReadings(ctx context.Context, node string) (machineStats
 	}
 
 	got := machineStats{node: node, Cores: int(facts.GetNumCpu()),
-		MemoryTotal: facts.GetMemTotalBytes(), DiskTotal: facts.GetRootDiskTotalBytes()}
+		MemoryTotal: facts.GetMemTotalBytes(), DiskTotal: facts.GetRootDiskTotalBytes(),
+		Engine: facts.GetEngine(), EngineVersion: facts.GetEngineVersion(),
+		EngineLeader: facts.GetEngineLeader(), LeaderEpoch: facts.GetLeaderEpoch()}
 	// A measured 0% is a reading — an idle machine — and an agent that
 	// says so is believed. From an agent too old to say, zero still means
 	// "not measured" (wsv1.HostFactsResult.cpu_measured).
