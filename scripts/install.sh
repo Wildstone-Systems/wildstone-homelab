@@ -246,7 +246,9 @@ verify_engine_runtime() { # service account name
   local account="$1" token="/etc/wildstone/k3s/$1.token" timer="wildstone-runtime-token@$1.timer"
   [ -n "$ENGINE_CA" ] || fail "--engine-ca is required with engine leadership"
   case "$ENGINE_CA" in *[!a-zA-Z0-9._/-]*) fail "engine CA path has unsupported characters" ;; esac
-  [ -f "$ENGINE_CA" ] && [ -r "$ENGINE_CA" ] || fail "engine CA is missing or unreadable: $ENGINE_CA"
+  if [ ! -f "$ENGINE_CA" ] || [ ! -r "$ENGINE_CA" ]; then
+    fail "engine CA is missing or unreadable: $ENGINE_CA"
+  fi
   [ "$(stat -c '%a %u %g' /etc/wildstone/k3s 2>/dev/null || true)" = '700 0 0' ] \
     || fail "engine token directory must be 0700 root:root; run the signed runtime-token playbook first"
   [ "$(stat -c '%a %u %g' "$token" 2>/dev/null || true)" = '600 0 0' ] \
