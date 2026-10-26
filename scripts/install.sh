@@ -4,6 +4,7 @@
 #   Control plane:
 #     sudo ./install.sh --role keystone [--console-dir <dir>] [--catalog-dir <dir>]
 #          [--keystone-arg <flag> ...] [--version vX.Y.Z]
+#          [--engine-api https://127.0.0.1:6443 --engine-ca <ca.pem>]
 #
 #   The Console is installed from the release's own console_dist.tar.gz
 #   and needs no Node on the host; --console-dir overrides it with a
@@ -12,6 +13,7 @@
 #     sudo ./install.sh --role node --keystone <host:9440> \
 #          --join-token <tok> [--ca-fingerprint <hex>] \
 #          [--node-id <id>] [--skip-docker] [--version vX.Y.Z]
+#          [--engine-apis https://127.0.0.1:6443 --engine-ca <ca.pem>]
 #   Upgrade an already-joined node (no token; reuses wardstoned.env):
 #     sudo ./install.sh --role node [--version vX.Y.Z]
 #   --wallpaper-dir overrides the pictures the themes ship with, the
@@ -78,6 +80,9 @@ ROLE=""
 KEYSTONE_ADDR=""
 JOIN_TOKEN=""
 CA_FINGERPRINT=""
+ENGINE_API=""
+ENGINE_APIS=""
+ENGINE_CA=""
 NODE_ID="$(hostname -s 2>/dev/null || echo node)"
 NODE_ID_SET=0
 NODE_JOINED=0
@@ -150,6 +155,9 @@ while [ $# -gt 0 ]; do
     --keystone)       KEYSTONE_ADDR="$2"; shift 2 ;;
     --join-token)     JOIN_TOKEN="$2"; shift 2 ;;
     --ca-fingerprint) CA_FINGERPRINT="$2"; shift 2 ;;
+    --engine-api)     ENGINE_API="$2"; shift 2 ;;
+    --engine-apis)    ENGINE_APIS="$2"; shift 2 ;;
+    --engine-ca)      ENGINE_CA="$2"; shift 2 ;;
     --node-id)        NODE_ID="$2"; NODE_ID_SET=1; shift 2 ;;
     --version)        VERSION="$2"; shift 2 ;;
     --artifact-dir)   ARTIFACT_DIR="$2"; shift 2 ;;
@@ -196,8 +204,12 @@ command -v tar >/dev/null       || fail "tar is required"
 command -v sha256sum >/dev/null || fail "sha256sum is required"
 
 case "$ROLE" in
-  keystone) ;;
+  keystone)
+    [ -z "$ENGINE_APIS" ] || fail "--engine-apis is for --role node"
+    [ -n "$ENGINE_API" ] || [ -z "$ENGINE_CA" ] || fail "--engine-ca needs --engine-api"
+    ;;
   node)
+    [ -z "$ENGINE_API" ] || fail "--engine-api is for --role keystone"
     # An already-joined node (cert, key and CA on disk, as agent.hasIdentity
     # requires) upgrades without a token; the agent only needs one when it has
     # no identity yet. Reuse the existing env
@@ -213,6 +225,8 @@ case "$ROLE" in
             NODE_ID)        [ "$NODE_ID_SET" = 1 ]        || NODE_ID="$v" ;;
             KEYSTONE_ADDR)  [ -n "$KEYSTONE_ADDR" ]       || KEYSTONE_ADDR="$v" ;;
             CA_FINGERPRINT) [ -n "$CA_FINGERPRINT" ]      || CA_FINGERPRINT="$v" ;;
+            ENGINE_APIS)    [ -n "$ENGINE_APIS" ]         || ENGINE_APIS="$v" ;;
+            ENGINE_CA)      [ -n "$ENGINE_CA" ]           || ENGINE_CA="$v" ;;
           esac
         done < /etc/wildstone/wardstoned.env
       fi
@@ -220,9 +234,45 @@ case "$ROLE" in
     [ -n "$JOIN_TOKEN" ] || [ "$NODE_JOINED" = 1 ] || fail "--join-token is required for --role node (mint one: wild node mint-join)"
     [ -n "$KEYSTONE_ADDR" ] || fail "--keystone <host:port> is required for --role node"
     [ -n "$CA_FINGERPRINT" ] || log "WARNING: no --ca-fingerprint — the join falls back to trust-on-first-use (ADR-W003 W3 recommends pinning)"
+    [ -n "$ENGINE_APIS" ] || [ -z "$ENGINE_CA" ] || fail "--engine-ca needs --engine-apis"
     ;;
   *) fail "--role must be keystone or node" ;;
 esac
+
+# Runtime credentials come from the separately verified, signed
+# engine-runtime-tokens.yml playbook. Never substitute k3s.yaml here: it
+# grants administrator authority that the running services must not hold.
+verify_engine_runtime() { # service account name
+  local account="$1" token="/etc/wildstone/k3s/$1.token" timer="wildstone-runtime-token@$1.timer"
+  [ -n "$ENGINE_CA" ] || fail "--engine-ca is required with engine leadership"
+  case "$ENGINE_CA" in *[!a-zA-Z0-9._/-]*) fail "engine CA path has unsupported characters" ;; esac
+  [ -f "$ENGINE_CA" ] && [ -r "$ENGINE_CA" ] || fail "engine CA is missing or unreadable: $ENGINE_CA"
+  [ "$(stat -c '%a %u %g' /etc/wildstone/k3s 2>/dev/null || true)" = '700 0 0' ] \
+    || fail "engine token directory must be 0700 root:root; run the signed runtime-token playbook first"
+  [ "$(stat -c '%a %u %g' "$token" 2>/dev/null || true)" = '600 0 0' ] \
+    || fail "$account token must be 0600 root:root; run the signed runtime-token playbook first"
+  if ! systemctl is-enabled --quiet "$timer" || ! systemctl is-active --quiet "$timer"; then
+    fail "$timer must be enabled and active before starting a service with its token"
+  fi
+}
+
+verify_engine_api() { # one URL, no shell/systemd argument separators
+  case "$1" in https://*) ;; *) fail "engine API must use https://" ;; esac
+  case "$1" in *[!a-zA-Z0-9.:/\[\]-]*) fail "engine API URL has unsupported characters" ;; esac
+}
+
+if [ -n "$ENGINE_API" ]; then
+  verify_engine_api "$ENGINE_API"
+  verify_engine_runtime keystone
+fi
+if [ -n "$ENGINE_APIS" ]; then
+  [[ "$NODE_ID" =~ ^[a-z0-9]([-a-z0-9.]{0,51}[a-z0-9])?$ ]] \
+    || fail "engine node ID must match the Kubernetes node name used by the signed playbook"
+  case "$ENGINE_APIS" in ,*|*,|*,,*) fail "--engine-apis contains an empty API URL" ;; esac
+  IFS=',' read -ra engine_api_list <<< "$ENGINE_APIS"
+  for engine_api in "${engine_api_list[@]}"; do verify_engine_api "$engine_api"; done
+  verify_engine_runtime "wardstone-$NODE_ID"
+fi
 
 
 # ---------------------------------------------------------------- steps 1-4
@@ -1841,6 +1891,10 @@ if [ "$ROLE" = keystone ]; then
     KEYSTONE_ARGS="$KEYSTONE_ARGS -api-listen 0.0.0.0:9441"
     KEYSTONE_ARGS_SET=1
   fi
+  if [ -n "$ENGINE_API" ]; then
+    KEYSTONE_ARGS="$KEYSTONE_ARGS -engine-api $ENGINE_API -engine-ca $ENGINE_CA -engine-token /etc/wildstone/k3s/keystone.token"
+    KEYSTONE_ARGS_SET=1
+  fi
   if [ "$KEYSTONE_ARGS_SET" = 0 ] && [ -f "$KEYSTONE_ENV" ]; then
     log "keeping the keystone flags already in $KEYSTONE_ENV"
   else
@@ -1956,12 +2010,19 @@ fi
 # meaningful until first join completes (the agent persists its identity
 # in its data dir afterwards).
 ENV_FILE=/etc/wildstone/wardstoned.env
+ENGINE_ARGS=""
+if [ -n "$ENGINE_APIS" ]; then
+  ENGINE_ARGS="-engine-apis $ENGINE_APIS -engine-ca $ENGINE_CA -engine-token /etc/wildstone/k3s/wardstone-$NODE_ID.token"
+fi
 umask 077
 cat > "$ENV_FILE" <<EOF
 NODE_ID=$NODE_ID
 KEYSTONE_ADDR=$KEYSTONE_ADDR
 JOIN_TOKEN=$JOIN_TOKEN
 CA_FINGERPRINT=$CA_FINGERPRINT
+ENGINE_APIS=$ENGINE_APIS
+ENGINE_CA=$ENGINE_CA
+ENGINE_ARGS=$ENGINE_ARGS
 EOF
 
 install_unit wardstoned <<'UNIT'
@@ -1973,7 +2034,7 @@ Requires=docker.service
 
 [Service]
 EnvironmentFile=/etc/wildstone/wardstoned.env
-ExecStart=/usr/local/bin/wardstoned -node-id ${NODE_ID} -keystone ${KEYSTONE_ADDR} -join-token ${JOIN_TOKEN} -ca-fingerprint ${CA_FINGERPRINT}
+ExecStart=/usr/local/bin/wardstoned -node-id ${NODE_ID} -keystone ${KEYSTONE_ADDR} -join-token ${JOIN_TOKEN} -ca-fingerprint ${CA_FINGERPRINT} $ENGINE_ARGS
 Restart=on-failure
 RestartSec=3
 UMask=0077
