@@ -738,9 +738,7 @@ type KeystoneMessage struct {
 	// pinned from JoinResponse.op_signing_public_key.
 	//
 	// Signed payload:
-	//
-	//	sha256("wardstone-op-v1" || op_id || deterministic-marshal(op))
-	//
+	//   sha256("wardstone-op-v1" || op_id || deterministic-marshal(op))
 	// where deterministic-marshal uses
 	// proto.MarshalOptions{Deterministic: true} over the Operation message,
 	// op_id is the raw (unterminated) string bytes, and "wardstone-op-v1"
@@ -4084,8 +4082,8 @@ type WriteManagedFile struct {
 	// writing (protocol minor 9). Keystone never holds secret values, so a
 	// rendered config carries references and the node substitutes them:
 	//
-	//	secret/<name>        -> the stored value
-	//	pbkdf2:secret/<name> -> $pbkdf2-sha512$... of the stored value
+	//   secret/<name>        -> the stored value
+	//   pbkdf2:secret/<name> -> $pbkdf2-sha512$... of the stored value
 	//
 	// Off by default and per-write, because a file may legitimately contain
 	// that text without meaning it — an agent that rewrote every managed
@@ -7015,14 +7013,13 @@ type Radio struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Stable identity key, deterministic for the same hardware. The prefix
 	// names how stable it is:
-	//
-	//	"serial-by-id:<alias>"  udev's /dev/serial/by-id name (vendor,
-	//	                        model, serial number, interface) — follows
-	//	                        the device to any USB port.
-	//	"usb:<vid>:<pid>:<serial>" a Bluetooth adapter whose USB device
-	//	                        reports a serial number.
-	//	"sysfs:<device path>"   the kernel device path — stable while the
-	//	                        device stays in the same physical port.
+	//   "serial-by-id:<alias>"  udev's /dev/serial/by-id name (vendor,
+	//                           model, serial number, interface) — follows
+	//                           the device to any USB port.
+	//   "usb:<vid>:<pid>:<serial>" a Bluetooth adapter whose USB device
+	//                           reports a serial number.
+	//   "sysfs:<device path>"   the kernel device path — stable while the
+	//                           device stays in the same physical port.
 	Id   string    `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	Kind RadioKind `protobuf:"varint,2,opt,name=kind,proto3,enum=wardstone.v1.RadioKind" json:"kind,omitempty"`
 	// Why kind was chosen, e.g. "usb id 1cf1:0030" or "no identifying
@@ -7516,6 +7513,87 @@ func (x *HomeAutomationReadinessResult) GetChecks() []*ReadinessCheck {
 	return nil
 }
 
+// Leadership RPC (minor 28). Identity comes only from the mTLS peer.
+type IssueLeaderEpochRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *IssueLeaderEpochRequest) Reset() {
+	*x = IssueLeaderEpochRequest{}
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[96]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *IssueLeaderEpochRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*IssueLeaderEpochRequest) ProtoMessage() {}
+
+func (x *IssueLeaderEpochRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[96]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use IssueLeaderEpochRequest.ProtoReflect.Descriptor instead.
+func (*IssueLeaderEpochRequest) Descriptor() ([]byte, []int) {
+	return file_wardstone_v1_wardstone_proto_rawDescGZIP(), []int{96}
+}
+
+type IssueLeaderEpochResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Epoch         uint64                 `protobuf:"varint,1,opt,name=epoch,proto3" json:"epoch,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *IssueLeaderEpochResponse) Reset() {
+	*x = IssueLeaderEpochResponse{}
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[97]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *IssueLeaderEpochResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*IssueLeaderEpochResponse) ProtoMessage() {}
+
+func (x *IssueLeaderEpochResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[97]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use IssueLeaderEpochResponse.ProtoReflect.Descriptor instead.
+func (*IssueLeaderEpochResponse) Descriptor() ([]byte, []int) {
+	return file_wardstone_v1_wardstone_proto_rawDescGZIP(), []int{97}
+}
+
+func (x *IssueLeaderEpochResponse) GetEpoch() uint64 {
+	if x != nil {
+		return x.Epoch
+	}
+	return 0
+}
+
 var File_wardstone_v1_wardstone_proto protoreflect.FileDescriptor
 
 const file_wardstone_v1_wardstone_proto_rawDesc = "" +
@@ -7996,7 +8074,10 @@ const file_wardstone_v1_wardstone_proto_rawDesc = "" +
 	"\n" +
 	"interfaces\x18\x02 \x03(\v2\x1b.wardstone.v1.NodeInterfaceR\n" +
 	"interfaces\x124\n" +
-	"\x06checks\x18\x03 \x03(\v2\x1c.wardstone.v1.ReadinessCheckR\x06checks*\xa8\x01\n" +
+	"\x06checks\x18\x03 \x03(\v2\x1c.wardstone.v1.ReadinessCheckR\x06checks\"\x19\n" +
+	"\x17IssueLeaderEpochRequest\"0\n" +
+	"\x18IssueLeaderEpochResponse\x12\x14\n" +
+	"\x05epoch\x18\x01 \x01(\x04R\x05epoch*\xa8\x01\n" +
 	"\tErrorCode\x12\x1a\n" +
 	"\x16ERROR_CODE_UNSPECIFIED\x10\x00\x12\x16\n" +
 	"\x12ERROR_CODE_INVALID\x10\x01\x12\x18\n" +
@@ -8028,11 +8109,12 @@ const file_wardstone_v1_wardstone_proto_rawDesc = "" +
 	"\x15READINESS_STATE_READY\x10\x01\x12\x1b\n" +
 	"\x17READINESS_STATE_MISSING\x10\x02\x12\x1f\n" +
 	"\x1bREADINESS_STATE_UNSUPPORTED\x10\x03\x12\x1b\n" +
-	"\x17READINESS_STATE_UNKNOWN\x10\x042\xdc\x01\n" +
+	"\x17READINESS_STATE_UNKNOWN\x10\x042\xbf\x02\n" +
 	"\x0fKeystoneGateway\x12=\n" +
 	"\x04Join\x12\x19.wardstone.v1.JoinRequest\x1a\x1a.wardstone.v1.JoinResponse\x12H\n" +
 	"\aSession\x12\x1a.wardstone.v1.AgentMessage\x1a\x1d.wardstone.v1.KeystoneMessage(\x010\x01\x12@\n" +
-	"\x05Renew\x12\x1a.wardstone.v1.RenewRequest\x1a\x1b.wardstone.v1.RenewResponseBSZQgithub.com/Wildstone-Systems/wildstone-homelab/proto/gen/wardstone/v1;wardstonev1b\x06proto3"
+	"\x05Renew\x12\x1a.wardstone.v1.RenewRequest\x1a\x1b.wardstone.v1.RenewResponse\x12a\n" +
+	"\x10IssueLeaderEpoch\x12%.wardstone.v1.IssueLeaderEpochRequest\x1a&.wardstone.v1.IssueLeaderEpochResponseBSZQgithub.com/Wildstone-Systems/wildstone-homelab/proto/gen/wardstone/v1;wardstonev1b\x06proto3"
 
 var (
 	file_wardstone_v1_wardstone_proto_rawDescOnce sync.Once
@@ -8047,7 +8129,7 @@ func file_wardstone_v1_wardstone_proto_rawDescGZIP() []byte {
 }
 
 var file_wardstone_v1_wardstone_proto_enumTypes = make([]protoimpl.EnumInfo, 6)
-var file_wardstone_v1_wardstone_proto_msgTypes = make([]protoimpl.MessageInfo, 99)
+var file_wardstone_v1_wardstone_proto_msgTypes = make([]protoimpl.MessageInfo, 101)
 var file_wardstone_v1_wardstone_proto_goTypes = []any{
 	(ErrorCode)(0),                        // 0: wardstone.v1.ErrorCode
 	(ContainerNetworkMode)(0),             // 1: wardstone.v1.ContainerNetworkMode
@@ -8151,9 +8233,11 @@ var file_wardstone_v1_wardstone_proto_goTypes = []any{
 	(*ReadinessCheck)(nil),                // 99: wardstone.v1.ReadinessCheck
 	(*NodeInterface)(nil),                 // 100: wardstone.v1.NodeInterface
 	(*HomeAutomationReadinessResult)(nil), // 101: wardstone.v1.HomeAutomationReadinessResult
-	nil,                                   // 102: wardstone.v1.EnsureContainer.EnvEntry
-	nil,                                   // 103: wardstone.v1.EnsureContainer.LabelsEntry
-	nil,                                   // 104: wardstone.v1.InspectContainerResult.LabelsEntry
+	(*IssueLeaderEpochRequest)(nil),       // 102: wardstone.v1.IssueLeaderEpochRequest
+	(*IssueLeaderEpochResponse)(nil),      // 103: wardstone.v1.IssueLeaderEpochResponse
+	nil,                                   // 104: wardstone.v1.EnsureContainer.EnvEntry
+	nil,                                   // 105: wardstone.v1.EnsureContainer.LabelsEntry
+	nil,                                   // 106: wardstone.v1.InspectContainerResult.LabelsEntry
 }
 var file_wardstone_v1_wardstone_proto_depIdxs = []int32{
 	11,  // 0: wardstone.v1.AgentMessage.hello:type_name -> wardstone.v1.Hello
@@ -8237,15 +8321,15 @@ var file_wardstone_v1_wardstone_proto_depIdxs = []int32{
 	97,  // 78: wardstone.v1.OpResult.list_radios:type_name -> wardstone.v1.ListRadiosResult
 	101, // 79: wardstone.v1.OpResult.home_automation_readiness:type_name -> wardstone.v1.HomeAutomationReadinessResult
 	0,   // 80: wardstone.v1.OpError.code:type_name -> wardstone.v1.ErrorCode
-	102, // 81: wardstone.v1.EnsureContainer.env:type_name -> wardstone.v1.EnsureContainer.EnvEntry
+	104, // 81: wardstone.v1.EnsureContainer.env:type_name -> wardstone.v1.EnsureContainer.EnvEntry
 	18,  // 82: wardstone.v1.EnsureContainer.ports:type_name -> wardstone.v1.PortBinding
 	20,  // 83: wardstone.v1.EnsureContainer.mounts:type_name -> wardstone.v1.Mount
-	103, // 84: wardstone.v1.EnsureContainer.labels:type_name -> wardstone.v1.EnsureContainer.LabelsEntry
+	105, // 84: wardstone.v1.EnsureContainer.labels:type_name -> wardstone.v1.EnsureContainer.LabelsEntry
 	19,  // 85: wardstone.v1.EnsureContainer.devices:type_name -> wardstone.v1.DeviceMapping
 	17,  // 86: wardstone.v1.EnsureContainer.resources:type_name -> wardstone.v1.ContainerResources
 	1,   // 87: wardstone.v1.EnsureContainer.network_mode:type_name -> wardstone.v1.ContainerNetworkMode
 	2,   // 88: wardstone.v1.PortBinding.protocol:type_name -> wardstone.v1.PortProtocol
-	104, // 89: wardstone.v1.InspectContainerResult.labels:type_name -> wardstone.v1.InspectContainerResult.LabelsEntry
+	106, // 89: wardstone.v1.InspectContainerResult.labels:type_name -> wardstone.v1.InspectContainerResult.LabelsEntry
 	61,  // 90: wardstone.v1.ListBlockDevicesResult.devices:type_name -> wardstone.v1.BlockDevice
 	70,  // 91: wardstone.v1.ListPortsResult.ports:type_name -> wardstone.v1.ListeningPort
 	3,   // 92: wardstone.v1.EnsureSecret.kind:type_name -> wardstone.v1.SecretKind
@@ -8258,11 +8342,13 @@ var file_wardstone_v1_wardstone_proto_depIdxs = []int32{
 	6,   // 99: wardstone.v1.KeystoneGateway.Join:input_type -> wardstone.v1.JoinRequest
 	10,  // 100: wardstone.v1.KeystoneGateway.Session:input_type -> wardstone.v1.AgentMessage
 	8,   // 101: wardstone.v1.KeystoneGateway.Renew:input_type -> wardstone.v1.RenewRequest
-	7,   // 102: wardstone.v1.KeystoneGateway.Join:output_type -> wardstone.v1.JoinResponse
-	12,  // 103: wardstone.v1.KeystoneGateway.Session:output_type -> wardstone.v1.KeystoneMessage
-	9,   // 104: wardstone.v1.KeystoneGateway.Renew:output_type -> wardstone.v1.RenewResponse
-	102, // [102:105] is the sub-list for method output_type
-	99,  // [99:102] is the sub-list for method input_type
+	102, // 102: wardstone.v1.KeystoneGateway.IssueLeaderEpoch:input_type -> wardstone.v1.IssueLeaderEpochRequest
+	7,   // 103: wardstone.v1.KeystoneGateway.Join:output_type -> wardstone.v1.JoinResponse
+	12,  // 104: wardstone.v1.KeystoneGateway.Session:output_type -> wardstone.v1.KeystoneMessage
+	9,   // 105: wardstone.v1.KeystoneGateway.Renew:output_type -> wardstone.v1.RenewResponse
+	103, // 106: wardstone.v1.KeystoneGateway.IssueLeaderEpoch:output_type -> wardstone.v1.IssueLeaderEpochResponse
+	103, // [103:107] is the sub-list for method output_type
+	99,  // [99:103] is the sub-list for method input_type
 	99,  // [99:99] is the sub-list for extension type_name
 	99,  // [99:99] is the sub-list for extension extendee
 	0,   // [0:99] is the sub-list for field type_name
@@ -8364,7 +8450,7 @@ func file_wardstone_v1_wardstone_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_wardstone_v1_wardstone_proto_rawDesc), len(file_wardstone_v1_wardstone_proto_rawDesc)),
 			NumEnums:      6,
-			NumMessages:   99,
+			NumMessages:   101,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

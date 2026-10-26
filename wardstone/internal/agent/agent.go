@@ -163,7 +163,10 @@ import (
 //	use the host's BlueZ. No schema change. An older agent refuses it as
 //	outside its managed prefixes, so Keystone refuses to dispatch such a
 //	spec to one (resource.HostSystemMountProtocolMinor).
-const ProtocolMinor = 27
+//
+// 28: adds IssueLeaderEpoch, a Wardstone-to-Keystone mTLS RPC with no
+// caller-selected leader identity. Keystone derives it from the peer cert.
+const ProtocolMinor = 28
 
 // maxUpdateMsgBytes is the gRPC message size cap on both ends of the
 // session/join connections (ADR-W003 W5). SelfUpdate ships the new binary
@@ -177,6 +180,12 @@ type Config struct {
 	KeystoneAddr string // host:port
 	DataDir      string // certs + CA live here
 	JoinToken    string // consumed on first run only
+	// EngineAPIs lists every server's local API URL. The first is used for
+	// Lease election; the epoch barrier probes all of them before serving.
+	// Empty disables cluster leadership for installations without k3s.
+	EngineAPIs      []string
+	EngineCAFile    string
+	EngineTokenFile string
 
 	// CAFingerprint, if set, is the hex-encoded sha256 of Keystone's CA
 	// certificate DER. When set, join uses CA pinning instead of TOFU
@@ -244,6 +253,12 @@ func New(cfg Config) (*Agent, error) {
 	if cfg.NodeID == "" || cfg.KeystoneAddr == "" || cfg.DataDir == "" {
 		return nil, fmt.Errorf("NodeID, KeystoneAddr and DataDir are required")
 	}
+	if len(cfg.EngineAPIs) == 0 && (cfg.EngineCAFile != "" || cfg.EngineTokenFile != "") || len(cfg.EngineAPIs) > 0 && (cfg.EngineCAFile == "" || cfg.EngineTokenFile == "") {
+		return nil, fmt.Errorf("EngineAPIs, EngineCAFile and EngineTokenFile must be set together")
+	}
+	if len(cfg.EngineAPIs) > 0 && !engineNodeName.MatchString(cfg.NodeID) {
+		return nil, fmt.Errorf("engine node ID %q is not a Kubernetes node name", cfg.NodeID)
+	}
 	if len(cfg.ManagedPrefixes) == 0 {
 		cfg.ManagedPrefixes = []string{"/etc/wildstone", "/srv/wildstone"}
 	}
@@ -308,6 +323,17 @@ func (a *Agent) Run(ctx context.Context) error {
 		if err := a.join(ctx); err != nil {
 			return fmt.Errorf("join: %w", err)
 		}
+	}
+	if len(a.cfg.EngineAPIs) > 0 {
+		engineCtx, cancelEngine := context.WithCancel(ctx)
+		engineDone := make(chan struct{})
+		go func() {
+			defer close(engineDone)
+			if err := a.runLeadership(engineCtx); err != nil && engineCtx.Err() == nil {
+				a.log.Error("cluster leadership stopped", "error", err)
+			}
+		}()
+		defer func() { cancelEngine(); <-engineDone }()
 	}
 	attempt := 0
 	for {

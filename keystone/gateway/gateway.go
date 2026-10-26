@@ -10,10 +10,12 @@ import (
 	"crypto/sha256"
 	"crypto/tls"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
 	"os"
+	"regexp"
 	"sort"
 	"sync"
 	"time"
@@ -25,6 +27,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/clusterauthority"
 	wsv1 "github.com/Wildstone-Systems/wildstone-homelab/proto/gen/wardstone/v1"
 )
 
@@ -32,7 +35,14 @@ import (
 // W1). Keep in sync with the .proto comment on KeystoneMessage.op_signature.
 const opSignDomainPrefix = "wardstone-op-v1"
 
+type EpochIssuer interface {
+	Issue(context.Context, string) (uint64, error)
+}
+
 type Config struct {
+	// EpochIssuer is installed only when Keystone has a scoped Kubernetes
+	// client. A missing issuer makes the RPC fail closed.
+	EpochIssuer EpochIssuer
 	// JoinTokens maps token -> allowed. Static, non-expiring, single-use
 	// per process, and never written to tokens.json — the dev/test path.
 	// MintJoinToken is the documented production path (ADR-W003 W2):
@@ -64,6 +74,41 @@ type Config struct {
 	// Used by New's own DataDir-loading path; not settable from outside
 	// the package.
 	opSigningKey ed25519.PrivateKey
+}
+
+var engineNodeID = regexp.MustCompile(`^[a-z0-9]([-a-z0-9.]{0,51}[a-z0-9])?$`)
+
+// IssueLeaderEpoch derives the runtime identity from the verified mTLS
+// certificate. A caller cannot ask for another node's epoch: the request
+// deliberately has no leader field, and Authority checks that identity
+// against the live Kubernetes Lease before advancing the record.
+func (g *Gateway) IssueLeaderEpoch(ctx context.Context, _ *wsv1.IssueLeaderEpochRequest) (*wsv1.IssueLeaderEpochResponse, error) {
+	nodeID, err := peerNodeID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if !engineNodeID.MatchString(nodeID) {
+		return nil, status.Error(codes.PermissionDenied, "certificate node ID is not an engine node name")
+	}
+	if g.cfg.EpochIssuer == nil {
+		return nil, status.Error(codes.Unavailable, "cluster authority is not configured")
+	}
+	leader := "system:serviceaccount:wildstone-system:wardstone-" + nodeID
+	epoch, err := g.cfg.EpochIssuer.Issue(ctx, leader)
+	if err != nil {
+		g.log.Error("leader epoch request refused", "node", nodeID, "error", err)
+		g.auditIdentity(nodeID, "IssueLeaderEpoch", "REFUSED")
+		if errors.Is(err, clusterauthority.ErrNotHolder) || errors.Is(err, clusterauthority.ErrBadRecord) {
+			return nil, status.Error(codes.FailedPrecondition, "leader Lease or authority record is not ready")
+		}
+		return nil, status.Error(codes.Internal, "leader epoch could not be issued")
+	}
+	if epoch == 0 {
+		g.log.Error("leader epoch issuer returned zero", "node", nodeID)
+		return nil, status.Error(codes.Internal, "leader epoch could not be issued")
+	}
+	g.auditIdentity(nodeID, "IssueLeaderEpoch", "")
+	return &wsv1.IssueLeaderEpochResponse{Epoch: epoch}, nil
 }
 
 type Gateway struct {
