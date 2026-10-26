@@ -1626,6 +1626,12 @@ post_install() {
   local -a args=(--role node --keystone "127.0.0.1:9440" --join-token "$join"
                  --node-id "$NODE_ID" --version "$VERSION")
   [ -n "$fp" ] && args+=(--ca-fingerprint "$fp")
+  # The Keystone role pairs this same host as a Wardstone node. When the
+  # owner opts into engine leadership, carry the scoped API configuration
+  # into that node install too; otherwise only Keystone starts its side.
+  if [ -n "$ENGINE_API" ]; then
+    args+=(--engine-apis "$ENGINE_API" --engine-ca "$ENGINE_CA")
+  fi
   [ -n "$ARTIFACT_DIR" ] && args+=(--artifact-dir "$ARTIFACT_DIR")
   [ -n "$TOKEN" ] && args+=(--token "$TOKEN")
   bash "$0" "${args[@]}" >/dev/null || fail "pairing this host as a node failed"
