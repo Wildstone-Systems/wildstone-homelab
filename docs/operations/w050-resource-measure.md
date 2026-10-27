@@ -16,7 +16,7 @@ sudo python3 scripts/engine-resource-sample.py --label engine-idle > engine-idle
 
 The default sample lasts two minutes, with ten memory observations and one
 host-wide CPU calculation over the entire interval. The JSON records median
-available/used RAM, root filesystem use before and after, sizes of the
+available/used RAM, root filesystem use before and after, allocated sizes of the
 Docker, k3s and Longhorn data directories, service cgroup memory and
 installed versions. A service cgroup is diagnostic only: Docker containers
 may live outside `docker.service`, so compare **host-wide** CPU and RAM for

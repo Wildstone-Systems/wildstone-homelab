@@ -42,7 +42,9 @@ def cpu_ticks():
 def tree_bytes(path):
     if not Path(path).exists():
         return None
-    out = command("du", "-sb", path)
+    # -b selects apparent file size. Longhorn and container layers can
+    # contain sparse files, so use allocated blocks for disk footprint.
+    out = command("du", "-s", "--block-size=1", path)
     return int(out.split()[0]) if out else None
 
 

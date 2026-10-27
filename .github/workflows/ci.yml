@@ -52,6 +52,16 @@ jobs:
         run: |
           sudo python3 scripts/engine-resource-sample.py --label docker-baseline --seconds 1 --samples 1 \
             | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["sampleCount"] == 1 and d["memTotalBytes"] > 0'
+          python3 - <<'PY'
+          import runpy
+          import tempfile
+          from pathlib import Path
+          tree_bytes = runpy.run_path('scripts/engine-resource-sample.py')['tree_bytes']
+          with tempfile.TemporaryDirectory() as directory:
+              with (Path(directory) / 'sparse').open('wb') as file:
+                  file.truncate(1024 * 1024 * 1024)
+              assert tree_bytes(directory) < 1024 * 1024, 'sparse file was counted by apparent size'
+          PY
       - name: disk guard offline checks
         run: bash scripts/test-disk-guard.sh
       # Pinned by checksum, like every other artifact this project runs
