@@ -35,3 +35,34 @@ jobs:
           WILDSTONE_E2E_PROVIDER: local
           WILDSTONE_E2E_IMAGE: /tmp/noble.img
         run: go test -v -run TestSmoke -timeout 35m ./...
+
+  engine-local:
+    name: signed engine bootstrap (QEMU)
+    runs-on: ubuntu-latest
+    timeout-minutes: 95
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.26"
+      - name: Install QEMU
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils
+      - name: Enable KVM access
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Fetch Ubuntu 24.04 cloud image
+        run: curl -fsSL -o /tmp/noble.img https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img
+      - name: Build signing tool from this checkout
+        run: (cd wardstone && go build -trimpath -o /tmp/wild-playbooks ./cmd/wild-playbooks)
+      - name: Test signed engine in disposable QEMU guest
+        working-directory: testing/e2e
+        env:
+          WILDSTONE_E2E_ENGINE: local
+          WILDSTONE_E2E_IMAGE: /tmp/noble.img
+          WILDSTONE_E2E_PLAYBOOK_BIN: /tmp/wild-playbooks
+        run: go test -v -run '^TestEngine$' -timeout 85m ./...
