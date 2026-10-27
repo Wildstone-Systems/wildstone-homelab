@@ -7,6 +7,7 @@ package api
 // carve-out; see writeJSON.
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,6 +21,43 @@ import (
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/runtimedb"
 	wsv1 "github.com/Wildstone-Systems/wildstone-homelab/proto/gen/wardstone/v1"
 )
+
+// nodeFacts reads Wardstone's live HostFacts independently of optional
+// household capabilities. Leadership here is observational; only the
+// Kubernetes epoch barrier authorizes cluster writes.
+func (s *Server) nodeFacts(r *http.Request, _ principal.Identity) (any, int, error) {
+	if s.Agents == nil {
+		return nil, http.StatusServiceUnavailable, fmt.Errorf("agent plane not wired")
+	}
+	node := r.PathValue("node")
+	if node == "" {
+		return nil, http.StatusBadRequest, fmt.Errorf("node required")
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	defer cancel()
+	res, err := s.Agents.Apply(ctx, node, &wsv1.Operation{
+		Op: &wsv1.Operation_HostFacts{HostFacts: &wsv1.HostFacts{}},
+	})
+	if err != nil {
+		return nil, http.StatusBadGateway, fmt.Errorf("node %s: %w", node, err)
+	}
+	if res == nil {
+		return nil, http.StatusBadGateway, fmt.Errorf("node %s returned no result", node)
+	}
+	if opErr := res.GetError(); opErr != nil {
+		return nil, opStatus(opErr), fmt.Errorf("node %s: %s", node, opErr.GetMessage())
+	}
+	facts := res.GetHostFacts()
+	if facts == nil {
+		return nil, http.StatusBadGateway, fmt.Errorf("node %s returned no HostFacts", node)
+	}
+	return map[string]any{
+		"node": node, "engine": facts.GetEngine(),
+		"engineVersion": facts.GetEngineVersion(),
+		"engineLeader":  facts.GetEngineLeader(),
+		"leaderEpoch":   facts.GetLeaderEpoch(),
+	}, http.StatusOK, nil
+}
 
 // joinTokenResponse is the pairing reply. Like mintResponse it skips the
 // redacting encoder — the join token is 64 hex chars, exactly the shape

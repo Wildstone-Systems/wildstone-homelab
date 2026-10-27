@@ -41,6 +41,8 @@ func (a *Agent) runLeadership(ctx context.Context) error {
 		Issuer:  keystoneEpochIssuer{agent: a},
 		Barrier: leader.Barrier{Servers: clients},
 		Serve: func(termCtx context.Context, term leader.Term) error {
+			a.activeLeaderEpoch.Store(term.Epoch)
+			defer a.activeLeaderEpoch.Store(0)
 			a.log.Info("cluster leadership term active", "epoch", term.Epoch)
 			<-termCtx.Done()
 			a.log.Info("cluster leadership term ended", "epoch", term.Epoch)

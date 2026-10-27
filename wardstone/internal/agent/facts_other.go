@@ -13,10 +13,13 @@ import (
 // developer machines.
 func (a *Agent) hostFacts() (*wsv1.OpResult_HostFacts, *wsv1.OpError) {
 	hostname, _ := os.Hostname()
+	epoch := a.activeLeaderEpoch.Load()
 	return &wsv1.OpResult_HostFacts{HostFacts: &wsv1.HostFactsResult{
 		Hostname:     hostname,
 		Os:           runtime.GOOS,
 		NumCpu:       uint32(runtime.NumCPU()),
 		AgentVersion: a.cfg.Version,
+		EngineLeader: epoch != 0,
+		LeaderEpoch:  epoch,
 	}}, nil
 }

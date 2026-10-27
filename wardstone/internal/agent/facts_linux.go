@@ -4,7 +4,9 @@ package agent
 
 import (
 	"bufio"
+	"context"
 	"os"
+	"os/exec"
 	"runtime"
 	"strconv"
 	"strings"
@@ -29,6 +31,8 @@ func (a *Agent) hostFacts() (*wsv1.OpResult_HostFacts, *wsv1.OpError) {
 	}
 	total, available := memBytes()
 	busy, measured := cpuBusyPercent()
+	engine, engineVersion := hostEngineVersion()
+	epoch := a.activeLeaderEpoch.Load()
 	return &wsv1.OpResult_HostFacts{HostFacts: &wsv1.HostFactsResult{
 		Hostname:           hostname,
 		Os:                 runtime.GOOS,
@@ -41,7 +45,35 @@ func (a *Agent) hostFacts() (*wsv1.OpResult_HostFacts, *wsv1.OpError) {
 		RootDiskTotalBytes: diskTotal,
 		RootDiskFreeBytes:  diskFree,
 		AgentVersion:       a.cfg.Version,
+		Engine:             engine,
+		EngineVersion:      engineVersion,
+		EngineLeader:       epoch != 0,
+		LeaderEpoch:        epoch,
 	}}, nil
+}
+
+// hostEngineVersion reads the installed binary's version without opening an
+// administrator kubeconfig or contacting the API server. An installed binary
+// may be unhealthy; HostFacts does not claim readiness from this field.
+func hostEngineVersion() (string, string) {
+	for _, path := range []string{"/usr/local/bin/k3s", "/usr/bin/k3s"} {
+		info, err := os.Stat(path)
+		if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
+			continue
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		out, err := exec.CommandContext(ctx, path, "--version").Output()
+		cancel()
+		if err != nil {
+			return "k3s", ""
+		}
+		fields := strings.Fields(string(out))
+		if len(fields) >= 3 && fields[0] == "k3s" && fields[1] == "version" {
+			return "k3s", fields[2]
+		}
+		return "k3s", ""
+	}
+	return "", ""
 }
 
 // cpuSampleWindow is how long cpuBusyPercent watches /proc/stat.

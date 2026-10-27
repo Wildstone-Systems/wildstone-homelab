@@ -45,6 +45,10 @@ func TestTheMachineReadingsAreComputedHonestly(t *testing.T) {
 	a := &factsApplier{facts: &wsv1.HostFactsResult{
 		NumCpu:         4,
 		CpuBusyPercent: 7,
+		Engine:         "k3s",
+		EngineVersion:  "v1.37.1+k3s1",
+		EngineLeader:   true,
+		LeaderEpoch:    3,
 		// 16 GB total, 9.6 GB available -> 40% used. MemAvailable, not
 		// MemFree: free memory on a healthy box is near zero.
 		MemTotalBytes:     16 * gb,
@@ -55,6 +59,9 @@ func TestTheMachineReadingsAreComputedHonestly(t *testing.T) {
 	}}
 	h := machineHarness(t, a)
 	got := h.summary(t, "sandy").Machines.Stats
+	if got.Engine != "k3s" || got.EngineVersion != "v1.37.1+k3s1" || !got.EngineLeader || got.LeaderEpoch != 3 {
+		t.Errorf("engine facts were lost: %+v", got)
+	}
 
 	for _, c := range []struct {
 		name  string
