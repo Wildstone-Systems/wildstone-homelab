@@ -472,6 +472,7 @@ func (s *Server) Handler() http.Handler {
 
 	// Onboarding validation probes (ADR-W016 A2, E10-U2): dial-or-read
 	// only on the agent side, so the whole family carries read.
+	mux.Handle("GET /api/v1/nodes/{node}/facts", s.handle(principal.VerbRead, s.nodeFacts))
 	mux.Handle("GET /api/v1/nodes/{node}/probes/blockdevices", s.handle(principal.VerbRead, s.probeBlockDevices))
 	mux.Handle("GET /api/v1/nodes/{node}/probes/ports", s.handle(principal.VerbRead, s.probePorts))
 	mux.Handle("GET /api/v1/nodes/{node}/probes/http", s.handle(principal.VerbRead, s.probeHttp))
