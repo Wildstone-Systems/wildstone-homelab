@@ -12,10 +12,11 @@ import (
 
 func TestNodeFactsWithoutHouseholdHome(t *testing.T) {
 	h := newHarness(t)
-	h.s.Agents = &factsApplier{facts: &wsv1.HostFactsResult{
+	applier := &factsApplier{facts: &wsv1.HostFactsResult{
 		Engine: "k3s", EngineVersion: "v1.37.1+k3s1",
 		EngineLeader: true, LeaderEpoch: 5,
 	}}
+	h.s.Agents = applier
 	var got struct {
 		Node          string `json:"node"`
 		Engine        string `json:"engine"`
@@ -28,6 +29,13 @@ func TestNodeFactsWithoutHouseholdHome(t *testing.T) {
 	}
 	if got.Node != "node-a" || got.Engine != "k3s" || got.EngineVersion != "v1.37.1+k3s1" || !got.EngineLeader || got.LeaderEpoch != 5 {
 		t.Fatalf("node facts = %+v", got)
+	}
+	applier.facts.EngineLeader, applier.facts.LeaderEpoch = false, 0
+	if resp := h.do(runtimedb.RoleOperator, http.MethodGet, "/api/v1/nodes/node-a/facts", nil, &got); resp.StatusCode != http.StatusOK {
+		t.Fatalf("inactive node facts = %d, want 200", resp.StatusCode)
+	}
+	if got.EngineLeader || got.LeaderEpoch != 0 {
+		t.Fatalf("inactive node still claimed leadership: %+v", got)
 	}
 	if resp := h.do("", http.MethodGet, "/api/v1/nodes/node-a/facts", nil, nil); resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("unauthenticated node facts = %d, want 401", resp.StatusCode)
