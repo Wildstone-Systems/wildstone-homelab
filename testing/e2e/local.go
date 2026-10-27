@@ -20,6 +20,7 @@ type LocalProvider struct {
 	Keys      *Keypair      // injected via cloud-init
 	MemoryMB  int           // default 2048
 	CPUs      int           // default 2
+	DiskGB    int           // overlay size, default 10
 	BootWait  time.Duration // max wait for SSH, default 10m (TCG is slow)
 }
 
@@ -45,7 +46,8 @@ func (p *LocalProvider) Create(ctx context.Context, name string) (*VM, error) {
 
 	overlay := filepath.Join(dir, "disk.qcow2")
 	img, err := exec.CommandContext(ctx, "qemu-img", "create",
-		"-f", "qcow2", "-F", "qcow2", "-b", mustAbs(p.ImagePath), overlay, "10G").CombinedOutput()
+		"-f", "qcow2", "-F", "qcow2", "-b", mustAbs(p.ImagePath), overlay,
+		fmt.Sprintf("%dG", orDefault(p.DiskGB, 10))).CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("qemu-img: %v: %s", err, img)
 	}

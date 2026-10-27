@@ -29,3 +29,11 @@ WILDSTONE_E2E_IMAGE=$PWD/noble-server-cloudimg-amd64.img \
 
 In CI the smoke test runs via the manually-triggered `e2e` workflow
 (`.github/workflows/e2e.yml`), not on every push.
+
+The same manual workflow has a separate `TestEngine` QEMU job. It uses a
+larger disposable guest, copies the exact checked-out signed-playbook source
+and signing tool into it, installs k3s and Longhorn, then checks the repeat
+install, storage, leader fence, and tamper refusal. It runs without a VIP:
+QEMU user networking cannot provide the LAN address kube-vip needs. The
+owner-operated VM evidence in #159 covers kube-vip and running Wardstone
+leadership. The QEMU job does not yet install Keystone/Wardstone services.
