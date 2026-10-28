@@ -2,6 +2,9 @@ package leader
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
@@ -14,16 +17,18 @@ import (
 )
 
 const (
-	managedByLabel        = "app.kubernetes.io/managed-by"
-	managedByValue        = "wildstone"
-	workloadLabel         = "wildstone.dev/workload"
-	packageLabel          = "wildstone.dev/package"
-	resourceLabel         = "wildstone.dev/resource"
-	revisionAnnotation    = "wildstone.dev/revision"
-	planAnnotation        = "wildstone.dev/plan"
-	stepAnnotation        = "wildstone.dev/step-digest"
-	deleteEpochAnnotation = "wildstone.dev/delete-epoch"
-	maxWorkloadLogBytes   = 1 << 20
+	managedByLabel          = "app.kubernetes.io/managed-by"
+	managedByValue          = "wildstone"
+	workloadLabel           = "wildstone.dev/workload"
+	packageLabel            = "wildstone.dev/package"
+	resourceLabel           = "wildstone.dev/resource"
+	revisionAnnotation      = "wildstone.dev/revision"
+	planAnnotation          = "wildstone.dev/plan"
+	stepAnnotation          = "wildstone.dev/step-digest"
+	deleteEpochAnnotation   = "wildstone.dev/delete-epoch"
+	deleteRequestAnnotation = "wildstone.dev/delete-request"
+	deleteStateAnnotation   = "wildstone.dev/delete-state"
+	maxWorkloadLogBytes     = 1 << 20
 )
 
 var (
@@ -46,10 +51,12 @@ func IsInvalid(err error) bool   { var i *Invalid; return errors.As(err, &i) }
 
 type WorkloadClient interface {
 	GetDeployment(context.Context, string) (*kubeapi.Deployment, error)
+	CreateDeployment(context.Context, *kubeapi.Deployment) (*kubeapi.Deployment, error)
 	ApplyDeployment(context.Context, *kubeapi.Deployment) (*kubeapi.Deployment, error)
 	UpdateDeployment(context.Context, *kubeapi.Deployment) (*kubeapi.Deployment, error)
 	DeleteDeployment(context.Context, string, string, string) error
 	GetService(context.Context, string) (*kubeapi.Service, error)
+	CreateService(context.Context, *kubeapi.Service) (*kubeapi.Service, error)
 	ApplyService(context.Context, *kubeapi.Service) (*kubeapi.Service, error)
 	UpdateService(context.Context, *kubeapi.Service) (*kubeapi.Service, error)
 	DeleteService(context.Context, string, string, string) error
@@ -206,6 +213,7 @@ func (x WorkloadExecutor) Apply(requestCtx context.Context, req *wsv1.ApplyWorkl
 		return nil, err
 	}
 	cur, err := x.Client.GetDeployment(ctx, w.GetName())
+	deploymentExists := err == nil
 	switch {
 	case err == nil:
 		if err := owned(cur.Metadata, w.GetName()); err != nil {
@@ -223,6 +231,7 @@ func (x WorkloadExecutor) Apply(requestCtx context.Context, req *wsv1.ApplyWorkl
 		return nil, err
 	}
 	service, serviceErr := x.Client.GetService(ctx, w.GetName())
+	serviceExists := serviceErr == nil
 	if serviceErr == nil {
 		if err := owned(service.Metadata, w.GetName()); err != nil {
 			return nil, err
@@ -235,13 +244,25 @@ func (x WorkloadExecutor) Apply(requestCtx context.Context, req *wsv1.ApplyWorkl
 		return nil, serviceErr
 	}
 	d, s := render(w, req.GetAuthority())
-	applied, err := x.Client.ApplyDeployment(ctx, d)
+	var applied *kubeapi.Deployment
+	if deploymentExists {
+		d.Metadata.ResourceVersion = cur.Metadata.ResourceVersion
+		applied, err = x.Client.ApplyDeployment(ctx, d)
+	} else {
+		applied, err = x.Client.CreateDeployment(ctx, d)
+	}
 	if err != nil {
 		return nil, err
 	}
 	var appliedService *kubeapi.Service
 	if len(s.Spec.Ports) > 0 {
-		if appliedService, err = x.Client.ApplyService(ctx, s); err != nil {
+		if serviceExists {
+			s.Metadata.ResourceVersion = service.Metadata.ResourceVersion
+			appliedService, err = x.Client.ApplyService(ctx, s)
+		} else {
+			appliedService, err = x.Client.CreateService(ctx, s)
+		}
+		if err != nil {
 			return nil, err
 		}
 	}
@@ -251,6 +272,45 @@ func (x WorkloadExecutor) Apply(requestCtx context.Context, req *wsv1.ApplyWorkl
 		result.ServiceResourceVersion = appliedService.Metadata.ResourceVersion
 	}
 	return result, nil
+}
+
+func deleteRequest(req *wsv1.DeleteWorkload) string {
+	a := req.GetAuthority()
+	b := []byte(strings.Join([]string{a.GetAcceptedRevision(), a.GetPlanId(), a.GetStepDigest(), strconv.FormatUint(a.GetLeaderEpoch(), 10), req.GetName(), req.GetUid(), req.GetResourceVersion(), req.GetServiceUid(), req.GetServiceResourceVersion()}, "\x00"))
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
+}
+
+func deleteState(meta kubeapi.ObjectMeta, spec any) string {
+	annotations := make(map[string]string, len(meta.Annotations))
+	for key, value := range meta.Annotations {
+		switch key {
+		case deleteEpochAnnotation, deleteRequestAnnotation, deleteStateAnnotation, epochAnnotation:
+			continue
+		}
+		annotations[key] = value
+	}
+	b, _ := json.Marshal(struct {
+		UID         string            `json:"uid"`
+		Labels      map[string]string `json:"labels"`
+		Annotations map[string]string `json:"annotations"`
+		Spec        any               `json:"spec"`
+	}{meta.UID, meta.Labels, annotations, spec})
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
+}
+
+func deleteTarget(meta kubeapi.ObjectMeta, uid, rv, marker, state string) error {
+	if uid == "" || rv == "" || meta.UID != uid {
+		return &Refusal{Reason: "object UID/resourceVersion changed after the Plan was made"}
+	}
+	if meta.ResourceVersion == rv {
+		return nil
+	}
+	if meta.Annotations[deleteRequestAnnotation] != marker || meta.Annotations[deleteStateAnnotation] != state {
+		return &Refusal{Reason: "object changed after the Plan was made or delete stamp"}
+	}
+	return nil
 }
 
 func (x WorkloadExecutor) Delete(requestCtx context.Context, req *wsv1.DeleteWorkload) (*wsv1.DeleteWorkloadResult, error) {
@@ -276,20 +336,21 @@ func (x WorkloadExecutor) Delete(requestCtx context.Context, req *wsv1.DeleteWor
 	if d == nil && service == nil {
 		return &wsv1.DeleteWorkloadResult{Deleted: false}, nil
 	}
+	marker := deleteRequest(req)
 	if d != nil {
 		if err := owned(d.Metadata, req.GetName()); err != nil {
 			return nil, err
 		}
-		if req.GetUid() == "" || req.GetResourceVersion() == "" || d.Metadata.UID != req.GetUid() || d.Metadata.ResourceVersion != req.GetResourceVersion() {
-			return nil, &Refusal{Reason: "Deployment UID/resourceVersion changed after the Plan was made"}
+		if err := deleteTarget(d.Metadata, req.GetUid(), req.GetResourceVersion(), marker, deleteState(d.Metadata, d.Spec)); err != nil {
+			return nil, fmt.Errorf("Deployment: %w", err)
 		}
 	}
 	if serviceErr == nil {
 		if err := owned(service.Metadata, req.GetName()); err != nil {
 			return nil, err
 		}
-		if req.GetServiceUid() == "" || req.GetServiceResourceVersion() == "" || service.Metadata.UID != req.GetServiceUid() || service.Metadata.ResourceVersion != req.GetServiceResourceVersion() {
-			return nil, &Refusal{Reason: "Service UID/resourceVersion changed after the Plan was made"}
+		if err := deleteTarget(service.Metadata, req.GetServiceUid(), req.GetServiceResourceVersion(), marker, deleteState(service.Metadata, service.Spec)); err != nil {
+			return nil, fmt.Errorf("Service: %w", err)
 		}
 	}
 	var stamped *kubeapi.Deployment
@@ -299,6 +360,8 @@ func (x WorkloadExecutor) Delete(requestCtx context.Context, req *wsv1.DeleteWor
 		}
 		d.Metadata.Annotations[deleteEpochAnnotation] = strconv.FormatUint(x.Epoch, 10)
 		d.Metadata.Annotations[epochAnnotation] = strconv.FormatUint(x.Epoch, 10)
+		d.Metadata.Annotations[deleteRequestAnnotation] = marker
+		d.Metadata.Annotations[deleteStateAnnotation] = deleteState(d.Metadata, d.Spec)
 		stamped, err = x.Client.UpdateDeployment(ctx, d)
 		if err != nil {
 			return nil, err
@@ -310,6 +373,8 @@ func (x WorkloadExecutor) Delete(requestCtx context.Context, req *wsv1.DeleteWor
 		}
 		service.Metadata.Annotations[deleteEpochAnnotation] = strconv.FormatUint(x.Epoch, 10)
 		service.Metadata.Annotations[epochAnnotation] = strconv.FormatUint(x.Epoch, 10)
+		service.Metadata.Annotations[deleteRequestAnnotation] = marker
+		service.Metadata.Annotations[deleteStateAnnotation] = deleteState(service.Metadata, service.Spec)
 		stampedS, e := x.Client.UpdateService(ctx, service)
 		if e != nil {
 			return nil, e

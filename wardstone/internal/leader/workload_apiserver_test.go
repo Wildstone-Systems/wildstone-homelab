@@ -64,7 +64,7 @@ func (s *workloadAPIServer) serve(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
 		return
 	}
-	if s.patchStart != nil && r.Method == http.MethodPatch && strings.Contains(r.URL.Path, "/deployments/") {
+	if s.patchStart != nil && (r.Method == http.MethodPost || r.Method == http.MethodPatch) && strings.Contains(r.URL.Path, "/deployments") {
 		close(s.patchStart)
 		<-s.patchDone
 		return
@@ -72,9 +72,9 @@ func (s *workloadAPIServer) serve(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	switch {
-	case strings.Contains(r.URL.Path, "/deployments/"):
+	case strings.Contains(r.URL.Path, "/deployments"):
 		s.serveDeployment(w, r)
-	case strings.Contains(r.URL.Path, "/services/"):
+	case strings.Contains(r.URL.Path, "/services"):
 		s.serveService(w, r)
 	default:
 		writeNotFound(w)
@@ -89,7 +89,7 @@ func (s *workloadAPIServer) serveDeployment(w http.ResponseWriter, r *http.Reque
 			return
 		}
 		writeObject(w, http.StatusOK, s.d)
-	case http.MethodPatch, http.MethodPut:
+	case http.MethodPost, http.MethodPatch, http.MethodPut:
 		if r.Method == http.MethodPatch && r.Header.Get("Content-Type") != "application/apply-patch+yaml" {
 			testingError(w, "wrong apply content type")
 			return
@@ -97,6 +97,10 @@ func (s *workloadAPIServer) serveDeployment(w http.ResponseWriter, r *http.Reque
 		var d kubeapi.Deployment
 		if json.NewDecoder(r.Body).Decode(&d) != nil {
 			testingError(w, "bad Deployment")
+			return
+		}
+		if r.Method == http.MethodPost && s.d != nil || r.Method != http.MethodPost && (s.d == nil || d.Metadata.ResourceVersion == "" || d.Metadata.ResourceVersion != s.d.Metadata.ResourceVersion) {
+			testingError(w, "Deployment resourceVersion conflict")
 			return
 		}
 		s.next(&d.Metadata, "deployment-uid")
@@ -123,10 +127,14 @@ func (s *workloadAPIServer) serveService(w http.ResponseWriter, r *http.Request)
 			return
 		}
 		writeObject(w, http.StatusOK, s.s)
-	case http.MethodPatch, http.MethodPut:
+	case http.MethodPost, http.MethodPatch, http.MethodPut:
 		var service kubeapi.Service
 		if json.NewDecoder(r.Body).Decode(&service) != nil {
 			testingError(w, "bad Service")
+			return
+		}
+		if r.Method == http.MethodPost && s.s != nil || r.Method != http.MethodPost && (s.s == nil || service.Metadata.ResourceVersion == "" || service.Metadata.ResourceVersion != s.s.Metadata.ResourceVersion) {
+			testingError(w, "Service resourceVersion conflict")
 			return
 		}
 		s.next(&service.Metadata, "service-uid")

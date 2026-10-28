@@ -2,6 +2,7 @@ package leader
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"reflect"
 	"testing"
@@ -21,6 +22,11 @@ type workloadFake struct {
 	deleteDeploymentUID, deleteDeploymentRV string
 	deleteServiceUID, deleteServiceRV       string
 	applyStarted                            chan struct{}
+	failServiceUpdate                       bool
+	failDeploymentDelete                    bool
+	beforeDeploymentApply                   func()
+	beforeDeploymentCreate                  func()
+	beforeServiceCreate                     func()
 }
 
 func notFound() error {
@@ -38,7 +44,14 @@ func clone[T any](v *T) *T {
 	if v == nil {
 		return nil
 	}
-	c := *v
+	b, err := json.Marshal(v)
+	if err != nil {
+		panic(err)
+	}
+	var c T
+	if err := json.Unmarshal(b, &c); err != nil {
+		panic(err)
+	}
 	return &c
 }
 func (f *workloadFake) GetDeployment(context.Context, string) (*kubeapi.Deployment, error) {
@@ -47,11 +60,40 @@ func (f *workloadFake) GetDeployment(context.Context, string) (*kubeapi.Deployme
 	}
 	return clone(f.d), nil
 }
+func (f *workloadFake) waitForWrite(ctx context.Context) error {
+	if f.applyStarted == nil {
+		return nil
+	}
+	close(f.applyStarted)
+	<-ctx.Done()
+	return ctx.Err()
+}
+func (f *workloadFake) CreateDeployment(ctx context.Context, d *kubeapi.Deployment) (*kubeapi.Deployment, error) {
+	if err := f.waitForWrite(ctx); err != nil {
+		return nil, err
+	}
+	if f.beforeDeploymentCreate != nil {
+		f.beforeDeploymentCreate()
+		f.beforeDeploymentCreate = nil
+	}
+	if f.d != nil {
+		return nil, &kubeapi.StatusError{Code: 409, Reason: "AlreadyExists"}
+	}
+	d.APIVersion, d.Kind, d.Metadata.Namespace = "apps/v1", "Deployment", kubeapi.WorkloadNamespace
+	f.next(&d.Metadata, "deployment-uid")
+	f.d = clone(d)
+	return clone(d), nil
+}
 func (f *workloadFake) ApplyDeployment(ctx context.Context, d *kubeapi.Deployment) (*kubeapi.Deployment, error) {
-	if f.applyStarted != nil {
-		close(f.applyStarted)
-		<-ctx.Done()
-		return nil, ctx.Err()
+	if err := f.waitForWrite(ctx); err != nil {
+		return nil, err
+	}
+	if f.beforeDeploymentApply != nil {
+		f.beforeDeploymentApply()
+		f.beforeDeploymentApply = nil
+	}
+	if f.d == nil || d.Metadata.ResourceVersion == "" || d.Metadata.ResourceVersion != f.d.Metadata.ResourceVersion {
+		return nil, &kubeapi.StatusError{Code: 409, Reason: "Conflict"}
 	}
 	d.APIVersion, d.Kind, d.Metadata.Namespace = "apps/v1", "Deployment", kubeapi.WorkloadNamespace
 	f.next(&d.Metadata, "deployment-uid")
@@ -68,6 +110,10 @@ func (f *workloadFake) DeleteDeployment(_ context.Context, _ string, uid, rv str
 	if f.d == nil || f.d.Metadata.UID != uid || f.d.Metadata.ResourceVersion != rv {
 		return errors.New("bad deployment precondition")
 	}
+	if f.failDeploymentDelete {
+		f.failDeploymentDelete = false
+		return errors.New("transient Deployment delete")
+	}
 	f.d = nil
 	return nil
 }
@@ -77,13 +123,33 @@ func (f *workloadFake) GetService(context.Context, string) (*kubeapi.Service, er
 	}
 	return clone(f.s), nil
 }
+func (f *workloadFake) CreateService(_ context.Context, s *kubeapi.Service) (*kubeapi.Service, error) {
+	if f.beforeServiceCreate != nil {
+		f.beforeServiceCreate()
+		f.beforeServiceCreate = nil
+	}
+	if f.s != nil {
+		return nil, &kubeapi.StatusError{Code: 409, Reason: "AlreadyExists"}
+	}
+	s.APIVersion, s.Kind, s.Metadata.Namespace = "v1", "Service", kubeapi.WorkloadNamespace
+	f.next(&s.Metadata, "service-uid")
+	f.s = clone(s)
+	return clone(s), nil
+}
 func (f *workloadFake) ApplyService(_ context.Context, s *kubeapi.Service) (*kubeapi.Service, error) {
+	if f.s == nil || s.Metadata.ResourceVersion == "" || s.Metadata.ResourceVersion != f.s.Metadata.ResourceVersion {
+		return nil, &kubeapi.StatusError{Code: 409, Reason: "Conflict"}
+	}
 	s.APIVersion, s.Kind, s.Metadata.Namespace = "v1", "Service", kubeapi.WorkloadNamespace
 	f.next(&s.Metadata, "service-uid")
 	f.s = clone(s)
 	return clone(s), nil
 }
 func (f *workloadFake) UpdateService(_ context.Context, s *kubeapi.Service) (*kubeapi.Service, error) {
+	if f.failServiceUpdate {
+		f.failServiceUpdate = false
+		return nil, errors.New("transient Service update")
+	}
 	f.next(&s.Metadata, "service-uid")
 	f.s = clone(s)
 	return clone(s), nil
@@ -178,6 +244,10 @@ func TestApplyIsFixedIdempotentAndRevisionFenced(t *testing.T) {
 	if _, err := x.Apply(context.Background(), stale); err != nil {
 		t.Fatalf("revision CAS update: %v", err)
 	}
+	f.beforeDeploymentApply = func() { f.next(&f.d.Metadata, "deployment-uid") }
+	if _, err := x.Apply(context.Background(), &wsv1.ApplyWorkload{Authority: authority(7, "rev-c"), ExpectedRevision: "rev-b", Workload: workload()}); !kubeapi.IsConflict(err) {
+		t.Fatalf("concurrent write escaped resourceVersion precondition: %v", err)
+	}
 }
 
 func TestWritesRequireActiveExactEpochAndCancelOnLoss(t *testing.T) {
@@ -196,6 +266,27 @@ func TestWritesRequireActiveExactEpochAndCancelOnLoss(t *testing.T) {
 	cancel()
 	if err := <-done; !errors.Is(err, context.Canceled) {
 		t.Fatalf("in-flight write after leadership loss = %v", err)
+	}
+}
+
+func TestApplyDoesNotOverwriteInterveningCreates(t *testing.T) {
+	ctx := context.Background()
+	f := &workloadFake{}
+	x := WorkloadExecutor{Client: f, Epoch: 7, Context: ctx}
+	f.beforeDeploymentCreate = func() {
+		f.d = &kubeapi.Deployment{Metadata: kubeapi.ObjectMeta{Name: "tools-it-tools", UID: "other", ResourceVersion: "other"}}
+	}
+	if _, err := x.Apply(ctx, &wsv1.ApplyWorkload{Authority: authority(7, "rev-a"), Workload: workload()}); !kubeapi.IsConflict(err) {
+		t.Fatalf("intervening Deployment create was overwritten: %v", err)
+	}
+
+	f = &workloadFake{}
+	x.Client = f
+	f.beforeServiceCreate = func() {
+		f.s = &kubeapi.Service{Metadata: kubeapi.ObjectMeta{Name: "tools-it-tools", UID: "other", ResourceVersion: "other"}}
+	}
+	if _, err := x.Apply(ctx, &wsv1.ApplyWorkload{Authority: authority(7, "rev-a"), Workload: workload()}); !kubeapi.IsConflict(err) {
+		t.Fatalf("intervening Service create was overwritten: %v", err)
 	}
 }
 
@@ -240,6 +331,37 @@ func TestDeleteConvergesAnOrphanedService(t *testing.T) {
 	}
 	if !res.Deleted || f.s != nil {
 		t.Fatalf("orphaned Service was not removed: %+v", res)
+	}
+}
+
+func TestDeleteResumesOnlyItsOwnUnchangedStamp(t *testing.T) {
+	f := &workloadFake{}
+	x := WorkloadExecutor{Client: f, Epoch: 7, Context: context.Background()}
+	applied, err := x.Apply(context.Background(), &wsv1.ApplyWorkload{Authority: authority(7, "rev-a"), Workload: workload()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := &wsv1.DeleteWorkload{Authority: authority(7, "rev-b"), Name: "tools-it-tools", Uid: applied.Uid, ResourceVersion: applied.ResourceVersion, ServiceUid: applied.ServiceUid, ServiceResourceVersion: applied.ServiceResourceVersion}
+	f.failServiceUpdate = true
+	if _, err := x.Delete(context.Background(), req); err == nil {
+		t.Fatal("partial delete unexpectedly succeeded")
+	}
+	if _, err := x.Delete(context.Background(), req); err != nil {
+		t.Fatalf("retry did not resume its own stamp: %v", err)
+	}
+
+	applied, err = x.Apply(context.Background(), &wsv1.ApplyWorkload{Authority: authority(7, "rev-c"), Workload: workload()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req = &wsv1.DeleteWorkload{Authority: authority(7, "rev-d"), Name: "tools-it-tools", Uid: applied.Uid, ResourceVersion: applied.ResourceVersion, ServiceUid: applied.ServiceUid, ServiceResourceVersion: applied.ServiceResourceVersion}
+	f.failDeploymentDelete = true
+	if _, err := x.Delete(context.Background(), req); err == nil {
+		t.Fatal("delete failure was not injected")
+	}
+	f.d.Spec.Replicas++
+	if _, err := x.Delete(context.Background(), req); !IsRefusal(err) {
+		t.Fatalf("unrelated post-stamp change was accepted: %v", err)
 	}
 }
 

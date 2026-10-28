@@ -157,7 +157,17 @@ func (c *Client) GetDeployment(ctx context.Context, name string) (*Deployment, e
 	var d Deployment
 	return &d, c.do(ctx, http.MethodGet, deploymentPath(name), nil, &d)
 }
+
+// CreateDeployment creates only when the observed name is still absent.
+func (c *Client) CreateDeployment(ctx context.Context, d *Deployment) (*Deployment, error) {
+	d.APIVersion, d.Kind, d.Metadata.Namespace = "apps/v1", "Deployment", WorkloadNamespace
+	var out Deployment
+	return &out, c.do(ctx, http.MethodPost, deploymentPath(""), d, &out)
+}
 func (c *Client) ApplyDeployment(ctx context.Context, d *Deployment) (*Deployment, error) {
+	if d.Metadata.ResourceVersion == "" {
+		return nil, fmt.Errorf("kubeapi: a Deployment apply needs the resourceVersion it read")
+	}
 	d.APIVersion, d.Kind, d.Metadata.Namespace = "apps/v1", "Deployment", WorkloadNamespace
 	var out Deployment
 	p := deploymentPath(d.Metadata.Name) + "?fieldManager=wildstone-wardstone&force=false"
@@ -174,7 +184,17 @@ func (c *Client) GetService(ctx context.Context, name string) (*Service, error) 
 	var s Service
 	return &s, c.do(ctx, http.MethodGet, servicePath(name), nil, &s)
 }
+
+// CreateService creates only when the observed name is still absent.
+func (c *Client) CreateService(ctx context.Context, s *Service) (*Service, error) {
+	s.APIVersion, s.Kind, s.Metadata.Namespace = "v1", "Service", WorkloadNamespace
+	var out Service
+	return &out, c.do(ctx, http.MethodPost, servicePath(""), s, &out)
+}
 func (c *Client) ApplyService(ctx context.Context, s *Service) (*Service, error) {
+	if s.Metadata.ResourceVersion == "" {
+		return nil, fmt.Errorf("kubeapi: a Service apply needs the resourceVersion it read")
+	}
 	s.APIVersion, s.Kind, s.Metadata.Namespace = "v1", "Service", WorkloadNamespace
 	var out Service
 	p := servicePath(s.Metadata.Name) + "?fieldManager=wildstone-wardstone&force=false"
@@ -223,19 +243,49 @@ func (c *Client) PodLogs(ctx context.Context, pod string, tail uint32, since int
 		return nil, false, err
 	}
 	defer resp.Body.Close()
-	b, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
-	if err != nil {
-		return nil, false, err
-	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		b, err := io.ReadAll(io.LimitReader(resp.Body, maxBody+1))
+		if err != nil {
+			return nil, false, err
+		}
 		var se StatusError
 		_ = json.NewDecoder(bytes.NewReader(b)).Decode(&se)
 		se.Code = resp.StatusCode
 		return nil, false, &se
 	}
-	truncated := int64(len(b)) > limit
-	if truncated {
-		b = b[len(b)-int(limit):]
+	return readSuffix(resp.Body, limit)
+}
+
+// readSuffix consumes the response while retaining at most limit bytes. Logs
+// are tail-biased, so reading only the first limit+1 bytes is not sufficient.
+func readSuffix(r io.Reader, limit int64) ([]byte, bool, error) {
+	if limit <= 0 {
+		return nil, false, fmt.Errorf("kubeapi: log suffix limit must be positive")
 	}
-	return b, truncated, nil
+	buf := make([]byte, int(limit))
+	chunk := make([]byte, 32*1024)
+	var total int64
+	for {
+		n, err := r.Read(chunk)
+		if n > 0 {
+			for _, b := range chunk[:n] {
+				buf[total%limit] = b
+				total++
+			}
+		}
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, false, err
+		}
+	}
+	if total <= limit {
+		return buf[:int(total)], false, nil
+	}
+	start := total % limit
+	out := make([]byte, 0, int(limit))
+	out = append(out, buf[start:]...)
+	out = append(out, buf[:start]...)
+	return out, true, nil
 }
