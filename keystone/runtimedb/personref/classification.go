@@ -714,6 +714,20 @@ var Columns = []Column{
 		"0084: an RFC3339 timestamp of acknowledgement, or empty while pending"},
 	{"agent_deliveries", "expired_at", NotAPerson,
 		"0087: an RFC3339 timestamp of when the long-poll consumer marked this delivery expired, or empty"},
+	{"agent_deliveries", "registration_id", NotAPerson,
+		"0111: the immutable external-client registration provenance, not a Person identity"},
+	{"agent_deliveries", "person_id", PersonID,
+		"0111: the canonical Person bound to an OAuth-visible delivery"},
+	{"agent_deliveries", "connection", NotAPerson,
+		"0111: the exact chat Connection sequence in OAuth delivery provenance"},
+	{"agent_deliveries", "runtime_principal", NotAPerson,
+		"0111: the exact machine runtime principal in OAuth delivery provenance"},
+	{"agent_deliveries", "credential_epoch", NotAPerson,
+		"0111: the external registration credential generation, not a Person"},
+	{"agent_deliveries", "task", NotAPerson,
+		"0111: the exact originating Butler task sequence"},
+	{"agent_deliveries", "audience", NotAPerson,
+		"0111: the task audience id, not a Person reference"},
 
 	// 0086 (ADR-W039 Phase 4, #341): agent_subscriptions, the Events
 	// family's Owner-approved standing watch.

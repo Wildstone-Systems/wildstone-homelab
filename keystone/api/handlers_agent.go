@@ -238,7 +238,7 @@ func (s *Server) reofferWaitingTasks(butlerSeq int64) error {
 			s.Log.Error("encoding a turn delivery", "task", task.ID, "err", err)
 			continue
 		}
-		if _, err := s.DB.RecordAgentDelivery(butlerSeq, agentapi.DeliveryTurn, string(payload)); err != nil {
+		if _, err := s.DB.RecordAgentDeliveryForTask(butlerSeq, agentapi.DeliveryTurn, task.ID, string(payload)); err != nil {
 			s.Log.Error("recording a turn delivery", "task", task.ID, "err", err)
 		}
 	}
@@ -642,13 +642,27 @@ func (s *Server) agentDeliveries(r *http.Request, id principal.Identity) (any, i
 	if wait < 0 {
 		wait = 0
 	}
-	cred, err := s.runtimeRequestCredential(r, id)
-	if err != nil {
-		return nil, http.StatusUnauthorized, principal.ErrUnauthenticated
+	auth, oauth := oauthresource.FromContext(r.Context())
+	var cred runtimedb.RuntimeDeliveryCredential
+	var err error
+	if !oauth {
+		cred, err = s.runtimeRequestCredential(r, id)
+		if err != nil {
+			return nil, http.StatusUnauthorized, principal.ErrUnauthenticated
+		}
 	}
 	deadline := time.Now().Add(wait)
 	for {
-		rows, err := s.DB.PollRuntimeDeliveries(cred, after, 50, time.Now)
+		var rows []runtimedb.AgentDelivery
+		if oauth {
+			fresh, recheckErr := auth.Recheck(r.Context())
+			if recheckErr != nil {
+				return nil, http.StatusUnauthorized, oauthresource.ErrUnauthenticated
+			}
+			rows, err = s.DB.PollExternalDeliveries(externalDeliveryIdentity(fresh), after, 50, time.Now)
+		} else {
+			rows, err = s.DB.PollRuntimeDeliveries(cred, after, 50, time.Now)
+		}
 		if errors.Is(err, runtimedb.ErrRuntimeDeliveryDenied) {
 			return nil, http.StatusUnauthorized, principal.ErrUnauthenticated
 		}
@@ -656,6 +670,11 @@ func (s *Server) agentDeliveries(r *http.Request, id principal.Identity) (any, i
 			return nil, http.StatusInternalServerError, err
 		}
 		if len(rows) > 0 {
+			if oauth {
+				if _, err := auth.Recheck(r.Context()); err != nil {
+					return nil, http.StatusUnauthorized, oauthresource.ErrUnauthenticated
+				}
+			}
 			return deliveriesResponse{Deliveries: deliveriesFor(agentgateway.FilterDeliveries(s.DB, rows))}, http.StatusOK, nil
 		}
 		if time.Now().After(deadline) || r.Context().Err() != nil {
@@ -714,11 +733,22 @@ func (s *Server) agentAckDelivery(r *http.Request, id principal.Identity) (any, 
 	if _, err := fmt.Sscanf(r.PathValue("id"), "%d", &deliveryID); err != nil {
 		return nil, http.StatusBadRequest, fmt.Errorf("delivery id must be a number")
 	}
-	cred, err := s.runtimeRequestCredential(r, id)
-	if err != nil {
-		return nil, http.StatusUnauthorized, principal.ErrUnauthenticated
+	auth, oauth := oauthresource.FromContext(r.Context())
+	var err error
+	if oauth {
+		fresh, recheckErr := auth.Recheck(r.Context())
+		if recheckErr != nil {
+			return nil, http.StatusUnauthorized, oauthresource.ErrUnauthenticated
+		}
+		err = s.DB.AckExternalDelivery(externalDeliveryIdentity(fresh), deliveryID)
+	} else {
+		cred, authErr := s.runtimeRequestCredential(r, id)
+		if authErr != nil {
+			return nil, http.StatusUnauthorized, principal.ErrUnauthenticated
+		}
+		err = s.DB.AckRuntimeDelivery(cred, deliveryID, time.Now)
 	}
-	if err := s.DB.AckRuntimeDelivery(cred, deliveryID, time.Now); err != nil {
+	if err != nil {
 		if errors.Is(err, runtimedb.ErrRuntimeDeliveryDenied) {
 			return nil, http.StatusUnauthorized, principal.ErrUnauthenticated
 		}
@@ -728,4 +758,10 @@ func (s *Server) agentAckDelivery(r *http.Request, id principal.Identity) (any, 
 		return nil, http.StatusInternalServerError, err
 	}
 	return nil, http.StatusOK, nil
+}
+
+func externalDeliveryIdentity(id oauthresource.Identity) runtimedb.ExternalDeliveryIdentity {
+	return runtimedb.ExternalDeliveryIdentity{RegistrationID: id.RegistrationID, PersonID: id.PersonID,
+		Butler: id.AgentID, Connection: id.ConnectionID, RuntimePrincipal: id.RuntimePrincipal,
+		CredentialEpoch: id.CredentialEpoch}
 }

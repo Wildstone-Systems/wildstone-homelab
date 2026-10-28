@@ -60,7 +60,7 @@ func (g *Gateway) Propose(ctx context.Context, req agentapi.ProposeRequest) (age
 	if summary == "" {
 		summary = fmt.Sprintf("%s proposes %s %s", s.hc.Butler.Name, res.Kind, res.Metadata.Name)
 	}
-	view, err := g.fileProposal(id, proposals.Request{Summary: summary, Put: []string{string(doc)}})
+	view, err := g.fileProposal(id, s.hc.Task.ID, proposals.Request{Summary: summary, Put: []string{string(doc)}})
 	if err != nil {
 		return agentapi.ProposalRef{}, err
 	}
@@ -119,6 +119,11 @@ func (g *Gateway) proposeSubscription(ctx context.Context, s *session, req agent
 	})
 	if err != nil {
 		return agentapi.ProposalRef{}, fmt.Errorf("%w: %v", ErrRefused, err)
+	}
+	if err := g.DB.LinkExternalPlanOrigin(view.ID, s.hc.Task.ID); err != nil {
+		if g.Log != nil {
+			g.Log.Error("recording external subscription proposal provenance", "plan", view.ID, "err", err)
+		}
 	}
 	return agentapi.ProposalRef{ID: view.ID}, nil
 }

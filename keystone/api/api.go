@@ -1327,8 +1327,16 @@ func oauthRouteAllowed(method, path string) bool {
 	if method == http.MethodGet && path == "/api/v1/agent/tools" {
 		return true
 	}
+	if method == http.MethodGet && path == "/api/v1/agent/deliveries" {
+		return true
+	}
 	if method != http.MethodPost {
 		return false
+	}
+	const deliveryPrefix = "/api/v1/agent/deliveries/"
+	if strings.HasPrefix(path, deliveryPrefix) && strings.HasSuffix(path, "/ack") {
+		id := strings.TrimSuffix(strings.TrimPrefix(path, deliveryPrefix), "/ack")
+		return id != "" && !strings.Contains(id, "/")
 	}
 	switch path {
 	case "/api/v1/agent/tasks", "/api/v1/agent/manifest", "/api/v1/agent/invoke", "/api/v1/agent/recall",

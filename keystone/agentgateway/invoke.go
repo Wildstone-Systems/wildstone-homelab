@@ -250,7 +250,7 @@ func (g *Gateway) Invoke(ctx context.Context, req agentapi.InvokeRequest) (agent
 		}
 		if pid, err := g.runtimeIdentity(ctx, s); err != nil {
 			rec.ProposalError = err.Error()
-		} else if view, err := g.fileProposal(pid, proposals.Request{
+		} else if view, err := g.fileProposal(pid, taskID, proposals.Request{
 			Summary: summary, Put: []string{outcome.ResourceYAML},
 		}); err != nil {
 			rec.ProposalError = err.Error()
