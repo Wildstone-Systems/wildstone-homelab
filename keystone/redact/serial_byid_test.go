@@ -76,4 +76,11 @@ func TestSecretsStillRedactNextToSerialByID(t *testing.T) {
 	if got := String(in); got != `{"DB_PASSWORD":"`+Placeholder+`"}` {
 		t.Errorf("keyword rule must still take the value, got %s", got)
 	}
+	// API responses can carry YAML or JSON inside an already serialized JSON
+	// string. Escaped quotes must not hide the credential-shaped key from the
+	// same rule before the by-id shelter is restored.
+	in = `{"summary":"DB_PASSWORD: \"` + alias + `\""}`
+	if got := String(in); got != `{"summary":"DB_PASSWORD: \"`+Placeholder+`\""}` {
+		t.Errorf("escaped keyword rule must still take the value, got %s", got)
+	}
 }
