@@ -1,9 +1,9 @@
-# W050 leader operations (provisional)
+# W050 leader operations
 
 - **Issue:** [#158](https://github.com/Wildstone-Systems/wildstone-homelab/issues/158), W050 slice 2b
-- **Status:** **provisional draft** for owner review. No proto field, generated code or runtime behaviour is authorized here. Field numbers are not reserved.
-- **Evidence base:** `main` after #184, 2026-10-25. Wardstone protocol minor 27; the last `Operation` arm is `home_automation_readiness = 38` and the last `OpResult` arm is `= 40`.
-- **Depends on:** the authority, storage and secret contract in [#180](https://github.com/Wildstone-Systems/wildstone-homelab/issues/180) before **any** operation here is implemented, and [#129](https://github.com/Wildstone-Systems/wildstone-homelab/issues/129) evidence before the shape is frozen ([gates](w050-migration-plan.md#revised-execution-gates), G1 and G4).
+- **Status:** The first stateless-workload subset is implemented by #210 under the accepted #180 authority contract. Later volume, Job, config, secret, and playbook rows remain provisional until their bounded slices.
+- **Wire allocation:** protocol minor 30; `Operation` arms 39–42 and `OpResult` arms 41–44 are `ApplyWorkload`, `DeleteWorkload`, `ObserveWorkload`, and `WorkloadLogs`.
+- **Depends on:** #159 is accepted complete for this repository implementation. #129 owner evaluation and #180 multi-node fault evidence remain separate proof gates; they are not claimed by the executor.
 - **Governed by:** ADR-W003 (typed operations, no `Exec(string)`), ADR-W050 §2 and A1, the [package deployment capabilities contract](package-deployment-capabilities-contract.md).
 
 This document answers one question: **what does Keystone ask the Wardstone leader to do, once a cluster exists?** Today Keystone sends Docker-shaped operations to each node. Since #184, the reconciler builds all of them in one place, its Docker translator (`keystone/reconcile/docker.go`). A cluster backend is a second translator that sends the operations below to the leader.
@@ -17,7 +17,9 @@ This document answers one question: **what does Keystone ask the Wardstone leade
    - `plan_id` and `step_digest`: the approved step it executes (ADR-W008 A2a);
    - `leader_epoch`: which leadership term sent it.
 
-   *How the leader rejects a stale or replayed write is #180's to define. A Lease alone is not fencing (ADR-W050 A1). This draft only reserves the fields.*
+   The accepted #180 contract is implemented with exact active-epoch checks,
+   leadership-loss cancellation, an observed-revision compare-and-swap, and
+   stamp-then-delete UID/resourceVersion preconditions.
 4. **Idempotent by design.** Applying the same request twice gives the same objects. `op_id` (already on every operation) identifies a retry.
 5. **Results are not Docker types.** A cluster result reports Kubernetes-level facts: generation, observed and ready replicas, conditions, and the node a pod runs on. The reconciler's health gate reads those, not `InspectContainer`.
 6. **Host work stays host work.** Managed files, mounts, probes, block devices and radios remain per-node operations to that node's Wardstone (ADR-W050 §2.2). The leader does not proxy them.
@@ -30,7 +32,8 @@ Each row is one request and one result. Names are working names.
 |---|---|---|---|
 | `ApplyWorkload` | `EnsureContainer` (+ `PullImage`, `EnsureDockerNetwork`) | Create or update one component as a Deployment (or a StatefulSet, if #129 shows it's needed) from a typed `WorkloadSpec` | Yes |
 | `DeleteWorkload` | `StopContainer` + `RemoveContainer` | Remove a component's objects. Never its volumes (ADR-W008 volume rule) | Yes |
-| `WorkloadStatus` | `InspectContainer`, `ContainerStats` | Generation, ready/updated replicas, conditions, pod node, restart count, image digest actually running | No |
+| `ObserveWorkload` | `InspectContainer`, `ContainerStats` | Generation, ready/updated replicas, conditions, pod node, restart count, image digest actually running | No |
+| `WorkloadLogs` | `ContainerLogs` | Ownership-scoped, tail-biased logs capped at 1 MiB | No |
 | `ApplyVolumeClaim` | `EnsureVolume` | A PersistentVolumeClaim with the storage class D4 and the capability contract select (Longhorn RWO, NFS share, or a local volume) | Yes |
 | `RunJob` / `JobStatus` | `EnsureContainer` for a Job's run + `InspectContainer` polling | A Kubernetes Job from a typed `JobSpec`; status reports completion and exit code | Yes / No |
 | `ApplyConfig` | `WriteManagedFile` for ConfigFiles read by containers | A ConfigMap holding rendered config, mounted by name | Yes |

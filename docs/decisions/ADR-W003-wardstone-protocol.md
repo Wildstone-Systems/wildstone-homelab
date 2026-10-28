@@ -369,6 +369,22 @@ Goal: proposal §4.2's "two independent audit trails".
 - Tests: audit line written per op incl. failed ops; secrets absent from
   audit output when a `WriteManagedFile` carries secret-looking content.
 
+### W8 — Fenced Kubernetes workload operations (ADR-W050, issue #210)
+
+Protocol minor 30 adds `ApplyWorkload`, `DeleteWorkload`,
+`ObserveWorkload`, and `WorkloadLogs`. They preserve A1's closed typed
+surface: no arm carries a Kubernetes manifest, YAML/JSON patch, Helm value,
+host command, or free-form API path. Wardstone renders only its compiled
+Deployment and Service shapes and uses its scoped runtime identity.
+
+Mutations carry the accepted revision, approved Plan id/step digest, and
+leader epoch. Apply uses an observed-revision compare-and-swap; delete uses
+the accepted ADR-W050 A2 stamp-then-delete flow with UID/resourceVersion
+preconditions for both owned objects. Writes run in the barrier-cleared
+leadership-term context and stop when it is cancelled. Status and logs are
+read-only, ownership-scoped, and logs remain tail-biased at no more than
+1 MiB.
+
 ### Sizing note for the planner
 
 W1–W4 are small (each well under a day of subagent work); W5 and W6c are

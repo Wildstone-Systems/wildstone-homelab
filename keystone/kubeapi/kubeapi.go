@@ -79,6 +79,7 @@ type ObjectMeta struct {
 	Namespace       string            `json:"namespace,omitempty"`
 	UID             string            `json:"uid,omitempty"`
 	ResourceVersion string            `json:"resourceVersion,omitempty"`
+	Generation      int64             `json:"generation,omitempty"`
 	Labels          map[string]string `json:"labels,omitempty"`
 	Annotations     map[string]string `json:"annotations,omitempty"`
 }
@@ -237,6 +238,10 @@ func (c *Client) DryRunCreateConfigMap(ctx context.Context, cm *ConfigMap) error
 const maxBody = 1 << 20
 
 func (c *Client) do(ctx context.Context, method, path string, in, out any) error {
+	return c.doContent(ctx, method, path, "application/json", in, out)
+}
+
+func (c *Client) doContent(ctx context.Context, method, path, contentType string, in, out any) error {
 	var body io.Reader
 	if in != nil {
 		b, err := json.Marshal(in)
@@ -256,7 +261,7 @@ func (c *Client) do(ctx context.Context, method, path string, in, out any) error
 	req.Header.Set("Authorization", "Bearer "+tok)
 	req.Header.Set("Accept", "application/json")
 	if in != nil {
-		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Content-Type", contentType)
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {

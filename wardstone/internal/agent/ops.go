@@ -11,7 +11,9 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/kubeapi"
 	wsv1 "github.com/Wildstone-Systems/wildstone-homelab/proto/gen/wardstone/v1"
+	"github.com/Wildstone-Systems/wildstone-homelab/wardstone/internal/leader"
 )
 
 // OwnerLabel marks Docker objects Wardstone manages. It refuses to touch
@@ -233,6 +235,54 @@ func (a *Agent) dispatchOp(ctx context.Context, opID string, op *wsv1.Operation)
 		if r, oerr = a.homeAutomationReadiness(ctx); oerr == nil {
 			res.Result = r
 		}
+	case *wsv1.Operation_ApplyWorkload:
+		x := a.workloadExecutor()
+		if x == nil {
+			oerr = opErr(wsv1.ErrorCode_ERROR_CODE_FORBIDDEN, "no active cluster leadership term")
+			break
+		}
+		r, err := x.Apply(ctx, o.ApplyWorkload)
+		if err != nil {
+			oerr = workloadOpError(err)
+		} else {
+			res.Result = &wsv1.OpResult_ApplyWorkload{ApplyWorkload: r}
+		}
+	case *wsv1.Operation_DeleteWorkload:
+		x := a.workloadExecutor()
+		if x == nil {
+			oerr = opErr(wsv1.ErrorCode_ERROR_CODE_FORBIDDEN, "no active cluster leadership term")
+			break
+		}
+		r, err := x.Delete(ctx, o.DeleteWorkload)
+		if err != nil {
+			oerr = workloadOpError(err)
+		} else {
+			res.Result = &wsv1.OpResult_DeleteWorkload{DeleteWorkload: r}
+		}
+	case *wsv1.Operation_ObserveWorkload:
+		x := a.workloadExecutor()
+		if x == nil {
+			oerr = opErr(wsv1.ErrorCode_ERROR_CODE_FORBIDDEN, "workload observation is leader-scoped")
+			break
+		}
+		r, err := x.Observe(ctx, o.ObserveWorkload)
+		if err != nil {
+			oerr = workloadOpError(err)
+		} else {
+			res.Result = &wsv1.OpResult_ObserveWorkload{ObserveWorkload: r}
+		}
+	case *wsv1.Operation_WorkloadLogs:
+		x := a.workloadExecutor()
+		if x == nil {
+			oerr = opErr(wsv1.ErrorCode_ERROR_CODE_FORBIDDEN, "workload logs are leader-scoped")
+			break
+		}
+		r, err := x.Logs(ctx, o.WorkloadLogs)
+		if err != nil {
+			oerr = workloadOpError(err)
+		} else {
+			res.Result = &wsv1.OpResult_WorkloadLogs{WorkloadLogs: r}
+		}
 	default:
 		oerr = opErr(wsv1.ErrorCode_ERROR_CODE_INVALID, "unknown operation — agent too old for this Keystone? (protocol skew)")
 	}
@@ -240,6 +290,25 @@ func (a *Agent) dispatchOp(ctx context.Context, opID string, op *wsv1.Operation)
 		res.Result = &wsv1.OpResult_Error{Error: oerr}
 	}
 	return res
+}
+
+func (a *Agent) workloadExecutor() *leader.WorkloadExecutor {
+	a.workloadMu.RLock()
+	defer a.workloadMu.RUnlock()
+	return a.workloads
+}
+
+func workloadOpError(err error) *wsv1.OpError {
+	switch {
+	case leader.IsInvalid(err):
+		return opErr(wsv1.ErrorCode_ERROR_CODE_INVALID, "%v", err)
+	case leader.IsRefusal(err):
+		return opErr(wsv1.ErrorCode_ERROR_CODE_FORBIDDEN, "%v", err)
+	case kubeapi.IsNotFound(err):
+		return opErr(wsv1.ErrorCode_ERROR_CODE_NOT_FOUND, "%v", err)
+	default:
+		return opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "%v", err)
+	}
 }
 
 func opErr(code wsv1.ErrorCode, format string, args ...any) *wsv1.OpError {

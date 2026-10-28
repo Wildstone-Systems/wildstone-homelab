@@ -147,6 +147,10 @@ message Operation {
     EraseSecret erase_secret = 36;
     ListRadios list_radios = 37; // protocol minor 25
     HomeAutomationReadiness home_automation_readiness = 38; // protocol minor 26
+    ApplyWorkload apply_workload = 39; // protocol minor 30
+    DeleteWorkload delete_workload = 40; // protocol minor 30
+    ObserveWorkload observe_workload = 41; // protocol minor 30
+    WorkloadLogs workload_logs = 42; // protocol minor 30
   }
 }
 
@@ -192,6 +196,10 @@ message OpResult {
     EraseSecretResult erase_secret = 38;
     ListRadiosResult list_radios = 39; // protocol minor 25
     HomeAutomationReadinessResult home_automation_readiness = 40; // protocol minor 26
+    ApplyWorkloadResult apply_workload = 41; // protocol minor 30
+    DeleteWorkloadResult delete_workload = 42; // protocol minor 30
+    ObserveWorkloadResult observe_workload = 43; // protocol minor 30
+    WorkloadLogsResult workload_logs = 44; // protocol minor 30
   }
 }
 
@@ -1271,4 +1279,121 @@ message IssueLeaderEpochRequest {}
 
 message IssueLeaderEpochResponse {
   uint64 epoch = 1;
+}
+
+// ---------------------------------------------------------------- leader workloads (protocol minor 30)
+
+// WorkloadAuthority binds a mutating cluster operation to the accepted
+// Statefile revision, approved Plan step and barrier-cleared leadership term.
+message WorkloadAuthority {
+  string accepted_revision = 1;
+  string plan_id = 2;
+  string step_digest = 3;
+  uint64 leader_epoch = 4;
+}
+
+enum WorkloadStrategy {
+  WORKLOAD_STRATEGY_UNSPECIFIED = 0;
+  WORKLOAD_STRATEGY_RECREATE = 1;
+  WORKLOAD_STRATEGY_ROLLING_UPDATE = 2;
+}
+
+message WorkloadPort {
+  string name = 1;
+  uint32 container_port = 2;
+  uint32 service_port = 3;
+  PortProtocol protocol = 4;
+}
+
+message WorkloadSecurity {
+  bool read_only_rootfs = 1;
+  bool no_new_privileges = 2;
+  repeated string cap_add = 3;
+  repeated string cap_drop = 4;
+  int64 run_as_user = 5;
+}
+
+// WorkloadSpec is deliberately narrower than a Kubernetes object. Wardstone
+// renders the fixed Deployment and Service shapes; no field can carry YAML,
+// JSON patches, manifests, Helm values or commands to execute on the host.
+message WorkloadSpec {
+  string name = 1;
+  string image = 2;
+  repeated string command = 3;
+  map<string, string> env = 4;
+  repeated WorkloadPort ports = 5;
+  ContainerResources resources = 6;
+  WorkloadSecurity security = 7;
+  uint32 replicas = 8;
+  WorkloadStrategy strategy = 9;
+  map<string, string> node_selector = 10;
+  string package = 11;
+  string resource = 12;
+}
+
+message ApplyWorkload {
+  WorkloadAuthority authority = 1;
+  WorkloadSpec workload = 2;
+  // Empty only for first creation. Otherwise this is the revision observed
+  // when the Plan was made; a different stored revision refuses stale work.
+  string expected_revision = 3;
+}
+
+message ApplyWorkloadResult {
+  string uid = 1;
+  string resource_version = 2;
+  int64 generation = 3;
+  string service_uid = 4;
+  string service_resource_version = 5;
+}
+
+message DeleteWorkload {
+  WorkloadAuthority authority = 1;
+  string name = 2;
+  string uid = 3;
+  string resource_version = 4;
+  string service_uid = 5;
+  string service_resource_version = 6;
+}
+
+message DeleteWorkloadResult { bool deleted = 1; }
+
+message ObserveWorkload { string name = 1; }
+
+message WorkloadCondition {
+  string type = 1;
+  string status = 2;
+  string reason = 3;
+  string message = 4;
+}
+
+message ObserveWorkloadResult {
+  string uid = 1;
+  string resource_version = 2;
+  string revision = 3;
+  int64 generation = 4;
+  int64 observed_generation = 5;
+  uint32 replicas = 6;
+  uint32 updated_replicas = 7;
+  uint32 ready_replicas = 8;
+  uint32 available_replicas = 9;
+  repeated WorkloadCondition conditions = 10;
+  repeated string pod_nodes = 11;
+  uint32 restart_count = 12;
+  string image = 13;
+  string service_uid = 14;
+  string service_resource_version = 15;
+}
+
+message WorkloadLogs {
+  string name = 1;
+  uint32 tail = 2;
+  int64 since_unix_sec = 3;
+  // The leader caps this at 1 MiB. Zero asks for that maximum.
+  uint32 limit_bytes = 4;
+}
+
+message WorkloadLogsResult {
+  bytes logs = 1;
+  bool truncated = 2;
 }

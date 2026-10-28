@@ -170,6 +170,20 @@ func auditFields(op *wsv1.Operation) (arm string, fields []slog.Attr) {
 		return "ListRadios", nil
 	case *wsv1.Operation_HomeAutomationReadiness:
 		return "HomeAutomationReadiness", nil
+	case *wsv1.Operation_ApplyWorkload:
+		return "ApplyWorkload", []slog.Attr{
+			slog.String("name", o.ApplyWorkload.GetWorkload().GetName()),
+			slog.Uint64("leader_epoch", o.ApplyWorkload.GetAuthority().GetLeaderEpoch()),
+		}
+	case *wsv1.Operation_DeleteWorkload:
+		return "DeleteWorkload", []slog.Attr{
+			slog.String("name", o.DeleteWorkload.GetName()),
+			slog.Uint64("leader_epoch", o.DeleteWorkload.GetAuthority().GetLeaderEpoch()),
+		}
+	case *wsv1.Operation_ObserveWorkload:
+		return "ObserveWorkload", []slog.Attr{slog.String("name", o.ObserveWorkload.GetName())}
+	case *wsv1.Operation_WorkloadLogs:
+		return "WorkloadLogs", []slog.Attr{slog.String("name", o.WorkloadLogs.GetName())}
 	default:
 		// Unknown/future op arm (protocol skew, or a new arm someone forgot
 		// to add a case for above): log the fact that something was
