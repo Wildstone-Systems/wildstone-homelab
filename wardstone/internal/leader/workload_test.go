@@ -227,6 +227,10 @@ func TestApplyIsFixedIdempotentAndRevisionFenced(t *testing.T) {
 	if len(f.d.Spec.Template.Spec.Containers[0].Command) != 0 || !reflect.DeepEqual(f.d.Spec.Template.Spec.Containers[0].Args, req.Workload.Command) {
 		t.Fatalf("container arguments were not preserved: %+v", f.d.Spec.Template.Spec.Containers[0])
 	}
+	security := f.d.Spec.Template.Spec.Containers[0].SecurityContext
+	if security == nil || security.RunAsNonRoot == nil || !*security.RunAsNonRoot || security.SeccompProfile == nil || security.SeccompProfile.Type != "RuntimeDefault" {
+		t.Fatalf("fixed workload does not satisfy restricted Pod Security: %+v", security)
+	}
 	if f.d.Metadata.Labels[managedByLabel] != managedByValue || f.d.Metadata.Annotations[revisionAnnotation] != "rev-a" {
 		t.Fatalf("ownership/authority not stamped: %+v", f.d.Metadata)
 	}

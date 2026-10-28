@@ -187,8 +187,8 @@ func render(w *wsv1.WorkloadSpec, a *wsv1.WorkloadAuthority) (*kubeapi.Deploymen
 		limits = nil
 	}
 	sec := w.GetSecurity()
-	ro, npe := sec.GetReadOnlyRootfs(), !sec.GetNoNewPrivileges()
-	sc := &kubeapi.SecurityContext{ReadOnlyRootFilesystem: &ro, AllowPrivilegeEscalation: &npe, Capabilities: &kubeapi.Capabilities{Add: append([]string(nil), sec.GetCapAdd()...), Drop: append([]string(nil), sec.GetCapDrop()...)}}
+	ro, npe, nonRoot := sec.GetReadOnlyRootfs(), !sec.GetNoNewPrivileges(), true
+	sc := &kubeapi.SecurityContext{ReadOnlyRootFilesystem: &ro, AllowPrivilegeEscalation: &npe, RunAsNonRoot: &nonRoot, SeccompProfile: &kubeapi.SeccompProfile{Type: "RuntimeDefault"}, Capabilities: &kubeapi.Capabilities{Add: append([]string(nil), sec.GetCapAdd()...), Drop: append([]string(nil), sec.GetCapDrop()...)}}
 	if sec.GetRunAsUser() != 0 {
 		v := sec.GetRunAsUser()
 		sc.RunAsUser = &v

@@ -82,6 +82,10 @@ func (s *workloadAPIServer) serve(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *workloadAPIServer) serveDeployment(w http.ResponseWriter, r *http.Request) {
+	if (r.Method == http.MethodPost || r.Method == http.MethodPatch) && r.URL.Query().Get("fieldManager") != "wildstone-wardstone" {
+		testingError(w, "Deployment field manager changed between create and apply")
+		return
+	}
 	switch r.Method {
 	case http.MethodGet:
 		if s.d == nil {
@@ -120,6 +124,10 @@ func (s *workloadAPIServer) serveDeployment(w http.ResponseWriter, r *http.Reque
 }
 
 func (s *workloadAPIServer) serveService(w http.ResponseWriter, r *http.Request) {
+	if (r.Method == http.MethodPost || r.Method == http.MethodPatch) && r.URL.Query().Get("fieldManager") != "wildstone-wardstone" {
+		testingError(w, "Service field manager changed between create and apply")
+		return
+	}
 	switch r.Method {
 	case http.MethodGet:
 		if s.s == nil {

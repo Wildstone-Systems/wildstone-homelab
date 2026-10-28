@@ -12,7 +12,10 @@ import (
 	"time"
 )
 
-const WorkloadNamespace = "wildstone-apps"
+const (
+	WorkloadNamespace    = "wildstone-apps"
+	workloadFieldManager = "wildstone-wardstone"
+)
 
 type Deployment struct {
 	APIVersion string           `json:"apiVersion"`
@@ -68,10 +71,15 @@ type ResourceRequirements struct {
 	Requests map[string]string `json:"requests,omitempty"`
 }
 type SecurityContext struct {
-	ReadOnlyRootFilesystem   *bool         `json:"readOnlyRootFilesystem,omitempty"`
-	AllowPrivilegeEscalation *bool         `json:"allowPrivilegeEscalation,omitempty"`
-	RunAsUser                *int64        `json:"runAsUser,omitempty"`
-	Capabilities             *Capabilities `json:"capabilities,omitempty"`
+	ReadOnlyRootFilesystem   *bool           `json:"readOnlyRootFilesystem,omitempty"`
+	AllowPrivilegeEscalation *bool           `json:"allowPrivilegeEscalation,omitempty"`
+	RunAsNonRoot             *bool           `json:"runAsNonRoot,omitempty"`
+	RunAsUser                *int64          `json:"runAsUser,omitempty"`
+	SeccompProfile           *SeccompProfile `json:"seccompProfile,omitempty"`
+	Capabilities             *Capabilities   `json:"capabilities,omitempty"`
+}
+type SeccompProfile struct {
+	Type string `json:"type"`
 }
 type Capabilities struct {
 	Add  []string `json:"add,omitempty"`
@@ -162,7 +170,8 @@ func (c *Client) GetDeployment(ctx context.Context, name string) (*Deployment, e
 func (c *Client) CreateDeployment(ctx context.Context, d *Deployment) (*Deployment, error) {
 	d.APIVersion, d.Kind, d.Metadata.Namespace = "apps/v1", "Deployment", WorkloadNamespace
 	var out Deployment
-	return &out, c.do(ctx, http.MethodPost, deploymentPath(""), d, &out)
+	p := deploymentPath("") + "?fieldManager=" + url.QueryEscape(workloadFieldManager)
+	return &out, c.do(ctx, http.MethodPost, p, d, &out)
 }
 func (c *Client) ApplyDeployment(ctx context.Context, d *Deployment) (*Deployment, error) {
 	if d.Metadata.ResourceVersion == "" {
@@ -170,7 +179,7 @@ func (c *Client) ApplyDeployment(ctx context.Context, d *Deployment) (*Deploymen
 	}
 	d.APIVersion, d.Kind, d.Metadata.Namespace = "apps/v1", "Deployment", WorkloadNamespace
 	var out Deployment
-	p := deploymentPath(d.Metadata.Name) + "?fieldManager=wildstone-wardstone&force=false"
+	p := deploymentPath(d.Metadata.Name) + "?fieldManager=" + url.QueryEscape(workloadFieldManager) + "&force=false"
 	return &out, c.doContent(ctx, http.MethodPatch, p, "application/apply-patch+yaml", d, &out)
 }
 func (c *Client) UpdateDeployment(ctx context.Context, d *Deployment) (*Deployment, error) {
@@ -189,7 +198,8 @@ func (c *Client) GetService(ctx context.Context, name string) (*Service, error) 
 func (c *Client) CreateService(ctx context.Context, s *Service) (*Service, error) {
 	s.APIVersion, s.Kind, s.Metadata.Namespace = "v1", "Service", WorkloadNamespace
 	var out Service
-	return &out, c.do(ctx, http.MethodPost, servicePath(""), s, &out)
+	p := servicePath("") + "?fieldManager=" + url.QueryEscape(workloadFieldManager)
+	return &out, c.do(ctx, http.MethodPost, p, s, &out)
 }
 func (c *Client) ApplyService(ctx context.Context, s *Service) (*Service, error) {
 	if s.Metadata.ResourceVersion == "" {
@@ -197,7 +207,7 @@ func (c *Client) ApplyService(ctx context.Context, s *Service) (*Service, error)
 	}
 	s.APIVersion, s.Kind, s.Metadata.Namespace = "v1", "Service", WorkloadNamespace
 	var out Service
-	p := servicePath(s.Metadata.Name) + "?fieldManager=wildstone-wardstone&force=false"
+	p := servicePath(s.Metadata.Name) + "?fieldManager=" + url.QueryEscape(workloadFieldManager) + "&force=false"
 	return &out, c.doContent(ctx, http.MethodPatch, p, "application/apply-patch+yaml", s, &out)
 }
 func (c *Client) UpdateService(ctx context.Context, s *Service) (*Service, error) {
