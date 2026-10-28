@@ -247,6 +247,11 @@ var Columns = []Column{
 	{"external_client_registrations", "subject", NotAPerson, "0107: exact issuer-scoped OIDC subject captured at activation; sensitive external identity, never a canonical Person selector"},
 	{"external_client_registrations", "activated_at", NotAPerson, "0107: fixed-width UTC activation timestamp"},
 	{"external_client_registrations", "activated_by", Actor, "0107: canonical Person actor that completed the independently authenticated confirmation"},
+	{"external_task_admissions", "registration_id", NotAPerson, "0110: exact external-client registration foreign key, never a Person selector"},
+	{"external_task_admissions", "client_session_id", NotAPerson, "0110: opaque client correlation identifier with no identity authority"},
+	{"external_task_admissions", "idempotency_key", NotAPerson, "0110: opaque registration/session-scoped retry key, never an identity"},
+	{"external_task_admissions", "payload_digest", NotAPerson, "0110: SHA-256 digest of the normalized bounded admission payload"},
+	{"external_task_admissions", "created_at", NotAPerson, "0110: fixed-width UTC admission timestamp"},
 	{"leader_epochs", "leader", NotAPerson, "0109: a Wardstone runtime ServiceAccount username (system:serviceaccount:wildstone-system:wardstone-<node>), naming a machine, never a Person"},
 	{"leader_epochs", "issued_at", NotAPerson, "0109: fixed-width UTC epoch issuance timestamp"},
 	// 0106 (#598): short-lived enrollment challenges bind the exact canonical

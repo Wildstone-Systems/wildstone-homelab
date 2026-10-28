@@ -51,7 +51,8 @@ func (db *DB) OpenSecretVault(keyPath string) (*SecretVault, error) {
 	key, err := os.ReadFile(keyPath)
 	if os.IsNotExist(err) {
 		var n int
-		if err = db.sql.QueryRow(`SELECT (SELECT COUNT(*) FROM household_secrets) + (SELECT COUNT(*) FROM integration_pairings)`).Scan(&n); err != nil {
+		if err = db.sql.QueryRow(`SELECT (SELECT COUNT(*) FROM household_secrets) +
+			(SELECT COUNT(*) FROM integration_pairings) + (SELECT COUNT(*) FROM external_task_admissions)`).Scan(&n); err != nil {
 			return nil, err
 		}
 		if n != 0 {
@@ -116,6 +117,9 @@ func (db *DB) OpenSecretVault(keyPath string) (*SecretVault, error) {
 		return nil, err
 	}
 	if err = v.checkPairingsOpen(); err != nil {
+		return nil, err
+	}
+	if err = v.checkExternalAdmissionsOpen(); err != nil {
 		return nil, err
 	}
 	return v, nil
