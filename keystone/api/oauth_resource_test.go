@@ -13,6 +13,7 @@ import (
 
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/agentapi"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/agentapi/httpclient"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/agentgateway"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/oauthresource"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/principal"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/runtimedb"
@@ -232,5 +233,51 @@ func TestOAuthRequestLocalRecheckFailsClosedOnIssuerOutage(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK || !rechecked || introspector.calls != 2 {
 		t.Fatalf("status=%d rechecked=%v introspections=%d", rec.Code, rechecked, introspector.calls)
+	}
+}
+
+func TestOAuthDeliveryPollAndAckUseFreshExactProvenance(t *testing.T) {
+	h, introspector := activeOAuthHarness(t)
+	h.s.AgentGateway = agentgateway.InProcess(&agentgateway.Gateway{DB: h.s.DB})
+	rec, admitted := admitOAuthTask(t, h,
+		`{"objective":"check the greenhouse","clientSessionId":"delivery-session","idempotencyKey":"delivery-turn"}`)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("admission = %d %s", rec.Code, rec.Body.String())
+	}
+	agentName, err := h.s.DB.TaskButler(admitted.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent, err := h.s.DB.GetButler(agentName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.s.DB.RecordAgentDeliveryForTask(agent.Seq, agentapi.DeliveryTurn, admitted.TaskID,
+		`{"handle":"`+string(admitted.Handle)+`","text":"synthetic delivery"}`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.s.DB.RecordAgentDelivery(agent.Seq, agentapi.DeliveryEscalation, `{"instruction":"static only"}`); err != nil {
+		t.Fatal(err)
+	}
+
+	introspector.calls = 0
+	client := &httpclient.Client{BaseURL: h.srv.URL, Bearer: "opaque-oauth-access-token", HTTP: h.srv.Client()}
+	deliveries, err := client.Deliveries(context.Background(), "", 0)
+	if err != nil || len(deliveries) != 1 || deliveries[0].Kind != agentapi.DeliveryTurn {
+		t.Fatalf("deliveries = %+v, %v", deliveries, err)
+	}
+	if introspector.calls != 3 { // request authentication, pre-selection, pre-return
+		t.Fatalf("poll introspections = %d", introspector.calls)
+	}
+
+	introspector.calls = 0
+	if err := client.Ack(context.Background(), deliveries[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Ack(context.Background(), deliveries[0].ID); err != nil {
+		t.Fatalf("duplicate ack = %v", err)
+	}
+	if introspector.calls != 4 { // request authentication and pre-write recheck per ack
+		t.Fatalf("ack introspections = %d", introspector.calls)
 	}
 }

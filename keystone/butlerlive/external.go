@@ -116,7 +116,7 @@ func (bs *Butlers) runExternal(ctx context.Context, runner *legacy.Runner,
 	if err != nil {
 		return s.Transcript(), err
 	}
-	if _, err := bs.DB.RecordAgentDelivery(b.Seq, agentapi.DeliveryTurn, string(payload)); err != nil {
+	if _, err := bs.DB.RecordAgentDeliveryForTask(b.Seq, agentapi.DeliveryTurn, taskID, string(payload)); err != nil {
 		return s.Transcript(), err
 	}
 

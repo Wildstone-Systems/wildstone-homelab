@@ -455,7 +455,7 @@ func (s *Server) recordProposalOutcomeDelivery(planID, filedBy, outcome, summary
 		s.Log.Error("encoding a proposal_outcome delivery", "plan", planID, "err", err)
 		return
 	}
-	if _, err := s.DB.RecordAgentDelivery(seq, "proposal_outcome", string(payload)); err != nil {
+	if _, err := s.DB.RecordAgentDeliveryForPlan(seq, "proposal_outcome", planID, string(payload)); err != nil {
 		s.Log.Error("recording a proposal_outcome delivery", "plan", planID, "err", err)
 	}
 }
