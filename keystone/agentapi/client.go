@@ -147,6 +147,14 @@ type ToolsClient interface {
 	Tools(ctx context.Context) ([]ToolSpec, error)
 }
 
+// TaskAdmissionClient is the OAuth profile's model-invisible direct
+// conversation seam (ADR-W049 §2.3). It is separate from Client because a
+// static/native runtime receives task handles through trusted ingress or
+// delivery and must never make this OAuth-only call.
+type TaskAdmissionClient interface {
+	AdmitTask(ctx context.Context, req TaskAdmissionRequest) (TaskAdmission, error)
+}
+
 // DeliveryClient is the pull side of the Events family (§3.6, §4.1;
 // Phase 4, #341): long-poll for unacked deliveries,
 // and acknowledge one. It is deliberately its OWN interface rather than

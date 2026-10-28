@@ -20,6 +20,20 @@ import (
 	"time"
 )
 
+// TaskAdmissionRequest is the closed client-supplied shape for direct OAuth
+// conversations. Identity, authority, grants, budget and processing facts are
+// intentionally absent: Keystone derives them from the active registration.
+type TaskAdmissionRequest struct {
+	Objective       string `json:"objective"`
+	ClientSessionID string `json:"clientSessionId"`
+	IdempotencyKey  string `json:"idempotencyKey"`
+}
+
+type TaskAdmission struct {
+	TaskID string `json:"taskId"`
+	Handle Handle `json:"handle"`
+}
+
 // ---- Capabilities ---------------------------------------------------
 
 // AgentClass names which Agent a manifest describes (ADR-W033 design

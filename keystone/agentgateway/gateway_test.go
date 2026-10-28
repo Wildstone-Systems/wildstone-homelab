@@ -113,6 +113,15 @@ func TestManifestListsTheSurfacesOwnTools(t *testing.T) {
 	}
 }
 
+func TestOAuthRegistrationCannotBorrowAnotherTaskHandle(t *testing.T) {
+	f := newFixture(t)
+	_, handle := f.openTask(t, "joan", "sam")
+	ctx := WithExternalRegistration(context.Background(), "xreg_unrelated")
+	if _, err := f.g.Manifest(ctx, handle); !errors.Is(err, ErrRefused) {
+		t.Fatalf("unbound OAuth registration used a valid task handle: %v", err)
+	}
+}
+
 // (b) An invoke writes the rows the runner writes: the same step, the
 // same attempt, the same envelope, the same trace, so a resume through
 // either reads one ledger.
