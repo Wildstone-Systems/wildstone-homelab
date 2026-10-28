@@ -73,6 +73,9 @@ func TestToolsITToolsClusterIntentGolden(t *testing.T) {
 	if len(intent.ServicePorts) != 1 || intent.ServicePorts[0].ContainerPort != 80 {
 		t.Fatalf("Route service port = %+v", intent.ServicePorts)
 	}
+	if err := ClusterRouteConflict(container, rs); err == nil || !strings.Contains(err.Error(), "#212") {
+		t.Fatalf("routed k3s install must wait for coexistence upstream: %v", err)
+	}
 	container.Container.Mounts = []resource.Mount{{Source: "data", Target: "/data"}}
 	if _, err := ClusterIntent(container, rs); err == nil || !strings.Contains(err.Error(), "stateless") {
 		t.Fatalf("mounted workload accepted: %v", err)

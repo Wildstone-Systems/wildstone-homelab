@@ -59,3 +59,19 @@ func ClusterIntent(want resource.Resource, all []resource.Resource) (*WorkloadSp
 	}
 	return req.Workload, nil
 }
+
+// ClusterRouteConflict refuses a k3s opt-in that would leave an existing
+// Docker Caddy Route pointing at Docker container-name DNS. The reachable
+// cluster upstream is the separate coexistence networking slice (#212).
+func ClusterRouteConflict(want resource.Resource, all []resource.Resource) error {
+	if want.Kind != resource.KindContainer || want.Container == nil || want.Container.Backend != "k3s" {
+		return nil
+	}
+	prefix := "container/" + want.Metadata.Name + ":"
+	for _, r := range all {
+		if r.Kind == resource.KindRoute && r.Route != nil && strings.HasPrefix(r.Route.Upstream, prefix) {
+			return fmt.Errorf("cluster: Route/%s still uses Docker container DNS for Container/%s; routed k3s installs need the coexistence upstream from #212", r.Metadata.Name, want.Metadata.Name)
+		}
+	}
+	return nil
+}

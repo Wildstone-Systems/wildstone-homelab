@@ -781,6 +781,9 @@ func (s *Server) proposeCapabilityBackend(id principal.Identity, pkg *pkgspec.Pa
 		}
 		for _, candidate := range rendered {
 			if candidate.Kind == resource.KindContainer {
+				if err := reconcile.ClusterRouteConflict(candidate, rendered); err != nil {
+					return nil, http.StatusBadRequest, err
+				}
 				if _, err := reconcile.ClusterIntent(candidate, rendered); err != nil {
 					return nil, http.StatusBadRequest, err
 				}

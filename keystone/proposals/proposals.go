@@ -275,6 +275,9 @@ func File(deps Deps, id principal.Identity, req Request, opts Options) (any, int
 			return nil, http.StatusUnprocessableEntity, fmt.Errorf("Container/%s backend migration needs a reviewed cutover; choose the backend on a new install", r.Metadata.Name)
 		}
 		if r.Container.Backend == "k3s" {
+			if err := reconcile.ClusterRouteConflict(r, desired); err != nil {
+				return nil, http.StatusUnprocessableEntity, err
+			}
 			if _, err := reconcile.ClusterIntent(r, desired); err != nil {
 				return nil, http.StatusUnprocessableEntity, err
 			}
