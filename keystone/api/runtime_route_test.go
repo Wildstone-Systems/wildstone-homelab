@@ -42,6 +42,7 @@ func TestRuntimeRouteClassifierIsClosed(t *testing.T) {
 		{http.MethodPost, "/api/v1/plans/plan-1/approve"},
 		{http.MethodPost, "/api/v1/agent/tasks"},
 		{http.MethodPost, "/mcp"},
+		{http.MethodGet, "/mcp"},
 		{http.MethodGet, "/api/v1/agent/manifest"},
 		{http.MethodPost, "/api/v1/agent/tools"},
 		{http.MethodPost, "/api/v1/agent/invoke/extra"},
@@ -66,6 +67,7 @@ func TestOAuthRouteClassifierIsClosedAndSeparateFromStatic(t *testing.T) {
 		{http.MethodPost, "/api/v1/agent/tasks"},
 		{http.MethodPost, "/api/v1/agent/manifest"},
 		{http.MethodPost, "/api/v1/agent/invoke"},
+		{http.MethodPost, "/mcp"},
 		{http.MethodPost, "/api/v1/agent/heartbeat"},
 		{http.MethodPost, "/api/v1/agent/deliveries/delivery-1/ack"},
 	}
@@ -75,7 +77,7 @@ func TestOAuthRouteClassifierIsClosedAndSeparateFromStatic(t *testing.T) {
 		}
 	}
 	denied := []struct{ method, path string }{
-		{http.MethodPost, "/mcp"},
+		{http.MethodGet, "/mcp"},
 		{http.MethodGet, "/api/v1/resources"},
 		{http.MethodPost, "/api/v1/plans"},
 		{http.MethodGet, "/api/v1/synthetic-unclassified"},
@@ -88,7 +90,7 @@ func TestOAuthRouteClassifierIsClosedAndSeparateFromStatic(t *testing.T) {
 		}
 	}
 	if runtimeRouteAllowed(http.MethodPost, "/mcp") || runtimeRouteAllowed(http.MethodPost, "/api/v1/agent/tasks") {
-		t.Fatal("future OAuth-only route leaked into static classification")
+		t.Fatal("OAuth-only route leaked into static classification")
 	}
 }
 

@@ -32,6 +32,10 @@ type TaskAdmissionRequest struct {
 type TaskAdmission struct {
 	TaskID string `json:"taskId"`
 	Handle Handle `json:"handle"`
+	// MCPSession is a high-entropy, expiry-bounded correlation value for
+	// Keystone's OAuth MCP profile. It is usable only for this admitted task.
+	MCPSession       string    `json:"mcpSession"`
+	SessionExpiresAt time.Time `json:"sessionExpiresAt"`
 }
 
 // ---- Capabilities ---------------------------------------------------
