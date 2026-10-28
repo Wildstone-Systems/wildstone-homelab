@@ -101,10 +101,10 @@ var calendarEventRefScanRegexp = regexp.MustCompile(
 // segments is not one.
 const serialByIDName = `(?:/dev/serial/by-id/|serial-by-id:)[A-Za-z0-9._:+-]{1,255}`
 
-// serialByIDValueRegexp / serialByIDJSONScanRegexp find a serial by-id
-// name that is an ENTIRE value: either the whole input, or the whole of a
-// JSON string (the opening quote directly after a structural character,
-// the closing quote directly after the name).
+// serialByIDScanRegexp finds serial by-id names wherever they appear in
+// rendered text. Plans carry put documents as multiline YAML strings, so
+// requiring the alias to be a whole JSON value hides the device identity
+// precisely where a reviewer needs to verify it.
 //
 // A udev by-id name is vendor, model and USB serial number —
 // "usb-ITead_Sonoff_Zigbee_3.0_USB_Dongle_Plus_<serial>-if00-port0" — a
@@ -114,15 +114,42 @@ const serialByIDName = `(?:/dev/serial/by-id/|serial-by-id:)[A-Za-z0-9._:+-]{1,2
 // stick's byIdPaths and its id both read "[REDACTED]" and the picker has
 // nothing to tell two sticks apart by, nor anything to submit.
 //
-// Narrow on purpose. Only the exact value is sheltered: the same name
-// with extra path segments, or embedded in a larger string (a plan
-// summary, an error message), still meets the value rules. And the
-// sentinel is its own, so a by-id value under a credential-shaped key is
-// still taken by kvSecretRegexp, as a path is.
-var (
-	serialByIDValueRegexp    = regexp.MustCompile(`^` + serialByIDName + `$`)
-	serialByIDJSONScanRegexp = regexp.MustCompile(`([\[{:,]\s*")(` + serialByIDName + `)"`)
-)
+// Narrow on purpose. serialByIDIsExact rejects a match embedded in a
+// larger path/name or followed by another path segment. The sentinel is
+// its own, so a by-id name under a credential-shaped key is still taken
+// by kvSecretRegexp, as a path is.
+var serialByIDScanRegexp = regexp.MustCompile(serialByIDName)
+
+func serialByIDIsExact(text string, start, end int) bool {
+	isNameByte := func(b byte) bool {
+		return b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z' ||
+			b >= '0' && b <= '9' || strings.ContainsRune("._:+-/", rune(b))
+	}
+	return (start == 0 || !isNameByte(text[start-1])) &&
+		(end == len(text) || !isNameByte(text[end]))
+}
+
+func shelterSerialByIDs(text string, shelter func(string) string) string {
+	matches := serialByIDScanRegexp.FindAllStringIndex(text, -1)
+	if len(matches) == 0 {
+		return text
+	}
+	var out strings.Builder
+	last := 0
+	for _, match := range matches {
+		if !serialByIDIsExact(text, match[0], match[1]) {
+			continue
+		}
+		out.WriteString(text[last:match[0]])
+		out.WriteString(shelter(text[match[0]:match[1]]))
+		last = match[1]
+	}
+	if last == 0 {
+		return text
+	}
+	out.WriteString(text[last:])
+	return out.String()
+}
 
 // kindRefScanRegexp finds a resource reference of the form "Kind/name"
 // over the closed kind vocabulary. These are sheltered for exactly the
@@ -430,8 +457,8 @@ const urlSentinelMarker = "\x00URLROUND\x00"
 // whole value and the sentinel is simply not here to restore.
 const pathSentinelMarker = "\x00PATHROUND\x00"
 
-// serialByIDSentinelMarker shelters an exact serial by-id value (see
-// serialByIDJSONScanRegexp), under its own marker for pathSentinelMarker's
+// serialByIDSentinelMarker shelters an exact serial by-id name (see
+// serialByIDScanRegexp), under its own marker for pathSentinelMarker's
 // reason.
 const serialByIDSentinelMarker = "\x00BYIDROUND\x00"
 
@@ -516,22 +543,15 @@ func String(s string) string {
 		urls = append(urls, m)
 		return fmt.Sprintf("%s%d\x00", urlSentinelMarker, len(urls)-1)
 	})
-	// Serial by-id names that are a whole value (see
-	// serialByIDJSONScanRegexp). Only the name is swapped out; the quotes
-	// stay in the text, so kvSecretRegexp still sees a quoted value.
+	// Serial by-id names wherever they appear in rendered text (see
+	// serialByIDScanRegexp). Only the name is swapped out, so surrounding
+	// text and quotes remain and kvSecretRegexp still sees a keyed value.
 	var byIDs []string
 	byIDSentinel := func(name string) string {
 		byIDs = append(byIDs, name)
 		return fmt.Sprintf("%s%d\x00", serialByIDSentinelMarker, len(byIDs)-1)
 	}
-	if serialByIDValueRegexp.MatchString(protected) {
-		protected = byIDSentinel(protected)
-	} else {
-		protected = serialByIDJSONScanRegexp.ReplaceAllStringFunc(protected, func(m string) string {
-			sub := serialByIDJSONScanRegexp.FindStringSubmatch(m)
-			return sub[1] + byIDSentinel(sub[2]) + `"`
-		})
-	}
+	protected = shelterSerialByIDs(protected, byIDSentinel)
 	protected = secretRefScanRegexp.ReplaceAllStringFunc(protected, func(m string) string {
 		refs = append(refs, m)
 		return fmt.Sprintf("%s%d\x00", secretRefSentinelMarker, len(refs)-1)
