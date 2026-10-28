@@ -30,6 +30,7 @@ import (
 	"google.golang.org/grpc/credentials"
 
 	wsv1 "github.com/Wildstone-Systems/wildstone-homelab/proto/gen/wardstone/v1"
+	"github.com/Wildstone-Systems/wildstone-homelab/wardstone/internal/leader"
 )
 
 // ProtocolMinor is the v1 minor revision this agent speaks.
@@ -169,7 +170,9 @@ import (
 // caller-selected leader identity. Keystone derives it from the peer cert.
 // 29: HostFacts reports the installed engine/version and this node's
 // active, barrier-cleared leadership term.
-const ProtocolMinor = 29
+// 30: adds typed ApplyWorkload, DeleteWorkload, ObserveWorkload and
+// WorkloadLogs arms for the fenced Wardstone leader.
+const ProtocolMinor = 30
 
 // maxUpdateMsgBytes is the gRPC message size cap on both ends of the
 // session/join connections (ADR-W003 W5). SelfUpdate ships the new binary
@@ -245,6 +248,8 @@ type Agent struct {
 	// Zero outside a barrier-cleared leadership term. HostFacts can be
 	// dispatched concurrently with election and reads this atomically.
 	activeLeaderEpoch atomic.Uint64
+	workloadMu        sync.RWMutex
+	workloads         *leader.WorkloadExecutor
 	// runtime is the node's container runtime; the Docker Engine client
 	// is the only one (runtime.go).
 	runtime runtimeBackend
