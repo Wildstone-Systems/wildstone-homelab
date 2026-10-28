@@ -1110,6 +1110,7 @@ func (s *Server) Handler() http.Handler {
 	// notify) — the decision that this family adds no new RBAC verb,
 	// since RoleButler already holds both.
 	mux.Handle("POST /api/v1/agent/manifest", s.handle(principal.VerbRead, s.agentManifest))
+	mux.Handle("POST /api/v1/agent/tasks", s.handle(principal.VerbRead, s.agentAdmitTask))
 	mux.Handle("GET /api/v1/agent/tools", s.handle(principal.VerbRead, s.agentTools))
 	mux.Handle("POST /api/v1/agent/invoke", s.handle(principal.VerbPropose, s.agentInvoke))
 	mux.Handle("POST /api/v1/agent/recall", s.handle(principal.VerbRead, s.agentRecall))
@@ -1208,7 +1209,8 @@ func (s *Server) handleResponse(verb principal.Verb, h responseHandlerFunc) http
 			s.writeError(w, status, "internal")
 			return
 		}
-		if runtimeBound && !runtimeRouteAllowed(r.Method, r.URL.Path) {
+		_, oauthAuthenticated := oauthresource.FromContext(r.Context())
+		if runtimeBound && !oauthAuthenticated && !runtimeRouteAllowed(r.Method, r.URL.Path) {
 			status = http.StatusForbidden
 			s.writeError(w, status, "runtime credential may only use the Agent API")
 			return
@@ -1329,7 +1331,7 @@ func oauthRouteAllowed(method, path string) bool {
 		return false
 	}
 	switch path {
-	case "/api/v1/agent/manifest", "/api/v1/agent/invoke", "/api/v1/agent/recall",
+	case "/api/v1/agent/tasks", "/api/v1/agent/manifest", "/api/v1/agent/invoke", "/api/v1/agent/recall",
 		"/api/v1/agent/remember", "/api/v1/agent/checkpoint", "/api/v1/agent/start",
 		"/api/v1/agent/wait", "/api/v1/agent/complete", "/api/v1/agent/fail",
 		"/api/v1/agent/propose", "/api/v1/agent/notify", "/api/v1/agent/heartbeat":
@@ -1497,11 +1499,13 @@ func (s *Server) writeJSON(w http.ResponseWriter, status int, body any) {
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("Pragma", "no-cache")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
-	case mintResponse, joinTokenResponse, runtimeCredentialResponse:
+	case mintResponse, joinTokenResponse, runtimeCredentialResponse, agentapi.TaskAdmission:
 		// The deliberate carve-outs (ADR-W007 A3, ADR-W014 A3, ADR-W039
 		// §4.1): a newly minted API token, join token or runtime
 		// credential, each in the only moment it ever exists in a
 		// response.
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Pragma", "no-cache")
 	case identityNotification:
 		// Redacted everywhere but the password-reset link an admin hands
 		// over (identityNotification.redacted), and never cached.
