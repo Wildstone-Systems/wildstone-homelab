@@ -59,6 +59,37 @@ func TestRuntimeRouteClassifierIsClosed(t *testing.T) {
 	}
 }
 
+func TestOAuthRouteClassifierIsClosedAndSeparateFromStatic(t *testing.T) {
+	allowed := []struct{ method, path string }{
+		{http.MethodGet, "/api/v1/agent/tools"},
+		{http.MethodPost, "/api/v1/agent/manifest"},
+		{http.MethodPost, "/api/v1/agent/invoke"},
+		{http.MethodPost, "/api/v1/agent/heartbeat"},
+	}
+	for _, tc := range allowed {
+		if !oauthRouteAllowed(tc.method, tc.path) {
+			t.Errorf("%s %s denied", tc.method, tc.path)
+		}
+	}
+	denied := []struct{ method, path string }{
+		{http.MethodPost, "/api/v1/agent/tasks"},
+		{http.MethodGet, "/api/v1/agent/deliveries"},
+		{http.MethodPost, "/api/v1/agent/deliveries/delivery-1/ack"},
+		{http.MethodPost, "/mcp"},
+		{http.MethodGet, "/api/v1/resources"},
+		{http.MethodPost, "/api/v1/plans"},
+		{http.MethodGet, "/api/v1/synthetic-unclassified"},
+	}
+	for _, tc := range denied {
+		if oauthRouteAllowed(tc.method, tc.path) {
+			t.Errorf("%s %s allowed", tc.method, tc.path)
+		}
+	}
+	if runtimeRouteAllowed(http.MethodPost, "/mcp") || runtimeRouteAllowed(http.MethodPost, "/api/v1/agent/tasks") {
+		t.Fatal("future OAuth-only route leaked into static classification")
+	}
+}
+
 type observedReader struct {
 	read bool
 	r    io.Reader

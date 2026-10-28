@@ -9,12 +9,15 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/householdtz"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/mailreview"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/oauthresource"
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -74,6 +77,9 @@ type Server struct {
 	// EnrollmentSignInHTTP is the test seam for the distinct external-
 	// enrollment relying party. Production uses the default client.
 	EnrollmentSignInHTTP *http.Client
+	// OAuthResource is the external-Agent resource-token boundary. Nil keeps
+	// the OAuth profile unavailable; deployment wiring is a later gate.
+	OAuthResource *oauthresource.Resolver
 	// Catalog is what this control plane can install (ADR-W021 A3).
 	// nil leaves the package and capability endpoints answering 503;
 	// every other route is unaffected, the same posture Agents takes.
@@ -409,6 +415,8 @@ func (s *Server) Handler() http.Handler {
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprintln(w, `{"ok":true}`)
 	})
+	mux.HandleFunc("GET /.well-known/oauth-protected-resource", s.oauthProtectedResourceMetadata)
+	mux.HandleFunc("GET /.well-known/oauth-protected-resource/mcp", s.oauthProtectedResourceMetadata)
 
 	mux.Handle("GET /api/v1/whoami", s.handle(principal.VerbRead, s.whoami))
 	// Console sign-in (ADR-W033 A4.1). Not behind s.handle: these are
@@ -1144,7 +1152,7 @@ func (s *Server) handle(verb principal.Verb, h handlerFunc) http.Handler {
 func (s *Server) handleResponse(verb principal.Verb, h responseHandlerFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// --- authn
-		id, ok := s.authenticate(r)
+		id, ok, authErr := s.authenticate(r)
 		if !ok {
 			// Everything unauthenticated shares one strict bucket so token
 			// guessing is throttled globally, not per-source.
@@ -1152,7 +1160,21 @@ func (s *Server) handleResponse(verb principal.Verb, h responseHandlerFunc) http
 				s.writeError(w, http.StatusTooManyRequests, "rate limited")
 				return
 			}
-			w.Header().Set("WWW-Authenticate", `Bearer realm="wildstone"`)
+			if errors.Is(authErr, oauthresource.ErrInsufficientScope) {
+				w.Header().Set("WWW-Authenticate", s.oauthChallenge("insufficient_scope"))
+				s.writeError(w, http.StatusForbidden, "insufficient OAuth scope")
+				return
+			}
+			if errors.Is(authErr, errOAuthRouteDenied) {
+				w.Header().Set("WWW-Authenticate", s.oauthChallenge("invalid_token"))
+				s.writeError(w, http.StatusForbidden, "OAuth credential may only use its classified Agent API routes")
+				return
+			}
+			if authErr != nil && s.OAuthResource != nil {
+				w.Header().Set("WWW-Authenticate", s.oauthChallenge("invalid_token"))
+			} else {
+				w.Header().Set("WWW-Authenticate", `Bearer realm="wildstone"`)
+			}
 			// A person the proxy signed in who has no fresh Console
 			// session is told where to get one, so the Console can send
 			// them there instead of showing a refusal.
@@ -1254,7 +1276,12 @@ func runtimeRouteAllowed(method, path string) bool {
 		!strings.Contains(strings.TrimSuffix(idAndAck, ackSuffix), "/")
 }
 
-func (s *Server) authenticate(r *http.Request) (principal.Identity, bool) {
+var errOAuthRouteDenied = errors.New("OAuth route is not classified")
+
+func (s *Server) authenticate(r *http.Request) (principal.Identity, bool, error) {
+	if r.URL.Query().Has("access_token") || r.URL.Query().Has("token") {
+		return principal.Identity{}, false, oauthresource.ErrUnauthenticated
+	}
 	auth := r.Header.Get("Authorization")
 	const scheme = "Bearer "
 	if strings.HasPrefix(auth, scheme) {
@@ -1262,16 +1289,80 @@ func (s *Server) authenticate(r *http.Request) (principal.Identity, bool) {
 		// Falling through to the proxy path on a failed token would let
 		// a stale or revoked credential quietly become whatever the
 		// headers claim, which is an escalation dressed as a fallback.
-		id, err := s.Principals.Authenticate(strings.TrimSpace(strings.TrimPrefix(auth, scheme)))
+		bearer := strings.TrimSpace(strings.TrimPrefix(auth, scheme))
+		if !strings.HasPrefix(bearer, "wst_") {
+			if s.OAuthResource == nil {
+				return principal.Identity{}, false, oauthresource.ErrUnauthenticated
+			}
+			if !oauthRouteAllowed(r.Method, r.URL.Path) {
+				return principal.Identity{}, false, errOAuthRouteDenied
+			}
+			auth, id, err := s.OAuthResource.Resolve(r.Context(), bearer)
+			if err != nil {
+				return principal.Identity{}, false, err
+			}
+			*r = *r.WithContext(oauthresource.WithRequestAuth(r.Context(), auth))
+			return id, true, nil
+		}
+		id, err := s.Principals.Authenticate(bearer)
 		if err != nil {
-			return principal.Identity{}, false
+			return principal.Identity{}, false, nil
 		}
 		if !s.actingPersonMayStillHold(id) {
-			return principal.Identity{}, false
+			return principal.Identity{}, false, nil
 		}
-		return id, true
+		return id, true, nil
 	}
-	return s.consoleForwardAuth(r)
+	id, ok := s.consoleForwardAuth(r)
+	return id, ok, nil
+}
+
+// oauthRouteAllowed is separate from the static profile so later OAuth-only
+// routes cannot accidentally become reachable to wst_ credentials. Delivery,
+// task admission, and /mcp remain closed until their own slices add provenance
+// and exact correlation.
+func oauthRouteAllowed(method, path string) bool {
+	if method == http.MethodGet && path == "/api/v1/agent/tools" {
+		return true
+	}
+	if method != http.MethodPost {
+		return false
+	}
+	switch path {
+	case "/api/v1/agent/manifest", "/api/v1/agent/invoke", "/api/v1/agent/recall",
+		"/api/v1/agent/remember", "/api/v1/agent/checkpoint", "/api/v1/agent/start",
+		"/api/v1/agent/wait", "/api/v1/agent/complete", "/api/v1/agent/fail",
+		"/api/v1/agent/propose", "/api/v1/agent/notify", "/api/v1/agent/heartbeat":
+		return true
+	}
+	return false
+}
+
+func (s *Server) oauthChallenge(code string) string {
+	if s.OAuthResource == nil {
+		return `Bearer realm="wildstone"`
+	}
+	metadata := "/.well-known/oauth-protected-resource"
+	if resourceURL, err := url.Parse(s.OAuthResource.Resource); err == nil && resourceURL.Scheme != "" && resourceURL.Host != "" {
+		metadata = resourceURL.Scheme + "://" + resourceURL.Host + metadata + strings.TrimSuffix(resourceURL.EscapedPath(), "/")
+	}
+	return fmt.Sprintf(`Bearer realm="wildstone", error=%q, resource_metadata=%q`, code,
+		metadata)
+}
+
+func (s *Server) oauthProtectedResourceMetadata(w http.ResponseWriter, r *http.Request) {
+	if s.OAuthResource == nil || s.OAuthResource.Resource == "" || s.OAuthResource.Issuer == "" {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	s.writeJSON(w, http.StatusOK, map[string]any{
+		"resource":                 s.OAuthResource.Resource,
+		"authorization_servers":    []string{s.OAuthResource.Issuer},
+		"scopes_supported":         []string{"wildstone.agent"},
+		"bearer_methods_supported": []string{"header"},
+		"resource_documentation":   "https://github.com/Wildstone-Systems/wildstone-homelab/blob/main/docs/decisions/ADR-W049-external-agent-identity-and-oauth-transport.md",
+	})
 }
 
 // actingPersonMayStillHold re-derives the standing of the PERSON a token

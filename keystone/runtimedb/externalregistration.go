@@ -256,6 +256,36 @@ func (db *DB) ExternalClientRegistration(id string) (ExternalClientRegistration,
 	return scanExternalRegistration(db.sql.QueryRow(externalRegistrationColumns+` WHERE id=?`, id))
 }
 
+// ResolveExternalClientRegistration binds exact introspected identity to one
+// active registration and freshly checks every local authority fence. The
+// issuer subject is byte-exact and is never normalized or name-mapped.
+func (db *DB) ResolveExternalClientRegistration(issuer, subject, clientID string, epoch int64) (ExternalClientRegistration, error) {
+	if issuer == "" || subject == "" || clientID == "" || epoch <= 0 {
+		return ExternalClientRegistration{}, ErrNotAdmitted
+	}
+	tx, err := db.sql.Begin()
+	if err != nil {
+		return ExternalClientRegistration{}, err
+	}
+	defer tx.Rollback()
+	if err := gateTx(tx, GateDispatch); err != nil {
+		return ExternalClientRegistration{}, err
+	}
+	r, err := scanExternalRegistration(tx.QueryRow(externalRegistrationColumns+
+		` WHERE issuer=? AND subject=? AND client_id=? AND state='active' AND credential_epoch=?`,
+		issuer, subject, clientID, epoch))
+	if errors.Is(err, ErrNotFound) {
+		return ExternalClientRegistration{}, ErrNotAdmitted
+	}
+	if err != nil {
+		return ExternalClientRegistration{}, err
+	}
+	if err := validateExternalRegistrationAuthority(tx, r); err != nil {
+		return ExternalClientRegistration{}, err
+	}
+	return r, nil
+}
+
 // ExternalRegistrationConfirmation rechecks every live authority input before
 // producing the bounded facts shown to the Person. The returned value is safe
 // to render; callers bind a digest of it into their short-lived confirmation.
