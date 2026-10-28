@@ -52,6 +52,112 @@ func externalRegistrationFixture(t *testing.T) (*DB, CreatePendingExternalRegist
 		RuntimePrincipal: principal, ConfiguredBy: "root-admin"}
 }
 
+func activeExternalRegistrationFixture(t *testing.T) (*DB, ExternalClientRegistration) {
+	t.Helper()
+	db, in := externalRegistrationFixture(t)
+	r, err := db.CreatePendingExternalRegistration(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proof, err := db.IssueExternalEnrollmentChallenge(IssueExternalEnrollmentChallenge{
+		RegistrationID: r.ID, PersonID: r.PersonID, IssuedBy: r.PersonID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err = db.ActivateExternalClientRegistration(ActivateExternalRegistration{
+		RegistrationID: r.ID, PersonID: r.PersonID, Issuer: r.Issuer,
+		Subject: "byte-exact-subject", Proof: proof.Secret, ActivatedBy: r.PersonID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return db, r
+}
+
+func TestResolveExternalRegistrationUsesExactIdentityAndFreshAuthority(t *testing.T) {
+	t.Run("exact active identity", func(t *testing.T) {
+		db, r := activeExternalRegistrationFixture(t)
+		got, err := db.ResolveExternalClientRegistration(r.Issuer, r.Subject, r.ClientID, r.CredentialEpoch)
+		if err != nil || got.ID != r.ID || got.PersonID != r.PersonID || got.RuntimePrincipal != r.RuntimePrincipal {
+			t.Fatalf("resolve = %+v, %v", got, err)
+		}
+		for _, tc := range []struct {
+			issuer, subject, client string
+			epoch                   int64
+		}{
+			{r.Issuer + "/", r.Subject, r.ClientID, r.CredentialEpoch},
+			{r.Issuer, r.Subject + " ", r.ClientID, r.CredentialEpoch},
+			{r.Issuer, r.Subject, r.ClientID + "-other", r.CredentialEpoch},
+			{r.Issuer, r.Subject, r.ClientID, r.CredentialEpoch + 1},
+		} {
+			if _, err := db.ResolveExternalClientRegistration(tc.issuer, tc.subject, tc.client, tc.epoch); err == nil {
+				t.Fatalf("inexact identity resolved: %+v", tc)
+			}
+		}
+	})
+
+	for _, tc := range []struct {
+		name   string
+		mutate func(*testing.T, *DB, ExternalClientRegistration)
+	}{
+		{"Person offboarded", func(t *testing.T, db *DB, r ExternalClientRegistration) {
+			_, err := db.sql.Exec(`UPDATE butler_members SET admitted=0,offboarded_at=?,offboarded_by='root-admin' WHERE person_id=?`, now(), r.PersonID)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"Agent access revoked", func(t *testing.T, db *DB, r ExternalClientRegistration) {
+			_, err := db.sql.Exec(`UPDATE butler_access SET revoked_at=?,revoked_by='root-admin' WHERE butler=? AND person_id=?`, now(), r.Butler, r.PersonID)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"Connection revoked", func(t *testing.T, db *DB, r ExternalClientRegistration) {
+			_, err := db.sql.Exec(`UPDATE butler_addresses SET revoked_at=?,revoked_by='root-admin' WHERE seq=?`, now(), r.Connection)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"runtime principal disabled", func(t *testing.T, db *DB, r ExternalClientRegistration) {
+			if err := db.SetPrincipalDisabled(r.RuntimePrincipal, true); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"registration revoked", func(t *testing.T, db *DB, r ExternalClientRegistration) {
+			if _, err := db.RevokeExternalClientRegistration(r.ID, "root-admin"); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db, r := activeExternalRegistrationFixture(t)
+			tc.mutate(t, db, r)
+			if _, err := db.ResolveExternalClientRegistration(r.Issuer, r.Subject, r.ClientID, r.CredentialEpoch); err == nil {
+				t.Fatal("stale authority resolved")
+			}
+		})
+	}
+
+	for _, tc := range []struct {
+		name  string
+		fence func(*DB) error
+	}{
+		{"execution stop", func(db *DB) error { return db.StopHouseholdExecution("mika", "test") }},
+		{"restore quarantine", func(db *DB) error { return db.EnterRestoreQuarantine("test", time.Now()) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db, r := activeExternalRegistrationFixture(t)
+			if err := tc.fence(db); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := db.ResolveExternalClientRegistration(r.Issuer, r.Subject, r.ClientID, r.CredentialEpoch); err == nil {
+				t.Fatal("execution fence did not deny resolution")
+			}
+		})
+	}
+}
+
 func TestPendingExternalRegistrationIsInertImmutableHistory(t *testing.T) {
 	db, in := externalRegistrationFixture(t)
 	r, err := db.CreatePendingExternalRegistration(in)
