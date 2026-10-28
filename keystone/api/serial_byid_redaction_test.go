@@ -27,6 +27,31 @@ func sonoffByIDName() string {
 // secretShaped is a genuine secret-shaped value; it must still redact.
 const secretShaped = "aGVsbG9Xb3JsZFRoaXNJc0FTZWNyZXRWYWx1ZTEyMw"
 
+func TestPlanReviewKeepsSerialByIDDevicePath(t *testing.T) {
+	h := newHarness(t)
+	alias := "/dev/serial/by-id/" + sonoffByIDName()
+	doc := deviceContainerDoc(t, "zigbee2mqtt", "zigbee", "n1", alias)
+
+	var created planView
+	resp := h.do(runtimedb.RoleOperator, http.MethodPost, "/api/v1/plans",
+		proposalRequest{Summary: "install zigbee", Put: []string{doc}}, &created)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("propose = %d", resp.StatusCode)
+	}
+	if len(created.Put) != 1 || !strings.Contains(created.Put[0], alias) {
+		t.Fatalf("created plan hid device identity: %+v", created.Put)
+	}
+
+	var shown planView
+	resp = h.do(runtimedb.RoleOperator, http.MethodGet, "/api/v1/plans/"+created.ID, nil, &shown)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("show plan = %d", resp.StatusCode)
+	}
+	if len(shown.Put) != 1 || !strings.Contains(shown.Put[0], alias) {
+		t.Fatalf("shown plan hid device identity: %+v", shown.Put)
+	}
+}
+
 func TestProbeRadiosKeepsSerialByIDIdentity(t *testing.T) {
 	h := newHarness(t)
 	alias := "/dev/serial/by-id/" + sonoffByIDName()

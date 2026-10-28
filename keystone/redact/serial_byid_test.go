@@ -12,8 +12,8 @@ func sonoffByIDName() string {
 }
 
 // A udev by-id name is hardware identity, not a credential, and it is the
-// stable identity the Console's radio picker keys on. Exactly that value
-// — as a whole input or a whole JSON string — survives.
+// stable identity the Console's radio picker keys on. It survives both as
+// a structured value and inside the multiline YAML document a plan renders.
 func TestSerialByIDValuesSurviveRedaction(t *testing.T) {
 	name := sonoffByIDName()
 	alias := "/dev/serial/by-id/" + name
@@ -27,6 +27,10 @@ func TestSerialByIDValuesSurviveRedaction(t *testing.T) {
 		`{"id":"` + id + `","byIdPaths":["` + alias + `","` + alias + `"]}`,
 		`{"devices":[{"source":"` + alias + `","target":"/dev/ttyACM0"}]}`,
 		`{"radioCandidates": [ "` + id + `" ]}`,
+		"put:\n  document: |\n    devices:\n      - source: " + alias + "\n        target: /dev/zigbee\n",
+		"map " + alias + " into the container",
+		`{"summary":"x ` + id + `"}`,
+		`{"msg":"device \"` + alias + `\" not found"}`,
 	} {
 		if got := String(in); got != in {
 			t.Errorf("by-id value was redacted:\n in: %s\nout: %s", in, got)
@@ -34,8 +38,8 @@ func TestSerialByIDValuesSurviveRedaction(t *testing.T) {
 	}
 }
 
-// The shelter is for the exact value only: anything else wearing a by-id
-// name still meets the value rules.
+// The shelter is for the exact by-id name only: extended paths and values
+// merely wearing the prefix still meet the value rules.
 func TestSerialByIDShelterIsNarrow(t *testing.T) {
 	name := sonoffByIDName()
 	alias := "/dev/serial/by-id/" + name
@@ -44,13 +48,6 @@ func TestSerialByIDShelterIsNarrow(t *testing.T) {
 		alias + "/extra",
 		`{"source":"` + alias + `/extra"}`,
 		"/dev/serial/by-id/sub/" + name,
-		// Embedded in a larger string.
-		"map " + alias + " into the container",
-		`{"summary":"map ` + alias + ` into the container"}`,
-		`{"summary":"` + alias + ` missing"}`,
-		`{"summary":"x serial-by-id:` + name + `"}`,
-		// Escaped inside a larger JSON string, not a value of its own.
-		`{"msg":"device \"` + alias + `\" not found"}`,
 		// A genuine secret wearing the prefix.
 		"/dev/serial/by-id/aGVsbG8gd29ybGQgdGhpcyBpcyBhIHZlcnkgbG9uZyBzZWNyZXQ/x",
 	} {
@@ -68,6 +65,11 @@ func TestSecretsStillRedactNextToSerialByID(t *testing.T) {
 	got := String(in)
 	if strings.Contains(got, secret) || !strings.Contains(got, alias) {
 		t.Errorf("want the alias kept and the secret redacted, got %s", got)
+	}
+	in = "source: " + alias + "\napi_token: " + secret + "\n"
+	got = String(in)
+	if strings.Contains(got, secret) || !strings.Contains(got, alias) {
+		t.Errorf("want the YAML alias kept and adjacent secret redacted, got %s", got)
 	}
 	// A by-id value under a credential-shaped key is still a credential.
 	in = `{"DB_PASSWORD":"` + alias + `"}`
