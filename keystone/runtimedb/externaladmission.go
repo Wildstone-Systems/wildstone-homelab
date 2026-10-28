@@ -60,25 +60,33 @@ func (db *DB) ExternalTaskAdmissionMatches(registrationID, taskID string) (bool,
 	return ok == 1, err
 }
 
-func externalAdmissionAAD(in ExternalTaskAdmissionInput, purpose string) []byte {
-	return []byte("external-task-admission/v1/" + purpose + "/" + in.Identity.RegistrationID + "/" +
+func externalHandleAAD(in ExternalTaskAdmissionInput) []byte {
+	// This format predates MCP sessions and is part of the persisted handle
+	// ciphertext contract. Changing it would make existing admissions prevent
+	// the household store from reopening after an upgrade.
+	return []byte("external-task-admission/v1/" + in.Identity.RegistrationID + "/" +
 		in.ClientSessionID + "/" + in.IdempotencyKey + "/" + in.PayloadDigest)
 }
 
-func (v *SecretVault) sealExternalValue(in ExternalTaskAdmissionInput, purpose, value string) ([]byte, error) {
+func externalMCPAdmissionAAD(in ExternalTaskAdmissionInput) []byte {
+	return []byte("external-task-admission/v1/mcp-session/" + in.Identity.RegistrationID + "/" +
+		in.ClientSessionID + "/" + in.IdempotencyKey + "/" + in.PayloadDigest)
+}
+
+func (v *SecretVault) sealExternalValue(aad []byte, value string) ([]byte, error) {
 	nonce := make([]byte, v.aead.NonceSize())
 	if _, err := rand.Read(nonce); err != nil {
 		return nil, err
 	}
-	return v.aead.Seal(nonce, nonce, []byte(value), externalAdmissionAAD(in, purpose)), nil
+	return v.aead.Seal(nonce, nonce, []byte(value), aad), nil
 }
 
-func (v *SecretVault) openExternalValue(in ExternalTaskAdmissionInput, purpose string, sealed []byte) (string, error) {
+func (v *SecretVault) openExternalValue(aad, sealed []byte) (string, error) {
 	n := v.aead.NonceSize()
 	if len(sealed) < n {
 		return "", ErrSecretDenied
 	}
-	raw, err := v.aead.Open(nil, sealed[:n], sealed[n:], externalAdmissionAAD(in, purpose))
+	raw, err := v.aead.Open(nil, sealed[:n], sealed[n:], aad)
 	if err != nil {
 		return "", ErrSecretDenied
 	}
@@ -87,11 +95,11 @@ func (v *SecretVault) openExternalValue(in ExternalTaskAdmissionInput, purpose s
 }
 
 func (v *SecretVault) sealExternalHandle(in ExternalTaskAdmissionInput, handle string) ([]byte, error) {
-	return v.sealExternalValue(in, "handle", handle)
+	return v.sealExternalValue(externalHandleAAD(in), handle)
 }
 
 func (v *SecretVault) openExternalHandle(in ExternalTaskAdmissionInput, sealed []byte) (string, error) {
-	return v.openExternalValue(in, "handle", sealed)
+	return v.openExternalValue(externalHandleAAD(in), sealed)
 }
 
 func (v *SecretVault) checkExternalAdmissionsOpen() error {
@@ -115,7 +123,7 @@ func (v *SecretVault) checkExternalAdmissionsOpen() error {
 			return errors.New("household secret key or external task admission ciphertext invalid; refusing to open store")
 		}
 		if sessionHash != "" {
-			session, err := v.openExternalValue(in, "mcp-session", sealedSession)
+			session, err := v.openExternalValue(externalMCPAdmissionAAD(in), sealedSession)
 			if err != nil || opaqueDigest(session) != sessionHash {
 				return errors.New("household secret key or external MCP session ciphertext invalid; refusing to open store")
 			}
@@ -205,7 +213,7 @@ func (v *SecretVault) AdmitExternalTask(in ExternalTaskAdmissionInput) (External
 			session := base64.RawURLEncoding.EncodeToString(raw)
 			clear(raw)
 			sessionHash = opaqueDigest(session)
-			sealedSession, err = v.sealExternalValue(in, "mcp-session", session)
+			sealedSession, err = v.sealExternalValue(externalMCPAdmissionAAD(in), session)
 			if err != nil {
 				return ExternalTaskAdmission{}, err
 			}
@@ -222,7 +230,7 @@ func (v *SecretVault) AdmitExternalTask(in ExternalTaskAdmissionInput) (External
 			}
 			return ExternalTaskAdmission{TaskID: taskID, Handle: handle, MCPSession: session, SessionExpiresAt: expiresAt}, nil
 		}
-		session, err := v.openExternalValue(in, "mcp-session", sealedSession)
+		session, err := v.openExternalValue(externalMCPAdmissionAAD(in), sealedSession)
 		expiresAt, parseErr := time.Parse(time.RFC3339Nano, sessionExpiry)
 		if err != nil || parseErr != nil || opaqueDigest(session) == "" ||
 			subtle.ConstantTimeCompare([]byte(opaqueDigest(session)), []byte(sessionHash)) != 1 {
@@ -306,7 +314,7 @@ func (v *SecretVault) AdmitExternalTask(in ExternalTaskAdmissionInput) (External
 	session := base64.RawURLEncoding.EncodeToString(sessionRaw)
 	clear(sessionRaw)
 	sessionHash = opaqueDigest(session)
-	sealedSession, err = v.sealExternalValue(in, "mcp-session", session)
+	sealedSession, err = v.sealExternalValue(externalMCPAdmissionAAD(in), session)
 	if err != nil {
 		return ExternalTaskAdmission{}, err
 	}
@@ -367,7 +375,7 @@ func (v *SecretVault) ResolveExternalMCPSession(identity ExternalTaskAdmissionId
 	if err != nil || !at.Before(expiresAt) || subtle.ConstantTimeCompare([]byte(opaqueDigest(session)), []byte(storedHash)) != 1 {
 		return ExternalTaskAdmission{}, ErrNotAdmitted
 	}
-	storedSession, err := v.openExternalValue(in, "mcp-session", sealedSession)
+	storedSession, err := v.openExternalValue(externalMCPAdmissionAAD(in), sealedSession)
 	if err != nil || subtle.ConstantTimeCompare([]byte(storedSession), []byte(session)) != 1 {
 		return ExternalTaskAdmission{}, ErrNotAdmitted
 	}

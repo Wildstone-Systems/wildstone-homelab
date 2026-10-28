@@ -76,6 +76,33 @@ func TestExternalTaskAdmissionExactReplayAndCiphertext(t *testing.T) {
 	}
 }
 
+func TestExternalTaskAdmissionPreMCPSessionCiphertextStillOpens(t *testing.T) {
+	db, vault, in := externalAdmissionFixture(t)
+	admitted, err := vault.AdmitExternalTask(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Migration 0112 adds empty MCP session fields to admissions created by
+	// older versions. Their sealed handles must retain the original AAD so an
+	// upgrade can reopen the store and lazily issue a session on exact replay.
+	if _, err := db.sql.Exec(`UPDATE external_task_admissions
+		SET mcp_session_hash='',sealed_mcp_session=X'',mcp_session_expires_at=''`); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := db.OpenSecretVault(vault.keyPath)
+	if err != nil {
+		t.Fatalf("open store with pre-MCP admission: %v", err)
+	}
+	replayed, err := reopened.AdmitExternalTask(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replayed.TaskID != admitted.TaskID || replayed.Handle != admitted.Handle || replayed.MCPSession == "" {
+		t.Fatalf("upgraded replay = %+v; want task and handle from %+v plus a session", replayed, admitted)
+	}
+}
+
 func TestExternalMCPSessionIsExactBoundAndExpiryBounded(t *testing.T) {
 	_, vault, in := externalAdmissionFixture(t)
 	admitted, err := vault.AdmitExternalTask(in)
