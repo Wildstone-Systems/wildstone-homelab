@@ -9,12 +9,9 @@ import (
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/resource"
 )
 
-// The cluster side of the backend seam (W050 slice 2c, #158). Nothing in
-// the reconciler sends these yet: every node is a Docker node, so the
-// cluster group is always empty. What is here is the typed shape the
-// leader operations take (docs/design/w050-leader-ops.md) and the rules
-// that bound it (docs/design/w050-multi-node-safety-contract.md), so the
-// first real backend implements a contract rather than inventing one.
+// The cluster side of the backend seam (W050, #158 and #211). The
+// reconciler sends these typed requests only for an explicitly approved
+// k3s Container; Docker remains the default.
 
 // TargetKind says what a resource is applied to.
 type TargetKind string
@@ -34,9 +31,12 @@ type Target struct {
 	Node string
 }
 
-// TargetOf names a resource's target. Every node is a Docker node until a
-// node joins a cluster (W050 slice 3), so this is always TargetNode today.
+// TargetOf names a resource's target. Only an explicit, accepted k3s
+// Container choice reaches the cluster; all legacy resources stay on Docker.
 func TargetOf(r resource.Resource) Target {
+	if r.Kind == resource.KindContainer && r.Container != nil && r.Container.Backend == "k3s" {
+		return Target{Kind: TargetCluster}
+	}
 	return Target{Kind: TargetNode, Node: r.Metadata.Node}
 }
 
@@ -71,14 +71,17 @@ const (
 // resource.ContainerSpec or from the deployment declaration and policy;
 // there is no manifest, patch or free-form field to carry anything else.
 type WorkloadSpec struct {
-	Name      string
-	Image     string
-	Command   []string
-	Env       map[string]string
-	Ports     []string
-	Mounts    []resource.Mount
-	Devices   []resource.DeviceMapping
-	Resources *resource.ContainerResources
+	Name         string
+	Package      string
+	Resource     string
+	Image        string
+	Command      []string
+	Env          map[string]string
+	Ports        []string
+	ServicePorts []WorkloadPort
+	Mounts       []resource.Mount
+	Devices      []resource.DeviceMapping
+	Resources    *resource.ContainerResources
 	// ShmSize is the container's /dev/shm size, as Docker's --shm-size.
 	ShmSize     string
 	HostNetwork bool
@@ -89,6 +92,13 @@ type WorkloadSpec struct {
 	// pinned to the node it runs on today; one that may move carries only
 	// the labels its devices need.
 	NodeSelector map[string]string
+}
+
+type WorkloadPort struct {
+	Name          string
+	ContainerPort uint32
+	ServicePort   uint32
+	Protocol      string
 }
 
 // WorkloadSecurity is the container's hardening, as declared.
@@ -118,20 +128,31 @@ type ClusterRequest struct {
 	// UID is the object the Plan saw, for OpDeleteWorkload: the leader
 	// stamps it with the current epoch, then deletes with the stamp's
 	// resourceVersion as the precondition (safety contract §2.4, §3).
-	UID string
+	UID                    string
+	ResourceVersion        string
+	ServiceUID             string
+	ServiceResourceVersion string
+	ExpectedRevision       string
 }
 
 // ClusterResult is the leader's answer: Kubernetes facts, not Docker ones.
 type ClusterResult struct {
-	Generation    int64
-	ReadyReplicas int
-	Replicas      int
-	Node          string
-	Conditions    []string
+	Found                  bool
+	UID                    string
+	ResourceVersion        string
+	Revision               string
+	ServiceUID             string
+	ServiceResourceVersion string
+	MatchesDesired         bool
+	Generation             int64
+	ObservedGeneration     int64
+	ReadyReplicas          int
+	Replicas               int
+	Node                   string
+	Conditions             []string
 }
 
-// ClusterApplier sends one request to the leader. The only implementation
-// today is the recording fake in keystone/internal/fakecluster.
+// ClusterApplier sends one request to the leader.
 type ClusterApplier interface {
 	Apply(ctx context.Context, req ClusterRequest) (ClusterResult, error)
 }
@@ -177,6 +198,8 @@ func (clusterTranslator) applyWorkload(r resource.Resource, decl pkgspec.Compone
 	}
 	w := &WorkloadSpec{
 		Name:        r.Metadata.Name,
+		Package:     r.Metadata.Package,
+		Resource:    r.Metadata.Name,
 		Image:       spec.Image,
 		Command:     spec.Command,
 		Env:         spec.Env,

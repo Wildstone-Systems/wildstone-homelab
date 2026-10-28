@@ -2602,14 +2602,15 @@ export const api = {
     ),
   identityCode: (node: string) =>
     call<IdentityNotification>("GET", `/api/v1/nodes/${encodeURIComponent(node)}/identity/code`),
-  previewCapability: (pkg: string, params: Record<string, string>) =>
+  previewCapability: (pkg: string, params: Record<string, string>, backend = "") =>
     call<EnablePreview>("POST", "/api/v1/capabilities", {
       package: pkg,
       params,
+      backend,
       dryRun: true,
     }),
-  enableCapability: (pkg: string, params: Record<string, string>) =>
-    call<PlanRecord>("POST", "/api/v1/capabilities", { package: pkg, params }),
+  enableCapability: (pkg: string, params: Record<string, string>, backend = "") =>
+    call<PlanRecord>("POST", "/api/v1/capabilities", { package: pkg, params, backend }),
   whoami: () => call<Identity>("GET", "/api/v1/whoami"),
   // Ends the Console session; signOut is the identity provider's logout,
   // where the browser goes next to finish signing out.

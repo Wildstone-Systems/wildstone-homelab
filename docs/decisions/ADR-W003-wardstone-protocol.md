@@ -385,6 +385,11 @@ leadership-term context and stop when it is cancelled. Status and logs are
 read-only, ownership-scoped, and logs remain tail-biased at no more than
 1 MiB.
 
+Protocol minor 31 adds an optional typed desired workload to
+`ObserveWorkload` and a `matches_desired` result. Keystone requires this
+minor on the active leader before using observation for approved k3s
+reconciliation, so older agents cannot silently hide or invent drift.
+
 ### Sizing note for the planner
 
 W1–W4 are small (each well under a day of subagent work); W5 and W6c are

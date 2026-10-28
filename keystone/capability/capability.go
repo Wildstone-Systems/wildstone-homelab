@@ -207,6 +207,9 @@ func (e *Engine) Expand(pkg *pkgspec.Package, params map[string]string, catalog 
 		if err != nil {
 			return nil, &TemplateError{Package: pkg.Metadata.Name, Index: i, Err: fmt.Errorf("parsing rendered resource: %w", err)}
 		}
+		if res.Kind == resource.KindContainer && res.Container != nil && res.Container.Backend != "" {
+			return nil, &TemplateError{Package: pkg.Metadata.Name, Index: i, Err: fmt.Errorf("resource %s/%s: backend is chosen by the installation, not the package template", res.Kind, res.Metadata.Name)}
+		}
 
 		if res.Metadata.Owner == "" {
 			res.Metadata.Owner = wantOwner

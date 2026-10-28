@@ -116,10 +116,20 @@ func TestClusterWritesCarryTheirAuthority(t *testing.T) {
 	}
 }
 
-// Until a node joins a cluster every resource goes to its node.
-func TestEveryResourceTargetsItsNodeToday(t *testing.T) {
+// Legacy Containers and every host resource stay at their node. A reviewed
+// k3s choice changes only the Container's target.
+func TestBackendTargetChoice(t *testing.T) {
 	if got := TargetOf(clusterContainer()); got != (Target{Kind: TargetNode, Node: "node-a"}) {
 		t.Fatalf("target = %+v", got)
+	}
+	k3s := clusterContainer()
+	k3s.Container.Backend = "k3s"
+	if got := TargetOf(k3s); got != (Target{Kind: TargetCluster}) {
+		t.Fatalf("k3s target = %+v", got)
+	}
+	volume := resource.Resource{Kind: resource.KindVolume, Metadata: resource.Metadata{Node: "node-a"}}
+	if got := TargetOf(volume); got != (Target{Kind: TargetNode, Node: "node-a"}) {
+		t.Fatalf("host target = %+v", got)
 	}
 }
 
@@ -168,6 +178,7 @@ func TestEveryContainerFieldIsCarriedOrHandled(t *testing.T) {
 		"NoNewPrivileges": true, "Resources": true, "ShmSize": true, "NetworkMode": true,
 	}
 	handled := map[string]string{
+		"Backend":    "selects the cluster translator before request construction",
 		"Restart":    "a workload always restarts; any other policy is refused",
 		"RunNetwork": "execution-only metadata for Keystone-run one-shots, never serialized",
 	}

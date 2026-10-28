@@ -1358,7 +1358,12 @@ message DeleteWorkload {
 
 message DeleteWorkloadResult { bool deleted = 1; }
 
-message ObserveWorkload { string name = 1; }
+message ObserveWorkload {
+  string name = 1;
+  // Optional typed intent for drift detection. The leader compares only
+  // fields owned by Wildstone; this read never applies the desired shape.
+  WorkloadSpec desired = 2;
+}
 
 message WorkloadCondition {
   string type = 1;
@@ -1383,6 +1388,7 @@ message ObserveWorkloadResult {
   string image = 13;
   string service_uid = 14;
   string service_resource_version = 15;
+  bool matches_desired = 16;
 }
 
 message WorkloadLogs {

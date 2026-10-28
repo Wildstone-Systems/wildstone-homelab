@@ -133,6 +133,9 @@ type PlanStep struct {
 	Kind        resource.Kind `json:"kind"`
 	Name        string        `json:"name"`
 	Action      Action        `json:"action"`
+	// Backend preserves a Container delete's reviewed executor after the
+	// resource has left accepted desired state. Empty is legacy Docker.
+	Backend string `json:"backend,omitempty"`
 	// Op is the typed operation(s) to apply this step. nil in S2a; S2b/S2c
 	// populate it when wiring the reconcile engine.
 	Op *ResourceOp `json:"op,omitempty"`
@@ -378,6 +381,9 @@ func newStep(action Action, want, have resource.Resource) PlanStep {
 		Risk:        risk,
 		BlastRadius: blast,
 	}
+	if r.Kind == resource.KindContainer && r.Container != nil {
+		step.Backend = r.Container.Backend
+	}
 	if action != ActionDelete {
 		step.Digest = Digest(want)
 	}
@@ -582,7 +588,7 @@ func containerEqual(a, b *resource.ContainerSpec) bool {
 	if a == nil || b == nil {
 		return a == b
 	}
-	if a.Image != b.Image || a.Restart != b.Restart || a.NetworkMode != b.NetworkMode {
+	if backendOf(a) != backendOf(b) || a.Image != b.Image || a.Restart != b.Restart || a.NetworkMode != b.NetworkMode {
 		return false
 	}
 	if len(a.Env) != len(b.Env) {
@@ -613,6 +619,13 @@ func containerEqual(a, b *resource.ContainerSpec) bool {
 		}
 	}
 	return true
+}
+
+func backendOf(s *resource.ContainerSpec) string {
+	if s == nil || s.Backend == "" {
+		return "docker"
+	}
+	return s.Backend
 }
 
 // mountsChanged reports whether the mount list differs between two
@@ -652,6 +665,9 @@ func grade(action Action, want, have resource.Resource) (RiskGrade, string) {
 			return RiskLow, "new volume, no existing service affected"
 		}
 	case resource.KindContainer:
+		if r.Container != nil && r.Container.Backend == "k3s" {
+			return RiskMedium, "cluster workload change requires a reviewed Plan step"
+		}
 		switch action {
 		case ActionDelete:
 			if r.Container != nil && len(r.Container.Mounts) > 0 {

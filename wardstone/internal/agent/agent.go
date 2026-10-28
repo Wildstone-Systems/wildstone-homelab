@@ -172,7 +172,9 @@ import (
 // active, barrier-cleared leadership term.
 // 30: adds typed ApplyWorkload, DeleteWorkload, ObserveWorkload and
 // WorkloadLogs arms for the fenced Wardstone leader.
-const ProtocolMinor = 30
+// 31: ObserveWorkload compares an optional typed desired workload and
+// returns matches_desired for drift detection.
+const ProtocolMinor = 31
 
 // maxUpdateMsgBytes is the gRPC message size cap on both ends of the
 // session/join connections (ADR-W003 W5). SelfUpdate ships the new binary

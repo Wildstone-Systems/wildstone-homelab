@@ -258,6 +258,28 @@ func File(deps Deps, id principal.Identity, req Request, opts Options) (any, int
 		return nil, http.StatusInternalServerError, fmt.Errorf("loading statefile: %w", err)
 	}
 	desired := ApplyChanges(current, puts, req.Delete)
+	// The first cluster path is an opt-in for stateless packages. A backend
+	// switch of a running Container needs an explicit cutover protocol; a
+	// plain Update would otherwise start a second copy on the new backend.
+	previous := map[string]string{}
+	for _, r := range current {
+		if r.Kind == resource.KindContainer && r.Container != nil {
+			previous[r.Metadata.Name] = r.Container.Backend
+		}
+	}
+	for _, r := range desired {
+		if r.Kind != resource.KindContainer || r.Container == nil {
+			continue
+		}
+		if before, existed := previous[r.Metadata.Name]; existed && !sameContainerBackend(before, r.Container.Backend) {
+			return nil, http.StatusUnprocessableEntity, fmt.Errorf("Container/%s backend migration needs a reviewed cutover; choose the backend on a new install", r.Metadata.Name)
+		}
+		if r.Container.Backend == "k3s" {
+			if _, err := reconcile.ClusterIntent(r, desired); err != nil {
+				return nil, http.StatusUnprocessableEntity, err
+			}
+		}
+	}
 
 	// Standing invariants (ADR-W009 A1): a policy-invalid change never
 	// becomes a plan record, whoever proposed it. Exemption uses are
@@ -361,6 +383,16 @@ func File(deps Deps, id principal.Identity, req Request, opts Options) (any, int
 		}
 	}
 	return ViewPlan(rec), http.StatusCreated, nil
+}
+
+func sameContainerBackend(a, b string) bool {
+	if a == "" {
+		a = "docker"
+	}
+	if b == "" {
+		b = "docker"
+	}
+	return a == b
 }
 
 // duplicateDeviceOwnership refuses a proposal that would leave two

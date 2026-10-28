@@ -183,6 +183,19 @@ type Reconciler struct {
 	// Applier dispatches operations to the target node. Production callers
 	// set this to &GatewayApplier{Gateway: gw}.
 	Applier Applier
+	// Cluster is the typed leader path for explicitly selected k3s
+	// Containers. nil refuses such a resource; Docker is unaffected.
+	Cluster ClusterApplier
+	// ClusterAuthority resolves a reviewed step to its exact accepted
+	// revision, Plan and active epoch. Set by the service loop each tick.
+	ClusterAuthority func(plan.PlanStep) (Authority, error)
+	// ClusterDelete remembers a reviewed k3s deletion after its Container
+	// has left desired state. The Plan records the backend explicitly.
+	ClusterDelete func(resource.Kind, string) bool
+	// ClusterRoutes are accepted Route declarations used only to derive
+	// Service ports for the cluster group, which is reconciled separately
+	// from host-scoped resources.
+	ClusterRoutes []resource.Resource
 
 	// Providers routes provider-backed kinds (currently only
 	// resource.KindDnsRecord, ADR-W004 A5) to their external-resource
@@ -559,6 +572,7 @@ func (r *Reconciler) repairNodePrereqs(ctx context.Context, nodeID string, desir
 }
 
 func (r *Reconciler) Reconcile(ctx context.Context, nodeID string, desired []resource.Resource) (*Outcome, error) {
+	clusterGroup := nodeID == "@cluster"
 	// The ingress posture is read once and used by every renderer this
 	// tick, so a Route fragment and the base Caddyfile cannot disagree
 	// about the scheme halfway through.
@@ -570,7 +584,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, nodeID string, desired []res
 	// whether or not there is anything to apply — and because Reconcile
 	// returns early on a pending approval or a failed step, which are
 	// exactly the ticks where an address must not go stale.
-	r.refreshIngressAddrs(ctx, nodeID, desired)
+	if !clusterGroup {
+		r.refreshIngressAddrs(ctx, nodeID, desired)
+	}
 
 	wsDesired := make([]resource.Resource, 0, len(desired))
 	providerDesired := make([]resource.Resource, 0, len(desired))
@@ -616,20 +632,26 @@ func (r *Reconciler) Reconcile(ctx context.Context, nodeID string, desired []res
 	// A capability awaiting a secret only the operator can supply is set
 	// aside, not allowed to stop the node (ADR-W028). Its steps come out
 	// of the plan below; everything else converges.
-	awaiting, serr := r.awaitingProvidedSecrets(ctx, nodeID, wsDesired)
-	if serr != "" {
-		return nil, fmt.Errorf("reconcile: %s", serr)
-	}
-	if serr := r.ensureNodeSecrets(ctx, nodeID, wsDesired, awaiting); serr != "" {
-		return nil, fmt.Errorf("reconcile: %s", serr)
+	var awaiting map[string]string
+	var prereqRepaired []string
+	if !clusterGroup {
+		var serr string
+		awaiting, serr = r.awaitingProvidedSecrets(ctx, nodeID, wsDesired)
+		if serr != "" {
+			return nil, fmt.Errorf("reconcile: %s", serr)
+		}
+		if serr := r.ensureNodeSecrets(ctx, nodeID, wsDesired, awaiting); serr != "" {
+			return nil, fmt.Errorf("reconcile: %s", serr)
+		}
+		var prereqErr string
+		prereqRepaired, prereqErr = r.repairNodePrereqs(ctx, nodeID, wsDesired)
+		if prereqErr != "" {
+			return nil, fmt.Errorf("reconcile: %s", prereqErr)
+		}
 	}
 
-	prereqRepaired, prereqErr := r.repairNodePrereqs(ctx, nodeID, wsDesired)
-	if prereqErr != "" {
-		return nil, fmt.Errorf("reconcile: %s", prereqErr)
-	}
-
-	observed, foreign, appHealth, err := r.observe(ctx, nodeID, wsDesired)
+	clusterSeen := map[resKey]ClusterResult{}
+	observed, foreign, appHealth, err := r.observe(ctx, nodeID, wsDesired, clusterSeen)
 	if err != nil {
 		return nil, fmt.Errorf("reconcile: observe: %w", err)
 	}
@@ -740,7 +762,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, nodeID string, desired []res
 		var sr StepResult
 		switch step.Kind {
 		case resource.KindContainer:
-			sr = r.applyContainerStep(ctx, nodeID, step, desiredByKey, cfgContents)
+			if step.Backend == "k3s" {
+				sr = r.applyClusterContainerStep(ctx, nodeID, step, desiredByKey, append(allDesired, r.ClusterRoutes...), clusterSeen)
+			} else {
+				sr = r.applyContainerStep(ctx, nodeID, step, desiredByKey, cfgContents)
+			}
 		case resource.KindJob:
 			sr = r.applyJobStep(ctx, nodeID, step, desiredByKey, cfgContents)
 		case resource.KindSecret:
@@ -814,7 +840,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, nodeID string, desired []res
 
 // ---------------------------------------------------------------- observe
 
-func (r *Reconciler) observe(ctx context.Context, nodeID string, desired []resource.Resource) (observed []resource.Resource, foreign []string, appHealth map[string]string, err error) {
+func (r *Reconciler) observe(ctx context.Context, nodeID string, desired []resource.Resource, clusterSeen map[resKey]ClusterResult) (observed []resource.Resource, foreign []string, appHealth map[string]string, err error) {
 	appHealth = map[string]string{}
 	desiredByKey := make(map[resKey]resource.Resource, len(desired))
 	for _, res := range desired {
@@ -859,6 +885,17 @@ func (r *Reconciler) observe(ctx context.Context, nodeID string, desired []resou
 				observed = append(observed, obs)
 			}
 		case resource.KindContainer:
+			if (isDesired && want.Container != nil && want.Container.Backend == "k3s") || (!isDesired && r.ClusterDelete != nil && r.ClusterDelete(k.Kind, k.Name)) {
+				obs, present, result, oerr := r.observeClusterContainer(ctx, k, want, isDesired, append(desired, r.ClusterRoutes...))
+				if oerr != nil {
+					return nil, nil, nil, oerr
+				}
+				clusterSeen[k] = result
+				if present {
+					observed = append(observed, obs)
+				}
+				continue
+			}
 			res, obs, oerr := r.observeContainer(ctx, nodeID, k, want, isDesired, cfgContents,
 				r.containerHostAliases(nodeID, k.Name, hostAliases, desiredByKey))
 			if oerr != nil {

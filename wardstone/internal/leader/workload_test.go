@@ -395,3 +395,30 @@ func TestObserveAndLogsAreOwnedAndBounded(t *testing.T) {
 		t.Fatalf("oversize logs = %v", err)
 	}
 }
+
+func TestObserveComparesTypedIntentWithoutApplyingDrift(t *testing.T) {
+	f := &workloadFake{}
+	x := WorkloadExecutor{Client: f, Epoch: 7, Context: context.Background()}
+	w := workload()
+	if _, err := x.Apply(context.Background(), &wsv1.ApplyWorkload{Authority: authority(7, "rev-a"), Workload: w}); err != nil {
+		t.Fatal(err)
+	}
+	observe := func() *wsv1.ObserveWorkloadResult {
+		t.Helper()
+		r, err := x.Observe(context.Background(), &wsv1.ObserveWorkload{Name: w.Name, Desired: w})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return r
+	}
+	if !observe().MatchesDesired {
+		t.Fatal("applied typed workload read as drift")
+	}
+	f.d.Spec.Template.Spec.Containers[0].Image = "other/image@sha256:" + "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	if observe().MatchesDesired {
+		t.Fatal("hand-edited Deployment was silently accepted")
+	}
+	if f.d.Spec.Template.Spec.Containers[0].Image != "other/image@sha256:"+"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" {
+		t.Fatal("observe applied a repair")
+	}
+}

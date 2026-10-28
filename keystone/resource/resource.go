@@ -176,6 +176,10 @@ type Mount struct {
 // ContainerSpec is the spec for kind Container, applied via Wardstone
 // EnsureContainer/StopContainer/RemoveContainer.
 type ContainerSpec struct {
+	// Backend selects the installed package's workload executor. Empty is
+	// Docker for every Statefile written before the k3s opt-in existed.
+	// An explicit k3s choice is reviewed as part of the resource digest.
+	Backend string `yaml:"backend,omitempty" json:"backend,omitempty"`
 	// Image must be digest-pinned (ADR-W003 A4.2 regex).
 	Image string            `yaml:"image"`
 	Env   map[string]string `yaml:"env,omitempty"`
@@ -1380,6 +1384,9 @@ func (r *Resource) validateSpecExclusivity() error {
 func validateContainer(r *Resource) error {
 	if r.Container == nil {
 		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec", Msg: "container spec missing"}
+	}
+	if r.Container.Backend != "" && r.Container.Backend != "docker" && r.Container.Backend != "k3s" {
+		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.backend", Msg: "must be docker or k3s"}
 	}
 	if !digestPinRegexp.MatchString(r.Container.Image) {
 		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.image", Msg: "must be digest-pinned (repo@sha256:<64 hex>), tags are refused"}

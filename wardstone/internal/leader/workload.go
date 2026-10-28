@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"regexp"
 	"sort"
 	"strconv"
@@ -407,13 +408,29 @@ func (x WorkloadExecutor) Observe(ctx context.Context, req *wsv1.ObserveWorkload
 		return nil, err
 	}
 	r := &wsv1.ObserveWorkloadResult{Uid: d.Metadata.UID, ResourceVersion: d.Metadata.ResourceVersion, Revision: d.Metadata.Annotations[revisionAnnotation], Generation: d.Metadata.Generation, ObservedGeneration: d.Status.ObservedGeneration, Replicas: uint32(d.Status.Replicas), UpdatedReplicas: uint32(d.Status.UpdatedReplicas), ReadyReplicas: uint32(d.Status.ReadyReplicas), AvailableReplicas: uint32(d.Status.AvailableReplicas)}
-	if service, serviceErr := x.Client.GetService(ctx, req.GetName()); serviceErr == nil {
+	service, serviceErr := x.Client.GetService(ctx, req.GetName())
+	if serviceErr == nil {
 		if err := owned(service.Metadata, req.GetName()); err != nil {
 			return nil, err
 		}
 		r.ServiceUid, r.ServiceResourceVersion = service.Metadata.UID, service.Metadata.ResourceVersion
 	} else if !kubeapi.IsNotFound(serviceErr) {
 		return nil, serviceErr
+	}
+	if desired := req.GetDesired(); desired != nil {
+		if err := validateWorkload(desired); err != nil {
+			return nil, err
+		}
+		if desired.GetName() != req.GetName() {
+			return nil, &Invalid{Reason: "desired workload name differs from observed name"}
+		}
+		wantDeployment, wantService := render(desired, &wsv1.WorkloadAuthority{})
+		r.MatchesDesired = d.Spec.Replicas == wantDeployment.Spec.Replicas &&
+			reflect.DeepEqual(d.Spec.Selector, wantDeployment.Spec.Selector) &&
+			reflect.DeepEqual(d.Spec.Strategy, wantDeployment.Spec.Strategy) &&
+			reflect.DeepEqual(d.Spec.Template.Metadata.Labels, wantDeployment.Spec.Template.Metadata.Labels) &&
+			reflect.DeepEqual(d.Spec.Template.Spec, wantDeployment.Spec.Template.Spec) &&
+			service != nil && reflect.DeepEqual(service.Spec, wantService.Spec)
 	}
 	for _, c := range d.Status.Conditions {
 		r.Conditions = append(r.Conditions, &wsv1.WorkloadCondition{Type: c.Type, Status: c.Status, Reason: c.Reason, Message: c.Message})
