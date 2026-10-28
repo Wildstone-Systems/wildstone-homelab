@@ -420,12 +420,15 @@ func isSeparatedIdentifier(s string) bool {
 // quote/escape; the shape-based rules above still catch high-entropy
 // secrets that contain them.
 // The separator group tolerates both ordinary quotes and the backslash-
-// escaped quotes in JSON nested inside an API string. It is echoed back
-// verbatim so the document keeps its shape. Without the optional escapes,
-// a sheltered value under DB_PASSWORD in a serialized summary bypassed
-// this rule and was restored in clear text.
+// escaped quotes in JSON nested inside an API string. A backslash is only
+// accepted together with the quote it escapes: accepting one on its own
+// would consume the start of a JSON escape such as \n and turn it into the
+// invalid escape \[ when the value is replaced. The group is echoed back
+// verbatim so the document keeps its shape. Without the optional escaped
+// quotes, a sheltered value under DB_PASSWORD in a serialized summary
+// bypassed this rule and was restored in clear text.
 var kvSecretRegexp = regexp.MustCompile(
-	`(?i)([A-Za-z0-9]*[_-]?(?:password|secret|token|api[_-]?key))(\\?["']?\s*[:=]\s*\\?["']?)([^\s"'\\]+)`)
+	`(?i)([A-Za-z0-9]*[_-]?(?:password|secret|token|api[_-]?key))((?:\\?["'])?\s*[:=]\s*(?:\\?["'])?)([^\s"'\\]+)`)
 
 // Placeholder replaces every redacted secret value.
 const Placeholder = "[REDACTED]"

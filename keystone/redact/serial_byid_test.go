@@ -83,4 +83,11 @@ func TestSecretsStillRedactNextToSerialByID(t *testing.T) {
 	if got := String(in); got != `{"summary":"DB_PASSWORD: \"`+Placeholder+`\""}` {
 		t.Errorf("escaped keyword rule must still take the value, got %s", got)
 	}
+	// A bare backslash starts a JSON escape; it is not part of a quoted
+	// key/value separator. Consuming it would turn \n into the invalid \[ when
+	// the following prose is redacted and corrupt the entire API response.
+	in = `{"summary":"password: \nuse secret/home-automation-publisher"}`
+	if got := String(in); got != in {
+		t.Errorf("JSON escape beside a credential word was corrupted:\n in: %s\nout: %s", in, got)
+	}
 }
