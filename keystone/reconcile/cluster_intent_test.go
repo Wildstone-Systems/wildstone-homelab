@@ -1,6 +1,8 @@
 package reconcile
 
 import (
+	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -42,10 +44,15 @@ func TestToolsITToolsClusterIntentGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := (protojson.MarshalOptions{Multiline: true, Indent: "  "}).Marshal(w)
+	wire, err := protojson.Marshal(w)
 	if err != nil {
 		t.Fatal(err)
 	}
+	var formatted bytes.Buffer
+	if err := json.Indent(&formatted, wire, "", "  "); err != nil {
+		t.Fatal(err)
+	}
+	got := formatted.Bytes()
 	got = append(got, '\n')
 	golden := filepath.Join("testdata", "tools-it-tools-workload.json")
 	if os.Getenv("UPDATE_GOLDEN") == "1" {

@@ -422,3 +422,20 @@ func TestObserveComparesTypedIntentWithoutApplyingDrift(t *testing.T) {
 		t.Fatal("observe applied a repair")
 	}
 }
+
+func TestObserveTreatsOmittedEmptyEnvAsConverged(t *testing.T) {
+	f := &workloadFake{}
+	x := WorkloadExecutor{Client: f, Epoch: 7, Context: context.Background()}
+	w := workload()
+	w.Env = nil
+	if _, err := x.Apply(context.Background(), &wsv1.ApplyWorkload{Authority: authority(7, "rev-a"), Workload: w}); err != nil {
+		t.Fatal(err)
+	}
+	observed, err := x.Observe(context.Background(), &wsv1.ObserveWorkload{Name: w.Name, Desired: w})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !observed.MatchesDesired {
+		t.Fatal("JSON-omitted empty Env was reported as drift")
+	}
+}

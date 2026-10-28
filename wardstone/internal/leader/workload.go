@@ -1,13 +1,13 @@
 package leader
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"reflect"
 	"regexp"
 	"sort"
 	"strconv"
@@ -426,11 +426,11 @@ func (x WorkloadExecutor) Observe(ctx context.Context, req *wsv1.ObserveWorkload
 		}
 		wantDeployment, wantService := render(desired, &wsv1.WorkloadAuthority{})
 		r.MatchesDesired = d.Spec.Replicas == wantDeployment.Spec.Replicas &&
-			reflect.DeepEqual(d.Spec.Selector, wantDeployment.Spec.Selector) &&
-			reflect.DeepEqual(d.Spec.Strategy, wantDeployment.Spec.Strategy) &&
-			reflect.DeepEqual(d.Spec.Template.Metadata.Labels, wantDeployment.Spec.Template.Metadata.Labels) &&
-			reflect.DeepEqual(d.Spec.Template.Spec, wantDeployment.Spec.Template.Spec) &&
-			service != nil && reflect.DeepEqual(service.Spec, wantService.Spec)
+			sameManagedFields(d.Spec.Selector, wantDeployment.Spec.Selector) &&
+			sameManagedFields(d.Spec.Strategy, wantDeployment.Spec.Strategy) &&
+			sameManagedFields(d.Spec.Template.Metadata.Labels, wantDeployment.Spec.Template.Metadata.Labels) &&
+			sameManagedFields(d.Spec.Template.Spec, wantDeployment.Spec.Template.Spec) &&
+			service != nil && sameManagedFields(service.Spec, wantService.Spec)
 	}
 	for _, c := range d.Status.Conditions {
 		r.Conditions = append(r.Conditions, &wsv1.WorkloadCondition{Type: c.Type, Status: c.Status, Reason: c.Reason, Message: c.Message})
@@ -455,6 +455,15 @@ func (x WorkloadExecutor) Observe(ctx context.Context, req *wsv1.ObserveWorkload
 	}
 	sort.Strings(r.PodNodes)
 	return r, nil
+}
+
+// Kubernetes reads pass through JSON. Compare the managed wire fields so
+// an omitted empty slice (for example Env) equals the empty slice render
+// builds, while a changed image, selector or Service port still drifts.
+func sameManagedFields(a, b any) bool {
+	left, leftErr := json.Marshal(a)
+	right, rightErr := json.Marshal(b)
+	return leftErr == nil && rightErr == nil && bytes.Equal(left, right)
 }
 
 func (x WorkloadExecutor) Logs(ctx context.Context, req *wsv1.WorkloadLogs) (*wsv1.WorkloadLogsResult, error) {

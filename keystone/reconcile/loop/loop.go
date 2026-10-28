@@ -284,6 +284,7 @@ func (l *Loop) Tick(ctx context.Context) (TickOutcome, error) {
 	}
 	l.Rec.Authorize = auth.covers
 	l.Rec.ClusterDelete = auth.clusterDelete
+	l.Rec.ClusterRevision = revision
 	l.Rec.ClusterRoutes = l.Rec.ClusterRoutes[:0]
 	for _, r := range desired {
 		if r.Kind == resource.KindRoute {

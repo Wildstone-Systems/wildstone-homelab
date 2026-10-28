@@ -196,6 +196,10 @@ type Reconciler struct {
 	// Service ports for the cluster group, which is reconciled separately
 	// from host-scoped resources.
 	ClusterRoutes []resource.Resource
+	// ClusterRevision identifies an owned Deployment left by an approved
+	// Create in this accepted revision, so a missing Service can resume
+	// that exact Create after leadership changes.
+	ClusterRevision string
 
 	// Providers routes provider-backed kinds (currently only
 	// resource.KindDnsRecord, ADR-W004 A5) to their external-resource
@@ -664,6 +668,16 @@ func (r *Reconciler) Reconcile(ctx context.Context, nodeID string, desired []res
 	allObserved := append(append(append([]resource.Resource{}, observed...), provObserved...), keystoneDesired...)
 
 	p := plan.Diff(allDesired, allObserved)
+	if clusterGroup {
+		for i := range p.Steps {
+			st := &p.Steps[i]
+			seen := clusterSeen[resKey{st.Kind, st.Name}]
+			if st.Kind == resource.KindContainer && st.Backend == "k3s" && st.Action == plan.ActionUpdate &&
+				seen.Found && seen.ServiceUID == "" && seen.Revision != "" && seen.Revision == r.ClusterRevision {
+				st.Action = plan.ActionCreate
+			}
+		}
+	}
 
 	// Set aside anything that has failed identically several times, so
 	// one impossible step stops holding up every other resource (F60).

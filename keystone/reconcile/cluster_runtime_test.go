@@ -11,13 +11,14 @@ import (
 )
 
 type clusterMemory struct {
-	present    bool
-	matches    bool
-	failApply  bool
-	lastApply  ClusterRequest
-	lastDelete ClusterRequest
-	revision   string
-	rv         string
+	present        bool
+	matches        bool
+	failApply      bool
+	partialService bool
+	lastApply      ClusterRequest
+	lastDelete     ClusterRequest
+	revision       string
+	rv             string
 }
 
 func (m *clusterMemory) Apply(_ context.Context, req ClusterRequest) (ClusterResult, error) {
@@ -26,8 +27,12 @@ func (m *clusterMemory) Apply(_ context.Context, req ClusterRequest) (ClusterRes
 		if !m.present {
 			return ClusterResult{}, nil
 		}
+		serviceUID := "svc-1"
+		if m.partialService {
+			serviceUID = ""
+		}
 		return ClusterResult{Found: true, UID: "uid-1", ResourceVersion: m.rv, Revision: m.revision,
-			ServiceUID: "svc-1", ServiceResourceVersion: m.rv, MatchesDesired: m.matches,
+			ServiceUID: serviceUID, ServiceResourceVersion: m.rv, MatchesDesired: m.matches,
 			Generation: 1, ObservedGeneration: 1, Replicas: 1, ReadyReplicas: 1}, nil
 	case OpApplyWorkload:
 		m.lastApply = req
@@ -35,7 +40,7 @@ func (m *clusterMemory) Apply(_ context.Context, req ClusterRequest) (ClusterRes
 			m.failApply = false
 			return ClusterResult{}, errors.New("leader term ended")
 		}
-		m.present, m.matches, m.revision, m.rv = true, true, req.Authority.AcceptedRevision, "rv-1"
+		m.present, m.matches, m.partialService, m.revision, m.rv = true, true, false, req.Authority.AcceptedRevision, "rv-1"
 		return ClusterResult{Found: true, UID: "uid-1", ResourceVersion: m.rv}, nil
 	case OpDeleteWorkload:
 		m.lastDelete = req
@@ -67,6 +72,7 @@ func TestClusterPlanApplyDriftDeleteAndLeaderRetry(t *testing.T) {
 	newRec := func(epoch uint64, approve bool) *Reconciler {
 		r := newReconciler(&GatewayApplier{Gateway: h.gw})
 		r.Cluster = m
+		r.ClusterRevision = "accepted-rev"
 		r.Authorize = func(st plan.PlanStep) bool { return approve }
 		r.ClusterAuthority = func(st plan.PlanStep) (Authority, error) {
 			return Authority{AcceptedRevision: "accepted-rev", PlanID: "plan-211", StepDigest: "sha256:reviewed", LeaderEpoch: epoch}, nil
@@ -101,6 +107,22 @@ func TestClusterPlanApplyDriftDeleteAndLeaderRetry(t *testing.T) {
 	}
 	if !created.Applied || !m.present || m.lastApply.Authority.LeaderEpoch != 5 || m.lastApply.Authority.StepDigest != "sha256:reviewed" {
 		t.Fatalf("approved cluster create = %+v, request %+v", created, m.lastApply)
+	}
+	// The Deployment landed with this accepted revision, but Service
+	// creation was interrupted. The same approved Create must finish it.
+	m.matches, m.partialService = false, true
+	r = newRec(6, false)
+	r.Authorize = func(st plan.PlanStep) bool { return st.Action == plan.ActionCreate }
+	r.ClusterRoutes = desired[1:]
+	m.revision = "another-revision"
+	unrelated, err := r.Reconcile(t.Context(), "@cluster", desired[:1])
+	if err != nil || !unrelated.PendingApproval || !m.partialService {
+		t.Fatalf("unrelated partial workload used Create approval: outcome=%+v err=%v", unrelated, err)
+	}
+	m.revision = "accepted-rev"
+	resumed, err := r.Reconcile(t.Context(), "@cluster", desired[:1])
+	if err != nil || !resumed.Applied || m.partialService || m.lastApply.ExpectedRevision != "accepted-rev" {
+		t.Fatalf("partial Create did not resume: outcome=%+v request=%+v err=%v", resumed, m.lastApply, err)
 	}
 	m.matches = false // An owned Deployment was hand-edited.
 	r.Authorize = func(plan.PlanStep) bool { return false }
