@@ -153,6 +153,7 @@ func (g *Gateway) observationTTL() time.Duration {
 
 // principalKey carries the runtime principal a call authenticated as.
 type principalKey struct{}
+type externalRegistrationKey struct{}
 
 // WithPrincipal marks ctx as a call authenticated as the named runtime
 // principal. The HTTP transport sets it from the bearer; the native
@@ -163,9 +164,20 @@ func WithPrincipal(ctx context.Context, name string) context.Context {
 	return context.WithValue(ctx, principalKey{}, name)
 }
 
+// WithExternalRegistration binds an OAuth request to the one registration
+// that admitted its task. Static/native calls intentionally carry no value.
+func WithExternalRegistration(ctx context.Context, id string) context.Context {
+	return context.WithValue(ctx, externalRegistrationKey{}, id)
+}
+
 func principalFrom(ctx context.Context) (string, bool) {
 	name, ok := ctx.Value(principalKey{}).(string)
 	return name, ok && name != ""
+}
+
+func externalRegistrationFrom(ctx context.Context) (string, bool) {
+	id, ok := ctx.Value(externalRegistrationKey{}).(string)
+	return id, ok && id != ""
 }
 
 // session is one resolved handle with the Toolset built for it: what
@@ -194,6 +206,15 @@ func (g *Gateway) open(ctx context.Context, h agentapi.Handle) (*session, error)
 	hc, err := g.Ledger.ResolveHandle(h)
 	if err != nil {
 		return nil, err
+	}
+	if registration, ok := externalRegistrationFrom(ctx); ok {
+		matched, err := g.DB.ExternalTaskAdmissionMatches(registration, hc.Task.ID)
+		if err != nil {
+			return nil, err
+		}
+		if !matched {
+			return nil, fmt.Errorf("%w: task was not admitted for this OAuth registration", ErrRefused)
+		}
 	}
 	if principal, ok := principalFrom(ctx); ok {
 		// §4.1 identity binding: the credential names one Agent for
@@ -490,7 +511,7 @@ func (g *Gateway) runtimeIdentity(ctx context.Context, s *session) (principal.Id
 // same convention every other gateway refusal uses; a genuine failure to
 // file (a database or Statefile error, the pipeline's 5xx) comes back as
 // a plain error, because the call did not happen at all.
-func (g *Gateway) fileProposal(id principal.Identity, req proposals.Request) (proposals.PlanView, error) {
+func (g *Gateway) fileProposal(id principal.Identity, taskID string, req proposals.Request) (proposals.PlanView, error) {
 	body, status, err := proposals.File(g.Proposals, id, req, proposals.Options{PrivateOrigin: true})
 	if err != nil {
 		if status >= 500 || status == 0 {
@@ -501,6 +522,14 @@ func (g *Gateway) fileProposal(id principal.Identity, req proposals.Request) (pr
 	view, ok := body.(proposals.PlanView)
 	if !ok {
 		return proposals.PlanView{}, fmt.Errorf("agentgateway: filing a proposal returned no plan (status %d)", status)
+	}
+	if err := g.DB.LinkExternalPlanOrigin(view.ID, taskID); err != nil {
+		// The Plan already committed. Do not report it as unfiled and invite a
+		// duplicate retry. Missing provenance fails closed later: its outcome
+		// remains static-only and cannot enter the OAuth queue.
+		if g.Log != nil {
+			g.Log.Error("recording external proposal provenance", "plan", view.ID, "err", err)
+		}
 	}
 	return view, nil
 }

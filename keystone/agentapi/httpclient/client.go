@@ -19,23 +19,23 @@ import (
 // Client implements agentapi.Client against Keystone's REST routes
 // (ADR-W040 §2's endpoint map: POST /api/v1/agent/{manifest,invoke,
 // recall,remember,checkpoint,start,wait,complete,fail,propose,notify}
-// and POST /api/v1/agent/heartbeat). The zero value is not usable:
+// and POST /api/v1/agent/heartbeat, plus ADR-W049's OAuth-only task
+// admission). The zero value is not usable:
 // BaseURL and Bearer are required.
 type Client struct {
 	// BaseURL is Keystone's own base, e.g.
 	// "https://keystone.internal:8443". A trailing slash is trimmed.
 	BaseURL string
-	// Bearer is the runtime principal's `wst_` secret (ADR-W040 §2:
-	// "Authorization: Bearer wst_<64 hex>"), presented on every call —
-	// no session, nothing that outlives a request, so a rotation or a
-	// revocation lands on this Client's very next call once Bearer is
-	// updated or the credential is replaced.
+	// Bearer is either the static runtime principal's `wst_` secret or the
+	// OAuth resource access token for the external profile, presented on
+	// every call. Keystone keeps the profiles mutually exclusive.
 	Bearer string
 	// HTTP is the client used for every call. nil means defaultHTTP.
 	HTTP *http.Client
 }
 
 var _ agentapi.Client = (*Client)(nil)
+var _ agentapi.TaskAdmissionClient = (*Client)(nil)
 
 // ErrRefused is what every 403 this Client receives wraps: a handle
 // refused, or a credential that is not bound as a runtime principal at
@@ -183,6 +183,13 @@ func (c *Client) Manifest(ctx context.Context, h agentapi.Handle) (agentapi.Mani
 	}{Handle: h}
 	var res agentapi.Manifest
 	err := c.do(ctx, "/api/v1/agent/manifest", req, &res)
+	return res, err
+}
+
+// AdmitTask implements the OAuth-only agentapi.TaskAdmissionClient.
+func (c *Client) AdmitTask(ctx context.Context, req agentapi.TaskAdmissionRequest) (agentapi.TaskAdmission, error) {
+	var res agentapi.TaskAdmission
+	err := c.do(ctx, "/api/v1/agent/tasks", req, &res)
 	return res, err
 }
 

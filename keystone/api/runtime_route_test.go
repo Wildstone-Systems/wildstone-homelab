@@ -62,9 +62,12 @@ func TestRuntimeRouteClassifierIsClosed(t *testing.T) {
 func TestOAuthRouteClassifierIsClosedAndSeparateFromStatic(t *testing.T) {
 	allowed := []struct{ method, path string }{
 		{http.MethodGet, "/api/v1/agent/tools"},
+		{http.MethodGet, "/api/v1/agent/deliveries"},
+		{http.MethodPost, "/api/v1/agent/tasks"},
 		{http.MethodPost, "/api/v1/agent/manifest"},
 		{http.MethodPost, "/api/v1/agent/invoke"},
 		{http.MethodPost, "/api/v1/agent/heartbeat"},
+		{http.MethodPost, "/api/v1/agent/deliveries/delivery-1/ack"},
 	}
 	for _, tc := range allowed {
 		if !oauthRouteAllowed(tc.method, tc.path) {
@@ -72,13 +75,12 @@ func TestOAuthRouteClassifierIsClosedAndSeparateFromStatic(t *testing.T) {
 		}
 	}
 	denied := []struct{ method, path string }{
-		{http.MethodPost, "/api/v1/agent/tasks"},
-		{http.MethodGet, "/api/v1/agent/deliveries"},
-		{http.MethodPost, "/api/v1/agent/deliveries/delivery-1/ack"},
 		{http.MethodPost, "/mcp"},
 		{http.MethodGet, "/api/v1/resources"},
 		{http.MethodPost, "/api/v1/plans"},
 		{http.MethodGet, "/api/v1/synthetic-unclassified"},
+		{http.MethodPost, "/api/v1/agent/deliveries//ack"},
+		{http.MethodPost, "/api/v1/agent/deliveries/a/b/ack"},
 	}
 	for _, tc := range denied {
 		if oauthRouteAllowed(tc.method, tc.path) {

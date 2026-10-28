@@ -35,21 +35,81 @@ package api
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/agentapi"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/agentgateway"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/butlerlive"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/butlerstore"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/oauthresource"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/principal"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/redact"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/runtimedb"
 )
+
+var externalTaskOpaqueID = regexp.MustCompile(`^[A-Za-z0-9._~-]{1,128}$`)
+
+// agentAdmitTask is the model-invisible OAuth-only conversation admission
+// seam from ADR-W049 §2.3. Authentication and the closed OAuth route gate
+// have already run before this method can read the bounded body.
+func (s *Server) agentAdmitTask(r *http.Request, _ principal.Identity) (any, int, error) {
+	auth, ok := oauthresource.FromContext(r.Context())
+	if !ok {
+		return nil, http.StatusForbidden, errors.New("task admission requires the OAuth profile")
+	}
+	if s.SecretVault == nil {
+		return nil, http.StatusServiceUnavailable, errors.New("encrypted task admission is unavailable")
+	}
+	var req agentapi.TaskAdmissionRequest
+	if err := decodeAgentBody(r, &req); err != nil {
+		return nil, http.StatusBadRequest, err
+	}
+	if !externalTaskOpaqueID.MatchString(req.ClientSessionID) || !externalTaskOpaqueID.MatchString(req.IdempotencyKey) {
+		return nil, http.StatusBadRequest, errors.New("clientSessionId and idempotencyKey must be 1-128 safe opaque characters")
+	}
+	objective := strings.TrimSpace(strings.ReplaceAll(req.Objective, "\r\n", "\n"))
+	if objective == "" || len(objective) > 4096 || !utf8.ValidString(objective) {
+		return nil, http.StatusBadRequest, errors.New("objective must contain 1-4096 bytes of valid UTF-8 text")
+	}
+	// Re-introspection is deliberately after parsing and immediately before
+	// the atomic store boundary; the resolver's initial check protected body
+	// decoding, while this one protects the write.
+	id, err := auth.Recheck(r.Context())
+	if err != nil {
+		return nil, http.StatusUnauthorized, oauthresource.ErrUnauthenticated
+	}
+	sum := sha256.Sum256([]byte("external-task-admission/v1\x00" + objective))
+	admitted, err := s.SecretVault.AdmitExternalTask(runtimedb.ExternalTaskAdmissionInput{
+		Identity: runtimedb.ExternalTaskAdmissionIdentity{
+			RegistrationID: id.RegistrationID, PersonID: id.PersonID, Butler: id.AgentID,
+			Connection: id.ConnectionID, RuntimePrincipal: id.RuntimePrincipal,
+			CredentialEpoch: id.CredentialEpoch,
+		},
+		ClientSessionID: req.ClientSessionID,
+		IdempotencyKey:  req.IdempotencyKey,
+		PayloadDigest:   hex.EncodeToString(sum[:]),
+		Objective:       objective,
+	})
+	if errors.Is(err, runtimedb.ErrExternalAdmissionConflict) {
+		return nil, http.StatusConflict, err
+	}
+	if errors.Is(err, runtimedb.ErrNotAdmitted) || errors.Is(err, runtimedb.ErrSecretDenied) {
+		return nil, http.StatusForbidden, errors.New("task admission refused")
+	}
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	return agentapi.TaskAdmission{TaskID: admitted.TaskID, Handle: agentapi.Handle(admitted.Handle)}, http.StatusCreated, nil
+}
 
 // maxDeliveryPoll bounds the deliveries long-poll (ADR-W039 §3.6, Phase
 // 4, #341), the same cap ADR-W040 §8 records and the same shape
@@ -91,7 +151,11 @@ func (s *Server) agentContext(r *http.Request, id principal.Identity) (context.C
 	if err := s.touchRuntimeArrival(seq); err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
-	return agentgateway.WithPrincipal(r.Context(), id.Name), http.StatusOK, nil
+	ctx := agentgateway.WithPrincipal(r.Context(), id.Name)
+	if auth, ok := oauthresource.FromContext(r.Context()); ok {
+		ctx = agentgateway.WithExternalRegistration(ctx, auth.Identity.RegistrationID)
+	}
+	return ctx, http.StatusOK, nil
 }
 
 // touchRuntimeArrival is Phase 1b's loose end (#336): the first
@@ -174,7 +238,7 @@ func (s *Server) reofferWaitingTasks(butlerSeq int64) error {
 			s.Log.Error("encoding a turn delivery", "task", task.ID, "err", err)
 			continue
 		}
-		if _, err := s.DB.RecordAgentDelivery(butlerSeq, agentapi.DeliveryTurn, string(payload)); err != nil {
+		if _, err := s.DB.RecordAgentDeliveryForTask(butlerSeq, agentapi.DeliveryTurn, task.ID, string(payload)); err != nil {
 			s.Log.Error("recording a turn delivery", "task", task.ID, "err", err)
 		}
 	}
@@ -578,13 +642,27 @@ func (s *Server) agentDeliveries(r *http.Request, id principal.Identity) (any, i
 	if wait < 0 {
 		wait = 0
 	}
-	cred, err := s.runtimeRequestCredential(r, id)
-	if err != nil {
-		return nil, http.StatusUnauthorized, principal.ErrUnauthenticated
+	auth, oauth := oauthresource.FromContext(r.Context())
+	var cred runtimedb.RuntimeDeliveryCredential
+	var err error
+	if !oauth {
+		cred, err = s.runtimeRequestCredential(r, id)
+		if err != nil {
+			return nil, http.StatusUnauthorized, principal.ErrUnauthenticated
+		}
 	}
 	deadline := time.Now().Add(wait)
 	for {
-		rows, err := s.DB.PollRuntimeDeliveries(cred, after, 50, time.Now)
+		var rows []runtimedb.AgentDelivery
+		if oauth {
+			fresh, recheckErr := auth.Recheck(r.Context())
+			if recheckErr != nil {
+				return nil, http.StatusUnauthorized, oauthresource.ErrUnauthenticated
+			}
+			rows, err = s.DB.PollExternalDeliveries(externalDeliveryIdentity(fresh), after, 50, time.Now)
+		} else {
+			rows, err = s.DB.PollRuntimeDeliveries(cred, after, 50, time.Now)
+		}
 		if errors.Is(err, runtimedb.ErrRuntimeDeliveryDenied) {
 			return nil, http.StatusUnauthorized, principal.ErrUnauthenticated
 		}
@@ -592,6 +670,11 @@ func (s *Server) agentDeliveries(r *http.Request, id principal.Identity) (any, i
 			return nil, http.StatusInternalServerError, err
 		}
 		if len(rows) > 0 {
+			if oauth {
+				if _, err := auth.Recheck(r.Context()); err != nil {
+					return nil, http.StatusUnauthorized, oauthresource.ErrUnauthenticated
+				}
+			}
 			return deliveriesResponse{Deliveries: deliveriesFor(agentgateway.FilterDeliveries(s.DB, rows))}, http.StatusOK, nil
 		}
 		if time.Now().After(deadline) || r.Context().Err() != nil {
@@ -650,11 +733,22 @@ func (s *Server) agentAckDelivery(r *http.Request, id principal.Identity) (any, 
 	if _, err := fmt.Sscanf(r.PathValue("id"), "%d", &deliveryID); err != nil {
 		return nil, http.StatusBadRequest, fmt.Errorf("delivery id must be a number")
 	}
-	cred, err := s.runtimeRequestCredential(r, id)
-	if err != nil {
-		return nil, http.StatusUnauthorized, principal.ErrUnauthenticated
+	auth, oauth := oauthresource.FromContext(r.Context())
+	var err error
+	if oauth {
+		fresh, recheckErr := auth.Recheck(r.Context())
+		if recheckErr != nil {
+			return nil, http.StatusUnauthorized, oauthresource.ErrUnauthenticated
+		}
+		err = s.DB.AckExternalDelivery(externalDeliveryIdentity(fresh), deliveryID)
+	} else {
+		cred, authErr := s.runtimeRequestCredential(r, id)
+		if authErr != nil {
+			return nil, http.StatusUnauthorized, principal.ErrUnauthenticated
+		}
+		err = s.DB.AckRuntimeDelivery(cred, deliveryID, time.Now)
 	}
-	if err := s.DB.AckRuntimeDelivery(cred, deliveryID, time.Now); err != nil {
+	if err != nil {
 		if errors.Is(err, runtimedb.ErrRuntimeDeliveryDenied) {
 			return nil, http.StatusUnauthorized, principal.ErrUnauthenticated
 		}
@@ -664,4 +758,10 @@ func (s *Server) agentAckDelivery(r *http.Request, id principal.Identity) (any, 
 		return nil, http.StatusInternalServerError, err
 	}
 	return nil, http.StatusOK, nil
+}
+
+func externalDeliveryIdentity(id oauthresource.Identity) runtimedb.ExternalDeliveryIdentity {
+	return runtimedb.ExternalDeliveryIdentity{RegistrationID: id.RegistrationID, PersonID: id.PersonID,
+		Butler: id.AgentID, Connection: id.ConnectionID, RuntimePrincipal: id.RuntimePrincipal,
+		CredentialEpoch: id.CredentialEpoch}
 }
