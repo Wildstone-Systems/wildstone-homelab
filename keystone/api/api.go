@@ -1111,6 +1111,7 @@ func (s *Server) Handler() http.Handler {
 	// since RoleButler already holds both.
 	mux.Handle("POST /api/v1/agent/manifest", s.handle(principal.VerbRead, s.agentManifest))
 	mux.Handle("POST /api/v1/agent/tasks", s.handle(principal.VerbRead, s.agentAdmitTask))
+	mux.Handle("POST /mcp", s.handleResponse(principal.VerbPropose, s.oauthMCP))
 	mux.Handle("GET /api/v1/agent/tools", s.handle(principal.VerbRead, s.agentTools))
 	mux.Handle("POST /api/v1/agent/invoke", s.handle(principal.VerbPropose, s.agentInvoke))
 	mux.Handle("POST /api/v1/agent/recall", s.handle(principal.VerbRead, s.agentRecall))
@@ -1319,10 +1320,10 @@ func (s *Server) authenticate(r *http.Request) (principal.Identity, bool, error)
 	return id, ok, nil
 }
 
-// oauthRouteAllowed is separate from the static profile so later OAuth-only
-// routes cannot accidentally become reachable to wst_ credentials. Delivery,
-// task admission, and /mcp remain closed until their own slices add provenance
-// and exact correlation.
+// oauthRouteAllowed is separate from the static profile so OAuth-only routes
+// cannot accidentally become reachable to wst_ credentials. Each entry is
+// added only with its own provenance, final-boundary, or exact-correlation
+// implementation; unknown and general Keystone routes remain closed.
 func oauthRouteAllowed(method, path string) bool {
 	if method == http.MethodGet && path == "/api/v1/agent/tools" {
 		return true
@@ -1339,7 +1340,7 @@ func oauthRouteAllowed(method, path string) bool {
 		return id != "" && !strings.Contains(id, "/")
 	}
 	switch path {
-	case "/api/v1/agent/tasks", "/api/v1/agent/manifest", "/api/v1/agent/invoke", "/api/v1/agent/recall",
+	case "/mcp", "/api/v1/agent/tasks", "/api/v1/agent/manifest", "/api/v1/agent/invoke", "/api/v1/agent/recall",
 		"/api/v1/agent/remember", "/api/v1/agent/checkpoint", "/api/v1/agent/start",
 		"/api/v1/agent/wait", "/api/v1/agent/complete", "/api/v1/agent/fail",
 		"/api/v1/agent/propose", "/api/v1/agent/notify", "/api/v1/agent/heartbeat":

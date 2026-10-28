@@ -252,6 +252,9 @@ var Columns = []Column{
 	{"external_task_admissions", "idempotency_key", NotAPerson, "0110: opaque registration/session-scoped retry key, never an identity"},
 	{"external_task_admissions", "payload_digest", NotAPerson, "0110: SHA-256 digest of the normalized bounded admission payload"},
 	{"external_task_admissions", "created_at", NotAPerson, "0110: fixed-width UTC admission timestamp"},
+	{"external_task_admissions", "mcp_session_hash", NotAPerson, "0112: SHA-256 digest of an opaque task-bound MCP session"},
+	{"external_task_admissions", "sealed_mcp_session", NotAPerson, "0112: encrypted opaque MCP session, never a Person selector"},
+	{"external_task_admissions", "mcp_session_expires_at", NotAPerson, "0112: fixed-width UTC MCP session expiry"},
 	{"leader_epochs", "leader", NotAPerson, "0109: a Wardstone runtime ServiceAccount username (system:serviceaccount:wildstone-system:wardstone-<node>), naming a machine, never a Person"},
 	{"leader_epochs", "issued_at", NotAPerson, "0109: fixed-width UTC epoch issuance timestamp"},
 	// 0106 (#598): short-lived enrollment challenges bind the exact canonical

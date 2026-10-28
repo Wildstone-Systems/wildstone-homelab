@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 )
 
 var ErrExternalAdmissionConflict = errors.New("runtimedb: external task admission conflicts with an earlier payload")
@@ -37,9 +38,13 @@ type ExternalTaskAdmissionInput struct {
 }
 
 type ExternalTaskAdmission struct {
-	TaskID string
-	Handle string
+	TaskID           string
+	Handle           string
+	MCPSession       string
+	SessionExpiresAt time.Time
 }
+
+const ExternalMCPSessionTTL = 30 * time.Minute
 
 // ExternalTaskAdmissionMatches proves that a task handle belongs to the exact
 // OAuth registration authenticating this request. It never infers correlation
@@ -55,25 +60,25 @@ func (db *DB) ExternalTaskAdmissionMatches(registrationID, taskID string) (bool,
 	return ok == 1, err
 }
 
-func externalAdmissionAAD(in ExternalTaskAdmissionInput) []byte {
-	return []byte("external-task-admission/v1/" + in.Identity.RegistrationID + "/" +
+func externalAdmissionAAD(in ExternalTaskAdmissionInput, purpose string) []byte {
+	return []byte("external-task-admission/v1/" + purpose + "/" + in.Identity.RegistrationID + "/" +
 		in.ClientSessionID + "/" + in.IdempotencyKey + "/" + in.PayloadDigest)
 }
 
-func (v *SecretVault) sealExternalHandle(in ExternalTaskAdmissionInput, handle string) ([]byte, error) {
+func (v *SecretVault) sealExternalValue(in ExternalTaskAdmissionInput, purpose, value string) ([]byte, error) {
 	nonce := make([]byte, v.aead.NonceSize())
 	if _, err := rand.Read(nonce); err != nil {
 		return nil, err
 	}
-	return v.aead.Seal(nonce, nonce, []byte(handle), externalAdmissionAAD(in)), nil
+	return v.aead.Seal(nonce, nonce, []byte(value), externalAdmissionAAD(in, purpose)), nil
 }
 
-func (v *SecretVault) openExternalHandle(in ExternalTaskAdmissionInput, sealed []byte) (string, error) {
+func (v *SecretVault) openExternalValue(in ExternalTaskAdmissionInput, purpose string, sealed []byte) (string, error) {
 	n := v.aead.NonceSize()
 	if len(sealed) < n {
 		return "", ErrSecretDenied
 	}
-	raw, err := v.aead.Open(nil, sealed[:n], sealed[n:], externalAdmissionAAD(in))
+	raw, err := v.aead.Open(nil, sealed[:n], sealed[n:], externalAdmissionAAD(in, purpose))
 	if err != nil {
 		return "", ErrSecretDenied
 	}
@@ -81,8 +86,17 @@ func (v *SecretVault) openExternalHandle(in ExternalTaskAdmissionInput, sealed [
 	return string(raw), nil
 }
 
+func (v *SecretVault) sealExternalHandle(in ExternalTaskAdmissionInput, handle string) ([]byte, error) {
+	return v.sealExternalValue(in, "handle", handle)
+}
+
+func (v *SecretVault) openExternalHandle(in ExternalTaskAdmissionInput, sealed []byte) (string, error) {
+	return v.openExternalValue(in, "handle", sealed)
+}
+
 func (v *SecretVault) checkExternalAdmissionsOpen() error {
-	rows, err := v.db.sql.Query(`SELECT registration_id,client_session_id,idempotency_key,payload_digest,sealed_handle
+	rows, err := v.db.sql.Query(`SELECT registration_id,client_session_id,idempotency_key,payload_digest,
+		sealed_handle,sealed_mcp_session,mcp_session_hash
 		FROM external_task_admissions`)
 	if err != nil {
 		return err
@@ -90,14 +104,21 @@ func (v *SecretVault) checkExternalAdmissionsOpen() error {
 	defer rows.Close()
 	for rows.Next() {
 		var in ExternalTaskAdmissionInput
-		var sealed []byte
+		var sealedHandle, sealedSession []byte
+		var sessionHash string
 		if err := rows.Scan(&in.Identity.RegistrationID, &in.ClientSessionID, &in.IdempotencyKey,
-			&in.PayloadDigest, &sealed); err != nil {
+			&in.PayloadDigest, &sealedHandle, &sealedSession, &sessionHash); err != nil {
 			return err
 		}
-		handle, err := v.openExternalHandle(in, sealed)
+		handle, err := v.openExternalHandle(in, sealedHandle)
 		if err != nil || externalHandleDigest(handle) == "" {
 			return errors.New("household secret key or external task admission ciphertext invalid; refusing to open store")
+		}
+		if sessionHash != "" {
+			session, err := v.openExternalValue(in, "mcp-session", sealedSession)
+			if err != nil || opaqueDigest(session) != sessionHash {
+				return errors.New("household secret key or external MCP session ciphertext invalid; refusing to open store")
+			}
 		}
 	}
 	return rows.Err()
@@ -109,6 +130,14 @@ func externalHandleDigest(handle string) string {
 		return ""
 	}
 	sum := sha256.Sum256([]byte(secret))
+	return hex.EncodeToString(sum[:])
+}
+
+func opaqueDigest(value string) string {
+	if value == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(value))
 	return hex.EncodeToString(sum[:])
 }
 
@@ -151,13 +180,14 @@ func (v *SecretVault) AdmitExternalTask(in ExternalTaskAdmissionInput) (External
 		return ExternalTaskAdmission{}, err
 	}
 
-	var priorDigest, taskID, handleHash string
-	var sealed []byte
-	err = tx.QueryRow(`SELECT a.payload_digest,'bt-'||a.task,a.sealed_handle,t.handle_hash
+	var priorDigest, taskID, handleHash, sessionHash, sessionExpiry string
+	var sealed, sealedSession []byte
+	err = tx.QueryRow(`SELECT a.payload_digest,'bt-'||a.task,a.sealed_handle,t.handle_hash,
+		a.mcp_session_hash,a.sealed_mcp_session,a.mcp_session_expires_at
 		FROM external_task_admissions a JOIN butler_tasks t ON t.seq=a.task
 		WHERE a.registration_id=? AND a.client_session_id=? AND a.idempotency_key=?`,
 		in.Identity.RegistrationID, in.ClientSessionID, in.IdempotencyKey).
-		Scan(&priorDigest, &taskID, &sealed, &handleHash)
+		Scan(&priorDigest, &taskID, &sealed, &handleHash, &sessionHash, &sealedSession, &sessionExpiry)
 	if err == nil {
 		if subtle.ConstantTimeCompare([]byte(priorDigest), []byte(in.PayloadDigest)) != 1 {
 			return ExternalTaskAdmission{}, ErrExternalAdmissionConflict
@@ -167,7 +197,38 @@ func (v *SecretVault) AdmitExternalTask(in ExternalTaskAdmissionInput) (External
 			subtle.ConstantTimeCompare([]byte(externalHandleDigest(handle)), []byte(handleHash)) != 1 {
 			return ExternalTaskAdmission{}, ErrSecretDenied
 		}
-		return ExternalTaskAdmission{TaskID: taskID, Handle: handle}, nil
+		if sessionHash == "" {
+			raw := make([]byte, 32)
+			if _, err := rand.Read(raw); err != nil {
+				return ExternalTaskAdmission{}, err
+			}
+			session := base64.RawURLEncoding.EncodeToString(raw)
+			clear(raw)
+			sessionHash = opaqueDigest(session)
+			sealedSession, err = v.sealExternalValue(in, "mcp-session", session)
+			if err != nil {
+				return ExternalTaskAdmission{}, err
+			}
+			expiresAt := time.Now().UTC().Add(ExternalMCPSessionTTL)
+			if _, err := tx.Exec(`UPDATE external_task_admissions
+				SET mcp_session_hash=?,sealed_mcp_session=?,mcp_session_expires_at=?
+				WHERE registration_id=? AND client_session_id=? AND idempotency_key=?`,
+				sessionHash, sealedSession, expiresAt.Format(time.RFC3339Nano), in.Identity.RegistrationID,
+				in.ClientSessionID, in.IdempotencyKey); err != nil {
+				return ExternalTaskAdmission{}, err
+			}
+			if err := tx.Commit(); err != nil {
+				return ExternalTaskAdmission{}, err
+			}
+			return ExternalTaskAdmission{TaskID: taskID, Handle: handle, MCPSession: session, SessionExpiresAt: expiresAt}, nil
+		}
+		session, err := v.openExternalValue(in, "mcp-session", sealedSession)
+		expiresAt, parseErr := time.Parse(time.RFC3339Nano, sessionExpiry)
+		if err != nil || parseErr != nil || opaqueDigest(session) == "" ||
+			subtle.ConstantTimeCompare([]byte(opaqueDigest(session)), []byte(sessionHash)) != 1 {
+			return ExternalTaskAdmission{}, ErrSecretDenied
+		}
+		return ExternalTaskAdmission{TaskID: taskID, Handle: handle, MCPSession: session, SessionExpiresAt: expiresAt}, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return ExternalTaskAdmission{}, err
@@ -238,13 +299,83 @@ func (v *SecretVault) AdmitExternalTask(in ExternalTaskAdmissionInput) (External
 	if err != nil {
 		return ExternalTaskAdmission{}, err
 	}
+	sessionRaw := make([]byte, 32)
+	if _, err := rand.Read(sessionRaw); err != nil {
+		return ExternalTaskAdmission{}, err
+	}
+	session := base64.RawURLEncoding.EncodeToString(sessionRaw)
+	clear(sessionRaw)
+	sessionHash = opaqueDigest(session)
+	sealedSession, err = v.sealExternalValue(in, "mcp-session", session)
+	if err != nil {
+		return ExternalTaskAdmission{}, err
+	}
+	expiresAt := time.Now().UTC().Add(ExternalMCPSessionTTL)
 	if _, err := tx.Exec(`INSERT INTO external_task_admissions
-		(registration_id,client_session_id,idempotency_key,payload_digest,task,sealed_handle,created_at)
-		VALUES(?,?,?,?,?,?,?)`, reg.ID, in.ClientSessionID, in.IdempotencyKey, in.PayloadDigest, seq, sealed, stamp); err != nil {
+		(registration_id,client_session_id,idempotency_key,payload_digest,task,sealed_handle,created_at,
+		 mcp_session_hash,sealed_mcp_session,mcp_session_expires_at)
+		VALUES(?,?,?,?,?,?,?,?,?,?)`, reg.ID, in.ClientSessionID, in.IdempotencyKey, in.PayloadDigest, seq, sealed, stamp,
+		sessionHash, sealedSession, expiresAt.Format(time.RFC3339Nano)); err != nil {
 		return ExternalTaskAdmission{}, fmt.Errorf("runtimedb: recording external task admission: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return ExternalTaskAdmission{}, err
 	}
-	return ExternalTaskAdmission{TaskID: taskID, Handle: handle}, nil
+	return ExternalTaskAdmission{TaskID: taskID, Handle: handle, MCPSession: session, SessionExpiresAt: expiresAt}, nil
+}
+
+// ResolveExternalMCPSession recovers the exact task handle only for the
+// currently authenticated registration tuple and a still-live task session.
+// Registration authority is rechecked in the same read transaction; the
+// caller must still re-introspect its OAuth bearer immediately beforehand.
+func (v *SecretVault) ResolveExternalMCPSession(identity ExternalTaskAdmissionIdentity, session string, at time.Time) (ExternalTaskAdmission, error) {
+	if v == nil || v.db == nil || session == "" || identity.RegistrationID == "" {
+		return ExternalTaskAdmission{}, ErrNotAdmitted
+	}
+	tx, err := v.db.sql.Begin()
+	if err != nil {
+		return ExternalTaskAdmission{}, err
+	}
+	defer tx.Rollback()
+	reg, err := scanExternalRegistration(tx.QueryRow(externalRegistrationColumns+` WHERE id=? AND state='active' AND credential_epoch=?`,
+		identity.RegistrationID, identity.CredentialEpoch))
+	if err != nil || reg.PersonID != identity.PersonID || reg.Butler != identity.Butler ||
+		reg.Connection != identity.Connection || reg.RuntimePrincipal != identity.RuntimePrincipal {
+		return ExternalTaskAdmission{}, ErrNotAdmitted
+	}
+	if err := validateExternalRegistrationAuthority(tx, reg); err != nil {
+		return ExternalTaskAdmission{}, err
+	}
+	var in ExternalTaskAdmissionInput
+	var task int64
+	var sealedHandle, sealedSession []byte
+	var storedHash, expires, handleHash string
+	err = tx.QueryRow(`SELECT client_session_id,idempotency_key,payload_digest,task,sealed_handle,
+		a.sealed_mcp_session,a.mcp_session_hash,a.mcp_session_expires_at,t.handle_hash
+		FROM external_task_admissions a JOIN butler_tasks t ON t.seq=a.task
+		WHERE a.registration_id=? AND a.mcp_session_hash=?`,
+		identity.RegistrationID, opaqueDigest(session)).Scan(&in.ClientSessionID, &in.IdempotencyKey,
+		&in.PayloadDigest, &task, &sealedHandle, &sealedSession, &storedHash, &expires, &handleHash)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ExternalTaskAdmission{}, ErrNotAdmitted
+	}
+	if err != nil {
+		return ExternalTaskAdmission{}, err
+	}
+	in.Identity = identity
+	expiresAt, err := time.Parse(time.RFC3339Nano, expires)
+	if err != nil || !at.Before(expiresAt) || subtle.ConstantTimeCompare([]byte(opaqueDigest(session)), []byte(storedHash)) != 1 {
+		return ExternalTaskAdmission{}, ErrNotAdmitted
+	}
+	storedSession, err := v.openExternalValue(in, "mcp-session", sealedSession)
+	if err != nil || subtle.ConstantTimeCompare([]byte(storedSession), []byte(session)) != 1 {
+		return ExternalTaskAdmission{}, ErrNotAdmitted
+	}
+	handle, err := v.openExternalHandle(in, sealedHandle)
+	agentTaskID := butlerTaskID(task)
+	if err != nil || !strings.HasPrefix(handle, agentTaskID+".") ||
+		subtle.ConstantTimeCompare([]byte(externalHandleDigest(handle)), []byte(handleHash)) != 1 {
+		return ExternalTaskAdmission{}, ErrSecretDenied
+	}
+	return ExternalTaskAdmission{TaskID: agentTaskID, Handle: handle, MCPSession: session, SessionExpiresAt: expiresAt}, nil
 }

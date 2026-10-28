@@ -108,7 +108,8 @@ func (s *Server) agentAdmitTask(r *http.Request, _ principal.Identity) (any, int
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
-	return agentapi.TaskAdmission{TaskID: admitted.TaskID, Handle: agentapi.Handle(admitted.Handle)}, http.StatusCreated, nil
+	return agentapi.TaskAdmission{TaskID: admitted.TaskID, Handle: agentapi.Handle(admitted.Handle),
+		MCPSession: admitted.MCPSession, SessionExpiresAt: admitted.SessionExpiresAt}, http.StatusCreated, nil
 }
 
 // maxDeliveryPoll bounds the deliveries long-poll (ADR-W039 §3.6, Phase

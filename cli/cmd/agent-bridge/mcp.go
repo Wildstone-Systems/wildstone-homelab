@@ -24,10 +24,11 @@ import (
 	"strings"
 
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/agentapi"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/agentmcp"
 )
 
 // mcpProtocolVersion is the MCP spec revision this server speaks.
-const mcpProtocolVersion = "2025-06-18"
+const mcpProtocolVersion = agentmcp.ProtocolVersion
 
 // handleHeader is the ADR-W040 §6-recommended shape: the task handle as
 // an explicit, request-scoped value. runIDHeader is the fallback runs.go
@@ -230,41 +231,12 @@ type mcpInitializeResult struct {
 	ServerInfo      mcpServerInfo  `json:"serverInfo"`
 }
 
-type mcpToolAnnotations struct {
-	ReadOnlyHint bool `json:"readOnlyHint,omitempty"`
-}
-
-// mcpTool is one manifest ToolSpec, mapped onto an MCP tool declaration.
-type mcpTool struct {
-	Name        string              `json:"name"`
-	Description string              `json:"description,omitempty"`
-	InputSchema json.RawMessage     `json:"inputSchema"`
-	Annotations *mcpToolAnnotations `json:"annotations,omitempty"`
-}
-
-type mcpToolsListResult struct {
-	Tools []mcpTool `json:"tools"`
-}
-
-// defaultInputSchema is what a tool with no declared schema gets: MCP's
-// own inputSchema is required, and "no parameters" is itself a schema.
-var defaultInputSchema = json.RawMessage(`{"type":"object"}`)
+type mcpToolAnnotations = agentmcp.ToolAnnotations
+type mcpTool = agentmcp.Tool
+type mcpToolsListResult = agentmcp.ToolsListResult
 
 func toolsFor(m agentapi.Manifest) []mcpTool {
-	out := make([]mcpTool, 0, len(m.Tools))
-	for _, t := range m.Tools {
-		schema := t.InputSchema
-		if len(schema) == 0 {
-			schema = defaultInputSchema
-		}
-		out = append(out, mcpTool{
-			Name:        t.Name,
-			Description: t.Description,
-			InputSchema: schema,
-			Annotations: &mcpToolAnnotations{ReadOnlyHint: t.ReadOnlyHint},
-		})
-	}
-	return out
+	return agentmcp.ToolsFor(m.Tools)
 }
 
 type mcpToolsCallParams struct {
@@ -272,15 +244,8 @@ type mcpToolsCallParams struct {
 	Arguments json.RawMessage `json:"arguments"`
 }
 
-type mcpContent struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
-}
-
-type mcpToolCallResult struct {
-	Content []mcpContent `json:"content"`
-	IsError bool         `json:"isError,omitempty"`
-}
+type mcpContent = agentmcp.Content
+type mcpToolCallResult = agentmcp.ToolCallResult
 
 // toolResultFor maps one agentapi.InvokeResult onto an MCP tool result
 // (H3 brief): ok is an ordinary result; waiting is ALSO an ordinary,
@@ -290,22 +255,7 @@ type mcpToolCallResult struct {
 // and error all set isError so the model sees a call that did not
 // succeed and does not represent it as having happened.
 func toolResultFor(res agentapi.InvokeResult) mcpToolCallResult {
-	switch res.Outcome {
-	case agentapi.OutcomeOK:
-		return mcpToolCallResult{Content: []mcpContent{{Type: "text", Text: res.Content}}}
-	case agentapi.OutcomeWaiting:
-		text := "waiting: " + string(res.WaitReason)
-		if res.Reason != "" {
-			text += " (" + res.Reason + ")"
-		}
-		return mcpToolCallResult{Content: []mcpContent{{Type: "text", Text: text}}}
-	default: // denied, rejected, error
-		text := string(res.Outcome)
-		if res.Reason != "" {
-			text += ": " + res.Reason
-		}
-		return mcpToolCallResult{Content: []mcpContent{{Type: "text", Text: text}}, IsError: true}
-	}
+	return agentmcp.ToolResultFor(res)
 }
 
 func writeJSONRPC(w http.ResponseWriter, resp jsonrpcResponse) {
