@@ -42,4 +42,3 @@ CREATE TABLE external_plan_origins (
     task INTEGER NOT NULL REFERENCES butler_tasks(seq),
     UNIQUE(plan, task)
 );
-
