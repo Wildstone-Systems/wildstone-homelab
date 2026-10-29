@@ -111,3 +111,31 @@ func TestClusterIntentRejectsUnresolvedSecretReferences(t *testing.T) {
 		t.Fatalf("secret-backed workload accepted: %v", err)
 	}
 }
+
+func TestClusterIntentRejectsUnsupportedResourceQuantitiesBeforeApproval(t *testing.T) {
+	for name, resources := range map[string]*resource.ContainerResources{
+		"sub-millicore CPU":  {Cpus: "0.0001"},
+		"overflowing memory": {Memory: "9999999999999999999g"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			container := containerResource("worker", testDigestImage)
+			container.Metadata.Owner, container.Metadata.Package = "capability/worker", "worker"
+			container.Container.Backend = "k3s"
+			container.Container.Expose = []uint32{8080}
+			container.Container.Resources = resources
+
+			if _, err := ClusterIntent(container, []resource.Resource{container}); err == nil {
+				t.Fatal("unsupported cluster resource quantity passed proposal preflight")
+			}
+		})
+	}
+
+	container := containerResource("worker", testDigestImage)
+	container.Metadata.Owner, container.Metadata.Package = "capability/worker", "worker"
+	container.Container.Backend = "k3s"
+	container.Container.Expose = []uint32{8080}
+	container.Container.Resources = &resource.ContainerResources{Memory: "9223372036854775807", Cpus: "0.001"}
+	if _, err := ClusterIntent(container, []resource.Resource{container}); err != nil {
+		t.Fatalf("boundary-supported resource quantities were rejected: %v", err)
+	}
+}

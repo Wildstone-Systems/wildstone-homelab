@@ -3,12 +3,17 @@ package reconcile
 import (
 	"context"
 	"fmt"
+	"math/big"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/gateway"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/runtimedb"
 	wsv1 "github.com/Wildstone-Systems/wildstone-homelab/proto/gen/wardstone/v1"
 )
+
+var clusterDecimalCPU = regexp.MustCompile(`^[0-9]+(\.[0-9]+)?$`)
 
 // GatewayClusterApplier routes only typed workload operations to the latest
 // issued leader. The Wardstone term gate remains authoritative: a stale DB
@@ -128,6 +133,14 @@ func wireWorkload(w *WorkloadSpec) (*wsv1.WorkloadSpec, error) {
 	if w.Resources != nil && w.Resources.PidsLimit != 0 {
 		return nil, fmt.Errorf("cluster: pidsLimit has no reviewed Kubernetes mapping")
 	}
+	if w.Resources != nil {
+		if err := validateClusterMemory(w.Resources.Memory); err != nil {
+			return nil, err
+		}
+		if err := validateClusterCPU(w.Resources.Cpus); err != nil {
+			return nil, err
+		}
+	}
 	strategy := wsv1.WorkloadStrategy_WORKLOAD_STRATEGY_RECREATE
 	if w.Strategy == StrategyRolling {
 		strategy = wsv1.WorkloadStrategy_WORKLOAD_STRATEGY_ROLLING_UPDATE
@@ -146,4 +159,51 @@ func wireWorkload(w *WorkloadSpec) (*wsv1.WorkloadSpec, error) {
 		out.Resources = &wsv1.ContainerResources{Memory: w.Resources.Memory, Cpus: w.Resources.Cpus}
 	}
 	return out, nil
+}
+
+// validateClusterMemory keeps proposal preflight aligned with Wardstone's
+// Docker-size-to-Kubernetes-quantity boundary. Resource validation checks the
+// spelling; this additional bound prevents an approved value from overflowing
+// only after it reaches the leader.
+func validateClusterMemory(value string) error {
+	if value == "" {
+		return nil
+	}
+	multiplier := uint64(1)
+	number := value
+	switch value[len(value)-1] {
+	case 'b', 'B':
+		number = value[:len(value)-1]
+	case 'k', 'K':
+		multiplier, number = 1<<10, value[:len(value)-1]
+	case 'm', 'M':
+		multiplier, number = 1<<20, value[:len(value)-1]
+	case 'g', 'G':
+		multiplier, number = 1<<30, value[:len(value)-1]
+	}
+	n, err := strconv.ParseUint(number, 10, 63)
+	if err != nil || n == 0 || n > uint64(^uint64(0)>>1)/multiplier {
+		return fmt.Errorf("cluster: memory %q is not a bounded Docker size string", value)
+	}
+	return nil
+}
+
+// validateClusterCPU rejects precision Kubernetes cannot represent before a
+// Plan is filed. Wardstone repeats the check at its typed execution boundary.
+func validateClusterCPU(value string) error {
+	if value == "" {
+		return nil
+	}
+	if !clusterDecimalCPU.MatchString(value) {
+		return fmt.Errorf("cluster: cpu %q is not a decimal core count", value)
+	}
+	cores, ok := new(big.Rat).SetString(value)
+	if !ok || cores.Sign() <= 0 {
+		return fmt.Errorf("cluster: cpu %q is not a positive decimal core count", value)
+	}
+	milli := new(big.Rat).Mul(cores, big.NewRat(1_000, 1))
+	if !milli.IsInt() {
+		return fmt.Errorf("cluster: cpu %q is finer than Kubernetes' 1m precision", value)
+	}
+	return nil
 }
