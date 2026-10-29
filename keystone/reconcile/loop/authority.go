@@ -94,7 +94,7 @@ func (a *authority) covers(st plan.PlanStep) bool {
 	current, stillDesired := a.accepted[k]
 	for _, p := range a.plans {
 		for _, e := range p.entries {
-			if e.kind != st.Kind || e.name != st.Name || e.backend != st.Backend || !sameEffect(st.Kind, e.action, st.Action) {
+			if e.kind != st.Kind || e.name != st.Name || !sameBackend(st.Kind, e.backend, st.Backend) || !sameEffect(st.Kind, e.action, st.Action) {
 				continue
 			}
 			if st.Action == plan.ActionDelete {
@@ -120,7 +120,7 @@ func (a *authority) grant(st plan.PlanStep) (planID, digest string, ok bool) {
 	}
 	for _, p := range a.plans {
 		for _, e := range p.entries {
-			if e.kind != st.Kind || e.name != st.Name || e.backend != st.Backend || !sameEffect(st.Kind, e.action, st.Action) {
+			if e.kind != st.Kind || e.name != st.Name || !sameBackend(st.Kind, e.backend, st.Backend) || !sameEffect(st.Kind, e.action, st.Action) {
 				continue
 			}
 			if st.Action != plan.ActionDelete {
@@ -129,7 +129,10 @@ func (a *authority) grant(st plan.PlanStep) (planID, digest string, ok bool) {
 				}
 				continue
 			}
-			sum := sha256.Sum256([]byte(p.id + "\x00" + string(st.Kind) + "\x00" + st.Name + "\x00" + st.Backend + "\x00Delete"))
+			// Bind the digest to the spelling the reviewer saw. Empty and
+			// "docker" are execution-equivalent for Containers, but the
+			// reviewed tuple remains the durable authority record.
+			sum := sha256.Sum256([]byte(p.id + "\x00" + string(st.Kind) + "\x00" + st.Name + "\x00" + e.backend + "\x00Delete"))
 			return p.id, "sha256:" + hex.EncodeToString(sum[:]), true
 		}
 	}
@@ -145,6 +148,22 @@ func (a *authority) clusterDelete(kind resource.Kind, name string) bool {
 		}
 	}
 	return false
+}
+
+// sameBackend preserves the Statefile compatibility rule that an omitted
+// Container backend means Docker. Other resource kinds do not have a backend
+// default, so their stored and recomputed values must remain byte-for-byte
+// equal.
+func sameBackend(kind resource.Kind, reviewed, planned string) bool {
+	if kind == resource.KindContainer {
+		if reviewed == "" {
+			reviewed = "docker"
+		}
+		if planned == "" {
+			planned = "docker"
+		}
+	}
+	return reviewed == planned
 }
 
 // sameEffect reports whether a reviewed action and a reconcile action are

@@ -85,6 +85,27 @@ func TestClusterApplyCarriesSeparateObjectRevisionWitnesses(t *testing.T) {
 	}
 }
 
+func TestClusterPartialUpdateKeepsItsApprovedUpdateAction(t *testing.T) {
+	desired := clusterDesired()[:1]
+	desired[0].Container.Expose = []uint32{8080}
+	m := &clusterMemory{present: true, partialService: true, revision: "accepted-rev", rv: "rv-1"}
+	r := newReconciler(nil)
+	r.Cluster = m
+	r.ClusterRevision = "accepted-rev"
+	r.Authorize = func(st plan.PlanStep) bool { return st.Action == plan.ActionUpdate }
+	r.ClusterAuthority = func(st plan.PlanStep) (Authority, error) {
+		if st.Action != plan.ActionUpdate {
+			t.Fatalf("cluster authority requested for %s, want Update", st.Action)
+		}
+		return Authority{AcceptedRevision: "accepted-rev", PlanID: "plan-211", StepDigest: "sha256:reviewed", LeaderEpoch: 7}, nil
+	}
+
+	outcome, err := r.Reconcile(t.Context(), "@cluster", desired)
+	if err != nil || !outcome.Applied || outcome.PendingApproval || m.partialService || m.lastApply.Op != OpApplyWorkload {
+		t.Fatalf("partial approved Update did not resume: outcome=%+v request=%+v err=%v", outcome, m.lastApply, err)
+	}
+}
+
 func clusterDesired() []resource.Resource {
 	c := containerResource("it-tools", testDigestImage)
 	c.Metadata.Owner, c.Metadata.Package = "capability/utilities", "tools-it-tools"
