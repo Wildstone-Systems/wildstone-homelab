@@ -7,6 +7,7 @@ import (
 
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/plan"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/resource"
+	wsv1 "github.com/Wildstone-Systems/wildstone-homelab/proto/gen/wardstone/v1"
 )
 
 // TestSpecDriftDetectedAndConverged pins ADR-W008 R2c: a running,
@@ -55,5 +56,58 @@ func TestSpecDriftDetectedAndConverged(t *testing.T) {
 	third, err := r.Reconcile(context.Background(), "node-a", []resource.Resource{changed})
 	if err != nil || len(third.Plan.Steps) != 0 {
 		t.Fatalf("converged spec still planning steps: %+v err=%v", third.Plan, err)
+	}
+}
+
+func TestForgedCurrentLabelCannotHideHardeningDrift(t *testing.T) {
+	h := startGateway(t, []string{"tok"})
+	agent := newTestAgent(t, h, "node-a", "tok")
+	if !h.gw.WaitConnected("node-a", 10*time.Second) {
+		t.Fatal("agent never connected")
+	}
+	gid := int64(1001)
+	want := containerResource("app", testDigestImage)
+	want.Container.RuntimeIdentity = &resource.ContainerRuntimeIdentity{UID: 1000, GID: &gid}
+	want.Container.ReadOnlyRootfs = true
+	want.Container.CapDrop = []string{"ALL"}
+	want.Container.NoNewPrivileges = true
+	want.Container.Resources = &resource.ContainerResources{Memory: "512m", Cpus: "0.5", PidsLimit: 128}
+	want.Container.ShmSize = "1g"
+	r := newReconciler(&GatewayApplier{Gateway: h.gw})
+	if first, err := r.Reconcile(context.Background(), "node-a", []resource.Resource{want}); err != nil || !first.Applied {
+		t.Fatalf("first reconcile: outcome=%+v err=%v", first, err)
+	}
+
+	agent.mu.Lock()
+	c := agent.containers["app"]
+	currentHash := c.labels[specHashLabel]
+	agent.mu.Unlock()
+	tests := map[string]func(*fakeContainer){
+		"runtime uid":       func(c *fakeContainer) { c.runtimeIdentity.Uid++ },
+		"runtime gid":       func(c *fakeContainer) { *c.runtimeIdentity.Gid++ },
+		"read-only rootfs":  func(c *fakeContainer) { c.readOnlyRootfs = false },
+		"capability drop":   func(c *fakeContainer) { c.capDrop = []string{"NET_RAW"} },
+		"no-new-privileges": func(c *fakeContainer) { c.noNewPrivileges = false },
+		"memory":            func(c *fakeContainer) { c.resources.Memory = "256m" },
+		"cpu":               func(c *fakeContainer) { c.resources.Cpus = "1" },
+		"pid":               func(c *fakeContainer) { c.resources.PidsLimit = 64 },
+		"shm":               func(c *fakeContainer) { c.shmSize = "512m" },
+	}
+	for name, mutate := range tests {
+		agent.mu.Lock()
+		gidCopy := int64(1001)
+		c.runtimeIdentity = &wsv1.ContainerRuntimeIdentity{Uid: 1000, Gid: &gidCopy}
+		c.readOnlyRootfs, c.capDrop, c.noNewPrivileges = true, []string{"ALL"}, true
+		c.resources = &wsv1.ContainerResources{Memory: "512m", Cpus: "0.5", PidsLimit: 128}
+		c.shmSize = "1g"
+		mutate(c)
+		if c.labels[specHashLabel] != currentHash {
+			t.Fatal("test changed the forged-current label")
+		}
+		agent.mu.Unlock()
+		out, err := r.Reconcile(context.Background(), "node-a", []resource.Resource{want})
+		if err != nil || len(out.Plan.Steps) != 1 || out.Plan.Steps[0].Action != plan.ActionUpdate {
+			t.Errorf("%s drift: outcome=%+v err=%v", name, out, err)
+		}
 	}
 }

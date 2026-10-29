@@ -682,6 +682,10 @@ func (a *Agent) ensureContainer(ctx context.Context, op *wsv1.EnsureContainer) (
 	if oe != nil {
 		return nil, oe
 	}
+	runtimeUser, oe := runtimeIdentityToDockerUser(op.GetRuntimeIdentity())
+	if oe != nil {
+		return nil, oe
+	}
 	// Host networking (protocol minor 23), up front for the same reason
 	// as everything above: an incompatible combination must fail with the
 	// OLD container still running. Docker itself would accept host mode
@@ -743,6 +747,9 @@ func (a *Agent) ensureContainer(ctx context.Context, op *wsv1.EnsureContainer) (
 		specMatches := existing.Config.Image == op.GetImage()
 		if hasHash {
 			specMatches = existing.Config.Labels[SpecHashLabel] == wantHash
+		}
+		if specMatches {
+			specMatches = managedHardeningMatches(existing, op, runtimeUser, memBytes, nanoCPUs, pidsLimit, shmBytes)
 		}
 		// A matching spec is not enough when a device alias now
 		// resolves elsewhere: docker start would hand over the node
@@ -815,6 +822,7 @@ func (a *Agent) ensureContainer(ctx context.Context, op *wsv1.EnsureContainer) (
 
 	id, err := a.runtime.create(ctx, op.GetName(), createBody{
 		Image:        op.GetImage(),
+		User:         runtimeUser,
 		Cmd:          op.GetCommand(),
 		Env:          env,
 		Labels:       labels,
@@ -1070,7 +1078,16 @@ func (a *Agent) inspectContainer(ctx context.Context, op *wsv1.InspectContainer)
 			sort.Strings(out)
 			return out
 		}(),
-		NetworkMode: ci.HostConfig.NetworkMode,
+		NetworkMode:       ci.HostConfig.NetworkMode,
+		RuntimeIdentity:   parseDockerRuntimeIdentity(ci.Config.User),
+		ReadOnlyRootfs:    ci.HostConfig.ReadonlyRootfs,
+		CapDrop:           append([]string(nil), ci.HostConfig.CapDrop...),
+		NoNewPrivileges:   hasNoNewPrivileges(ci.HostConfig.SecurityOpt),
+		MemoryBytes:       ci.HostConfig.Memory,
+		NanoCpus:          ci.HostConfig.NanoCpus,
+		PidsLimit:         ci.HostConfig.PidsLimit,
+		ShmSizeBytes:      ci.HostConfig.ShmSize,
+		HardeningObserved: true,
 	}}, nil
 }
 

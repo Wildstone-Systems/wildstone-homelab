@@ -2481,9 +2481,14 @@ type EnsureContainer struct {
 	// A pre-minor-23 agent ignores this field and would start the container
 	// on the bridge with nothing published, which is why Keystone refuses to
 	// dispatch a HOST spec to one (resource.HostNetworkProtocolMinor).
-	NetworkMode   ContainerNetworkMode `protobuf:"varint,18,opt,name=network_mode,json=networkMode,proto3,enum=wardstone.v1.ContainerNetworkMode" json:"network_mode,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	NetworkMode ContainerNetworkMode `protobuf:"varint,18,opt,name=network_mode,json=networkMode,proto3,enum=wardstone.v1.ContainerNetworkMode" json:"network_mode,omitempty"`
+	// Numeric runtime identity (protocol minor 34). A message preserves the
+	// distinction between omitted (use the image default) and explicit uid 0;
+	// optional gid likewise distinguishes uid-only from uid:gid. Keystone never
+	// sends names or other free-form account expressions.
+	RuntimeIdentity *ContainerRuntimeIdentity `protobuf:"bytes,19,opt,name=runtime_identity,json=runtimeIdentity,proto3" json:"runtime_identity,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *EnsureContainer) Reset() {
@@ -2640,6 +2645,13 @@ func (x *EnsureContainer) GetNetworkMode() ContainerNetworkMode {
 		return x.NetworkMode
 	}
 	return ContainerNetworkMode_CONTAINER_NETWORK_MODE_UNSPECIFIED
+}
+
+func (x *EnsureContainer) GetRuntimeIdentity() *ContainerRuntimeIdentity {
+	if x != nil {
+		return x.RuntimeIdentity
+	}
+	return nil
 }
 
 // ContainerResources bounds what one container may consume (protocol
@@ -3578,9 +3590,22 @@ type InspectContainerResult struct {
 	// network name Docker recorded. Verbatim for the reason `status` is.
 	// Empty from an agent older than minor 23, which readers must treat as
 	// "unknown" rather than "bridge".
-	NetworkMode   string `protobuf:"bytes,8,opt,name=network_mode,json=networkMode,proto3" json:"network_mode,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	NetworkMode string `protobuf:"bytes,8,opt,name=network_mode,json=networkMode,proto3" json:"network_mode,omitempty"`
+	// Protocol minor 34 authoritative readback. hardening_observed separates a
+	// new agent observing defaults from an older agent that omitted these
+	// additive fields. Values are Docker's bounded effective metadata; no env,
+	// command, output or secret is returned.
+	RuntimeIdentity   *ContainerRuntimeIdentity `protobuf:"bytes,9,opt,name=runtime_identity,json=runtimeIdentity,proto3" json:"runtime_identity,omitempty"`
+	ReadOnlyRootfs    bool                      `protobuf:"varint,10,opt,name=read_only_rootfs,json=readOnlyRootfs,proto3" json:"read_only_rootfs,omitempty"`
+	CapDrop           []string                  `protobuf:"bytes,11,rep,name=cap_drop,json=capDrop,proto3" json:"cap_drop,omitempty"`
+	NoNewPrivileges   bool                      `protobuf:"varint,12,opt,name=no_new_privileges,json=noNewPrivileges,proto3" json:"no_new_privileges,omitempty"`
+	MemoryBytes       int64                     `protobuf:"varint,13,opt,name=memory_bytes,json=memoryBytes,proto3" json:"memory_bytes,omitempty"`
+	NanoCpus          int64                     `protobuf:"varint,14,opt,name=nano_cpus,json=nanoCpus,proto3" json:"nano_cpus,omitempty"`
+	PidsLimit         int64                     `protobuf:"varint,15,opt,name=pids_limit,json=pidsLimit,proto3" json:"pids_limit,omitempty"`
+	ShmSizeBytes      int64                     `protobuf:"varint,16,opt,name=shm_size_bytes,json=shmSizeBytes,proto3" json:"shm_size_bytes,omitempty"`
+	HardeningObserved bool                      `protobuf:"varint,17,opt,name=hardening_observed,json=hardeningObserved,proto3" json:"hardening_observed,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *InspectContainerResult) Reset() {
@@ -3667,6 +3692,69 @@ func (x *InspectContainerResult) GetNetworkMode() string {
 		return x.NetworkMode
 	}
 	return ""
+}
+
+func (x *InspectContainerResult) GetRuntimeIdentity() *ContainerRuntimeIdentity {
+	if x != nil {
+		return x.RuntimeIdentity
+	}
+	return nil
+}
+
+func (x *InspectContainerResult) GetReadOnlyRootfs() bool {
+	if x != nil {
+		return x.ReadOnlyRootfs
+	}
+	return false
+}
+
+func (x *InspectContainerResult) GetCapDrop() []string {
+	if x != nil {
+		return x.CapDrop
+	}
+	return nil
+}
+
+func (x *InspectContainerResult) GetNoNewPrivileges() bool {
+	if x != nil {
+		return x.NoNewPrivileges
+	}
+	return false
+}
+
+func (x *InspectContainerResult) GetMemoryBytes() int64 {
+	if x != nil {
+		return x.MemoryBytes
+	}
+	return 0
+}
+
+func (x *InspectContainerResult) GetNanoCpus() int64 {
+	if x != nil {
+		return x.NanoCpus
+	}
+	return 0
+}
+
+func (x *InspectContainerResult) GetPidsLimit() int64 {
+	if x != nil {
+		return x.PidsLimit
+	}
+	return 0
+}
+
+func (x *InspectContainerResult) GetShmSizeBytes() int64 {
+	if x != nil {
+		return x.ShmSizeBytes
+	}
+	return 0
+}
+
+func (x *InspectContainerResult) GetHardeningObserved() bool {
+	if x != nil {
+		return x.HardeningObserved
+	}
+	return false
 }
 
 type PruneImages struct {
@@ -8884,6 +8972,60 @@ func (x *WorkloadLogsResult) GetTruncated() bool {
 	return false
 }
 
+// Appended to preserve the declaration indices of every pre-minor-34 wire
+// type in generated code. References above may point forward in protobuf.
+type ContainerRuntimeIdentity struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Uid           int64                  `protobuf:"varint,1,opt,name=uid,proto3" json:"uid,omitempty"`
+	Gid           *int64                 `protobuf:"varint,2,opt,name=gid,proto3,oneof" json:"gid,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ContainerRuntimeIdentity) Reset() {
+	*x = ContainerRuntimeIdentity{}
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[111]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ContainerRuntimeIdentity) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ContainerRuntimeIdentity) ProtoMessage() {}
+
+func (x *ContainerRuntimeIdentity) ProtoReflect() protoreflect.Message {
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[111]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ContainerRuntimeIdentity.ProtoReflect.Descriptor instead.
+func (*ContainerRuntimeIdentity) Descriptor() ([]byte, []int) {
+	return file_wardstone_v1_wardstone_proto_rawDescGZIP(), []int{111}
+}
+
+func (x *ContainerRuntimeIdentity) GetUid() int64 {
+	if x != nil {
+		return x.Uid
+	}
+	return 0
+}
+
+func (x *ContainerRuntimeIdentity) GetGid() int64 {
+	if x != nil && x.Gid != nil {
+		return *x.Gid
+	}
+	return 0
+}
+
 var File_wardstone_v1_wardstone_proto protoreflect.FileDescriptor
 
 const file_wardstone_v1_wardstone_proto_rawDesc = "" +
@@ -9024,7 +9166,7 @@ const file_wardstone_v1_wardstone_proto_rawDesc = "" +
 	"\x06result\"P\n" +
 	"\aOpError\x12+\n" +
 	"\x04code\x18\x01 \x01(\x0e2\x17.wardstone.v1.ErrorCodeR\x04code\x12\x18\n" +
-	"\amessage\x18\x02 \x01(\tR\amessage\"\xea\x06\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\"\xbd\a\n" +
 	"\x0fEnsureContainer\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
 	"\x05image\x18\x02 \x01(\tR\x05image\x128\n" +
@@ -9044,7 +9186,8 @@ const file_wardstone_v1_wardstone_proto_rawDesc = "" +
 	"\x11no_new_privileges\x18\x0f \x01(\bR\x0fnoNewPrivileges\x12>\n" +
 	"\tresources\x18\x10 \x01(\v2 .wardstone.v1.ContainerResourcesR\tresources\x12\x19\n" +
 	"\bshm_size\x18\x11 \x01(\tR\ashmSize\x12E\n" +
-	"\fnetwork_mode\x18\x12 \x01(\x0e2\".wardstone.v1.ContainerNetworkModeR\vnetworkMode\x1a6\n" +
+	"\fnetwork_mode\x18\x12 \x01(\x0e2\".wardstone.v1.ContainerNetworkModeR\vnetworkMode\x12Q\n" +
+	"\x10runtime_identity\x18\x13 \x01(\v2&.wardstone.v1.ContainerRuntimeIdentityR\x0fruntimeIdentity\x1a6\n" +
 	"\bEnvEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1a9\n" +
@@ -9101,7 +9244,7 @@ const file_wardstone_v1_wardstone_proto_rawDesc = "" +
 	"\x0fmem_usage_bytes\x18\x02 \x01(\x04R\rmemUsageBytes\x12&\n" +
 	"\x0fmem_limit_bytes\x18\x03 \x01(\x04R\rmemLimitBytes\"&\n" +
 	"\x10InspectContainer\x12\x12\n" +
-	"\x04name\x18\x01 \x01(\tR\x04name\"\xe7\x02\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\"\xdf\x05\n" +
 	"\x16InspectContainerResult\x12\x18\n" +
 	"\arunning\x18\x01 \x01(\bR\arunning\x12\x14\n" +
 	"\x05image\x18\x02 \x01(\tR\x05image\x12H\n" +
@@ -9111,7 +9254,18 @@ const file_wardstone_v1_wardstone_proto_rawDesc = "" +
 	"\n" +
 	"app_health\x18\x06 \x01(\tR\tappHealth\x12!\n" +
 	"\fip_addresses\x18\a \x03(\tR\vipAddresses\x12!\n" +
-	"\fnetwork_mode\x18\b \x01(\tR\vnetworkMode\x1a9\n" +
+	"\fnetwork_mode\x18\b \x01(\tR\vnetworkMode\x12Q\n" +
+	"\x10runtime_identity\x18\t \x01(\v2&.wardstone.v1.ContainerRuntimeIdentityR\x0fruntimeIdentity\x12(\n" +
+	"\x10read_only_rootfs\x18\n" +
+	" \x01(\bR\x0ereadOnlyRootfs\x12\x19\n" +
+	"\bcap_drop\x18\v \x03(\tR\acapDrop\x12*\n" +
+	"\x11no_new_privileges\x18\f \x01(\bR\x0fnoNewPrivileges\x12!\n" +
+	"\fmemory_bytes\x18\r \x01(\x03R\vmemoryBytes\x12\x1b\n" +
+	"\tnano_cpus\x18\x0e \x01(\x03R\bnanoCpus\x12\x1d\n" +
+	"\n" +
+	"pids_limit\x18\x0f \x01(\x03R\tpidsLimit\x12$\n" +
+	"\x0eshm_size_bytes\x18\x10 \x01(\x03R\fshmSizeBytes\x12-\n" +
+	"\x12hardening_observed\x18\x11 \x01(\bR\x11hardeningObserved\x1a9\n" +
 	"\vLabelsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\r\n" +
@@ -9485,7 +9639,11 @@ const file_wardstone_v1_wardstone_proto_rawDesc = "" +
 	"limitBytes\"F\n" +
 	"\x12WorkloadLogsResult\x12\x12\n" +
 	"\x04logs\x18\x01 \x01(\fR\x04logs\x12\x1c\n" +
-	"\ttruncated\x18\x02 \x01(\bR\ttruncated*\xa8\x01\n" +
+	"\ttruncated\x18\x02 \x01(\bR\ttruncated\"K\n" +
+	"\x18ContainerRuntimeIdentity\x12\x10\n" +
+	"\x03uid\x18\x01 \x01(\x03R\x03uid\x12\x15\n" +
+	"\x03gid\x18\x02 \x01(\x03H\x00R\x03gid\x88\x01\x01B\x06\n" +
+	"\x04_gid*\xa8\x01\n" +
 	"\tErrorCode\x12\x1a\n" +
 	"\x16ERROR_CODE_UNSPECIFIED\x10\x00\x12\x16\n" +
 	"\x12ERROR_CODE_INVALID\x10\x01\x12\x18\n" +
@@ -9541,7 +9699,7 @@ func file_wardstone_v1_wardstone_proto_rawDescGZIP() []byte {
 }
 
 var file_wardstone_v1_wardstone_proto_enumTypes = make([]protoimpl.EnumInfo, 7)
-var file_wardstone_v1_wardstone_proto_msgTypes = make([]protoimpl.MessageInfo, 116)
+var file_wardstone_v1_wardstone_proto_msgTypes = make([]protoimpl.MessageInfo, 117)
 var file_wardstone_v1_wardstone_proto_goTypes = []any{
 	(ErrorCode)(0),                        // 0: wardstone.v1.ErrorCode
 	(ContainerNetworkMode)(0),             // 1: wardstone.v1.ContainerNetworkMode
@@ -9661,11 +9819,12 @@ var file_wardstone_v1_wardstone_proto_goTypes = []any{
 	(*ObserveWorkloadResult)(nil),         // 115: wardstone.v1.ObserveWorkloadResult
 	(*WorkloadLogs)(nil),                  // 116: wardstone.v1.WorkloadLogs
 	(*WorkloadLogsResult)(nil),            // 117: wardstone.v1.WorkloadLogsResult
-	nil,                                   // 118: wardstone.v1.EnsureContainer.EnvEntry
-	nil,                                   // 119: wardstone.v1.EnsureContainer.LabelsEntry
-	nil,                                   // 120: wardstone.v1.InspectContainerResult.LabelsEntry
-	nil,                                   // 121: wardstone.v1.WorkloadSpec.EnvEntry
-	nil,                                   // 122: wardstone.v1.WorkloadSpec.NodeSelectorEntry
+	(*ContainerRuntimeIdentity)(nil),      // 118: wardstone.v1.ContainerRuntimeIdentity
+	nil,                                   // 119: wardstone.v1.EnsureContainer.EnvEntry
+	nil,                                   // 120: wardstone.v1.EnsureContainer.LabelsEntry
+	nil,                                   // 121: wardstone.v1.InspectContainerResult.LabelsEntry
+	nil,                                   // 122: wardstone.v1.WorkloadSpec.EnvEntry
+	nil,                                   // 123: wardstone.v1.WorkloadSpec.NodeSelectorEntry
 }
 var file_wardstone_v1_wardstone_proto_depIdxs = []int32{
 	12,  // 0: wardstone.v1.AgentMessage.hello:type_name -> wardstone.v1.Hello
@@ -9757,49 +9916,51 @@ var file_wardstone_v1_wardstone_proto_depIdxs = []int32{
 	115, // 86: wardstone.v1.OpResult.observe_workload:type_name -> wardstone.v1.ObserveWorkloadResult
 	117, // 87: wardstone.v1.OpResult.workload_logs:type_name -> wardstone.v1.WorkloadLogsResult
 	0,   // 88: wardstone.v1.OpError.code:type_name -> wardstone.v1.ErrorCode
-	118, // 89: wardstone.v1.EnsureContainer.env:type_name -> wardstone.v1.EnsureContainer.EnvEntry
+	119, // 89: wardstone.v1.EnsureContainer.env:type_name -> wardstone.v1.EnsureContainer.EnvEntry
 	19,  // 90: wardstone.v1.EnsureContainer.ports:type_name -> wardstone.v1.PortBinding
 	21,  // 91: wardstone.v1.EnsureContainer.mounts:type_name -> wardstone.v1.Mount
-	119, // 92: wardstone.v1.EnsureContainer.labels:type_name -> wardstone.v1.EnsureContainer.LabelsEntry
+	120, // 92: wardstone.v1.EnsureContainer.labels:type_name -> wardstone.v1.EnsureContainer.LabelsEntry
 	20,  // 93: wardstone.v1.EnsureContainer.devices:type_name -> wardstone.v1.DeviceMapping
 	18,  // 94: wardstone.v1.EnsureContainer.resources:type_name -> wardstone.v1.ContainerResources
 	1,   // 95: wardstone.v1.EnsureContainer.network_mode:type_name -> wardstone.v1.ContainerNetworkMode
-	2,   // 96: wardstone.v1.PortBinding.protocol:type_name -> wardstone.v1.PortProtocol
-	120, // 97: wardstone.v1.InspectContainerResult.labels:type_name -> wardstone.v1.InspectContainerResult.LabelsEntry
-	62,  // 98: wardstone.v1.ListBlockDevicesResult.devices:type_name -> wardstone.v1.BlockDevice
-	71,  // 99: wardstone.v1.ListPortsResult.ports:type_name -> wardstone.v1.ListeningPort
-	3,   // 100: wardstone.v1.EnsureSecret.kind:type_name -> wardstone.v1.SecretKind
-	88,  // 101: wardstone.v1.ListSecretsResult.secrets:type_name -> wardstone.v1.SecretInfo
-	4,   // 102: wardstone.v1.Radio.kind:type_name -> wardstone.v1.RadioKind
-	97,  // 103: wardstone.v1.ListRadiosResult.radios:type_name -> wardstone.v1.Radio
-	5,   // 104: wardstone.v1.ReadinessCheck.state:type_name -> wardstone.v1.ReadinessState
-	101, // 105: wardstone.v1.HomeAutomationReadinessResult.interfaces:type_name -> wardstone.v1.NodeInterface
-	100, // 106: wardstone.v1.HomeAutomationReadinessResult.checks:type_name -> wardstone.v1.ReadinessCheck
-	2,   // 107: wardstone.v1.WorkloadPort.protocol:type_name -> wardstone.v1.PortProtocol
-	121, // 108: wardstone.v1.WorkloadSpec.env:type_name -> wardstone.v1.WorkloadSpec.EnvEntry
-	106, // 109: wardstone.v1.WorkloadSpec.ports:type_name -> wardstone.v1.WorkloadPort
-	18,  // 110: wardstone.v1.WorkloadSpec.resources:type_name -> wardstone.v1.ContainerResources
-	107, // 111: wardstone.v1.WorkloadSpec.security:type_name -> wardstone.v1.WorkloadSecurity
-	6,   // 112: wardstone.v1.WorkloadSpec.strategy:type_name -> wardstone.v1.WorkloadStrategy
-	122, // 113: wardstone.v1.WorkloadSpec.node_selector:type_name -> wardstone.v1.WorkloadSpec.NodeSelectorEntry
-	105, // 114: wardstone.v1.ApplyWorkload.authority:type_name -> wardstone.v1.WorkloadAuthority
-	108, // 115: wardstone.v1.ApplyWorkload.workload:type_name -> wardstone.v1.WorkloadSpec
-	105, // 116: wardstone.v1.DeleteWorkload.authority:type_name -> wardstone.v1.WorkloadAuthority
-	108, // 117: wardstone.v1.ObserveWorkload.desired:type_name -> wardstone.v1.WorkloadSpec
-	114, // 118: wardstone.v1.ObserveWorkloadResult.conditions:type_name -> wardstone.v1.WorkloadCondition
-	7,   // 119: wardstone.v1.KeystoneGateway.Join:input_type -> wardstone.v1.JoinRequest
-	11,  // 120: wardstone.v1.KeystoneGateway.Session:input_type -> wardstone.v1.AgentMessage
-	9,   // 121: wardstone.v1.KeystoneGateway.Renew:input_type -> wardstone.v1.RenewRequest
-	103, // 122: wardstone.v1.KeystoneGateway.IssueLeaderEpoch:input_type -> wardstone.v1.IssueLeaderEpochRequest
-	8,   // 123: wardstone.v1.KeystoneGateway.Join:output_type -> wardstone.v1.JoinResponse
-	13,  // 124: wardstone.v1.KeystoneGateway.Session:output_type -> wardstone.v1.KeystoneMessage
-	10,  // 125: wardstone.v1.KeystoneGateway.Renew:output_type -> wardstone.v1.RenewResponse
-	104, // 126: wardstone.v1.KeystoneGateway.IssueLeaderEpoch:output_type -> wardstone.v1.IssueLeaderEpochResponse
-	123, // [123:127] is the sub-list for method output_type
-	119, // [119:123] is the sub-list for method input_type
-	119, // [119:119] is the sub-list for extension type_name
-	119, // [119:119] is the sub-list for extension extendee
-	0,   // [0:119] is the sub-list for field type_name
+	118, // 96: wardstone.v1.EnsureContainer.runtime_identity:type_name -> wardstone.v1.ContainerRuntimeIdentity
+	2,   // 97: wardstone.v1.PortBinding.protocol:type_name -> wardstone.v1.PortProtocol
+	121, // 98: wardstone.v1.InspectContainerResult.labels:type_name -> wardstone.v1.InspectContainerResult.LabelsEntry
+	118, // 99: wardstone.v1.InspectContainerResult.runtime_identity:type_name -> wardstone.v1.ContainerRuntimeIdentity
+	62,  // 100: wardstone.v1.ListBlockDevicesResult.devices:type_name -> wardstone.v1.BlockDevice
+	71,  // 101: wardstone.v1.ListPortsResult.ports:type_name -> wardstone.v1.ListeningPort
+	3,   // 102: wardstone.v1.EnsureSecret.kind:type_name -> wardstone.v1.SecretKind
+	88,  // 103: wardstone.v1.ListSecretsResult.secrets:type_name -> wardstone.v1.SecretInfo
+	4,   // 104: wardstone.v1.Radio.kind:type_name -> wardstone.v1.RadioKind
+	97,  // 105: wardstone.v1.ListRadiosResult.radios:type_name -> wardstone.v1.Radio
+	5,   // 106: wardstone.v1.ReadinessCheck.state:type_name -> wardstone.v1.ReadinessState
+	101, // 107: wardstone.v1.HomeAutomationReadinessResult.interfaces:type_name -> wardstone.v1.NodeInterface
+	100, // 108: wardstone.v1.HomeAutomationReadinessResult.checks:type_name -> wardstone.v1.ReadinessCheck
+	2,   // 109: wardstone.v1.WorkloadPort.protocol:type_name -> wardstone.v1.PortProtocol
+	122, // 110: wardstone.v1.WorkloadSpec.env:type_name -> wardstone.v1.WorkloadSpec.EnvEntry
+	106, // 111: wardstone.v1.WorkloadSpec.ports:type_name -> wardstone.v1.WorkloadPort
+	18,  // 112: wardstone.v1.WorkloadSpec.resources:type_name -> wardstone.v1.ContainerResources
+	107, // 113: wardstone.v1.WorkloadSpec.security:type_name -> wardstone.v1.WorkloadSecurity
+	6,   // 114: wardstone.v1.WorkloadSpec.strategy:type_name -> wardstone.v1.WorkloadStrategy
+	123, // 115: wardstone.v1.WorkloadSpec.node_selector:type_name -> wardstone.v1.WorkloadSpec.NodeSelectorEntry
+	105, // 116: wardstone.v1.ApplyWorkload.authority:type_name -> wardstone.v1.WorkloadAuthority
+	108, // 117: wardstone.v1.ApplyWorkload.workload:type_name -> wardstone.v1.WorkloadSpec
+	105, // 118: wardstone.v1.DeleteWorkload.authority:type_name -> wardstone.v1.WorkloadAuthority
+	108, // 119: wardstone.v1.ObserveWorkload.desired:type_name -> wardstone.v1.WorkloadSpec
+	114, // 120: wardstone.v1.ObserveWorkloadResult.conditions:type_name -> wardstone.v1.WorkloadCondition
+	7,   // 121: wardstone.v1.KeystoneGateway.Join:input_type -> wardstone.v1.JoinRequest
+	11,  // 122: wardstone.v1.KeystoneGateway.Session:input_type -> wardstone.v1.AgentMessage
+	9,   // 123: wardstone.v1.KeystoneGateway.Renew:input_type -> wardstone.v1.RenewRequest
+	103, // 124: wardstone.v1.KeystoneGateway.IssueLeaderEpoch:input_type -> wardstone.v1.IssueLeaderEpochRequest
+	8,   // 125: wardstone.v1.KeystoneGateway.Join:output_type -> wardstone.v1.JoinResponse
+	13,  // 126: wardstone.v1.KeystoneGateway.Session:output_type -> wardstone.v1.KeystoneMessage
+	10,  // 127: wardstone.v1.KeystoneGateway.Renew:output_type -> wardstone.v1.RenewResponse
+	104, // 128: wardstone.v1.KeystoneGateway.IssueLeaderEpoch:output_type -> wardstone.v1.IssueLeaderEpochResponse
+	125, // [125:129] is the sub-list for method output_type
+	121, // [121:125] is the sub-list for method input_type
+	121, // [121:121] is the sub-list for extension type_name
+	121, // [121:121] is the sub-list for extension extendee
+	0,   // [0:121] is the sub-list for field type_name
 }
 
 func init() { file_wardstone_v1_wardstone_proto_init() }
@@ -9900,13 +10061,14 @@ func file_wardstone_v1_wardstone_proto_init() {
 		(*OpResult_ObserveWorkload)(nil),
 		(*OpResult_WorkloadLogs)(nil),
 	}
+	file_wardstone_v1_wardstone_proto_msgTypes[111].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_wardstone_v1_wardstone_proto_rawDesc), len(file_wardstone_v1_wardstone_proto_rawDesc)),
 			NumEnums:      7,
-			NumMessages:   116,
+			NumMessages:   117,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

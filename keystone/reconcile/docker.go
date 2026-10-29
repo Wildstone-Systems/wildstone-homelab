@@ -91,6 +91,10 @@ func (dockerTranslator) ensureContainer(name string, spec *resource.ContainerSpe
 	if r := spec.Resources; r != nil {
 		resources = &wsv1.ContainerResources{Memory: r.Memory, Cpus: r.Cpus, PidsLimit: int64(r.PidsLimit)}
 	}
+	var runtimeIdentity *wsv1.ContainerRuntimeIdentity
+	if id := spec.RuntimeIdentity; id != nil {
+		runtimeIdentity = &wsv1.ContainerRuntimeIdentity{Uid: id.UID, Gid: id.GID}
+	}
 	// Host networking (protocol minor 23): refuseIfAgentTooOld keeps a
 	// host-mode spec away from an agent that would ignore this and start
 	// the container on the bridge instead.
@@ -110,6 +114,7 @@ func (dockerTranslator) ensureContainer(name string, spec *resource.ContainerSpe
 		NoNewPrivileges: spec.NoNewPrivileges,
 		Resources:       resources,
 		ShmSize:         spec.ShmSize,
+		RuntimeIdentity: runtimeIdentity,
 		NetworkMode:     networkMode,
 		Labels:          map[string]string{specHashLabel: specHash(spec, network, cfgDigest, aliases)},
 	}}}

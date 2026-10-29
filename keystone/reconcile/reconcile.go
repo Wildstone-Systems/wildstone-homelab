@@ -1056,12 +1056,109 @@ func (r *Reconciler) observeContainer(ctx context.Context, nodeID string, k resK
 	// verdict turns out to be: a converged container whose app says
 	// "unhealthy" is exactly the case this exists to make visible.
 	appHealth := inspect.GetAppHealth()
-	if inspect.GetLabels()[specHashLabel] == specHash(want.Container, containerNetworkFor(want.Container), configDigest(r.ManagedPrefix, want.Container, cfgContents), hostAliases) && inspect.GetRunning() {
+	if inspect.GetLabels()[specHashLabel] == specHash(want.Container, containerNetworkFor(want.Container), configDigest(r.ManagedPrefix, want.Container, cfgContents), hostAliases) &&
+		containerHardeningMatches(want.Container, inspect) && inspect.GetRunning() {
 		return &containerObserveResult{appHealth: appHealth}, want, nil
 	}
 	// Present but stale (spec drifted, or a pre-spec-hash container) or
 	// stopped: plan an Update.
 	return &containerObserveResult{appHealth: appHealth}, placeholderResource(resource.KindContainer, k.Name), nil
+}
+
+// containerHardeningMatches compares fields that desired state explicitly
+// manages against protocol-minor-34 Docker readback. Older agents leave
+// hardening_observed false; existing pre-34 hardening specs retain their label
+// behavior, while a new runtimeIdentity still fails closed because an older
+// agent cannot possibly have applied it.
+func containerHardeningMatches(want *resource.ContainerSpec, got *wsv1.InspectContainerResult) bool {
+	if want == nil {
+		return true
+	}
+	if !got.GetHardeningObserved() {
+		return want.RuntimeIdentity == nil
+	}
+	if id := want.RuntimeIdentity; id != nil {
+		observed := got.GetRuntimeIdentity()
+		if observed == nil || observed.GetUid() != id.UID || (observed.Gid == nil) != (id.GID == nil) {
+			return false
+		}
+		if id.GID != nil && observed.GetGid() != *id.GID {
+			return false
+		}
+	}
+	if want.ReadOnlyRootfs && !got.GetReadOnlyRootfs() {
+		return false
+	}
+	if want.NoNewPrivileges && !got.GetNoNewPrivileges() {
+		return false
+	}
+	if len(want.CapDrop) > 0 && !sameStrings(want.CapDrop, got.GetCapDrop()) {
+		return false
+	}
+	if res := want.Resources; res != nil {
+		if res.Memory != "" {
+			v, ok := desiredDockerBytes(res.Memory)
+			if !ok || got.GetMemoryBytes() != v {
+				return false
+			}
+		}
+		if res.Cpus != "" {
+			v, err := strconv.ParseFloat(res.Cpus, 64)
+			if err != nil || got.GetNanoCpus() != int64(v*1e9) {
+				return false
+			}
+		}
+		if res.PidsLimit > 0 && got.GetPidsLimit() != int64(res.PidsLimit) {
+			return false
+		}
+	}
+	if want.ShmSize != "" {
+		v, ok := desiredDockerBytes(want.ShmSize)
+		if !ok || got.GetShmSizeBytes() != v {
+			return false
+		}
+	}
+	return true
+}
+
+func sameStrings(want, got []string) bool {
+	if len(want) != len(got) {
+		return false
+	}
+	counts := make(map[string]int, len(want))
+	for _, v := range want {
+		counts[v]++
+	}
+	for _, v := range got {
+		counts[v]--
+		if counts[v] < 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func desiredDockerBytes(value string) (int64, bool) {
+	if value == "" {
+		return 0, true
+	}
+	multiplier := int64(1)
+	number := value
+	switch value[len(value)-1] {
+	case 'b', 'B':
+		number = value[:len(value)-1]
+	case 'k', 'K':
+		number, multiplier = value[:len(value)-1], 1<<10
+	case 'm', 'M':
+		number, multiplier = value[:len(value)-1], 1<<20
+	case 'g', 'G':
+		number, multiplier = value[:len(value)-1], 1<<30
+	}
+	n, err := strconv.ParseInt(number, 10, 64)
+	if err != nil || n <= 0 || n > (1<<63-1)/multiplier {
+		return 0, false
+	}
+	return n * multiplier, true
 }
 
 // observeContainerPresence is the pre-R2c presence-only observe, kept as
@@ -1862,6 +1959,12 @@ func (r *Reconciler) refuseIfAgentTooOld(nodeID string, step plan.PlanStep, spec
 	have, known := r.AgentProtocolMinor(nodeID)
 	if !known || have >= need {
 		return ""
+	}
+	if spec.RuntimeIdentity != nil {
+		return fmt.Sprintf("%s/%s needs wardstone protocol minor %d (numeric runtimeIdentity) and the agent on node %s "+
+			"speaks minor %d: upgrade wardstoned there first. An older agent would silently use the image-default user, "+
+			"so it is refused before the existing container is touched",
+			step.Kind, step.Name, need, nodeID, have)
 	}
 	if need >= resource.HostSystemMountProtocolMinor {
 		return fmt.Sprintf("%s/%s needs wardstone protocol minor %d (a read-only mount of the host's /run/dbus, for "+

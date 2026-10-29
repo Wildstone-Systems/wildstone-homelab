@@ -49,6 +49,11 @@ export interface ContainerResources {
   pidsLimit?: number;
 }
 
+export interface ContainerRuntimeIdentity {
+  uid: number;
+  gid?: number;
+}
+
 export interface ContainerSpec {
   backend?: string;
   image: string;
@@ -65,6 +70,7 @@ export interface ContainerSpec {
   noNewPrivileges?: boolean;
   resources?: ContainerResources;
   shmSize?: string;
+  runtimeIdentity?: ContainerRuntimeIdentity;
   networkMode?: string;
 }
 

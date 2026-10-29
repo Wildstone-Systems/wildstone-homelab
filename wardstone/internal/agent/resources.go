@@ -7,6 +7,104 @@ import (
 	wsv1 "github.com/Wildstone-Systems/wildstone-homelab/proto/gen/wardstone/v1"
 )
 
+func runtimeIdentityToDockerUser(id *wsv1.ContainerRuntimeIdentity) (string, *wsv1.OpError) {
+	if id == nil {
+		return "", nil
+	}
+	const maxRuntimeID = int64(1<<32 - 1)
+	if id.GetUid() < 0 || id.GetUid() > maxRuntimeID {
+		return "", opErr(wsv1.ErrorCode_ERROR_CODE_INVALID, "runtime identity uid %d must be between 0 and %d", id.GetUid(), maxRuntimeID)
+	}
+	user := strconv.FormatInt(id.GetUid(), 10)
+	if id.Gid != nil {
+		if id.GetGid() < 0 || id.GetGid() > maxRuntimeID {
+			return "", opErr(wsv1.ErrorCode_ERROR_CODE_INVALID, "runtime identity gid %d must be between 0 and %d", id.GetGid(), maxRuntimeID)
+		}
+		user += ":" + strconv.FormatInt(id.GetGid(), 10)
+	}
+	return user, nil
+}
+
+// parseDockerRuntimeIdentity accepts only the numeric form Wildstone writes.
+// A nil result for an image-defined name is intentional: when desired state
+// pins a numeric identity it will compare unequal, while an omitted identity
+// leaves the image default unmanaged.
+func parseDockerRuntimeIdentity(user string) *wsv1.ContainerRuntimeIdentity {
+	if user == "" {
+		return nil
+	}
+	parts := strings.Split(user, ":")
+	if len(parts) > 2 || parts[0] == "" {
+		return nil
+	}
+	uid, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil || uid < 0 || uid > 1<<32-1 {
+		return nil
+	}
+	id := &wsv1.ContainerRuntimeIdentity{Uid: uid}
+	if len(parts) == 2 {
+		gid, err := strconv.ParseInt(parts[1], 10, 64)
+		if err != nil || gid < 0 || gid > 1<<32-1 {
+			return nil
+		}
+		id.Gid = &gid
+	}
+	return id
+}
+
+func hasNoNewPrivileges(opts []string) bool {
+	for _, opt := range opts {
+		if opt == "no-new-privileges" || opt == "no-new-privileges:true" {
+			return true
+		}
+	}
+	return false
+}
+
+func managedHardeningMatches(ci *containerInspect, op *wsv1.EnsureContainer, runtimeUser string, memoryBytes, nanoCPUs, pidsLimit, shmBytes int64) bool {
+	if op.GetRuntimeIdentity() != nil && ci.Config.User != runtimeUser {
+		return false
+	}
+	if op.GetReadOnlyRootfs() && !ci.HostConfig.ReadonlyRootfs {
+		return false
+	}
+	if op.GetNoNewPrivileges() && !hasNoNewPrivileges(ci.HostConfig.SecurityOpt) {
+		return false
+	}
+	if len(op.GetCapDrop()) > 0 && !sameStringSet(op.GetCapDrop(), ci.HostConfig.CapDrop) {
+		return false
+	}
+	if res := op.GetResources(); res != nil {
+		if res.GetMemory() != "" && ci.HostConfig.Memory != memoryBytes {
+			return false
+		}
+		if res.GetCpus() != "" && ci.HostConfig.NanoCpus != nanoCPUs {
+			return false
+		}
+		if res.GetPidsLimit() > 0 && ci.HostConfig.PidsLimit != pidsLimit {
+			return false
+		}
+	}
+	return op.GetShmSize() == "" || ci.HostConfig.ShmSize == shmBytes
+}
+
+func sameStringSet(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	counts := make(map[string]int, len(a))
+	for _, value := range a {
+		counts[value]++
+	}
+	for _, value := range b {
+		counts[value]--
+		if counts[value] < 0 {
+			return false
+		}
+	}
+	return true
+}
+
 // The H1 hardening fields (ADR-W039 Phase 6, protocol minor 18) narrow a
 // container rather than widen it, which is why they carry no allowlist
 // the way devices.go's do — the concern there is a package granting

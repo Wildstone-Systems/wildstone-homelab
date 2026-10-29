@@ -143,6 +143,7 @@ func TestRequiredProtocolMinor(t *testing.T) {
 		"hardening+device": {ContainerSpec{Image: "x", ReadOnlyRootfs: true, Devices: []DeviceMapping{{Source: "/dev/net/tun"}}}, HardeningProtocolMinor},
 		"hostNetwork":      {ContainerSpec{Image: "x", NetworkMode: NetworkModeHost}, HostNetworkProtocolMinor},
 		"host+hardening":   {ContainerSpec{Image: "x", NetworkMode: NetworkModeHost, ReadOnlyRootfs: true, CapAdd: []string{"NET_RAW"}}, HostNetworkProtocolMinor},
+		"runtimeIdentity":  {ContainerSpec{Image: "x", RuntimeIdentity: &ContainerRuntimeIdentity{UID: 1000}}, RuntimeIdentityProtocolMinor},
 		"host+dbus": {ContainerSpec{Image: "x", NetworkMode: NetworkModeHost, CapAdd: []string{"NET_ADMIN", "NET_RAW"},
 			Mounts: []Mount{{Source: "cfg", Target: "/config"}, {Source: "/run/dbus", Target: "/run/dbus", ReadOnly: true}}}, HostSystemMountProtocolMinor},
 		"volume only": {ContainerSpec{Image: "x", Mounts: []Mount{{Source: "cfg", Target: "/config"}}}, 0},
@@ -185,11 +186,66 @@ func TestContainerHardeningFieldsAreValidated(t *testing.T) {
 		"cpus negative":             func(s *ContainerSpec) { s.Resources = &ContainerResources{Cpus: "-1"} },
 		"pidsLimit negative":        func(s *ContainerSpec) { s.Resources = &ContainerResources{PidsLimit: -1} },
 		"shmSize not a size string": func(s *ContainerSpec) { s.ShmSize = "huge" },
+		"runtime uid negative":      func(s *ContainerSpec) { s.RuntimeIdentity = &ContainerRuntimeIdentity{UID: -1} },
+		"runtime uid too large":     func(s *ContainerSpec) { s.RuntimeIdentity = &ContainerRuntimeIdentity{UID: 1 << 32} },
+		"runtime identity on k3s": func(s *ContainerSpec) {
+			s.Backend = "k3s"
+			s.RuntimeIdentity = &ContainerRuntimeIdentity{UID: 1000}
+		},
+		"runtime gid negative": func(s *ContainerSpec) {
+			gid := int64(-1)
+			s.RuntimeIdentity = &ContainerRuntimeIdentity{UID: 1000, GID: &gid}
+		},
 	} {
 		if err := containerWith(mutate).Validate(); err == nil {
 			t.Errorf("%s: accepted", name)
 		}
 	}
+}
+
+func TestContainerRuntimeIdentityYAMLAndHashShape(t *testing.T) {
+	r, err := Unmarshal([]byte(`
+apiVersion: wildstone.dev/v1
+kind: Container
+metadata:
+  name: app
+  owner: capability/example
+  node: node-a
+spec:
+  image: ghcr.io/example/app@sha256:` + strings.Repeat("a", 64) + `
+  runtimeIdentity:
+    uid: 1000
+    gid: 1001
+`))
+	if err != nil || r.Container.RuntimeIdentity == nil || r.Container.RuntimeIdentity.GID == nil {
+		t.Fatalf("numeric runtime identity did not decode: resource=%+v err=%v", r, err)
+	}
+	if err := r.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	plain, _ := json.Marshal(&ContainerSpec{Image: "x"})
+	if strings.Contains(string(plain), "runtimeIdentity") {
+		t.Fatalf("omitted runtime identity changed hashed JSON: %s", plain)
+	}
+	withIdentity, _ := json.Marshal(r.Container)
+	if !strings.Contains(string(withIdentity), `"runtimeIdentity":{"uid":1000,"gid":1001}`) {
+		t.Fatalf("runtime identity missing from hashed JSON: %s", withIdentity)
+	}
+	for _, value := range []string{"-1", "service-account"} {
+		doc := strings.Replace(string(mustMarshalResource(t, r)), "uid: 1000", "uid: "+value, 1)
+		if parsed, err := Unmarshal([]byte(doc)); err == nil && parsed.Validate() == nil {
+			t.Errorf("uid %q was accepted", value)
+		}
+	}
+}
+
+func mustMarshalResource(t *testing.T, r Resource) []byte {
+	t.Helper()
+	b, err := Marshal(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
 }
 
 // TestContainerHardeningFieldsAbsentDoNotChangeValidation: the H1 fields

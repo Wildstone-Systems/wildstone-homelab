@@ -179,7 +179,10 @@ import (
 // 33: ObserveWorkload returns the approved Plan id and step digest stamped on
 // the object supplying its revision witness, so partial Create recovery does
 // not depend on the latest whole-Statefile revision.
-const ProtocolMinor = 33
+// 34: EnsureContainer carries a numeric runtime identity and
+// InspectContainer returns authoritative identity/hardening metadata so an
+// unchanged spec-hash label cannot hide out-of-band Docker drift.
+const ProtocolMinor = 34
 
 // maxUpdateMsgBytes is the gRPC message size cap on both ends of the
 // session/join connections (ADR-W003 W5). SelfUpdate ships the new binary

@@ -18,6 +18,7 @@ import (
 type fakeContainer struct {
 	id      string
 	image   string
+	user    string
 	labels  map[string]string
 	env     []string
 	running bool
@@ -158,6 +159,7 @@ func (f *fakeDocker) handle(w http.ResponseWriter, r *http.Request) {
 		}
 		var body struct {
 			Image            string              `json:"Image"`
+			User             string              `json:"User"`
 			Labels           map[string]string   `json:"Labels"`
 			Env              []string            `json:"Env"`
 			ExposedPorts     map[string]struct{} `json:"ExposedPorts"`
@@ -177,7 +179,7 @@ func (f *fakeDocker) handle(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		f.seq++
-		c := &fakeContainer{id: fmt.Sprintf("cid-%d", f.seq), image: body.Image, labels: body.Labels, env: body.Env, networks: nets, host: body.HostConfig, exposedPorts: body.ExposedPorts}
+		c := &fakeContainer{id: fmt.Sprintf("cid-%d", f.seq), image: body.Image, user: body.User, labels: body.Labels, env: body.Env, networks: nets, host: body.HostConfig, exposedPorts: body.ExposedPorts}
 		f.containers[name] = c
 		w.WriteHeader(http.StatusCreated)
 		json.NewEncoder(w).Encode(map[string]string{"Id": c.id})
@@ -285,6 +287,8 @@ func (f *fakeDocker) handle(w http.ResponseWriter, r *http.Request) {
 	}
 	switch {
 	case m[3] == "json":
+		host := c.host
+		host.NetworkMode = c.dockerNetworkMode()
 		livePorts := map[string][]portBinding{}
 		if c.running && !c.suppressPorts {
 			for port, bindings := range c.host.PortBindings {
@@ -298,9 +302,10 @@ func (f *fakeDocker) handle(w http.ResponseWriter, r *http.Request) {
 			"State": map[string]any{"Running": c.running, "Status": c.dockerStatus(), "ExitCode": c.exitCode},
 			"Config": map[string]any{
 				"Image":  c.image,
+				"User":   c.user,
 				"Labels": c.labels,
 			},
-			"HostConfig":      map[string]any{"PortBindings": c.host.PortBindings, "NetworkMode": c.dockerNetworkMode(), "Devices": c.host.Devices},
+			"HostConfig":      host,
 			"NetworkSettings": map[string]any{"Ports": livePorts},
 		})
 	case m[3] == "start" && r.Method == http.MethodPost:

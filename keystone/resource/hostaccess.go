@@ -130,6 +130,12 @@ const HostAccessProtocolMinor = 12
 // cannot honour it, exactly as HostAccessProtocolMinor already is.
 const HardeningProtocolMinor = 18
 
+// RuntimeIdentityProtocolMinor is the first minor that carries a numeric
+// runtime identity and authoritative Docker hardening readback. An older
+// Wardstone would silently start the image-default user, so Keystone must
+// refuse before mutation whenever runtimeIdentity is present.
+const RuntimeIdentityProtocolMinor = 34
+
 // IPCLockProtocolMinor is the wardstone protocol minor whose closed
 // capability allowlist first admits IPC_LOCK. An older agent still
 // refuses it as FORBIDDEN, so a spec asking for it is gated on this
@@ -160,6 +166,9 @@ func (s *ContainerSpec) RequiredProtocolMinor() uint32 {
 	}
 	if s.UsesHostSystemMount() {
 		return HostSystemMountProtocolMinor
+	}
+	if s.RuntimeIdentity != nil {
+		return RuntimeIdentityProtocolMinor
 	}
 	if s.HostNetwork() {
 		return HostNetworkProtocolMinor

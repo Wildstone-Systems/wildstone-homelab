@@ -91,9 +91,11 @@ func TestEnsureContainerCarriesHardeningToDocker(t *testing.T) {
 		t.Fatal("agent never connected")
 	}
 
+	gid := int64(1001)
 	res := dispatch(t, h, "node-a", &wsv1.Operation{Op: &wsv1.Operation_EnsureContainer{
 		EnsureContainer: &wsv1.EnsureContainer{
 			Name: "hermes", Image: testDigestImage,
+			RuntimeIdentity: &wsv1.ContainerRuntimeIdentity{Uid: 1000, Gid: &gid},
 			ReadOnlyRootfs:  true,
 			CapDrop:         []string{"ALL"},
 			NoNewPrivileges: true,
@@ -128,6 +130,15 @@ func TestEnsureContainerCarriesHardeningToDocker(t *testing.T) {
 	if hc.ShmSize != 1<<30 {
 		t.Errorf("ShmSize = %d, want %d", hc.ShmSize, int64(1)<<30)
 	}
+	if got := fake.containers["hermes"].user; got != "1000:1001" {
+		t.Errorf("Docker User = %q, want 1000:1001", got)
+	}
+	inspect := dispatch(t, h, "node-a", &wsv1.Operation{Op: &wsv1.Operation_InspectContainer{InspectContainer: &wsv1.InspectContainer{Name: "hermes"}}}).GetInspectContainer()
+	if !inspect.GetHardeningObserved() || inspect.GetRuntimeIdentity().GetUid() != 1000 || inspect.GetRuntimeIdentity().GetGid() != 1001 ||
+		!inspect.GetReadOnlyRootfs() || !inspect.GetNoNewPrivileges() || inspect.GetMemoryBytes() != 4<<30 ||
+		inspect.GetNanoCpus() != 2_000_000_000 || inspect.GetPidsLimit() != 512 || inspect.GetShmSizeBytes() != 1<<30 {
+		t.Errorf("inspect hardening readback = %+v", inspect)
+	}
 
 	// A malformed resource value fails the op before anything is created,
 	// the same up-front-check discipline devices and capAdd already get.
@@ -145,6 +156,12 @@ func TestEnsureContainerCarriesHardeningToDocker(t *testing.T) {
 	fake.mu.Unlock()
 	if created {
 		t.Error("a container was created despite the malformed resources")
+	}
+	res = dispatch(t, h, "node-a", &wsv1.Operation{Op: &wsv1.Operation_EnsureContainer{EnsureContainer: &wsv1.EnsureContainer{
+		Name: "bad-user", Image: testDigestImage, RuntimeIdentity: &wsv1.ContainerRuntimeIdentity{Uid: -1},
+	}}})
+	if oe := res.GetError(); oe == nil || oe.GetCode() != wsv1.ErrorCode_ERROR_CODE_INVALID {
+		t.Fatalf("negative uid: got %v, want INVALID", res.GetError())
 	}
 }
 
@@ -168,8 +185,81 @@ func TestEnsureContainerHardeningFieldsAreOptional(t *testing.T) {
 	fake.mu.Lock()
 	hc := fake.containers["plain"].host
 	fake.mu.Unlock()
-	if hc.ReadonlyRootfs || len(hc.CapDrop) != 0 || len(hc.SecurityOpt) != 0 ||
+	if fake.containers["plain"].user != "" || hc.ReadonlyRootfs || len(hc.CapDrop) != 0 || len(hc.SecurityOpt) != 0 ||
 		hc.Memory != 0 || hc.NanoCpus != 0 || hc.PidsLimit != 0 || hc.ShmSize != 0 {
 		t.Errorf("a spec with no hardening fields set some anyway: %+v", hc)
+	}
+}
+
+func TestManagedHardeningMatchesEveryConfiguredField(t *testing.T) {
+	gid := int64(1001)
+	op := &wsv1.EnsureContainer{
+		RuntimeIdentity: &wsv1.ContainerRuntimeIdentity{Uid: 1000, Gid: &gid},
+		ReadOnlyRootfs:  true, CapDrop: []string{"ALL"}, NoNewPrivileges: true,
+		Resources: &wsv1.ContainerResources{Memory: "4g", Cpus: "2", PidsLimit: 512}, ShmSize: "1g",
+	}
+	base := func() *containerInspect {
+		ci := &containerInspect{}
+		ci.Config.User = "1000:1001"
+		ci.HostConfig.ReadonlyRootfs = true
+		ci.HostConfig.CapDrop = []string{"ALL"}
+		ci.HostConfig.SecurityOpt = []string{"no-new-privileges:true"}
+		ci.HostConfig.Memory, ci.HostConfig.NanoCpus, ci.HostConfig.PidsLimit, ci.HostConfig.ShmSize = 4<<30, 2_000_000_000, 512, 1<<30
+		return ci
+	}
+	if !managedHardeningMatches(base(), op, "1000:1001", 4<<30, 2_000_000_000, 512, 1<<30) {
+		t.Fatal("matching hardening was reported drifted")
+	}
+	for name, mutate := range map[string]func(*containerInspect){
+		"uid":               func(c *containerInspect) { c.Config.User = "1002:1001" },
+		"gid":               func(c *containerInspect) { c.Config.User = "1000:1002" },
+		"read-only":         func(c *containerInspect) { c.HostConfig.ReadonlyRootfs = false },
+		"cap-drop":          func(c *containerInspect) { c.HostConfig.CapDrop = []string{"NET_RAW"} },
+		"no-new-privileges": func(c *containerInspect) { c.HostConfig.SecurityOpt = nil },
+		"memory":            func(c *containerInspect) { c.HostConfig.Memory-- },
+		"cpu":               func(c *containerInspect) { c.HostConfig.NanoCpus-- },
+		"pids":              func(c *containerInspect) { c.HostConfig.PidsLimit-- },
+		"shm":               func(c *containerInspect) { c.HostConfig.ShmSize-- },
+	} {
+		ci := base()
+		mutate(ci)
+		if managedHardeningMatches(ci, op, "1000:1001", 4<<30, 2_000_000_000, 512, 1<<30) {
+			t.Errorf("%s drift was reported matching", name)
+		}
+	}
+}
+
+func TestEnsureContainerReplacesForgedCurrentHardening(t *testing.T) {
+	fake := newFakeDocker(t)
+	h := startGateway(t, []string{"tok"}, "")
+	newTestAgent(t, h, "node-a", "tok", func(c *Config) { c.DockerEndpoint = fake.URL() })
+	if !h.gw.WaitConnected("node-a", 10*time.Second) {
+		t.Fatal("agent never connected")
+	}
+	op := &wsv1.EnsureContainer{Name: "app", Image: testDigestImage, Labels: map[string]string{SpecHashLabel: "current"}, Resources: &wsv1.ContainerResources{Memory: "4g"}}
+	ensure := func() *wsv1.EnsureContainerResult {
+		res := dispatch(t, h, "node-a", &wsv1.Operation{Op: &wsv1.Operation_EnsureContainer{EnsureContainer: op}})
+		if res.GetError() != nil {
+			t.Fatalf("ensure: %v", res.GetError())
+		}
+		return res.GetEnsureContainer()
+	}
+	if !ensure().GetCreated() {
+		t.Fatal("initial ensure did not create")
+	}
+	fake.mu.Lock()
+	fake.containers["app"].host.Memory = 2 << 30
+	if fake.containers["app"].labels[SpecHashLabel] != "current" {
+		t.Fatal("test did not preserve the current spec hash")
+	}
+	fake.mu.Unlock()
+	if !ensure().GetCreated() {
+		t.Fatal("hardening drift with a current label was not replaced")
+	}
+	fake.mu.Lock()
+	got := fake.containers["app"].host.Memory
+	fake.mu.Unlock()
+	if got != 4<<30 {
+		t.Fatalf("replacement memory = %d, want %d", got, int64(4)<<30)
 	}
 }

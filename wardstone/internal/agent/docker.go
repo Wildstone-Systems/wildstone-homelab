@@ -86,6 +86,7 @@ type containerInspect struct {
 	} `json:"State"`
 	Config struct {
 		Image  string            `json:"Image"`
+		User   string            `json:"User"`
 		Labels map[string]string `json:"Labels"`
 	} `json:"Config"`
 	HostConfig struct {
@@ -96,7 +97,14 @@ type containerInspect struct {
 		// Devices is what Docker will hand the container on its next
 		// start: the RESOLVED host node, fixed when it was created. See
 		// staleDevice for why that can stop matching the stick.
-		Devices []deviceMapping `json:"Devices"`
+		Devices        []deviceMapping `json:"Devices"`
+		ReadonlyRootfs bool            `json:"ReadonlyRootfs"`
+		CapDrop        []string        `json:"CapDrop"`
+		SecurityOpt    []string        `json:"SecurityOpt"`
+		Memory         int64           `json:"Memory"`
+		NanoCpus       int64           `json:"NanoCpus"`
+		PidsLimit      int64           `json:"PidsLimit"`
+		ShmSize        int64           `json:"ShmSize"`
 	} `json:"HostConfig"`
 	// Networks is keyed by Docker network name; a container attached to
 	// several has an address on each. Parsed because Keystone has to
@@ -186,6 +194,7 @@ func (d *dockerClient) inspect(ctx context.Context, name string) (*containerInsp
 
 type createBody struct {
 	Image        string              `json:"Image"`
+	User         string              `json:"User,omitempty"`
 	Cmd          []string            `json:"Cmd,omitempty"`
 	Env          []string            `json:"Env,omitempty"`
 	Labels       map[string]string   `json:"Labels,omitempty"`

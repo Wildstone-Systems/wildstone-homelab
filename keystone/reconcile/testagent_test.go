@@ -30,6 +30,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -90,8 +91,14 @@ type fakeContainer struct {
 	// hostAliases is the EnsureContainer.host_aliases it was created with.
 	hostAliases []string
 	// mounts and capAdd are what it was created with (#445).
-	mounts []*wsv1.Mount
-	capAdd []string
+	mounts          []*wsv1.Mount
+	capAdd          []string
+	runtimeIdentity *wsv1.ContainerRuntimeIdentity
+	readOnlyRootfs  bool
+	capDrop         []string
+	noNewPrivileges bool
+	resources       *wsv1.ContainerResources
+	shmSize         string
 }
 
 // dockerStatus is what the real agent reads off Docker's State.Status.
@@ -466,7 +473,9 @@ func (a *testAgent) ensureContainer(opID string, op *wsv1.EnsureContainer) *wsv1
 	}
 	created := &fakeContainer{image: op.GetImage(), labels: op.GetLabels(), running: true, owned: true,
 		network: op.GetNetwork(), networkMode: op.GetNetworkMode(), hostAliases: op.GetHostAliases(),
-		mounts: op.GetMounts(), capAdd: op.GetCapAdd()}
+		mounts: op.GetMounts(), capAdd: op.GetCapAdd(), runtimeIdentity: op.GetRuntimeIdentity(),
+		readOnlyRootfs: op.GetReadOnlyRootfs(), capDrop: op.GetCapDrop(), noNewPrivileges: op.GetNoNewPrivileges(),
+		resources: op.GetResources(), shmSize: op.GetShmSize()}
 	a.containers[op.GetName()] = created
 	a.runJobLocked(op.GetName(), created)
 	return &wsv1.OpResult{OpId: opID, Result: &wsv1.OpResult_EnsureContainer{EnsureContainer: &wsv1.EnsureContainerResult{
@@ -526,10 +535,21 @@ func (a *testAgent) inspectContainer(opID string, op *wsv1.InspectContainer) *ws
 	if c.networkMode == wsv1.ContainerNetworkMode_CONTAINER_NETWORK_MODE_HOST {
 		networkMode = "host"
 	}
-	return &wsv1.OpResult{OpId: opID, Result: &wsv1.OpResult_InspectContainer{InspectContainer: &wsv1.InspectContainerResult{
+	inspect := &wsv1.InspectContainerResult{
 		Running: c.running, Image: c.image, Labels: c.labels,
 		Status: c.dockerStatus(), ExitCode: c.exitCode, NetworkMode: networkMode,
-	}}}
+		RuntimeIdentity: c.runtimeIdentity, ReadOnlyRootfs: c.readOnlyRootfs, CapDrop: c.capDrop,
+		NoNewPrivileges: c.noNewPrivileges, HardeningObserved: true,
+	}
+	if c.resources != nil {
+		inspect.MemoryBytes, _ = desiredDockerBytes(c.resources.GetMemory())
+		if cpus, err := strconv.ParseFloat(c.resources.GetCpus(), 64); err == nil {
+			inspect.NanoCpus = int64(cpus * 1e9)
+		}
+		inspect.PidsLimit = c.resources.GetPidsLimit()
+	}
+	inspect.ShmSizeBytes, _ = desiredDockerBytes(c.shmSize)
+	return &wsv1.OpResult{OpId: opID, Result: &wsv1.OpResult_InspectContainer{InspectContainer: inspect}}
 }
 
 // containerStats doubles as the Reconciler's presence+running observe/
