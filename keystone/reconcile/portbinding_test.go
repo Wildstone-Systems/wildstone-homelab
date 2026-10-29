@@ -233,6 +233,32 @@ func TestHardeningSpecIsRefusedOnAnOlderAgent(t *testing.T) {
 	}
 }
 
+func TestRuntimeIdentityIsRefusedOnAnOlderAgent(t *testing.T) {
+	h := startGateway(t, []string{"tok"})
+	agent := newTestAgent(t, h, "node-a", "tok")
+	if !h.gw.WaitConnected("node-a", 10*time.Second) {
+		t.Fatal("agent never connected")
+	}
+	app := containerResource("app", testDigestImage)
+	app.Container.RuntimeIdentity = testRuntimeIdentity(1000)
+	app.Container.Mounts = append(app.Container.Mounts, resource.Mount{Source: "/run/dbus", Target: "/run/dbus", ReadOnly: true})
+	r := newReconciler(&GatewayApplier{Gateway: h.gw})
+	r.AgentProtocolMinor = func(string) (uint32, bool) { return resource.RuntimeIdentityProtocolMinor - 1, true }
+	out, err := r.Reconcile(context.Background(), "node-a", []resource.Resource{app})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := agent.containerExists("app"); exists || agent.opCount("EnsureContainer") != 0 || agent.opCount("PullImage") != 0 {
+		t.Fatalf("old agent was mutated: %+v", out)
+	}
+	msg := out.Steps[0].Error
+	for _, want := range []string{"protocol minor 34", "runtimeIdentity", "minor 33", "upgrade wardstoned", "image-default user"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("step error %q does not say %q", msg, want)
+		}
+	}
+}
+
 // TestMinor12SpecIsRefusedOnAnOlderAgent: the one-minor-skew guarantee
 // makes a minor-11 agent a legitimate peer, and it IGNORES the minor-12
 // fields rather than refusing them — so "53:53/udp" reaches it as a

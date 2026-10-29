@@ -344,6 +344,12 @@ message EnsureContainer {
   // on the bridge with nothing published, which is why Keystone refuses to
   // dispatch a HOST spec to one (resource.HostNetworkProtocolMinor).
   ContainerNetworkMode network_mode = 18;
+
+  // Numeric runtime identity (protocol minor 34). A message preserves the
+  // distinction between omitted (use the image default) and explicit uid 0;
+  // optional gid likewise distinguishes uid-only from uid:gid. Keystone never
+  // sends names or other free-form account expressions.
+  ContainerRuntimeIdentity runtime_identity = 19;
 }
 
 // ContainerNetworkMode is a closed set on purpose: Docker also accepts
@@ -549,6 +555,20 @@ message InspectContainerResult {
   // Empty from an agent older than minor 23, which readers must treat as
   // "unknown" rather than "bridge".
   string network_mode = 8;
+
+  // Protocol minor 34 authoritative readback. hardening_observed separates a
+  // new agent observing defaults from an older agent that omitted these
+  // additive fields. Values are Docker's bounded effective metadata; no env,
+  // command, output or secret is returned.
+  ContainerRuntimeIdentity runtime_identity = 9;
+  bool read_only_rootfs = 10;
+  repeated string cap_drop = 11;
+  bool no_new_privileges = 12;
+  int64 memory_bytes = 13;
+  int64 nano_cpus = 14;
+  int64 pids_limit = 15;
+  int64 shm_size_bytes = 16;
+  bool hardening_observed = 17;
 }
 
 message PruneImages {}
@@ -1421,4 +1441,11 @@ message WorkloadLogs {
 message WorkloadLogsResult {
   bytes logs = 1;
   bool truncated = 2;
+}
+
+// Appended to preserve the declaration indices of every pre-minor-34 wire
+// type in generated code. References above may point forward in protobuf.
+message ContainerRuntimeIdentity {
+  int64 uid = 1;
+  optional int64 gid = 2;
 }

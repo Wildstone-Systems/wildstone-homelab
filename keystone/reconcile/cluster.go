@@ -185,6 +185,9 @@ func (clusterTranslator) applyWorkload(r resource.Resource, decl pkgspec.Compone
 		return ClusterRequest{}, fmt.Errorf("cluster: %s: a write needs its accepted revision, plan step and leader epoch", r.Metadata.Name)
 	}
 	spec := r.Container
+	if spec.RuntimeIdentity != nil {
+		return ClusterRequest{}, fmt.Errorf("cluster: %s: runtimeIdentity is not supported by the k3s backend yet", r.Metadata.Name)
+	}
 	// A Deployment's pods always restart. A spec that asks for anything
 	// else cannot be carried, so it is refused rather than changed.
 	switch spec.Restart {

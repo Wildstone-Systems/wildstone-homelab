@@ -249,6 +249,11 @@ type ContainerSpec struct {
 	// ShmSize is the container's /dev/shm size in Docker's own size-string
 	// syntax (e.g. "1g"); empty leaves Docker's default (64m).
 	ShmSize string `yaml:"shmSize,omitempty" json:"shmSize,omitempty"`
+	// RuntimeIdentity pins the numeric uid, and optionally gid, used by the
+	// container process. nil preserves the image's configured user exactly as
+	// before. Numeric fields deliberately cannot carry a host account name,
+	// passwd lookup, path or other free-form account expression.
+	RuntimeIdentity *ContainerRuntimeIdentity `yaml:"runtimeIdentity,omitempty" json:"runtimeIdentity,omitempty"`
 	// RunNetwork is execution-only metadata for Keystone-created one-shot
 	// containers. It is deliberately absent from YAML and spec hashing: a
 	// package cannot choose a Docker network, while the backup engine can
@@ -294,6 +299,17 @@ type ContainerResources struct {
 	// the container.
 	PidsLimit int `yaml:"pidsLimit,omitempty" json:"pidsLimit,omitempty"`
 }
+
+// ContainerRuntimeIdentity is the backend-neutral security-context identity
+// for one container. Signed package data carries numbers only; Wardstone maps
+// these directly to Docker's User and a later Kubernetes backend can map them
+// directly to runAsUser/runAsGroup without looking up host accounts.
+type ContainerRuntimeIdentity struct {
+	UID *int64 `yaml:"uid" json:"uid"`
+	GID *int64 `yaml:"gid,omitempty" json:"gid,omitempty"`
+}
+
+const maxContainerRuntimeID = int64(1<<32 - 1)
 
 // DeviceMapping is one host device visible inside a container.
 type DeviceMapping struct {
@@ -1498,6 +1514,24 @@ func validateNetworkMode(r *Resource) error {
 // silent no-op — Docker ignores a CapDrop entry it does not recognize.
 func validateContainerHardening(r *Resource) error {
 	c := r.Container
+	if id := c.RuntimeIdentity; id != nil {
+		if c.Backend == "k3s" {
+			return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.runtimeIdentity",
+				Msg: "is not supported by the k3s backend yet"}
+		}
+		if id.UID == nil {
+			return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.runtimeIdentity.uid",
+				Msg: "is required when runtimeIdentity is present"}
+		}
+		if *id.UID < 0 || *id.UID > maxContainerRuntimeID {
+			return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.runtimeIdentity.uid",
+				Msg: fmt.Sprintf("%d must be between 0 and %d", *id.UID, maxContainerRuntimeID)}
+		}
+		if id.GID != nil && (*id.GID < 0 || *id.GID > maxContainerRuntimeID) {
+			return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.runtimeIdentity.gid",
+				Msg: fmt.Sprintf("%d must be between 0 and %d", *id.GID, maxContainerRuntimeID)}
+		}
+	}
 	addedSet := make(map[string]bool, len(c.CapAdd))
 	for _, a := range c.CapAdd {
 		addedSet[a] = true

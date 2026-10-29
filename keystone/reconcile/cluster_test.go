@@ -182,10 +182,11 @@ func TestEveryContainerFieldIsCarriedOrHandled(t *testing.T) {
 		"NoNewPrivileges": true, "Resources": true, "ShmSize": true, "NetworkMode": true,
 	}
 	handled := map[string]string{
-		"Backend":    "selects the cluster translator before request construction",
-		"Expose":     "ClusterIntent turns internal ports into bounded Service ports",
-		"Restart":    "a workload always restarts; any other policy is refused",
-		"RunNetwork": "execution-only metadata for Keystone-run one-shots, never serialized",
+		"Backend":         "selects the cluster translator before request construction",
+		"Expose":          "ClusterIntent turns internal ports into bounded Service ports",
+		"Restart":         "a workload always restarts; any other policy is refused",
+		"RunNetwork":      "execution-only metadata for Keystone-run one-shots, never serialized",
+		"RuntimeIdentity": "refused until the k3s backend implements numeric runAsUser/runAsGroup",
 	}
 	tp := reflect.TypeOf(resource.ContainerSpec{})
 	for i := 0; i < tp.NumField(); i++ {
@@ -201,5 +202,13 @@ func TestApplyWorkloadRefusesARestartPolicyItCannotCarry(t *testing.T) {
 	r.Container.Restart = "no"
 	if _, err := cluster.applyWorkload(r, pkgspec.ComponentDecl{}, WorkloadPolicy{}, nil, testAuthority); err == nil || !strings.Contains(err.Error(), "restart") {
 		t.Fatalf("err = %v, want a restart refusal", err)
+	}
+}
+
+func TestApplyWorkloadRefusesRuntimeIdentityUntilBackendSupportsIt(t *testing.T) {
+	r := clusterContainer()
+	r.Container.RuntimeIdentity = testRuntimeIdentity(1000)
+	if _, err := cluster.applyWorkload(r, pkgspec.ComponentDecl{}, WorkloadPolicy{}, nil, testAuthority); err == nil || !strings.Contains(err.Error(), "runtimeIdentity") {
+		t.Fatalf("err = %v, want runtimeIdentity refusal", err)
 	}
 }
