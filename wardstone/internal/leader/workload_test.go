@@ -396,6 +396,23 @@ func TestObserveAndLogsAreOwnedAndBounded(t *testing.T) {
 	}
 }
 
+func TestObserveFindsAnOrphanedService(t *testing.T) {
+	f := &workloadFake{}
+	x := WorkloadExecutor{Client: f, Epoch: 7, Context: context.Background()}
+	applied, err := x.Apply(context.Background(), &wsv1.ApplyWorkload{Authority: authority(7, "rev-a"), Workload: workload()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.d = nil // an external deletion removed only the Deployment
+	observed, err := x.Observe(context.Background(), &wsv1.ObserveWorkload{Name: "tools-it-tools", Desired: workload()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if observed.Uid != "" || observed.ResourceVersion != "" || observed.ServiceUid != applied.ServiceUid || observed.ServiceResourceVersion != applied.ServiceResourceVersion || observed.Revision != "rev-a" || observed.MatchesDesired {
+		t.Fatalf("orphaned Service observation %+v", observed)
+	}
+}
+
 func TestObserveComparesTypedIntentWithoutApplyingDrift(t *testing.T) {
 	f := &workloadFake{}
 	x := WorkloadExecutor{Client: f, Epoch: 7, Context: context.Background()}

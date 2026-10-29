@@ -396,26 +396,47 @@ func (x WorkloadExecutor) Observe(ctx context.Context, req *wsv1.ObserveWorkload
 	if !dnsLabel.MatchString(req.GetName()) {
 		return nil, &Invalid{Reason: "invalid workload name"}
 	}
-	d, err := x.Client.GetDeployment(ctx, req.GetName())
-	if err != nil {
-		return nil, err
+	d, deploymentErr := x.Client.GetDeployment(ctx, req.GetName())
+	if deploymentErr != nil && !kubeapi.IsNotFound(deploymentErr) {
+		return nil, deploymentErr
 	}
-	if err := owned(d.Metadata, req.GetName()); err != nil {
-		return nil, err
+	if kubeapi.IsNotFound(deploymentErr) {
+		d = nil
 	}
-	pods, err := x.Client.ListPods(ctx, req.GetName())
-	if err != nil {
-		return nil, err
-	}
-	r := &wsv1.ObserveWorkloadResult{Uid: d.Metadata.UID, ResourceVersion: d.Metadata.ResourceVersion, Revision: d.Metadata.Annotations[revisionAnnotation], Generation: d.Metadata.Generation, ObservedGeneration: d.Status.ObservedGeneration, Replicas: uint32(d.Status.Replicas), UpdatedReplicas: uint32(d.Status.UpdatedReplicas), ReadyReplicas: uint32(d.Status.ReadyReplicas), AvailableReplicas: uint32(d.Status.AvailableReplicas)}
 	service, serviceErr := x.Client.GetService(ctx, req.GetName())
-	if serviceErr == nil {
+	if serviceErr != nil && !kubeapi.IsNotFound(serviceErr) {
+		return nil, serviceErr
+	}
+	if kubeapi.IsNotFound(serviceErr) {
+		service = nil
+	}
+	if d == nil && service == nil {
+		return nil, deploymentErr
+	}
+	r := &wsv1.ObserveWorkloadResult{}
+	var pods *kubeapi.PodList
+	if d != nil {
+		if err := owned(d.Metadata, req.GetName()); err != nil {
+			return nil, err
+		}
+		pods, deploymentErr = x.Client.ListPods(ctx, req.GetName())
+		if deploymentErr != nil {
+			return nil, deploymentErr
+		}
+		r.Uid, r.ResourceVersion = d.Metadata.UID, d.Metadata.ResourceVersion
+		r.Revision = d.Metadata.Annotations[revisionAnnotation]
+		r.Generation, r.ObservedGeneration = d.Metadata.Generation, d.Status.ObservedGeneration
+		r.Replicas, r.UpdatedReplicas = uint32(d.Status.Replicas), uint32(d.Status.UpdatedReplicas)
+		r.ReadyReplicas, r.AvailableReplicas = uint32(d.Status.ReadyReplicas), uint32(d.Status.AvailableReplicas)
+	}
+	if service != nil {
 		if err := owned(service.Metadata, req.GetName()); err != nil {
 			return nil, err
 		}
 		r.ServiceUid, r.ServiceResourceVersion = service.Metadata.UID, service.Metadata.ResourceVersion
-	} else if !kubeapi.IsNotFound(serviceErr) {
-		return nil, serviceErr
+		if r.Revision == "" {
+			r.Revision = service.Metadata.Annotations[revisionAnnotation]
+		}
 	}
 	if desired := req.GetDesired(); desired != nil {
 		if err := validateWorkload(desired); err != nil {
@@ -425,35 +446,37 @@ func (x WorkloadExecutor) Observe(ctx context.Context, req *wsv1.ObserveWorkload
 			return nil, &Invalid{Reason: "desired workload name differs from observed name"}
 		}
 		wantDeployment, wantService := render(desired, &wsv1.WorkloadAuthority{})
-		r.MatchesDesired = d.Spec.Replicas == wantDeployment.Spec.Replicas &&
+		r.MatchesDesired = d != nil && service != nil && d.Spec.Replicas == wantDeployment.Spec.Replicas &&
 			sameManagedFields(d.Spec.Selector, wantDeployment.Spec.Selector) &&
 			sameManagedFields(d.Spec.Strategy, wantDeployment.Spec.Strategy) &&
 			sameManagedFields(d.Spec.Template.Metadata.Labels, wantDeployment.Spec.Template.Metadata.Labels) &&
 			sameManagedFields(d.Spec.Template.Spec, wantDeployment.Spec.Template.Spec) &&
-			service != nil && sameManagedFields(service.Spec, wantService.Spec)
+			sameManagedFields(service.Spec, wantService.Spec)
 	}
-	for _, c := range d.Status.Conditions {
-		r.Conditions = append(r.Conditions, &wsv1.WorkloadCondition{Type: c.Type, Status: c.Status, Reason: c.Reason, Message: c.Message})
-	}
-	nodes := map[string]bool{}
-	for _, p := range pods.Items {
-		if err := owned(p.Metadata, req.GetName()); err != nil {
-			return nil, err
+	if d != nil {
+		for _, c := range d.Status.Conditions {
+			r.Conditions = append(r.Conditions, &wsv1.WorkloadCondition{Type: c.Type, Status: c.Status, Reason: c.Reason, Message: c.Message})
 		}
-		if p.Spec.NodeName != "" {
-			nodes[p.Spec.NodeName] = true
-		}
-		for _, cs := range p.Status.ContainerStatuses {
-			r.RestartCount += uint32(cs.RestartCount)
-			if r.Image == "" {
-				r.Image = cs.ImageID
+		nodes := map[string]bool{}
+		for _, p := range pods.Items {
+			if err := owned(p.Metadata, req.GetName()); err != nil {
+				return nil, err
+			}
+			if p.Spec.NodeName != "" {
+				nodes[p.Spec.NodeName] = true
+			}
+			for _, cs := range p.Status.ContainerStatuses {
+				r.RestartCount += uint32(cs.RestartCount)
+				if r.Image == "" {
+					r.Image = cs.ImageID
+				}
 			}
 		}
+		for n := range nodes {
+			r.PodNodes = append(r.PodNodes, n)
+		}
+		sort.Strings(r.PodNodes)
 	}
-	for n := range nodes {
-		r.PodNodes = append(r.PodNodes, n)
-	}
-	sort.Strings(r.PodNodes)
 	return r, nil
 }
 
