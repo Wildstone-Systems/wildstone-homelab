@@ -15,8 +15,11 @@ var clusterName = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$`)
 
 // ClusterIntent checks the first stateless subset before a Plan is filed
 // and constructs the same typed body used by observe and apply. Service
-// ports come from accepted Routes: a Docker host-port mapping would change
-// exposure semantics and is refused instead of silently reinterpreted.
+// ports come from the Container's bounded internal-only expose declaration.
+// Accepted Routes also contribute their target port so the translation stays
+// deterministic before the separate coexistence slice makes those Routes
+// reachable. Docker host-port mappings would change exposure semantics and
+// are refused instead of silently reinterpreted.
 func ClusterIntent(want resource.Resource, all []resource.Resource) (*WorkloadSpec, error) {
 	if want.Kind != resource.KindContainer || want.Container == nil || want.Container.Backend != "k3s" {
 		return nil, fmt.Errorf("cluster: explicit k3s Container required")
@@ -32,6 +35,9 @@ func ClusterIntent(want resource.Resource, all []resource.Resource) (*WorkloadSp
 		return nil, err
 	}
 	ports := map[uint32]bool{}
+	for _, p := range want.Container.Expose {
+		ports[p] = true
+	}
 	for _, r := range all {
 		if r.Kind != resource.KindRoute || r.Route == nil || r.Metadata.Owner != want.Metadata.Owner || r.Metadata.Package != want.Metadata.Package {
 			continue

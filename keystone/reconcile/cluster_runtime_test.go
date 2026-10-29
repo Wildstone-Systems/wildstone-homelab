@@ -15,6 +15,7 @@ type clusterMemory struct {
 	matches        bool
 	failApply      bool
 	partialService bool
+	serviceOnly    bool
 	lastApply      ClusterRequest
 	lastDelete     ClusterRequest
 	revision       string
@@ -31,7 +32,11 @@ func (m *clusterMemory) Apply(_ context.Context, req ClusterRequest) (ClusterRes
 		if m.partialService {
 			serviceUID = ""
 		}
-		return ClusterResult{Found: true, UID: "uid-1", ResourceVersion: m.rv, Revision: m.revision,
+		uid, deploymentRV := "uid-1", m.rv
+		if m.serviceOnly {
+			uid, deploymentRV = "", ""
+		}
+		return ClusterResult{Found: true, UID: uid, ResourceVersion: deploymentRV, Revision: m.revision,
 			ServiceUID: serviceUID, ServiceResourceVersion: m.rv, MatchesDesired: m.matches,
 			Generation: 1, ObservedGeneration: 1, Replicas: 1, ReadyReplicas: 1}, nil
 	case OpApplyWorkload:
@@ -40,11 +45,15 @@ func (m *clusterMemory) Apply(_ context.Context, req ClusterRequest) (ClusterRes
 			m.failApply = false
 			return ClusterResult{}, errors.New("leader term ended")
 		}
-		m.present, m.matches, m.partialService, m.revision, m.rv = true, true, false, req.Authority.AcceptedRevision, "rv-1"
+		m.present, m.matches, m.partialService, m.serviceOnly, m.revision, m.rv = true, true, false, false, req.Authority.AcceptedRevision, "rv-1"
 		return ClusterResult{Found: true, UID: "uid-1", ResourceVersion: m.rv}, nil
 	case OpDeleteWorkload:
 		m.lastDelete = req
-		if req.UID != "uid-1" || req.ResourceVersion != m.rv {
+		if m.serviceOnly {
+			if req.UID != "" || req.ResourceVersion != "" || req.ServiceUID != "svc-1" || req.ServiceResourceVersion != m.rv {
+				return ClusterResult{}, errors.New("stale service-only delete")
+			}
+		} else if req.UID != "uid-1" || req.ResourceVersion != m.rv {
 			return ClusterResult{}, errors.New("stale delete")
 		}
 		m.present = false
@@ -141,5 +150,18 @@ func TestClusterPlanApplyDriftDeleteAndLeaderRetry(t *testing.T) {
 	}
 	if !deleted.Applied || m.present || m.lastDelete.UID != "uid-1" || m.lastDelete.ResourceVersion != "rv-1" || m.lastDelete.Authority.LeaderEpoch != 6 {
 		t.Fatalf("approved cluster delete = %+v, request %+v", deleted, m.lastDelete)
+	}
+
+	// If the Deployment disappeared independently, the surviving owned
+	// Service still carries a complete preconditioned delete identity.
+	m.present, m.serviceOnly, m.revision, m.rv = true, true, "accepted-rev", "rv-2"
+	r = newRec(7, true)
+	r.SeedManaged("node-a", []ManagedRef{{Kind: resource.KindContainer, Name: "it-tools"}})
+	serviceOnlyDeleted, err := r.Reconcile(t.Context(), "node-a", desired[1:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !serviceOnlyDeleted.Applied || m.present || m.lastDelete.UID != "" || m.lastDelete.ResourceVersion != "" || m.lastDelete.ServiceUID != "svc-1" || m.lastDelete.ServiceResourceVersion != "rv-2" {
+		t.Fatalf("approved Service-only delete = %+v, request %+v", serviceOnlyDeleted, m.lastDelete)
 	}
 }

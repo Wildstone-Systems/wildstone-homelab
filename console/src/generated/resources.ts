@@ -54,6 +54,7 @@ export interface ContainerSpec {
   image: string;
   env?: Record<string, string>;
   ports?: string[];
+  expose?: number[];
   mounts?: Mount[];
   command?: string[];
   restart?: string;

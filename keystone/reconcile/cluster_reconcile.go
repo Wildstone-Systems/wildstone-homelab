@@ -90,12 +90,14 @@ func (r *Reconciler) applyClusterContainerStep(ctx context.Context, nodeID strin
 		r.markManaged(nodeID, k, true)
 		return sr
 	case plan.ActionDelete:
-		if !before.Found || before.UID == "" || before.ResourceVersion == "" {
-			sr.Error = "cluster: delete has no observed UID and resourceVersion"
+		deploymentIdentity := before.UID != "" && before.ResourceVersion != ""
+		serviceIdentity := before.ServiceUID != "" && before.ServiceResourceVersion != ""
+		if !before.Found || (!deploymentIdentity && !serviceIdentity) {
+			sr.Error = "cluster: delete has no complete observed Deployment or Service identity"
 			sr.Retryable = true
 			return sr
 		}
-		req, err := cluster.deleteWorkload(step.Name, before.UID, auth)
+		req, err := cluster.deleteWorkload(step.Name, before.UID, before.ServiceUID, auth)
 		if err != nil {
 			sr.Error = err.Error()
 			return sr

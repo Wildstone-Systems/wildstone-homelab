@@ -34,3 +34,19 @@ func TestContainerBackendDefaultsAndBounds(t *testing.T) {
 		t.Fatal("unrecognized backend was accepted")
 	}
 }
+
+func TestContainerExposeIsBoundedAndUnique(t *testing.T) {
+	image := "example/app@sha256:" + strings.Repeat("a", 64)
+	base := Resource{ApiVersion: ApiVersion, Kind: KindContainer,
+		Metadata:  Metadata{Name: "app", Owner: "capability/tools", Node: "node-a"},
+		Container: &ContainerSpec{Image: image, Expose: []uint32{8080}}}
+	if err := base.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	for _, expose := range [][]uint32{{0}, {65536}, {8080, 8080}} {
+		base.Container.Expose = expose
+		if err := base.Validate(); err == nil {
+			t.Errorf("expose %v was accepted", expose)
+		}
+	}
+}

@@ -81,3 +81,21 @@ func TestToolsITToolsClusterIntentGolden(t *testing.T) {
 		t.Fatalf("mounted workload accepted: %v", err)
 	}
 }
+
+func TestClusterIntentSupportsAnUnroutedExposedPort(t *testing.T) {
+	container := containerResource("worker", testDigestImage)
+	container.Metadata.Owner, container.Metadata.Package = "capability/worker", "worker"
+	container.Container.Backend = "k3s"
+	container.Container.Expose = []uint32{8080}
+
+	intent, err := ClusterIntent(container, []resource.Resource{container})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(intent.ServicePorts) != 1 || intent.ServicePorts[0] != (WorkloadPort{Name: "port-8080", ContainerPort: 8080, ServicePort: 8080, Protocol: "tcp"}) {
+		t.Fatalf("unrouted exposed ports = %+v", intent.ServicePorts)
+	}
+	if err := ClusterRouteConflict(container, []resource.Resource{container}); err != nil {
+		t.Fatalf("unrouted workload was rejected: %v", err)
+	}
+}

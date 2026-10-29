@@ -51,7 +51,8 @@ The fields map one-to-one from `resource.ContainerSpec` (#41 limits and runtime 
 ```text
 WorkloadSpec
   name, image (digest-pinned), command, env (secret refs stay refs)
-  ports[]           -> Service ports; host ports only where the spec has them today
+  expose[]          -> internal Service ports; never a host listener
+  ports[]           -> existing Docker host publications; refused by the first k3s slice
   mounts[]          -> claim, config or allowlisted host path by reference
   devices[]         -> device-plugin resource or allowlisted path, plus node selector
   resources         -> requests/limits (W051 QoS rules)

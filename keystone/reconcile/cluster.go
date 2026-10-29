@@ -246,14 +246,14 @@ func nodeSelector(node string, keepRunning bool, devices []pkgspec.DeviceDecl) m
 
 // deleteWorkload translates a delete. It carries the UID the Plan saw, so
 // the leader's stamp-then-delete refuses an object that was replaced.
-func (clusterTranslator) deleteWorkload(name, uid string, auth Authority) (ClusterRequest, error) {
-	if uid == "" {
-		return ClusterRequest{}, fmt.Errorf("cluster: %s: a delete needs the UID the Plan saw", name)
+func (clusterTranslator) deleteWorkload(name, uid, serviceUID string, auth Authority) (ClusterRequest, error) {
+	if uid == "" && serviceUID == "" {
+		return ClusterRequest{}, fmt.Errorf("cluster: %s: a delete needs a Deployment or Service UID the Plan saw", name)
 	}
 	if auth.AcceptedRevision == "" || auth.PlanID == "" || auth.StepDigest == "" || auth.LeaderEpoch == 0 {
 		return ClusterRequest{}, fmt.Errorf("cluster: %s: a write needs its accepted revision, plan step and leader epoch", name)
 	}
-	return ClusterRequest{Op: OpDeleteWorkload, Name: name, UID: uid, Authority: auth}, nil
+	return ClusterRequest{Op: OpDeleteWorkload, Name: name, UID: uid, ServiceUID: serviceUID, Authority: auth}, nil
 }
 
 // workloadStatus reads; it needs no authority.

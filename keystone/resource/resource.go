@@ -190,6 +190,12 @@ type ContainerSpec struct {
 	// the UDP side (protocol minor 12), which a DNS resolver or a
 	// torrent client's DHT needs and which used to be unsayable.
 	Ports  []string `yaml:"ports,omitempty"`
+	// Expose names container ports that a backend may make reachable only
+	// inside its own workload network. Unlike Ports, these do not publish a
+	// listener on a host. The first k3s slice uses them to build a ClusterIP
+	// Service for an otherwise unrouted workload while coexistence ingress is
+	// still deliberately unavailable.
+	Expose []uint32 `yaml:"expose,omitempty" json:"expose,omitempty"`
 	Mounts []Mount  `yaml:"mounts,omitempty"`
 	// Command is the container argument vector, appended after the
 	// image's entrypoint (docker Cmd; ADR-W011 A3, protocol minor 6).
@@ -1395,6 +1401,16 @@ func validateContainer(r *Resource) error {
 		if err := validatePortMapping(r, p); err != nil {
 			return err
 		}
+	}
+	seenExpose := map[uint32]bool{}
+	for i, p := range r.Container.Expose {
+		if p == 0 || p > 65535 {
+			return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: fmt.Sprintf("spec.expose[%d]", i), Msg: "must be a port in 1-65535"}
+		}
+		if seenExpose[p] {
+			return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: fmt.Sprintf("spec.expose[%d]", i), Msg: fmt.Sprintf("duplicates port %d", p)}
+		}
+		seenExpose[p] = true
 	}
 	for i, m := range r.Container.Mounts {
 		if m.Source == "" {
