@@ -117,6 +117,11 @@ func wireWorkload(w *WorkloadSpec) (*wsv1.WorkloadSpec, error) {
 	if w == nil {
 		return nil, nil
 	}
+	for _, value := range w.Env {
+		if strings.HasPrefix(value, "secret/") {
+			return nil, fmt.Errorf("cluster: first stateless workload cannot carry unresolved secret references")
+		}
+	}
 	if len(w.Mounts) != 0 || len(w.Devices) != 0 || w.ShmSize != "" || w.HostNetwork || len(w.Ports) != 0 || len(w.ServicePorts) == 0 {
 		return nil, fmt.Errorf("cluster: first stateless workload requires a Service port and cannot carry Docker host ports, mounts, devices, shmSize or host networking")
 	}

@@ -116,6 +116,25 @@ func TestDiffContainerImageChangeIsMediumUpdate(t *testing.T) {
 	}
 }
 
+func TestDiffContainerExposeChangeIsMediumUpdate(t *testing.T) {
+	desired := cont("c1", imgA(), nil)
+	desired.Container.Backend = "k3s"
+	desired.Container.Expose = []uint32{8080}
+	observed := cont("c1", imgA(), nil)
+	observed.Container.Backend = "k3s"
+	observed.Container.Expose = []uint32{9090}
+
+	p := Diff([]resource.Resource{desired}, []resource.Resource{observed})
+	if len(p.Steps) != 1 || p.Steps[0].Action != ActionUpdate || p.Steps[0].Risk != RiskMedium {
+		t.Fatalf("expose change plan = %+v, want one medium-risk Update", p)
+	}
+
+	observed.Container.Expose = []uint32{8080}
+	if p := Diff([]resource.Resource{desired}, []resource.Resource{observed}); len(p.Steps) != 0 {
+		t.Fatalf("unchanged expose produced steps: %+v", p.Steps)
+	}
+}
+
 func TestDiffVolumeDeleteIsHigh(t *testing.T) {
 	observed := []resource.Resource{vol("v1")}
 	p := Diff(nil, observed)

@@ -99,3 +99,15 @@ func TestClusterIntentSupportsAnUnroutedExposedPort(t *testing.T) {
 		t.Fatalf("unrouted workload was rejected: %v", err)
 	}
 }
+
+func TestClusterIntentRejectsUnresolvedSecretReferences(t *testing.T) {
+	container := containerResource("worker", testDigestImage)
+	container.Metadata.Owner, container.Metadata.Package = "capability/worker", "worker"
+	container.Container.Backend = "k3s"
+	container.Container.Expose = []uint32{8080}
+	container.Container.Env = map[string]string{"TOKEN": "secret/app-token"}
+
+	if _, err := ClusterIntent(container, []resource.Resource{container}); err == nil || !strings.Contains(err.Error(), "unresolved secret references") {
+		t.Fatalf("secret-backed workload accepted: %v", err)
+	}
+}

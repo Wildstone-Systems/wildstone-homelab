@@ -467,6 +467,23 @@ func stringSliceEqual(a, b []string) bool {
 	return true
 }
 
+func uint32SetEqual(a, b []uint32) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	in := make(map[uint32]int, len(b))
+	for _, x := range b {
+		in[x]++
+	}
+	for _, x := range a {
+		if in[x] == 0 {
+			return false
+		}
+		in[x]--
+	}
+	return true
+}
+
 func oidcClientEqual(a, b *resource.OidcClientSpec) bool {
 	if a == nil || b == nil {
 		return a == b
@@ -588,7 +605,7 @@ func containerEqual(a, b *resource.ContainerSpec) bool {
 	if a == nil || b == nil {
 		return a == b
 	}
-	if backendOf(a) != backendOf(b) || a.Image != b.Image || a.Restart != b.Restart || a.NetworkMode != b.NetworkMode {
+	if backendOf(a) != backendOf(b) || a.Image != b.Image || a.Restart != b.Restart || a.NetworkMode != b.NetworkMode || !uint32SetEqual(a.Expose, b.Expose) {
 		return false
 	}
 	if len(a.Env) != len(b.Env) {
