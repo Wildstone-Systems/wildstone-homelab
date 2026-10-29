@@ -213,24 +213,6 @@ func (x WorkloadExecutor) Apply(requestCtx context.Context, req *wsv1.ApplyWorkl
 	if err := validateWorkload(w); err != nil {
 		return nil, err
 	}
-	cur, err := x.Client.GetDeployment(ctx, w.GetName())
-	deploymentExists := err == nil
-	switch {
-	case err == nil:
-		if err := owned(cur.Metadata, w.GetName()); err != nil {
-			return nil, err
-		}
-		stored := cur.Metadata.Annotations[revisionAnnotation]
-		if stored != req.GetExpectedRevision() && stored != req.GetAuthority().GetAcceptedRevision() {
-			return nil, &Refusal{Reason: fmt.Sprintf("observed revision %q, expected %q", stored, req.GetExpectedRevision())}
-		}
-	case kubeapi.IsNotFound(err):
-		if req.GetExpectedRevision() != "" {
-			return nil, &Refusal{Reason: "workload disappeared after the Plan was made"}
-		}
-	default:
-		return nil, err
-	}
 	service, serviceErr := x.Client.GetService(ctx, w.GetName())
 	serviceExists := serviceErr == nil
 	if serviceErr == nil {
@@ -243,6 +225,27 @@ func (x WorkloadExecutor) Apply(requestCtx context.Context, req *wsv1.ApplyWorkl
 		}
 	} else if !kubeapi.IsNotFound(serviceErr) {
 		return nil, serviceErr
+	}
+	cur, err := x.Client.GetDeployment(ctx, w.GetName())
+	deploymentExists := err == nil
+	switch {
+	case err == nil:
+		if err := owned(cur.Metadata, w.GetName()); err != nil {
+			return nil, err
+		}
+		stored := cur.Metadata.Annotations[revisionAnnotation]
+		if stored != req.GetExpectedRevision() && stored != req.GetAuthority().GetAcceptedRevision() {
+			return nil, &Refusal{Reason: fmt.Sprintf("observed revision %q, expected %q", stored, req.GetExpectedRevision())}
+		}
+	case kubeapi.IsNotFound(err):
+		// A surviving owned Service is the compare-and-set witness for a
+		// Service-only observation. It permits the reviewed repair to recreate
+		// the missing Deployment without turning a stale update into a create.
+		if req.GetExpectedRevision() != "" && (!serviceExists || service.Metadata.Annotations[revisionAnnotation] != req.GetExpectedRevision()) {
+			return nil, &Refusal{Reason: "workload disappeared after the Plan was made"}
+		}
+	default:
+		return nil, err
 	}
 	d, s := render(w, req.GetAuthority())
 	var applied *kubeapi.Deployment

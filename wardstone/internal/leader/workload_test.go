@@ -413,6 +413,26 @@ func TestObserveFindsAnOrphanedService(t *testing.T) {
 	}
 }
 
+func TestApplyRepairsAServiceOnlyWorkloadWithExactRevision(t *testing.T) {
+	f := &workloadFake{}
+	x := WorkloadExecutor{Client: f, Epoch: 7, Context: context.Background()}
+	if _, err := x.Apply(context.Background(), &wsv1.ApplyWorkload{Authority: authority(7, "rev-a"), Workload: workload()}); err != nil {
+		t.Fatal(err)
+	}
+	f.d = nil // an external deletion removed only the Deployment
+	stale := &wsv1.ApplyWorkload{Authority: authority(7, "rev-b"), ExpectedRevision: "unrelated-revision", Workload: workload()}
+	if _, err := x.Apply(context.Background(), stale); !IsRefusal(err) {
+		t.Fatalf("unrelated revision repaired Service-only workload: %v", err)
+	}
+	stale.ExpectedRevision = "rev-a"
+	if _, err := x.Apply(context.Background(), stale); err != nil {
+		t.Fatalf("exact revision did not repair Service-only workload: %v", err)
+	}
+	if f.d == nil || f.s == nil || f.d.Metadata.Annotations[revisionAnnotation] != "rev-b" || f.s.Metadata.Annotations[revisionAnnotation] != "rev-b" {
+		t.Fatalf("Service-only repair did not converge: deployment=%+v service=%+v", f.d, f.s)
+	}
+}
+
 func TestObserveComparesTypedIntentWithoutApplyingDrift(t *testing.T) {
 	f := &workloadFake{}
 	x := WorkloadExecutor{Client: f, Epoch: 7, Context: context.Background()}
