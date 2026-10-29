@@ -111,3 +111,48 @@ func TestForgedCurrentLabelCannotHideHardeningDrift(t *testing.T) {
 		}
 	}
 }
+
+func TestRuntimeIdentityLifecycle(t *testing.T) {
+	h := startGateway(t, []string{"tok"})
+	agent := newTestAgent(t, h, "node-a", "tok")
+	if !h.gw.WaitConnected("node-a", 10*time.Second) {
+		t.Fatal("agent never connected")
+	}
+	r := newReconciler(&GatewayApplier{Gateway: h.gw})
+	r.Approve = func(*plan.Plan) bool { return true }
+	want := containerResource("app", testDigestImage)
+	want.Container.RuntimeIdentity = &resource.ContainerRuntimeIdentity{UID: 1000}
+	if out, err := r.Reconcile(context.Background(), "node-a", []resource.Resource{want}); err != nil || !out.Applied {
+		t.Fatalf("create: outcome=%+v err=%v", out, err)
+	}
+	if out, err := r.Reconcile(context.Background(), "node-a", []resource.Resource{want}); err != nil || len(out.Plan.Steps) != 0 {
+		t.Fatalf("healthy observation: outcome=%+v err=%v", out, err)
+	}
+
+	// A stopped but otherwise matching container restarts through the approved
+	// Update path without losing its pinned identity.
+	agent.mu.Lock()
+	agent.containers["app"].running = false
+	agent.mu.Unlock()
+	if out, err := r.Reconcile(context.Background(), "node-a", []resource.Resource{want}); err != nil || !out.Applied {
+		t.Fatalf("restart: outcome=%+v err=%v", out, err)
+	}
+
+	changed := containerResource("app", testDigestImage)
+	changed.Container.RuntimeIdentity = &resource.ContainerRuntimeIdentity{UID: 1001}
+	if out, err := r.Reconcile(context.Background(), "node-a", []resource.Resource{changed}); err != nil || !out.Applied || len(out.Plan.Steps) != 1 {
+		t.Fatalf("approved identity update: outcome=%+v err=%v", out, err)
+	}
+	agent.mu.Lock()
+	gotUID := agent.containers["app"].runtimeIdentity.GetUid()
+	agent.mu.Unlock()
+	if gotUID != 1001 {
+		t.Fatalf("updated uid = %d, want 1001", gotUID)
+	}
+	if out, err := r.Reconcile(context.Background(), "node-a", nil); err != nil || !out.Applied {
+		t.Fatalf("delete: outcome=%+v err=%v", out, err)
+	}
+	if _, exists := agent.containerExists("app"); exists {
+		t.Fatal("container still exists after approved delete")
+	}
+}
