@@ -907,6 +907,7 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 		AccessGroups: accessGroupsByCapability(cat),
 		Rec: &reconcile.Reconciler{
 			Applier:       &reconcile.GatewayApplier{Gateway: gw},
+			Cluster:       &reconcile.GatewayClusterApplier{Gateway: gw, DB: db},
 			ManagedPrefix: managedPrefix,
 			// Which protocol minor each connected agent speaks, so a
 			// spec that needs minor 12 is refused on an older node

@@ -1012,6 +1012,7 @@ export function InstallForm({ pkg, onDone }: { pkg: PackageView; onDone: () => v
     Object.fromEntries(params.map((p) => [p.name, p.installed ?? p.suggested ?? p.default ?? ""])),
   );
   const [preview, setPreview] = useState<EnablePreview | null>(null);
+  const [backend, setBackend] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // The secrets only the operator can supply, asked for HERE rather than
@@ -1053,7 +1054,7 @@ export function InstallForm({ pkg, onDone }: { pkg: PackageView; onDone: () => v
         if (v) await api.setSecret(node, s, v);
       }
     }
-    return api.enableCapability(pkg.name, values);
+    return api.enableCapability(pkg.name, values, backend);
   };
 
   const run = (p: Promise<unknown>, after: (v: never) => void) => {
@@ -1125,13 +1126,22 @@ export function InstallForm({ pkg, onDone }: { pkg: PackageView; onDone: () => v
         </div>
       ))}
 
+      <div className="field">
+        <label>Workload backend</label>
+        <select value={backend} onChange={(e) => { setBackend(e.target.value); setPreview(null); }}>
+          <option value="">Keep current (Docker on a new install)</option>
+          <option value="docker">Docker</option>
+          <option value="k3s">k3s (stateless workloads)</option>
+        </select>
+      </div>
+
       <ErrorLine error={error} />
 
       {!preview && (
         <button
           className="btn btn-primary"
           disabled={busy || missing.length > 0}
-          onClick={() => run(api.previewCapability(pkg.name, values), showPreview)}
+          onClick={() => run(api.previewCapability(pkg.name, values, backend), showPreview)}
         >
           {missing.length > 0 ? `fill in ${missing.map((m) => m.name).join(", ")}` : "Preview"}
         </button>

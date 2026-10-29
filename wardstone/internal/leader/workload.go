@@ -1,12 +1,14 @@
 package leader
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/big"
 	"regexp"
 	"sort"
 	"strconv"
@@ -32,8 +34,10 @@ const (
 )
 
 var (
-	dnsLabel    = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$`)
-	digestImage = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9./_:-]*@sha256:[a-f0-9]{64}$`)
+	dnsLabel             = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$`)
+	digestImage          = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9./_:-]*@sha256:[a-f0-9]{64}$`)
+	dockerMemoryQuantity = regexp.MustCompile(`^[0-9]+[bBkKmMgG]?$`)
+	decimalCPUQuantity   = regexp.MustCompile(`^[0-9]+(?:\.[0-9]+)?$`)
 )
 
 // Refusal is an authority, ownership or stale-state failure. Callers expose
@@ -126,6 +130,14 @@ func validateWorkload(w *wsv1.WorkloadSpec) error {
 	if r := w.GetResources(); r != nil && r.GetPidsLimit() != 0 {
 		return &Invalid{Reason: "pids_limit has no reviewed Kubernetes mapping"}
 	}
+	if r := w.GetResources(); r != nil {
+		if _, err := kubernetesMemoryQuantity(r.GetMemory()); err != nil {
+			return &Invalid{Reason: err.Error()}
+		}
+		if _, err := kubernetesCPUQuantity(r.GetCpus()); err != nil {
+			return &Invalid{Reason: err.Error()}
+		}
+	}
 	portNames := map[string]bool{}
 	servicePorts := map[uint32]bool{}
 	for _, p := range w.GetPorts() {
@@ -177,10 +189,10 @@ func render(w *wsv1.WorkloadSpec, a *wsv1.WorkloadAuthority) (*kubeapi.Deploymen
 	limits := map[string]string{}
 	if r := w.GetResources(); r != nil {
 		if r.GetMemory() != "" {
-			limits["memory"] = r.GetMemory()
+			limits["memory"], _ = kubernetesMemoryQuantity(r.GetMemory())
 		}
 		if r.GetCpus() != "" {
-			limits["cpu"] = r.GetCpus()
+			limits["cpu"], _ = kubernetesCPUQuantity(r.GetCpus())
 		}
 	}
 	if len(limits) == 0 {
@@ -212,6 +224,27 @@ func (x WorkloadExecutor) Apply(requestCtx context.Context, req *wsv1.ApplyWorkl
 	if err := validateWorkload(w); err != nil {
 		return nil, err
 	}
+	service, serviceErr := x.Client.GetService(ctx, w.GetName())
+	serviceExists := serviceErr == nil
+	expectedServiceRevision := req.GetExpectedServiceRevision()
+	if !req.GetSeparateRevisionWitnesses() {
+		// Preserve the original single-witness contract for pre-minor-32
+		// callers. The explicit marker distinguishes them from a new caller that
+		// observed no Service and therefore carries an authoritative empty
+		// Service witness.
+		expectedServiceRevision = req.GetExpectedRevision()
+	}
+	if serviceErr == nil {
+		if err := owned(service.Metadata, w.GetName()); err != nil {
+			return nil, err
+		}
+		stored := service.Metadata.Annotations[revisionAnnotation]
+		if stored != expectedServiceRevision && stored != req.GetAuthority().GetAcceptedRevision() {
+			return nil, &Refusal{Reason: fmt.Sprintf("Service observed revision %q, expected %q", stored, expectedServiceRevision)}
+		}
+	} else if !kubeapi.IsNotFound(serviceErr) {
+		return nil, serviceErr
+	}
 	cur, err := x.Client.GetDeployment(ctx, w.GetName())
 	deploymentExists := err == nil
 	switch {
@@ -224,24 +257,14 @@ func (x WorkloadExecutor) Apply(requestCtx context.Context, req *wsv1.ApplyWorkl
 			return nil, &Refusal{Reason: fmt.Sprintf("observed revision %q, expected %q", stored, req.GetExpectedRevision())}
 		}
 	case kubeapi.IsNotFound(err):
-		if req.GetExpectedRevision() != "" {
+		// A surviving owned Service is the compare-and-set witness for a
+		// Service-only observation. It permits the reviewed repair to recreate
+		// the missing Deployment without turning a stale update into a create.
+		if req.GetExpectedRevision() != "" && (!serviceExists || service.Metadata.Annotations[revisionAnnotation] != expectedServiceRevision) {
 			return nil, &Refusal{Reason: "workload disappeared after the Plan was made"}
 		}
 	default:
 		return nil, err
-	}
-	service, serviceErr := x.Client.GetService(ctx, w.GetName())
-	serviceExists := serviceErr == nil
-	if serviceErr == nil {
-		if err := owned(service.Metadata, w.GetName()); err != nil {
-			return nil, err
-		}
-		stored := service.Metadata.Annotations[revisionAnnotation]
-		if stored != req.GetExpectedRevision() && stored != req.GetAuthority().GetAcceptedRevision() {
-			return nil, &Refusal{Reason: fmt.Sprintf("Service observed revision %q, expected %q", stored, req.GetExpectedRevision())}
-		}
-	} else if !kubeapi.IsNotFound(serviceErr) {
-		return nil, serviceErr
 	}
 	d, s := render(w, req.GetAuthority())
 	var applied *kubeapi.Deployment
@@ -395,49 +418,218 @@ func (x WorkloadExecutor) Observe(ctx context.Context, req *wsv1.ObserveWorkload
 	if !dnsLabel.MatchString(req.GetName()) {
 		return nil, &Invalid{Reason: "invalid workload name"}
 	}
-	d, err := x.Client.GetDeployment(ctx, req.GetName())
-	if err != nil {
-		return nil, err
+	d, deploymentErr := x.Client.GetDeployment(ctx, req.GetName())
+	if deploymentErr != nil && !kubeapi.IsNotFound(deploymentErr) {
+		return nil, deploymentErr
 	}
-	if err := owned(d.Metadata, req.GetName()); err != nil {
-		return nil, err
+	if kubeapi.IsNotFound(deploymentErr) {
+		d = nil
 	}
-	pods, err := x.Client.ListPods(ctx, req.GetName())
-	if err != nil {
-		return nil, err
+	service, serviceErr := x.Client.GetService(ctx, req.GetName())
+	if serviceErr != nil && !kubeapi.IsNotFound(serviceErr) {
+		return nil, serviceErr
 	}
-	r := &wsv1.ObserveWorkloadResult{Uid: d.Metadata.UID, ResourceVersion: d.Metadata.ResourceVersion, Revision: d.Metadata.Annotations[revisionAnnotation], Generation: d.Metadata.Generation, ObservedGeneration: d.Status.ObservedGeneration, Replicas: uint32(d.Status.Replicas), UpdatedReplicas: uint32(d.Status.UpdatedReplicas), ReadyReplicas: uint32(d.Status.ReadyReplicas), AvailableReplicas: uint32(d.Status.AvailableReplicas)}
-	if service, serviceErr := x.Client.GetService(ctx, req.GetName()); serviceErr == nil {
+	if kubeapi.IsNotFound(serviceErr) {
+		service = nil
+	}
+	if d == nil && service == nil {
+		return nil, deploymentErr
+	}
+	r := &wsv1.ObserveWorkloadResult{}
+	var pods *kubeapi.PodList
+	if d != nil {
+		if err := owned(d.Metadata, req.GetName()); err != nil {
+			return nil, err
+		}
+		pods, deploymentErr = x.Client.ListPods(ctx, req.GetName())
+		if deploymentErr != nil {
+			return nil, deploymentErr
+		}
+		r.Uid, r.ResourceVersion = d.Metadata.UID, d.Metadata.ResourceVersion
+		r.Revision = d.Metadata.Annotations[revisionAnnotation]
+		r.PlanId = d.Metadata.Annotations[planAnnotation]
+		r.StepDigest = d.Metadata.Annotations[stepAnnotation]
+		r.Generation, r.ObservedGeneration = d.Metadata.Generation, d.Status.ObservedGeneration
+		r.Replicas, r.UpdatedReplicas = uint32(d.Status.Replicas), uint32(d.Status.UpdatedReplicas)
+		r.ReadyReplicas, r.AvailableReplicas = uint32(d.Status.ReadyReplicas), uint32(d.Status.AvailableReplicas)
+	}
+	if service != nil {
 		if err := owned(service.Metadata, req.GetName()); err != nil {
 			return nil, err
 		}
 		r.ServiceUid, r.ServiceResourceVersion = service.Metadata.UID, service.Metadata.ResourceVersion
-	} else if !kubeapi.IsNotFound(serviceErr) {
-		return nil, serviceErr
+		r.ServiceRevision = service.Metadata.Annotations[revisionAnnotation]
+		if r.Revision == "" {
+			r.Revision = r.ServiceRevision
+			r.PlanId = service.Metadata.Annotations[planAnnotation]
+			r.StepDigest = service.Metadata.Annotations[stepAnnotation]
+		}
 	}
-	for _, c := range d.Status.Conditions {
-		r.Conditions = append(r.Conditions, &wsv1.WorkloadCondition{Type: c.Type, Status: c.Status, Reason: c.Reason, Message: c.Message})
-	}
-	nodes := map[string]bool{}
-	for _, p := range pods.Items {
-		if err := owned(p.Metadata, req.GetName()); err != nil {
+	if desired := req.GetDesired(); desired != nil {
+		if err := validateWorkload(desired); err != nil {
 			return nil, err
 		}
-		if p.Spec.NodeName != "" {
-			nodes[p.Spec.NodeName] = true
+		if desired.GetName() != req.GetName() {
+			return nil, &Invalid{Reason: "desired workload name differs from observed name"}
 		}
-		for _, cs := range p.Status.ContainerStatuses {
-			r.RestartCount += uint32(cs.RestartCount)
-			if r.Image == "" {
-				r.Image = cs.ImageID
+		wantDeployment, wantService := render(desired, &wsv1.WorkloadAuthority{})
+		r.MatchesDesired = d != nil && service != nil && d.Spec.Replicas == wantDeployment.Spec.Replicas &&
+			sameManagedFields(d.Spec.Selector, wantDeployment.Spec.Selector) &&
+			sameManagedFields(d.Spec.Strategy, wantDeployment.Spec.Strategy) &&
+			sameManagedFields(d.Spec.Template.Metadata.Labels, wantDeployment.Spec.Template.Metadata.Labels) &&
+			sameManagedPodSpec(d.Spec.Template.Spec, wantDeployment.Spec.Template.Spec) &&
+			sameManagedFields(service.Spec, wantService.Spec)
+	}
+	if d != nil {
+		for _, c := range d.Status.Conditions {
+			r.Conditions = append(r.Conditions, &wsv1.WorkloadCondition{Type: c.Type, Status: c.Status, Reason: c.Reason, Message: c.Message})
+		}
+		nodes := map[string]bool{}
+		for _, p := range pods.Items {
+			if err := owned(p.Metadata, req.GetName()); err != nil {
+				return nil, err
+			}
+			if p.Spec.NodeName != "" {
+				nodes[p.Spec.NodeName] = true
+			}
+			for _, cs := range p.Status.ContainerStatuses {
+				r.RestartCount += uint32(cs.RestartCount)
+				if r.Image == "" {
+					r.Image = cs.ImageID
+				}
+			}
+		}
+		for n := range nodes {
+			r.PodNodes = append(r.PodNodes, n)
+		}
+		sort.Strings(r.PodNodes)
+	}
+	return r, nil
+}
+
+// Kubernetes reads pass through JSON. Compare the managed wire fields so
+// an omitted empty slice (for example Env) equals the empty slice render
+// builds, while a changed image, selector or Service port still drifts.
+func sameManagedFields(a, b any) bool {
+	left, leftErr := json.Marshal(a)
+	right, rightErr := json.Marshal(b)
+	return leftErr == nil && rightErr == nil && bytes.Equal(left, right)
+}
+
+func sameManagedPodSpec(a, b kubeapi.PodSpec) bool {
+	left, right := a, b
+	normalizePodResources(&left)
+	normalizePodResources(&right)
+	return sameManagedFields(left, right)
+}
+
+func normalizePodResources(p *kubeapi.PodSpec) {
+	for i := range p.Containers {
+		for _, resources := range []map[string]string{p.Containers[i].Resources.Limits, p.Containers[i].Resources.Requests} {
+			for name, value := range resources {
+				if normalized, ok := kubernetesQuantityValue(name, value); ok {
+					resources[name] = normalized.RatString()
+				}
 			}
 		}
 	}
-	for n := range nodes {
-		r.PodNodes = append(r.PodNodes, n)
+}
+
+func kubernetesQuantityValue(name, value string) (*big.Rat, bool) {
+	var multipliers map[string]*big.Rat
+	switch name {
+	case "cpu":
+		multipliers = map[string]*big.Rat{
+			"": big.NewRat(1, 1), "m": big.NewRat(1, 1_000),
+			"u": big.NewRat(1, 1_000_000), "n": big.NewRat(1, 1_000_000_000),
+		}
+	case "memory":
+		multipliers = map[string]*big.Rat{
+			"": big.NewRat(1, 1), "Ki": big.NewRat(1<<10, 1),
+			"Mi": big.NewRat(1<<20, 1), "Gi": big.NewRat(1<<30, 1),
+			"Ti": new(big.Rat).SetInt(new(big.Int).Lsh(big.NewInt(1), 40)),
+			"k":  big.NewRat(1_000, 1), "M": big.NewRat(1_000_000, 1),
+			"G": big.NewRat(1_000_000_000, 1), "m": big.NewRat(1, 1_000),
+		}
+	default:
+		return nil, false
 	}
-	sort.Strings(r.PodNodes)
-	return r, nil
+	for _, suffix := range []string{"Ki", "Mi", "Gi", "Ti", "m", "u", "n", "k", "M", "G", ""} {
+		multiplier, allowed := multipliers[suffix]
+		if !allowed || !strings.HasSuffix(value, suffix) {
+			continue
+		}
+		number := strings.TrimSuffix(value, suffix)
+		if number == "" {
+			continue
+		}
+		quantity, ok := new(big.Rat).SetString(number)
+		if !ok {
+			return nil, false
+		}
+		return quantity.Mul(quantity, multiplier), true
+	}
+	return nil, false
+}
+
+// Workload resources retain the existing Docker-readable public contract.
+// Translate it only at the typed Kubernetes execution boundary so "512m"
+// keeps meaning 512 MiB rather than Kubernetes' 0.512-byte milli suffix.
+func kubernetesMemoryQuantity(value string) (string, error) {
+	if value == "" {
+		return "", nil
+	}
+	if !dockerMemoryQuantity.MatchString(value) {
+		return "", fmt.Errorf("memory %q is not a Docker size string", value)
+	}
+	multiplier := int64(1)
+	number := value
+	switch value[len(value)-1] {
+	case 'b', 'B':
+		number = value[:len(value)-1]
+	case 'k', 'K':
+		multiplier, number = 1<<10, value[:len(value)-1]
+	case 'm', 'M':
+		multiplier, number = 1<<20, value[:len(value)-1]
+	case 'g', 'G':
+		multiplier, number = 1<<30, value[:len(value)-1]
+	}
+	n, err := strconv.ParseInt(number, 10, 64)
+	if err != nil || n <= 0 || n > (1<<63-1)/multiplier {
+		return "", fmt.Errorf("memory %q is not a bounded Docker size string", value)
+	}
+	bytes := n * multiplier
+	for _, unit := range []struct {
+		bytes int64
+		name  string
+	}{{1 << 30, "Gi"}, {1 << 20, "Mi"}, {1 << 10, "Ki"}} {
+		if bytes%unit.bytes == 0 {
+			return strconv.FormatInt(bytes/unit.bytes, 10) + unit.name, nil
+		}
+	}
+	return strconv.FormatInt(bytes, 10), nil
+}
+
+func kubernetesCPUQuantity(value string) (string, error) {
+	if value == "" {
+		return "", nil
+	}
+	if !decimalCPUQuantity.MatchString(value) {
+		return "", fmt.Errorf("cpu %q is not a decimal core count", value)
+	}
+	cores, ok := new(big.Rat).SetString(value)
+	if !ok || cores.Sign() <= 0 {
+		return "", fmt.Errorf("cpu %q is not a positive decimal core count", value)
+	}
+	milli := new(big.Rat).Mul(cores, big.NewRat(1_000, 1))
+	if !milli.IsInt() {
+		return "", fmt.Errorf("cpu %q is finer than Kubernetes' 1m precision", value)
+	}
+	m := milli.Num()
+	if new(big.Int).Mod(new(big.Int).Set(m), big.NewInt(1_000)).Sign() == 0 {
+		return new(big.Int).Quo(new(big.Int).Set(m), big.NewInt(1_000)).String(), nil
+	}
+	return m.String() + "m", nil
 }
 
 func (x WorkloadExecutor) Logs(ctx context.Context, req *wsv1.WorkloadLogs) (*wsv1.WorkloadLogsResult, error) {

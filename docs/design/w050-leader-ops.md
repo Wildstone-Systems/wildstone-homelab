@@ -3,6 +3,9 @@
 - **Issue:** [#158](https://github.com/Wildstone-Systems/wildstone-homelab/issues/158), W050 slice 2b
 - **Status:** The first stateless-workload subset is implemented by #210 under the accepted #180 authority contract. Later volume, Job, config, secret, and playbook rows remain provisional until their bounded slices.
 - **Wire allocation:** protocol minor 30; `Operation` arms 39–42 and `OpResult` arms 41–44 are `ApplyWorkload`, `DeleteWorkload`, `ObserveWorkload`, and `WorkloadLogs`.
+- **Desired comparison:** protocol minor 31 adds typed desired input and `matches_desired` output to `ObserveWorkload`; Keystone gates k3s reconciliation on that minor.
+- **Partial-update recovery:** protocol minor 32 carries separate Deployment and Service revision witnesses so an approved retry can finish one object without weakening the other's compare-and-set check.
+- **Partial-create recovery:** protocol minor 33 reports the Plan id and step digest stamped on the object supplying the revision witness, so a queued exact Create can finish after an unrelated accepted revision while another Plan's object remains fail-closed.
 - **Depends on:** #159 is accepted complete for this repository implementation. #129 owner evaluation and #180 multi-node fault evidence remain separate proof gates; they are not claimed by the executor.
 - **Governed by:** ADR-W003 (typed operations, no `Exec(string)`), ADR-W050 §2 and A1, the [package deployment capabilities contract](package-deployment-capabilities-contract.md).
 
@@ -50,7 +53,8 @@ The fields map one-to-one from `resource.ContainerSpec` (#41 limits and runtime 
 ```text
 WorkloadSpec
   name, image (digest-pinned), command, env (secret refs stay refs)
-  ports[]           -> Service ports; host ports only where the spec has them today
+  expose[]          -> internal Service ports; never a host listener
+  ports[]           -> existing Docker host publications; refused by the first k3s slice
   mounts[]          -> claim, config or allowlisted host path by reference
   devices[]         -> device-plugin resource or allowlisted path, plus node selector
   resources         -> requests/limits (W051 QoS rules)

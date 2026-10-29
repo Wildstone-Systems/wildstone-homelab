@@ -100,26 +100,40 @@ func TestClusterWritesCarryTheirAuthority(t *testing.T) {
 		if _, err := cluster.applyWorkload(r, pkgspec.ComponentDecl{}, WorkloadPolicy{}, nil, missing); err == nil {
 			t.Errorf("apply without %+v was built", missing)
 		}
-		if _, err := cluster.deleteWorkload("app", "uid-1", missing); err == nil {
+		if _, err := cluster.deleteWorkload("app", "uid-1", "", missing); err == nil {
 			t.Errorf("delete without %+v was built", missing)
 		}
 	}
-	if _, err := cluster.deleteWorkload("app", "", testAuthority); err == nil {
-		t.Error("a delete without the UID the Plan saw was built")
+	if _, err := cluster.deleteWorkload("app", "", "", testAuthority); err == nil {
+		t.Error("a delete without an object UID the Plan saw was built")
 	}
-	del, err := cluster.deleteWorkload("app", "uid-1", testAuthority)
+	del, err := cluster.deleteWorkload("app", "uid-1", "", testAuthority)
 	if err != nil || del.Op != OpDeleteWorkload || del.UID != "uid-1" || del.Authority != testAuthority {
 		t.Fatalf("delete = %+v, %v", del, err)
+	}
+	serviceOnly, err := cluster.deleteWorkload("app", "", "svc-1", testAuthority)
+	if err != nil || serviceOnly.UID != "" || serviceOnly.ServiceUID != "svc-1" {
+		t.Fatalf("service-only delete = %+v, %v", serviceOnly, err)
 	}
 	if st := cluster.workloadStatus("app"); st.Op != OpWorkloadStatus || st.Authority != (Authority{}) {
 		t.Fatalf("status = %+v", st)
 	}
 }
 
-// Until a node joins a cluster every resource goes to its node.
-func TestEveryResourceTargetsItsNodeToday(t *testing.T) {
+// Legacy Containers and every host resource stay at their node. A reviewed
+// k3s choice changes only the Container's target.
+func TestBackendTargetChoice(t *testing.T) {
 	if got := TargetOf(clusterContainer()); got != (Target{Kind: TargetNode, Node: "node-a"}) {
 		t.Fatalf("target = %+v", got)
+	}
+	k3s := clusterContainer()
+	k3s.Container.Backend = "k3s"
+	if got := TargetOf(k3s); got != (Target{Kind: TargetCluster}) {
+		t.Fatalf("k3s target = %+v", got)
+	}
+	volume := resource.Resource{Kind: resource.KindVolume, Metadata: resource.Metadata{Node: "node-a"}}
+	if got := TargetOf(volume); got != (Target{Kind: TargetNode, Node: "node-a"}) {
+		t.Fatalf("host target = %+v", got)
 	}
 }
 
@@ -168,6 +182,8 @@ func TestEveryContainerFieldIsCarriedOrHandled(t *testing.T) {
 		"NoNewPrivileges": true, "Resources": true, "ShmSize": true, "NetworkMode": true,
 	}
 	handled := map[string]string{
+		"Backend":    "selects the cluster translator before request construction",
+		"Expose":     "ClusterIntent turns internal ports into bounded Service ports",
 		"Restart":    "a workload always restarts; any other policy is refused",
 		"RunNetwork": "execution-only metadata for Keystone-run one-shots, never serialized",
 	}

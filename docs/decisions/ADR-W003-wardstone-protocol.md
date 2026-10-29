@@ -385,6 +385,19 @@ leadership-term context and stop when it is cancelled. Status and logs are
 read-only, ownership-scoped, and logs remain tail-biased at no more than
 1 MiB.
 
+Protocol minor 31 adds an optional typed desired workload to
+`ObserveWorkload` and a `matches_desired` result. Keystone requires this
+minor on the active leader before using observation for approved k3s
+reconciliation, so older agents cannot silently hide or invent drift.
+
+Protocol minor 32 gives Deployment and Service separate accepted-revision
+witnesses for partial Update recovery. Protocol minor 33 returns the approved
+Plan id and step digest stamped on the object supplying the primary revision
+witness. Keystone requires minor 33 and resumes an Update-shaped partial
+Create only when that durable Plan/step stamp matches the still-queued exact
+Create approval; an unrelated Statefile revision may advance without granting
+authority over an object written by another Plan.
+
 ### Sizing note for the planner
 
 W1–W4 are small (each well under a day of subagent work); W5 and W6c are

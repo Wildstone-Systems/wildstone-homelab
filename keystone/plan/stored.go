@@ -87,6 +87,7 @@ type CapabilityOrigin struct {
 	Package string            `json:"package"`
 	Version string            `json:"version"`
 	Params  map[string]string `json:"params,omitempty"`
+	Backend string            `json:"backend,omitempty"`
 }
 
 // SubscriptionChange is one Owner-approved event subscription a proposal

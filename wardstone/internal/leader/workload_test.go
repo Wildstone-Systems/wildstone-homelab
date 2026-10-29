@@ -22,6 +22,7 @@ type workloadFake struct {
 	deleteDeploymentUID, deleteDeploymentRV string
 	deleteServiceUID, deleteServiceRV       string
 	applyStarted                            chan struct{}
+	failServiceApply                        bool
 	failServiceUpdate                       bool
 	failDeploymentDelete                    bool
 	beforeDeploymentApply                   func()
@@ -137,6 +138,10 @@ func (f *workloadFake) CreateService(_ context.Context, s *kubeapi.Service) (*ku
 	return clone(s), nil
 }
 func (f *workloadFake) ApplyService(_ context.Context, s *kubeapi.Service) (*kubeapi.Service, error) {
+	if f.failServiceApply {
+		f.failServiceApply = false
+		return nil, errors.New("transient Service apply")
+	}
 	if f.s == nil || s.Metadata.ResourceVersion == "" || s.Metadata.ResourceVersion != f.s.Metadata.ResourceVersion {
 		return nil, &kubeapi.StatusError{Code: 409, Reason: "Conflict"}
 	}
@@ -182,7 +187,7 @@ func workload() *wsv1.WorkloadSpec {
 
 func TestGeneratedWorkloadArmsRoundTripWithoutRawPayload(t *testing.T) {
 	operations := []*wsv1.Operation{
-		{Op: &wsv1.Operation_ApplyWorkload{ApplyWorkload: &wsv1.ApplyWorkload{Authority: authority(7, "rev-a"), Workload: workload(), ExpectedRevision: "rev-before"}}},
+		{Op: &wsv1.Operation_ApplyWorkload{ApplyWorkload: &wsv1.ApplyWorkload{Authority: authority(7, "rev-a"), Workload: workload(), ExpectedRevision: "deployment-before", ExpectedServiceRevision: "service-before", SeparateRevisionWitnesses: true}}},
 		{Op: &wsv1.Operation_DeleteWorkload{DeleteWorkload: &wsv1.DeleteWorkload{Authority: authority(7, "rev-b"), Name: "tools-it-tools", Uid: "deployment-uid", ResourceVersion: "12", ServiceUid: "service-uid", ServiceResourceVersion: "13"}}},
 		{Op: &wsv1.Operation_ObserveWorkload{ObserveWorkload: &wsv1.ObserveWorkload{Name: "tools-it-tools"}}},
 		{Op: &wsv1.Operation_WorkloadLogs{WorkloadLogs: &wsv1.WorkloadLogs{Name: "tools-it-tools", Tail: 25, SinceUnixSec: 10, LimitBytes: 4096}}},
@@ -381,7 +386,7 @@ func TestObserveAndLogsAreOwnedAndBounded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(obs.PodNodes, []string{"node-a", "node-b"}) || obs.RestartCount != 2 || obs.ServiceUid == "" {
+	if !reflect.DeepEqual(obs.PodNodes, []string{"node-a", "node-b"}) || obs.RestartCount != 2 || obs.ServiceUid == "" || obs.PlanId != "plan-1" || obs.StepDigest != "step-1" {
 		t.Fatalf("observe %+v", obs)
 	}
 	logs, err := x.Logs(context.Background(), &wsv1.WorkloadLogs{Name: "tools-it-tools", LimitBytes: 6})
@@ -393,5 +398,207 @@ func TestObserveAndLogsAreOwnedAndBounded(t *testing.T) {
 	}
 	if _, err := x.Logs(context.Background(), &wsv1.WorkloadLogs{Name: "tools-it-tools", LimitBytes: maxWorkloadLogBytes + 1}); !IsRefusal(err) {
 		t.Fatalf("oversize logs = %v", err)
+	}
+}
+
+func TestObserveFindsAnOrphanedService(t *testing.T) {
+	f := &workloadFake{}
+	x := WorkloadExecutor{Client: f, Epoch: 7, Context: context.Background()}
+	applied, err := x.Apply(context.Background(), &wsv1.ApplyWorkload{Authority: authority(7, "rev-a"), Workload: workload()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.d = nil // an external deletion removed only the Deployment
+	observed, err := x.Observe(context.Background(), &wsv1.ObserveWorkload{Name: "tools-it-tools", Desired: workload()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if observed.Uid != "" || observed.ResourceVersion != "" || observed.ServiceUid != applied.ServiceUid || observed.ServiceResourceVersion != applied.ServiceResourceVersion || observed.Revision != "rev-a" || observed.ServiceRevision != "rev-a" || observed.PlanId != "plan-1" || observed.StepDigest != "step-1" || observed.MatchesDesired {
+		t.Fatalf("orphaned Service observation %+v", observed)
+	}
+}
+
+func TestApplyRepairsAServiceOnlyWorkloadWithExactRevision(t *testing.T) {
+	f := &workloadFake{}
+	x := WorkloadExecutor{Client: f, Epoch: 7, Context: context.Background()}
+	if _, err := x.Apply(context.Background(), &wsv1.ApplyWorkload{Authority: authority(7, "rev-a"), Workload: workload()}); err != nil {
+		t.Fatal(err)
+	}
+	f.d = nil // an external deletion removed only the Deployment
+	stale := &wsv1.ApplyWorkload{Authority: authority(7, "rev-b"), ExpectedRevision: "unrelated-revision", Workload: workload()}
+	if _, err := x.Apply(context.Background(), stale); !IsRefusal(err) {
+		t.Fatalf("unrelated revision repaired Service-only workload: %v", err)
+	}
+	stale.ExpectedRevision = "rev-a"
+	if _, err := x.Apply(context.Background(), stale); err != nil {
+		t.Fatalf("exact revision did not repair Service-only workload: %v", err)
+	}
+	if f.d == nil || f.s == nil || f.d.Metadata.Annotations[revisionAnnotation] != "rev-b" || f.s.Metadata.Annotations[revisionAnnotation] != "rev-b" {
+		t.Fatalf("Service-only repair did not converge: deployment=%+v service=%+v", f.d, f.s)
+	}
+}
+
+func TestApplyResumesAPartialUpdateWithSeparateRevisionWitnesses(t *testing.T) {
+	f := &workloadFake{}
+	x := WorkloadExecutor{Client: f, Epoch: 7, Context: context.Background()}
+	if _, err := x.Apply(context.Background(), &wsv1.ApplyWorkload{Authority: authority(7, "rev-a"), Workload: workload()}); err != nil {
+		t.Fatal(err)
+	}
+	updated := workload()
+	updated.Ports[0].ServicePort = 9090
+	f.failServiceApply = true
+	if _, err := x.Apply(context.Background(), &wsv1.ApplyWorkload{Authority: authority(7, "rev-b"), ExpectedRevision: "rev-a", ExpectedServiceRevision: "rev-a", SeparateRevisionWitnesses: true, Workload: updated}); err == nil {
+		t.Fatal("partial update unexpectedly succeeded")
+	}
+	observed, err := x.Observe(context.Background(), &wsv1.ObserveWorkload{Name: updated.Name, Desired: updated})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if observed.Revision != "rev-b" || observed.ServiceRevision != "rev-a" || observed.MatchesDesired {
+		t.Fatalf("partial update witnesses = %+v", observed)
+	}
+	if _, err := x.Apply(context.Background(), &wsv1.ApplyWorkload{Authority: authority(7, "rev-b"), ExpectedRevision: observed.Revision, ExpectedServiceRevision: observed.ServiceRevision, SeparateRevisionWitnesses: true, Workload: updated}); err != nil {
+		t.Fatalf("separately witnessed retry: %v", err)
+	}
+	if f.d.Metadata.Annotations[revisionAnnotation] != "rev-b" || f.s.Metadata.Annotations[revisionAnnotation] != "rev-b" || f.s.Spec.Ports[0].Port != 9090 {
+		t.Fatalf("partial update did not converge: deployment=%+v service=%+v", f.d, f.s)
+	}
+}
+
+func TestSeparateServiceWitnessPreservesObservedAbsence(t *testing.T) {
+	f := &workloadFake{}
+	x := WorkloadExecutor{Client: f, Epoch: 7, Context: context.Background()}
+	if _, err := x.Apply(context.Background(), &wsv1.ApplyWorkload{Authority: authority(7, "rev-a"), Workload: workload()}); err != nil {
+		t.Fatal(err)
+	}
+	req := &wsv1.ApplyWorkload{Authority: authority(7, "rev-b"), ExpectedRevision: "rev-a", SeparateRevisionWitnesses: true, Workload: workload()}
+	if _, err := x.Apply(context.Background(), req); !IsRefusal(err) {
+		t.Fatalf("Service absent from the observation was overwritten: %v", err)
+	}
+}
+
+func TestObserveComparesTypedIntentWithoutApplyingDrift(t *testing.T) {
+	f := &workloadFake{}
+	x := WorkloadExecutor{Client: f, Epoch: 7, Context: context.Background()}
+	w := workload()
+	if _, err := x.Apply(context.Background(), &wsv1.ApplyWorkload{Authority: authority(7, "rev-a"), Workload: w}); err != nil {
+		t.Fatal(err)
+	}
+	observe := func() *wsv1.ObserveWorkloadResult {
+		t.Helper()
+		r, err := x.Observe(context.Background(), &wsv1.ObserveWorkload{Name: w.Name, Desired: w})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return r
+	}
+	if !observe().MatchesDesired {
+		t.Fatal("applied typed workload read as drift")
+	}
+	f.d.Spec.Template.Spec.Containers[0].Image = "other/image@sha256:" + "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	if observe().MatchesDesired {
+		t.Fatal("hand-edited Deployment was silently accepted")
+	}
+	if f.d.Spec.Template.Spec.Containers[0].Image != "other/image@sha256:"+"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" {
+		t.Fatal("observe applied a repair")
+	}
+}
+
+func TestObserveTreatsOmittedEmptyEnvAsConverged(t *testing.T) {
+	f := &workloadFake{}
+	x := WorkloadExecutor{Client: f, Epoch: 7, Context: context.Background()}
+	w := workload()
+	w.Env = nil
+	if _, err := x.Apply(context.Background(), &wsv1.ApplyWorkload{Authority: authority(7, "rev-a"), Workload: w}); err != nil {
+		t.Fatal(err)
+	}
+	observed, err := x.Observe(context.Background(), &wsv1.ObserveWorkload{Name: w.Name, Desired: w})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !observed.MatchesDesired {
+		t.Fatal("JSON-omitted empty Env was reported as drift")
+	}
+}
+
+func TestWorkloadResourcesUseKubernetesQuantities(t *testing.T) {
+	f := &workloadFake{}
+	x := WorkloadExecutor{Client: f, Epoch: 7, Context: context.Background()}
+	w := workload()
+	w.Resources = &wsv1.ContainerResources{Memory: "512m", Cpus: "0.5"}
+	if _, err := x.Apply(context.Background(), &wsv1.ApplyWorkload{Authority: authority(7, "rev-a"), Workload: w}); err != nil {
+		t.Fatal(err)
+	}
+	resources := f.d.Spec.Template.Spec.Containers[0].Resources
+	if got := resources.Limits["memory"]; got != "512Mi" {
+		t.Fatalf("memory limit = %q, want 512Mi", got)
+	}
+	if got := resources.Limits["cpu"]; got != "500m" {
+		t.Fatalf("cpu limit = %q, want 500m", got)
+	}
+	if !reflect.DeepEqual(resources.Limits, resources.Requests) {
+		t.Fatalf("requests = %+v, want limits %+v", resources.Requests, resources.Limits)
+	}
+	for name, test := range map[string]struct {
+		memory, cpu, wantMemory, wantCPU string
+	}{
+		"whole units":    {"4g", "2", "4Gi", "2"},
+		"canonical fold": {"1024m", "1.25", "1Gi", "1250m"},
+		"bare bytes":     {"536870913", "0.001", "536870913", "1m"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got, err := kubernetesMemoryQuantity(test.memory); err != nil || got != test.wantMemory {
+				t.Fatalf("memory %q = %q, %v; want %q", test.memory, got, err, test.wantMemory)
+			}
+			if got, err := kubernetesCPUQuantity(test.cpu); err != nil || got != test.wantCPU {
+				t.Fatalf("cpu %q = %q, %v; want %q", test.cpu, got, err, test.wantCPU)
+			}
+		})
+	}
+}
+
+func TestObserveComparesResourceQuantitiesSemantically(t *testing.T) {
+	f := &workloadFake{}
+	x := WorkloadExecutor{Client: f, Epoch: 7, Context: context.Background()}
+	w := workload()
+	w.Resources = &wsv1.ContainerResources{Memory: "512m", Cpus: "0.5"}
+	if _, err := x.Apply(context.Background(), &wsv1.ApplyWorkload{Authority: authority(7, "rev-a"), Workload: w}); err != nil {
+		t.Fatal(err)
+	}
+	resources := &f.d.Spec.Template.Spec.Containers[0].Resources
+	resources.Limits["memory"], resources.Requests["memory"] = "536870912", "536870912"
+	resources.Limits["cpu"], resources.Requests["cpu"] = "0.5", "0.5"
+	observed, err := x.Observe(context.Background(), &wsv1.ObserveWorkload{Name: w.Name, Desired: w})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !observed.MatchesDesired {
+		t.Fatal("equivalent Kubernetes resource quantities were reported as drift")
+	}
+	resources.Limits["cpu"] = "600m"
+	if observed, err = x.Observe(context.Background(), &wsv1.ObserveWorkload{Name: w.Name, Desired: w}); err != nil || observed.MatchesDesired {
+		t.Fatalf("changed CPU limit was accepted: observed=%+v err=%v", observed, err)
+	}
+	resources.Limits["cpu"] = "500m"
+	resources.Requests["memory"] = "256Mi"
+	if observed, err = x.Observe(context.Background(), &wsv1.ObserveWorkload{Name: w.Name, Desired: w}); err != nil || observed.MatchesDesired {
+		t.Fatalf("changed memory request was accepted: observed=%+v err=%v", observed, err)
+	}
+}
+
+func TestWorkloadRejectsUnsupportedResourceQuantities(t *testing.T) {
+	for name, resources := range map[string]*wsv1.ContainerResources{
+		"overflowing memory":  {Memory: "9999999999999999999g"},
+		"sub-millicore CPU":   {Cpus: "0.0001"},
+		"fraction CPU syntax": {Cpus: "1/2"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			x := WorkloadExecutor{Client: &workloadFake{}, Epoch: 7, Context: context.Background()}
+			w := workload()
+			w.Resources = resources
+			if _, err := x.Apply(context.Background(), &wsv1.ApplyWorkload{Authority: authority(7, "rev-a"), Workload: w}); !IsInvalid(err) {
+				t.Fatalf("Apply error = %v, want Invalid", err)
+			}
+		})
 	}
 }

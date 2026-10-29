@@ -1,6 +1,8 @@
 package loop
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 
@@ -26,10 +28,11 @@ import (
 
 // entry is one reviewed step: the exact effect a Plan's approval permits.
 type entry struct {
-	kind   resource.Kind
-	name   string
-	action plan.Action
-	digest string // the accepted content a create/update produces; "" for a delete
+	kind    resource.Kind
+	name    string
+	action  plan.Action
+	digest  string // the accepted content a create/update produces; "" for a delete
+	backend string
 }
 
 func resKey(kind resource.Kind, name string) string { return string(kind) + "/" + name }
@@ -58,7 +61,7 @@ func newAuthority(records []runtimedb.PlanRecord, accepted map[string]string) (*
 		if stored.Plan != nil {
 			for _, st := range stored.Plan.Steps {
 				q.entries = append(q.entries, entry{
-					kind: st.Kind, name: st.Name, action: st.Action, digest: st.Digest,
+					kind: st.Kind, name: st.Name, action: st.Action, digest: st.Digest, backend: st.Backend,
 				})
 			}
 		}
@@ -91,7 +94,7 @@ func (a *authority) covers(st plan.PlanStep) bool {
 	current, stillDesired := a.accepted[k]
 	for _, p := range a.plans {
 		for _, e := range p.entries {
-			if e.kind != st.Kind || e.name != st.Name || !sameEffect(st.Kind, e.action, st.Action) {
+			if e.kind != st.Kind || e.name != st.Name || !sameBackend(st.Kind, e.backend, st.Backend) || !sameEffect(st.Kind, e.action, st.Action) {
 				continue
 			}
 			if st.Action == plan.ActionDelete {
@@ -106,6 +109,61 @@ func (a *authority) covers(st plan.PlanStep) bool {
 		}
 	}
 	return false
+}
+
+// grant names the exact queued Plan step that authorizes a cluster write.
+// A delete has no desired-resource digest; its stable step digest binds
+// the reviewed (plan, kind, name, backend, delete) tuple instead.
+func (a *authority) grant(st plan.PlanStep) (planID, digest string, ok bool) {
+	if !a.covers(st) {
+		return "", "", false
+	}
+	for _, p := range a.plans {
+		for _, e := range p.entries {
+			if e.kind != st.Kind || e.name != st.Name || !sameBackend(st.Kind, e.backend, st.Backend) || !sameEffect(st.Kind, e.action, st.Action) {
+				continue
+			}
+			if st.Action != plan.ActionDelete {
+				if e.digest == a.accepted[resKey(st.Kind, st.Name)] {
+					return p.id, e.digest, true
+				}
+				continue
+			}
+			// Bind the digest to the spelling the reviewer saw. Empty and
+			// "docker" are execution-equivalent for Containers, but the
+			// reviewed tuple remains the durable authority record.
+			sum := sha256.Sum256([]byte(p.id + "\x00" + string(st.Kind) + "\x00" + st.Name + "\x00" + e.backend + "\x00Delete"))
+			return p.id, "sha256:" + hex.EncodeToString(sum[:]), true
+		}
+	}
+	return "", "", false
+}
+
+func (a *authority) clusterDelete(kind resource.Kind, name string) bool {
+	for _, p := range a.plans {
+		for _, e := range p.entries {
+			if e.kind == kind && e.name == name && e.action == plan.ActionDelete && e.backend == "k3s" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// sameBackend preserves the Statefile compatibility rule that an omitted
+// Container backend means Docker. Other resource kinds do not have a backend
+// default, so their stored and recomputed values must remain byte-for-byte
+// equal.
+func sameBackend(kind resource.Kind, reviewed, planned string) bool {
+	if kind == resource.KindContainer {
+		if reviewed == "" {
+			reviewed = "docker"
+		}
+		if planned == "" {
+			planned = "docker"
+		}
+	}
+	return reviewed == planned
 }
 
 // sameEffect reports whether a reviewed action and a reconcile action are
@@ -182,7 +240,11 @@ func resourceNodes(placements map[string]string, desired []resource.Resource, re
 		homes[k] = node
 	}
 	for _, r := range desired {
-		homes[resKey(r.Kind, r.Metadata.Name)] = r.Metadata.Node
+		node := r.Metadata.Node
+		if reconcile.TargetOf(r).Kind == reconcile.TargetCluster {
+			node = "@cluster"
+		}
+		homes[resKey(r.Kind, r.Metadata.Name)] = node
 	}
 	for node, nr := range results {
 		for k := range nr.planned {

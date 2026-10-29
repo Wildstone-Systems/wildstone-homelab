@@ -677,6 +677,7 @@ type enableRequest struct {
 	Package string            `json:"package"`
 	Version string            `json:"version,omitempty"`
 	Params  map[string]string `json:"params,omitempty"`
+	Backend string            `json:"backend,omitempty"`
 	DryRun  bool              `json:"dryRun,omitempty"`
 }
 
@@ -708,7 +709,7 @@ func (s *Server) enableCapability(r *http.Request, id principal.Identity) (any, 
 	if err != nil {
 		return nil, http.StatusNotFound, err
 	}
-	return s.proposeCapability(id, pkg, req.Params, req.DryRun)
+	return s.proposeCapabilityBackend(id, pkg, req.Params, req.Backend, req.DryRun)
 }
 
 // proposeCapability expands one catalog package with params and files
@@ -717,6 +718,13 @@ func (s *Server) enableCapability(r *http.Request, id principal.Identity) (any, 
 // (#447), so a package step the orchestrator proposes is exactly the
 // plan the Services page would have made.
 func (s *Server) proposeCapability(id principal.Identity, pkg *pkgspec.Package, params map[string]string, dryRun bool) (any, int, error) {
+	return s.proposeCapabilityBackend(id, pkg, params, "", dryRun)
+}
+
+func (s *Server) proposeCapabilityBackend(id principal.Identity, pkg *pkgspec.Package, params map[string]string, backend string, dryRun bool) (any, int, error) {
+	if backend != "" && backend != "docker" && backend != "k3s" {
+		return nil, http.StatusBadRequest, fmt.Errorf("backend must be docker or k3s")
+	}
 	req := enableRequest{Package: pkg.Metadata.Name, Params: params, DryRun: dryRun}
 	enabled, err := s.enabledCapabilities()
 	if err != nil {
@@ -743,6 +751,44 @@ func (s *Server) proposeCapability(id principal.Identity, pkg *pkgspec.Package, 
 		// missing required param, an unsatisfied requirement — not a
 		// server fault.
 		return nil, http.StatusBadRequest, err
+	}
+	// Reconfiguration without a choice keeps this installation's accepted
+	// backend. Match its rendered owner so another instance of the same
+	// package cannot change this one's placement.
+	if backend == "" {
+		owner := ""
+		for _, next := range rendered {
+			if next.Kind == resource.KindContainer {
+				owner = next.Metadata.Owner
+				break
+			}
+		}
+		for _, existing := range current {
+			if existing.Kind == resource.KindContainer && existing.Container != nil && existing.Metadata.Package == pkg.Metadata.Name && existing.Metadata.Owner == owner && existing.Container.Backend == "k3s" {
+				backend = "k3s"
+				break
+			}
+		}
+	}
+	if backend == "k3s" {
+		for i := range rendered {
+			if rendered[i].Kind == resource.KindContainer {
+				rendered[i].Container.Backend = "k3s"
+				if err := rendered[i].Validate(); err != nil {
+					return nil, http.StatusBadRequest, err
+				}
+			}
+		}
+		for _, candidate := range rendered {
+			if candidate.Kind == resource.KindContainer {
+				if err := reconcile.ClusterRouteConflict(candidate, rendered); err != nil {
+					return nil, http.StatusBadRequest, err
+				}
+				if _, err := reconcile.ClusterIntent(candidate, rendered); err != nil {
+					return nil, http.StatusBadRequest, err
+				}
+			}
+		}
 	}
 	if err := claimedByAnotherCapability(pkg, current, rendered); err != nil {
 		return nil, http.StatusConflict, err
@@ -781,6 +827,7 @@ func (s *Server) proposeCapability(id principal.Identity, pkg *pkgspec.Package, 
 			Package: pkg.Metadata.Name,
 			Version: pkg.Metadata.Version,
 			Params:  req.Params,
+			Backend: backend,
 		},
 	})
 }

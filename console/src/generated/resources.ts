@@ -50,9 +50,11 @@ export interface ContainerResources {
 }
 
 export interface ContainerSpec {
+  backend?: string;
   image: string;
   env?: Record<string, string>;
   ports?: string[];
+  expose?: number[];
   mounts?: Mount[];
   command?: string[];
   restart?: string;

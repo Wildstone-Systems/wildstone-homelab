@@ -283,6 +283,31 @@ func (l *Loop) Tick(ctx context.Context) (TickOutcome, error) {
 		return out, err
 	}
 	l.Rec.Authorize = auth.covers
+	l.Rec.ClusterDelete = auth.clusterDelete
+	l.Rec.ClusterCreateRecovery = func(st plan.PlanStep, planID, stepDigest string) bool {
+		grantedPlan, grantedDigest, ok := auth.grant(st)
+		return ok && planID != "" && stepDigest != "" && planID == grantedPlan && stepDigest == grantedDigest
+	}
+	l.Rec.ClusterRoutes = l.Rec.ClusterRoutes[:0]
+	for _, r := range desired {
+		if r.Kind == resource.KindRoute {
+			l.Rec.ClusterRoutes = append(l.Rec.ClusterRoutes, r)
+		}
+	}
+	l.Rec.ClusterAuthority = func(st plan.PlanStep) (reconcile.Authority, error) {
+		planID, digest, ok := auth.grant(st)
+		if !ok {
+			return reconcile.Authority{}, fmt.Errorf("cluster: %s %s/%s has no exact approved Plan step", st.Action, st.Kind, st.Name)
+		}
+		term, issued, err := l.DB.CurrentLeaderEpoch()
+		if err != nil {
+			return reconcile.Authority{}, err
+		}
+		if !issued || term.Epoch == 0 {
+			return reconcile.Authority{}, fmt.Errorf("cluster: no active leader epoch has been issued")
+		}
+		return reconcile.Authority{AcceptedRevision: revision, PlanID: planID, StepDigest: digest, LeaderEpoch: term.Epoch}, nil
+	}
 	// A failed Delete is recorded unhealthy because the resource is still
 	// present but not in desired state. Startup deliberately does not seed
 	// unhealthy observations into the Reconciler, so an applying plan that
@@ -333,7 +358,7 @@ func (l *Loop) Tick(ctx context.Context) (TickOutcome, error) {
 	for _, g := range groups {
 		nr := &nodeResult{}
 		results[g.node] = nr
-		if g.node != "" && l.Connected != nil && !l.Connected(g.node) && hasAgentKinds(g.resources) {
+		if g.node != "" && g.node != "@cluster" && l.Connected != nil && !l.Connected(g.node) && hasAgentKinds(g.resources) {
 			// An offline node says nothing about whether its state can
 			// converge. A Plan with work there stays applying, so a
 			// reconnect retries it without another approval or an
@@ -349,7 +374,16 @@ func (l *Loop) Tick(ctx context.Context) (TickOutcome, error) {
 		}
 		outcome, err := l.Rec.Reconcile(ctx, g.node, g.resources)
 		if err != nil {
-			if g.node != "" && l.Connected != nil && !l.Connected(g.node) {
+			var clusterUnavailable *reconcile.ClusterUnavailable
+			if errors.As(err, &clusterUnavailable) {
+				nr.deferred = true
+				unvisited[g.node] = true
+				if planTick {
+					l.event("reconcile.deferred-leader", g.node, "leader unavailable; retry pending", nil)
+				}
+				continue
+			}
+			if g.node != "" && g.node != "@cluster" && l.Connected != nil && !l.Connected(g.node) {
 				nr.deferred = true
 				unvisited[g.node] = true
 				if planTick {
@@ -380,7 +414,7 @@ func (l *Loop) Tick(ctx context.Context) (TickOutcome, error) {
 				map[string]string{"kind": string(b.Kind), "name": b.Name})
 		}
 		switch {
-		case g.node != "" && l.Connected != nil && !l.Connected(g.node):
+		case g.node != "" && g.node != "@cluster" && l.Connected != nil && !l.Connected(g.node):
 			// The operation may have landed before the session disappeared.
 			// Preserve the applying plan and let a fresh observation decide;
 			// never turn transport uncertainty into rollback or a terminal
@@ -615,7 +649,7 @@ func (l *Loop) proposeDrift(head string, held []plan.PlanStep, accepted map[stri
 }
 
 func stepKey(st plan.PlanStep) string {
-	return fmt.Sprintf("%s/%s/%s/%s/%s", st.Kind, st.Name, st.Action, st.Digest, st.Risk)
+	return fmt.Sprintf("%s/%s/%s/%s/%s/%s", st.Kind, st.Name, st.Action, st.Backend, st.Digest, st.Risk)
 }
 
 // sameSteps reports whether a stored drift proposal covers exactly steps.
@@ -782,7 +816,11 @@ type nodeGroup struct {
 func groupByNode(desired []resource.Resource) []nodeGroup {
 	byNode := map[string][]resource.Resource{}
 	for _, r := range desired {
-		byNode[r.Metadata.Node] = append(byNode[r.Metadata.Node], r)
+		node := r.Metadata.Node
+		if reconcile.TargetOf(r).Kind == reconcile.TargetCluster {
+			node = "@cluster"
+		}
+		byNode[node] = append(byNode[node], r)
 	}
 	nodes := make([]string, 0, len(byNode))
 	for n := range byNode {

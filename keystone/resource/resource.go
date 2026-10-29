@@ -176,6 +176,10 @@ type Mount struct {
 // ContainerSpec is the spec for kind Container, applied via Wardstone
 // EnsureContainer/StopContainer/RemoveContainer.
 type ContainerSpec struct {
+	// Backend selects the installed package's workload executor. Empty is
+	// Docker for every Statefile written before the k3s opt-in existed.
+	// An explicit k3s choice is reviewed as part of the resource digest.
+	Backend string `yaml:"backend,omitempty" json:"backend,omitempty"`
 	// Image must be digest-pinned (ADR-W003 A4.2 regex).
 	Image string            `yaml:"image"`
 	Env   map[string]string `yaml:"env,omitempty"`
@@ -185,7 +189,13 @@ type ContainerSpec struct {
 	// public ones. Omitting the protocol means TCP; "/udp" publishes
 	// the UDP side (protocol minor 12), which a DNS resolver or a
 	// torrent client's DHT needs and which used to be unsayable.
-	Ports  []string `yaml:"ports,omitempty"`
+	Ports []string `yaml:"ports,omitempty"`
+	// Expose names container ports that a backend may make reachable only
+	// inside its own workload network. Unlike Ports, these do not publish a
+	// listener on a host. The first k3s slice uses them to build a ClusterIP
+	// Service for an otherwise unrouted workload while coexistence ingress is
+	// still deliberately unavailable.
+	Expose []uint32 `yaml:"expose,omitempty" json:"expose,omitempty"`
 	Mounts []Mount  `yaml:"mounts,omitempty"`
 	// Command is the container argument vector, appended after the
 	// image's entrypoint (docker Cmd; ADR-W011 A3, protocol minor 6).
@@ -1381,6 +1391,9 @@ func validateContainer(r *Resource) error {
 	if r.Container == nil {
 		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec", Msg: "container spec missing"}
 	}
+	if r.Container.Backend != "" && r.Container.Backend != "docker" && r.Container.Backend != "k3s" {
+		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.backend", Msg: "must be docker or k3s"}
+	}
 	if !digestPinRegexp.MatchString(r.Container.Image) {
 		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.image", Msg: "must be digest-pinned (repo@sha256:<64 hex>), tags are refused"}
 	}
@@ -1388,6 +1401,16 @@ func validateContainer(r *Resource) error {
 		if err := validatePortMapping(r, p); err != nil {
 			return err
 		}
+	}
+	seenExpose := map[uint32]bool{}
+	for i, p := range r.Container.Expose {
+		if p == 0 || p > 65535 {
+			return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: fmt.Sprintf("spec.expose[%d]", i), Msg: "must be a port in 1-65535"}
+		}
+		if seenExpose[p] {
+			return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: fmt.Sprintf("spec.expose[%d]", i), Msg: fmt.Sprintf("duplicates port %d", p)}
+		}
+		seenExpose[p] = true
 	}
 	for i, m := range r.Container.Mounts {
 		if m.Source == "" {
