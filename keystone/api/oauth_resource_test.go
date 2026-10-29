@@ -20,13 +20,17 @@ import (
 )
 
 type fakeOAuthIntrospector struct {
-	claims oauthresource.Claims
-	err    error
-	calls  int
+	claims     oauthresource.Claims
+	err        error
+	calls      int
+	beforeCall func(int)
 }
 
 func (f *fakeOAuthIntrospector) Introspect(_ context.Context, _ string) (oauthresource.Claims, error) {
 	f.calls++
+	if f.beforeCall != nil {
+		f.beforeCall(f.calls)
+	}
 	return f.claims, f.err
 }
 
