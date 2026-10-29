@@ -152,6 +152,12 @@ type ClusterResult struct {
 	Replicas               int
 	Node                   string
 	Conditions             []string
+	// RolloutPending distinguishes an owned workload whose managed fields
+	// already match from actual spec drift while Kubernetes is still
+	// observing the generation or bringing the requested replicas Ready.
+	// It is derived by Keystone during observation and is never sent over
+	// the Wardstone protocol.
+	RolloutPending bool
 }
 
 // ClusterApplier sends one request to the leader.

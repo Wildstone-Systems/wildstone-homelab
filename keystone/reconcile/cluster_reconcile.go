@@ -27,12 +27,19 @@ func (r *Reconciler) observeClusterContainer(ctx context.Context, k resKey, want
 	if !result.Found {
 		return resource.Resource{}, false, result, nil
 	}
-	if isDesired && result.MatchesDesired && result.ReadyReplicas == intentReplicas(req.Workload) && result.ObservedGeneration >= result.Generation {
-		return want, true, result, nil
+	if isDesired && result.MatchesDesired {
+		if clusterRolloutReady(result, req.Workload) {
+			return want, true, result, nil
+		}
+		result.RolloutPending = true
 	}
 	placeholder := placeholderResource(resource.KindContainer, k.Name)
 	placeholder.Container.Backend = "k3s"
 	return placeholder, true, result, nil
+}
+
+func clusterRolloutReady(result ClusterResult, workload *WorkloadSpec) bool {
+	return result.ReadyReplicas == intentReplicas(workload) && result.ObservedGeneration >= result.Generation
 }
 
 func intentReplicas(w *WorkloadSpec) int {
@@ -81,7 +88,7 @@ func (r *Reconciler) applyClusterContainerStep(ctx context.Context, nodeID strin
 			sr.Retryable = true
 			return sr
 		}
-		if !result.Found || !result.MatchesDesired || result.ReadyReplicas != intent.Replicas || result.ObservedGeneration < result.Generation {
+		if !result.Found || !result.MatchesDesired || !clusterRolloutReady(result, intent) {
 			sr.Error = "cluster rollout is not ready; next tick will re-observe"
 			sr.Retryable = true
 			return sr

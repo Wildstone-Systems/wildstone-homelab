@@ -673,13 +673,15 @@ func (r *Reconciler) Reconcile(ctx context.Context, nodeID string, desired []res
 			st := &p.Steps[i]
 			seen := clusterSeen[resKey{st.Kind, st.Name}]
 			if st.Kind == resource.KindContainer && st.Backend == "k3s" && st.Action == plan.ActionUpdate &&
-				seen.Found && seen.ServiceUID == "" && seen.Revision != "" && seen.Revision == r.ClusterRevision {
+				seen.Found && (seen.ServiceUID == "" || seen.RolloutPending) && seen.Revision != "" && seen.Revision == r.ClusterRevision {
 				// A partial approved Create observes as an Update once its
-				// Deployment exists. Recover its original action only when the
-				// queued authority actually reviewed a Create. An interrupted
-				// approved Update can reach the same observed shape after writing
-				// the Deployment but before creating the Service; changing that
-				// step to Create would strand the exact Update approval.
+				// Deployment exists. A complete Create does too while Kubernetes
+				// is still observing the generation or bringing replicas Ready,
+				// even though its managed fields already match. Recover the
+				// original action only when the queued authority actually reviewed
+				// a Create. An interrupted approved Update can reach both shapes;
+				// changing that step to Create would strand the exact Update
+				// approval.
 				create := *st
 				create.Action = plan.ActionCreate
 				if r.Authorize != nil && r.Authorize(create) {

@@ -11,16 +11,18 @@ import (
 )
 
 type clusterMemory struct {
-	present         bool
-	matches         bool
-	failApply       bool
-	partialService  bool
-	serviceOnly     bool
-	lastApply       ClusterRequest
-	lastDelete      ClusterRequest
-	revision        string
-	serviceRevision string
-	rv              string
+	present           bool
+	matches           bool
+	failApply         bool
+	partialService    bool
+	serviceOnly       bool
+	lastApply         ClusterRequest
+	lastDelete        ClusterRequest
+	revision          string
+	serviceRevision   string
+	rv                string
+	rolloutPending    bool
+	generationPending bool
 }
 
 func (m *clusterMemory) Apply(_ context.Context, req ClusterRequest) (ClusterResult, error) {
@@ -41,9 +43,17 @@ func (m *clusterMemory) Apply(_ context.Context, req ClusterRequest) (ClusterRes
 		if serviceUID != "" && serviceRevision == "" {
 			serviceRevision = m.revision
 		}
+		readyReplicas := 1
+		if m.rolloutPending {
+			readyReplicas = 0
+		}
+		observedGeneration := int64(1)
+		if m.generationPending {
+			observedGeneration = 0
+		}
 		return ClusterResult{Found: true, UID: uid, ResourceVersion: deploymentRV, Revision: m.revision,
 			ServiceUID: serviceUID, ServiceResourceVersion: m.rv, ServiceRevision: serviceRevision, MatchesDesired: m.matches,
-			Generation: 1, ObservedGeneration: 1, Replicas: 1, ReadyReplicas: 1}, nil
+			Generation: 1, ObservedGeneration: observedGeneration, Replicas: 1, ReadyReplicas: readyReplicas}, nil
 	case OpApplyWorkload:
 		m.lastApply = req
 		if m.failApply {
@@ -103,6 +113,65 @@ func TestClusterPartialUpdateKeepsItsApprovedUpdateAction(t *testing.T) {
 	outcome, err := r.Reconcile(t.Context(), "@cluster", desired)
 	if err != nil || !outcome.Applied || outcome.PendingApproval || m.partialService || m.lastApply.Op != OpApplyWorkload {
 		t.Fatalf("partial approved Update did not resume: outcome=%+v request=%+v err=%v", outcome, m.lastApply, err)
+	}
+}
+
+func TestClusterRolloutWaitKeepsItsApprovedCreateAction(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		rolloutPending    bool
+		generationPending bool
+	}{
+		{name: "replicas are not Ready", rolloutPending: true},
+		{name: "generation is not observed", generationPending: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			desired := clusterDesired()[:1]
+			desired[0].Container.Expose = []uint32{8080}
+			m := &clusterMemory{present: true, matches: true, revision: "accepted-rev", serviceRevision: "accepted-rev", rv: "rv-1", rolloutPending: tc.rolloutPending, generationPending: tc.generationPending}
+			r := newReconciler(nil)
+			r.Cluster = m
+			r.ClusterRevision = "accepted-rev"
+			r.Authorize = func(st plan.PlanStep) bool { return st.Action == plan.ActionCreate }
+			r.ClusterAuthority = func(st plan.PlanStep) (Authority, error) {
+				if st.Action != plan.ActionCreate {
+					t.Fatalf("cluster authority requested for %s, want Create", st.Action)
+				}
+				return Authority{AcceptedRevision: "accepted-rev", PlanID: "plan-211", StepDigest: "sha256:reviewed", LeaderEpoch: 7}, nil
+			}
+
+			waiting, err := r.Reconcile(t.Context(), "@cluster", desired)
+			if err != nil || !waiting.Retryable || waiting.PendingApproval || len(waiting.Steps) != 1 || waiting.Steps[0].Step.Action != plan.ActionCreate {
+				t.Fatalf("matching rollout lost its approved Create while waiting: outcome=%+v err=%v", waiting, err)
+			}
+
+			m.rolloutPending, m.generationPending = false, false
+			ready, err := r.Reconcile(t.Context(), "@cluster", desired)
+			if err != nil || !ready.Applied || ready.PendingApproval || len(ready.Plan.Steps) != 0 {
+				t.Fatalf("ready matching workload did not converge: outcome=%+v err=%v", ready, err)
+			}
+		})
+	}
+}
+
+func TestClusterRolloutWaitKeepsItsApprovedUpdateAction(t *testing.T) {
+	desired := clusterDesired()[:1]
+	desired[0].Container.Expose = []uint32{8080}
+	m := &clusterMemory{present: true, matches: true, revision: "accepted-rev", serviceRevision: "accepted-rev", rv: "rv-1", rolloutPending: true}
+	r := newReconciler(nil)
+	r.Cluster = m
+	r.ClusterRevision = "accepted-rev"
+	r.Authorize = func(st plan.PlanStep) bool { return st.Action == plan.ActionUpdate }
+	r.ClusterAuthority = func(st plan.PlanStep) (Authority, error) {
+		if st.Action != plan.ActionUpdate {
+			t.Fatalf("cluster authority requested for %s, want Update", st.Action)
+		}
+		return Authority{AcceptedRevision: "accepted-rev", PlanID: "plan-211", StepDigest: "sha256:reviewed", LeaderEpoch: 7}, nil
+	}
+
+	waiting, err := r.Reconcile(t.Context(), "@cluster", desired)
+	if err != nil || !waiting.Retryable || waiting.PendingApproval || len(waiting.Steps) != 1 || waiting.Steps[0].Step.Action != plan.ActionUpdate {
+		t.Fatalf("matching rollout lost its approved Update while waiting: outcome=%+v err=%v", waiting, err)
 	}
 }
 
