@@ -189,7 +189,7 @@ type ContainerSpec struct {
 	// public ones. Omitting the protocol means TCP; "/udp" publishes
 	// the UDP side (protocol minor 12), which a DNS resolver or a
 	// torrent client's DHT needs and which used to be unsayable.
-	Ports  []string `yaml:"ports,omitempty"`
+	Ports []string `yaml:"ports,omitempty"`
 	// Expose names container ports that a backend may make reachable only
 	// inside its own workload network. Unlike Ports, these do not publish a
 	// listener on a host. The first k3s slice uses them to build a ClusterIP
