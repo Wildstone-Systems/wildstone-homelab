@@ -520,3 +520,85 @@ func TestObserveTreatsOmittedEmptyEnvAsConverged(t *testing.T) {
 		t.Fatal("JSON-omitted empty Env was reported as drift")
 	}
 }
+
+func TestWorkloadResourcesUseKubernetesQuantities(t *testing.T) {
+	f := &workloadFake{}
+	x := WorkloadExecutor{Client: f, Epoch: 7, Context: context.Background()}
+	w := workload()
+	w.Resources = &wsv1.ContainerResources{Memory: "512m", Cpus: "0.5"}
+	if _, err := x.Apply(context.Background(), &wsv1.ApplyWorkload{Authority: authority(7, "rev-a"), Workload: w}); err != nil {
+		t.Fatal(err)
+	}
+	resources := f.d.Spec.Template.Spec.Containers[0].Resources
+	if got := resources.Limits["memory"]; got != "512Mi" {
+		t.Fatalf("memory limit = %q, want 512Mi", got)
+	}
+	if got := resources.Limits["cpu"]; got != "500m" {
+		t.Fatalf("cpu limit = %q, want 500m", got)
+	}
+	if !reflect.DeepEqual(resources.Limits, resources.Requests) {
+		t.Fatalf("requests = %+v, want limits %+v", resources.Requests, resources.Limits)
+	}
+	for name, test := range map[string]struct {
+		memory, cpu, wantMemory, wantCPU string
+	}{
+		"whole units":    {"4g", "2", "4Gi", "2"},
+		"canonical fold": {"1024m", "1.25", "1Gi", "1250m"},
+		"bare bytes":     {"536870913", "0.001", "536870913", "1m"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got, err := kubernetesMemoryQuantity(test.memory); err != nil || got != test.wantMemory {
+				t.Fatalf("memory %q = %q, %v; want %q", test.memory, got, err, test.wantMemory)
+			}
+			if got, err := kubernetesCPUQuantity(test.cpu); err != nil || got != test.wantCPU {
+				t.Fatalf("cpu %q = %q, %v; want %q", test.cpu, got, err, test.wantCPU)
+			}
+		})
+	}
+}
+
+func TestObserveComparesResourceQuantitiesSemantically(t *testing.T) {
+	f := &workloadFake{}
+	x := WorkloadExecutor{Client: f, Epoch: 7, Context: context.Background()}
+	w := workload()
+	w.Resources = &wsv1.ContainerResources{Memory: "512m", Cpus: "0.5"}
+	if _, err := x.Apply(context.Background(), &wsv1.ApplyWorkload{Authority: authority(7, "rev-a"), Workload: w}); err != nil {
+		t.Fatal(err)
+	}
+	resources := &f.d.Spec.Template.Spec.Containers[0].Resources
+	resources.Limits["memory"], resources.Requests["memory"] = "536870912", "536870912"
+	resources.Limits["cpu"], resources.Requests["cpu"] = "0.5", "0.5"
+	observed, err := x.Observe(context.Background(), &wsv1.ObserveWorkload{Name: w.Name, Desired: w})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !observed.MatchesDesired {
+		t.Fatal("equivalent Kubernetes resource quantities were reported as drift")
+	}
+	resources.Limits["cpu"] = "600m"
+	if observed, err = x.Observe(context.Background(), &wsv1.ObserveWorkload{Name: w.Name, Desired: w}); err != nil || observed.MatchesDesired {
+		t.Fatalf("changed CPU limit was accepted: observed=%+v err=%v", observed, err)
+	}
+	resources.Limits["cpu"] = "500m"
+	resources.Requests["memory"] = "256Mi"
+	if observed, err = x.Observe(context.Background(), &wsv1.ObserveWorkload{Name: w.Name, Desired: w}); err != nil || observed.MatchesDesired {
+		t.Fatalf("changed memory request was accepted: observed=%+v err=%v", observed, err)
+	}
+}
+
+func TestWorkloadRejectsUnsupportedResourceQuantities(t *testing.T) {
+	for name, resources := range map[string]*wsv1.ContainerResources{
+		"overflowing memory":  {Memory: "9999999999999999999g"},
+		"sub-millicore CPU":   {Cpus: "0.0001"},
+		"fraction CPU syntax": {Cpus: "1/2"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			x := WorkloadExecutor{Client: &workloadFake{}, Epoch: 7, Context: context.Background()}
+			w := workload()
+			w.Resources = resources
+			if _, err := x.Apply(context.Background(), &wsv1.ApplyWorkload{Authority: authority(7, "rev-a"), Workload: w}); !IsInvalid(err) {
+				t.Fatalf("Apply error = %v, want Invalid", err)
+			}
+		})
+	}
+}

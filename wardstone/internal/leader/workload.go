@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/big"
 	"regexp"
 	"sort"
 	"strconv"
@@ -33,8 +34,10 @@ const (
 )
 
 var (
-	dnsLabel    = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$`)
-	digestImage = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9./_:-]*@sha256:[a-f0-9]{64}$`)
+	dnsLabel             = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$`)
+	digestImage          = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9./_:-]*@sha256:[a-f0-9]{64}$`)
+	dockerMemoryQuantity = regexp.MustCompile(`^[0-9]+[bBkKmMgG]?$`)
+	decimalCPUQuantity   = regexp.MustCompile(`^[0-9]+(?:\.[0-9]+)?$`)
 )
 
 // Refusal is an authority, ownership or stale-state failure. Callers expose
@@ -127,6 +130,14 @@ func validateWorkload(w *wsv1.WorkloadSpec) error {
 	if r := w.GetResources(); r != nil && r.GetPidsLimit() != 0 {
 		return &Invalid{Reason: "pids_limit has no reviewed Kubernetes mapping"}
 	}
+	if r := w.GetResources(); r != nil {
+		if _, err := kubernetesMemoryQuantity(r.GetMemory()); err != nil {
+			return &Invalid{Reason: err.Error()}
+		}
+		if _, err := kubernetesCPUQuantity(r.GetCpus()); err != nil {
+			return &Invalid{Reason: err.Error()}
+		}
+	}
 	portNames := map[string]bool{}
 	servicePorts := map[uint32]bool{}
 	for _, p := range w.GetPorts() {
@@ -178,10 +189,10 @@ func render(w *wsv1.WorkloadSpec, a *wsv1.WorkloadAuthority) (*kubeapi.Deploymen
 	limits := map[string]string{}
 	if r := w.GetResources(); r != nil {
 		if r.GetMemory() != "" {
-			limits["memory"] = r.GetMemory()
+			limits["memory"], _ = kubernetesMemoryQuantity(r.GetMemory())
 		}
 		if r.GetCpus() != "" {
-			limits["cpu"] = r.GetCpus()
+			limits["cpu"], _ = kubernetesCPUQuantity(r.GetCpus())
 		}
 	}
 	if len(limits) == 0 {
@@ -462,7 +473,7 @@ func (x WorkloadExecutor) Observe(ctx context.Context, req *wsv1.ObserveWorkload
 			sameManagedFields(d.Spec.Selector, wantDeployment.Spec.Selector) &&
 			sameManagedFields(d.Spec.Strategy, wantDeployment.Spec.Strategy) &&
 			sameManagedFields(d.Spec.Template.Metadata.Labels, wantDeployment.Spec.Template.Metadata.Labels) &&
-			sameManagedFields(d.Spec.Template.Spec, wantDeployment.Spec.Template.Spec) &&
+			sameManagedPodSpec(d.Spec.Template.Spec, wantDeployment.Spec.Template.Spec) &&
 			sameManagedFields(service.Spec, wantService.Spec)
 	}
 	if d != nil {
@@ -499,6 +510,122 @@ func sameManagedFields(a, b any) bool {
 	left, leftErr := json.Marshal(a)
 	right, rightErr := json.Marshal(b)
 	return leftErr == nil && rightErr == nil && bytes.Equal(left, right)
+}
+
+func sameManagedPodSpec(a, b kubeapi.PodSpec) bool {
+	left, right := a, b
+	normalizePodResources(&left)
+	normalizePodResources(&right)
+	return sameManagedFields(left, right)
+}
+
+func normalizePodResources(p *kubeapi.PodSpec) {
+	for i := range p.Containers {
+		for _, resources := range []map[string]string{p.Containers[i].Resources.Limits, p.Containers[i].Resources.Requests} {
+			for name, value := range resources {
+				if normalized, ok := kubernetesQuantityValue(name, value); ok {
+					resources[name] = normalized.RatString()
+				}
+			}
+		}
+	}
+}
+
+func kubernetesQuantityValue(name, value string) (*big.Rat, bool) {
+	var multipliers map[string]*big.Rat
+	switch name {
+	case "cpu":
+		multipliers = map[string]*big.Rat{
+			"": big.NewRat(1, 1), "m": big.NewRat(1, 1_000),
+			"u": big.NewRat(1, 1_000_000), "n": big.NewRat(1, 1_000_000_000),
+		}
+	case "memory":
+		multipliers = map[string]*big.Rat{
+			"": big.NewRat(1, 1), "Ki": big.NewRat(1<<10, 1),
+			"Mi": big.NewRat(1<<20, 1), "Gi": big.NewRat(1<<30, 1),
+			"Ti": new(big.Rat).SetInt(new(big.Int).Lsh(big.NewInt(1), 40)),
+			"k":  big.NewRat(1_000, 1), "M": big.NewRat(1_000_000, 1),
+			"G": big.NewRat(1_000_000_000, 1), "m": big.NewRat(1, 1_000),
+		}
+	default:
+		return nil, false
+	}
+	for _, suffix := range []string{"Ki", "Mi", "Gi", "Ti", "m", "u", "n", "k", "M", "G", ""} {
+		multiplier, allowed := multipliers[suffix]
+		if !allowed || !strings.HasSuffix(value, suffix) {
+			continue
+		}
+		number := strings.TrimSuffix(value, suffix)
+		if number == "" {
+			continue
+		}
+		quantity, ok := new(big.Rat).SetString(number)
+		if !ok {
+			return nil, false
+		}
+		return quantity.Mul(quantity, multiplier), true
+	}
+	return nil, false
+}
+
+// Workload resources retain the existing Docker-readable public contract.
+// Translate it only at the typed Kubernetes execution boundary so "512m"
+// keeps meaning 512 MiB rather than Kubernetes' 0.512-byte milli suffix.
+func kubernetesMemoryQuantity(value string) (string, error) {
+	if value == "" {
+		return "", nil
+	}
+	if !dockerMemoryQuantity.MatchString(value) {
+		return "", fmt.Errorf("memory %q is not a Docker size string", value)
+	}
+	multiplier := int64(1)
+	number := value
+	switch value[len(value)-1] {
+	case 'b', 'B':
+		number = value[:len(value)-1]
+	case 'k', 'K':
+		multiplier, number = 1<<10, value[:len(value)-1]
+	case 'm', 'M':
+		multiplier, number = 1<<20, value[:len(value)-1]
+	case 'g', 'G':
+		multiplier, number = 1<<30, value[:len(value)-1]
+	}
+	n, err := strconv.ParseInt(number, 10, 64)
+	if err != nil || n <= 0 || n > (1<<63-1)/multiplier {
+		return "", fmt.Errorf("memory %q is not a bounded Docker size string", value)
+	}
+	bytes := n * multiplier
+	for _, unit := range []struct {
+		bytes int64
+		name  string
+	}{{1 << 30, "Gi"}, {1 << 20, "Mi"}, {1 << 10, "Ki"}} {
+		if bytes%unit.bytes == 0 {
+			return strconv.FormatInt(bytes/unit.bytes, 10) + unit.name, nil
+		}
+	}
+	return strconv.FormatInt(bytes, 10), nil
+}
+
+func kubernetesCPUQuantity(value string) (string, error) {
+	if value == "" {
+		return "", nil
+	}
+	if !decimalCPUQuantity.MatchString(value) {
+		return "", fmt.Errorf("cpu %q is not a decimal core count", value)
+	}
+	cores, ok := new(big.Rat).SetString(value)
+	if !ok || cores.Sign() <= 0 {
+		return "", fmt.Errorf("cpu %q is not a positive decimal core count", value)
+	}
+	milli := new(big.Rat).Mul(cores, big.NewRat(1_000, 1))
+	if !milli.IsInt() {
+		return "", fmt.Errorf("cpu %q is finer than Kubernetes' 1m precision", value)
+	}
+	m := milli.Num()
+	if new(big.Int).Mod(new(big.Int).Set(m), big.NewInt(1_000)).Sign() == 0 {
+		return new(big.Int).Quo(new(big.Int).Set(m), big.NewInt(1_000)).String(), nil
+	}
+	return m.String() + "m", nil
 }
 
 func (x WorkloadExecutor) Logs(ctx context.Context, req *wsv1.WorkloadLogs) (*wsv1.WorkloadLogsResult, error) {
