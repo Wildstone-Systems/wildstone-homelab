@@ -47,13 +47,13 @@ func (a *GatewayClusterApplier) Apply(ctx context.Context, req ClusterRequest) (
 	}
 	compatible := false
 	for _, n := range nodes {
-		if n.NodeID == node && n.ProtocolMinor >= 31 {
+		if n.NodeID == node && n.ProtocolMinor >= 32 {
 			compatible = true
 			break
 		}
 	}
 	if !compatible {
-		return ClusterResult{}, &ClusterUnavailable{fmt.Errorf("cluster: leader %s requires protocol minor 31 for desired workload observation", node)}
+		return ClusterResult{}, &ClusterUnavailable{fmt.Errorf("cluster: leader %s requires protocol minor 32 for separate workload revision witnesses", node)}
 	}
 	if req.Op != OpWorkloadStatus && term.Epoch != req.Authority.LeaderEpoch {
 		return ClusterResult{}, &ClusterUnavailable{fmt.Errorf("cluster: leadership changed before dispatch")}
@@ -66,7 +66,7 @@ func (a *GatewayClusterApplier) Apply(ctx context.Context, req ClusterRequest) (
 		if err != nil {
 			return ClusterResult{}, err
 		}
-		op = &wsv1.Operation{Op: &wsv1.Operation_ApplyWorkload{ApplyWorkload: &wsv1.ApplyWorkload{Authority: auth, Workload: w, ExpectedRevision: req.ExpectedRevision}}}
+		op = &wsv1.Operation{Op: &wsv1.Operation_ApplyWorkload{ApplyWorkload: &wsv1.ApplyWorkload{Authority: auth, Workload: w, ExpectedRevision: req.ExpectedRevision, ExpectedServiceRevision: req.ExpectedServiceRevision, SeparateRevisionWitnesses: true}}}
 	case OpDeleteWorkload:
 		op = &wsv1.Operation{Op: &wsv1.Operation_DeleteWorkload{DeleteWorkload: &wsv1.DeleteWorkload{Authority: auth, Name: req.Name, Uid: req.UID, ResourceVersion: req.ResourceVersion, ServiceUid: req.ServiceUID, ServiceResourceVersion: req.ServiceResourceVersion}}}
 	case OpWorkloadStatus:
@@ -109,7 +109,7 @@ func (a *GatewayClusterApplier) Apply(ctx context.Context, req ClusterRequest) (
 		if r == nil {
 			return ClusterResult{}, fmt.Errorf("cluster: missing ObserveWorkload result")
 		}
-		return ClusterResult{Found: true, UID: r.GetUid(), ResourceVersion: r.GetResourceVersion(), Revision: r.GetRevision(), ServiceUID: r.GetServiceUid(), ServiceResourceVersion: r.GetServiceResourceVersion(), MatchesDesired: r.GetMatchesDesired(), Generation: r.GetGeneration(), ObservedGeneration: r.GetObservedGeneration(), ReadyReplicas: int(r.GetReadyReplicas()), Replicas: int(r.GetReplicas())}, nil
+		return ClusterResult{Found: true, UID: r.GetUid(), ResourceVersion: r.GetResourceVersion(), Revision: r.GetRevision(), ServiceUID: r.GetServiceUid(), ServiceResourceVersion: r.GetServiceResourceVersion(), ServiceRevision: r.GetServiceRevision(), MatchesDesired: r.GetMatchesDesired(), Generation: r.GetGeneration(), ObservedGeneration: r.GetObservedGeneration(), ReadyReplicas: int(r.GetReadyReplicas()), Replicas: int(r.GetReplicas())}, nil
 	}
 }
 

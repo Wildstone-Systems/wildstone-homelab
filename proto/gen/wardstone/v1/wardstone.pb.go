@@ -5416,7 +5416,6 @@ func (x *ListBlockDevicesResult) GetDevices() []*BlockDevice {
 //   - every option must match ^[a-zA-Z0-9._=/-]+$ (no commas/whitespace —
 //     fstab field injection); nosuid and nodev are mandatory and appended
 //     if the caller omitted them.
-//
 // The agent owns a marker-delimited block in /etc/fstab ("# BEGIN
 // wildstone-managed" / "# END wildstone-managed") — lines outside that
 // block are never touched. Ordering: the actual mount is attempted FIRST;
@@ -8161,11 +8160,20 @@ type ApplyWorkload struct {
 	state     protoimpl.MessageState `protogen:"open.v1"`
 	Authority *WorkloadAuthority     `protobuf:"bytes,1,opt,name=authority,proto3" json:"authority,omitempty"`
 	Workload  *WorkloadSpec          `protobuf:"bytes,2,opt,name=workload,proto3" json:"workload,omitempty"`
-	// Empty only for first creation. Otherwise this is the revision observed
-	// when the Plan was made; a different stored revision refuses stale work.
+	// Empty only when the Deployment was absent. Otherwise this is its
+	// separately observed revision; a different stored revision refuses stale
+	// work. Keeping the two object witnesses separate lets an approved retry
+	// finish when the Deployment write succeeded but the Service write did not.
 	ExpectedRevision string `protobuf:"bytes,3,opt,name=expected_revision,json=expectedRevision,proto3" json:"expected_revision,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// The separately observed Service revision (protocol minor 32). Empty when
+	// the Service was absent.
+	ExpectedServiceRevision string `protobuf:"bytes,4,opt,name=expected_service_revision,json=expectedServiceRevision,proto3" json:"expected_service_revision,omitempty"`
+	// Distinguishes a minor-32 caller that observed no Service (the empty value
+	// above is authoritative) from a pre-minor-32 caller that omitted the new
+	// field. Only the latter receives the original single-witness fallback.
+	SeparateRevisionWitnesses bool `protobuf:"varint,5,opt,name=separate_revision_witnesses,json=separateRevisionWitnesses,proto3" json:"separate_revision_witnesses,omitempty"`
+	unknownFields             protoimpl.UnknownFields
+	sizeCache                 protoimpl.SizeCache
 }
 
 func (x *ApplyWorkload) Reset() {
@@ -8217,6 +8225,20 @@ func (x *ApplyWorkload) GetExpectedRevision() string {
 		return x.ExpectedRevision
 	}
 	return ""
+}
+
+func (x *ApplyWorkload) GetExpectedServiceRevision() string {
+	if x != nil {
+		return x.ExpectedServiceRevision
+	}
+	return ""
+}
+
+func (x *ApplyWorkload) GetSeparateRevisionWitnesses() bool {
+	if x != nil {
+		return x.SeparateRevisionWitnesses
+	}
+	return false
 }
 
 type ApplyWorkloadResult struct {
@@ -8563,8 +8585,12 @@ type ObserveWorkloadResult struct {
 	ServiceUid             string                 `protobuf:"bytes,14,opt,name=service_uid,json=serviceUid,proto3" json:"service_uid,omitempty"`
 	ServiceResourceVersion string                 `protobuf:"bytes,15,opt,name=service_resource_version,json=serviceResourceVersion,proto3" json:"service_resource_version,omitempty"`
 	MatchesDesired         bool                   `protobuf:"varint,16,opt,name=matches_desired,json=matchesDesired,proto3" json:"matches_desired,omitempty"`
-	unknownFields          protoimpl.UnknownFields
-	sizeCache              protoimpl.SizeCache
+	// The Service's own accepted-revision witness (protocol minor 32). revision
+	// remains the Deployment witness, falling back to this value only when the
+	// Deployment is absent for wire compatibility with the original contract.
+	ServiceRevision string `protobuf:"bytes,17,opt,name=service_revision,json=serviceRevision,proto3" json:"service_revision,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *ObserveWorkloadResult) Reset() {
@@ -8707,6 +8733,13 @@ func (x *ObserveWorkloadResult) GetMatchesDesired() bool {
 		return x.MatchesDesired
 	}
 	return false
+}
+
+func (x *ObserveWorkloadResult) GetServiceRevision() string {
+	if x != nil {
+		return x.ServiceRevision
+	}
+	return ""
 }
 
 type WorkloadLogs struct {
@@ -9362,11 +9395,13 @@ const file_wardstone_v1_wardstone_proto_rawDesc = "" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1a?\n" +
 	"\x11NodeSelectorEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xb3\x01\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xaf\x02\n" +
 	"\rApplyWorkload\x12=\n" +
 	"\tauthority\x18\x01 \x01(\v2\x1f.wardstone.v1.WorkloadAuthorityR\tauthority\x126\n" +
 	"\bworkload\x18\x02 \x01(\v2\x1a.wardstone.v1.WorkloadSpecR\bworkload\x12+\n" +
-	"\x11expected_revision\x18\x03 \x01(\tR\x10expectedRevision\"\xcd\x01\n" +
+	"\x11expected_revision\x18\x03 \x01(\tR\x10expectedRevision\x12:\n" +
+	"\x19expected_service_revision\x18\x04 \x01(\tR\x17expectedServiceRevision\x12>\n" +
+	"\x1bseparate_revision_witnesses\x18\x05 \x01(\bR\x19separateRevisionWitnesses\"\xcd\x01\n" +
 	"\x13ApplyWorkloadResult\x12\x10\n" +
 	"\x03uid\x18\x01 \x01(\tR\x03uid\x12)\n" +
 	"\x10resource_version\x18\x02 \x01(\tR\x0fresourceVersion\x12\x1e\n" +
@@ -9393,7 +9428,7 @@ const file_wardstone_v1_wardstone_proto_rawDesc = "" +
 	"\x04type\x18\x01 \x01(\tR\x04type\x12\x16\n" +
 	"\x06status\x18\x02 \x01(\tR\x06status\x12\x16\n" +
 	"\x06reason\x18\x03 \x01(\tR\x06reason\x12\x18\n" +
-	"\amessage\x18\x04 \x01(\tR\amessage\"\xfb\x04\n" +
+	"\amessage\x18\x04 \x01(\tR\amessage\"\xa6\x05\n" +
 	"\x15ObserveWorkloadResult\x12\x10\n" +
 	"\x03uid\x18\x01 \x01(\tR\x03uid\x12)\n" +
 	"\x10resource_version\x18\x02 \x01(\tR\x0fresourceVersion\x12\x1a\n" +
@@ -9416,7 +9451,8 @@ const file_wardstone_v1_wardstone_proto_rawDesc = "" +
 	"\vservice_uid\x18\x0e \x01(\tR\n" +
 	"serviceUid\x128\n" +
 	"\x18service_resource_version\x18\x0f \x01(\tR\x16serviceResourceVersion\x12'\n" +
-	"\x0fmatches_desired\x18\x10 \x01(\bR\x0ematchesDesired\"}\n" +
+	"\x0fmatches_desired\x18\x10 \x01(\bR\x0ematchesDesired\x12)\n" +
+	"\x10service_revision\x18\x11 \x01(\tR\x0fserviceRevision\"}\n" +
 	"\fWorkloadLogs\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x12\n" +
 	"\x04tail\x18\x02 \x01(\rR\x04tail\x12$\n" +

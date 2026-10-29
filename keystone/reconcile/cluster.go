@@ -128,11 +128,12 @@ type ClusterRequest struct {
 	// UID is the object the Plan saw, for OpDeleteWorkload: the leader
 	// stamps it with the current epoch, then deletes with the stamp's
 	// resourceVersion as the precondition (safety contract §2.4, §3).
-	UID                    string
-	ResourceVersion        string
-	ServiceUID             string
-	ServiceResourceVersion string
-	ExpectedRevision       string
+	UID                     string
+	ResourceVersion         string
+	ServiceUID              string
+	ServiceResourceVersion  string
+	ExpectedRevision        string
+	ExpectedServiceRevision string
 }
 
 // ClusterResult is the leader's answer: Kubernetes facts, not Docker ones.
@@ -143,6 +144,7 @@ type ClusterResult struct {
 	Revision               string
 	ServiceUID             string
 	ServiceResourceVersion string
+	ServiceRevision        string
 	MatchesDesired         bool
 	Generation             int64
 	ObservedGeneration     int64

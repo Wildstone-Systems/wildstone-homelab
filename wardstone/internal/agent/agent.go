@@ -174,7 +174,9 @@ import (
 // WorkloadLogs arms for the fenced Wardstone leader.
 // 31: ObserveWorkload compares an optional typed desired workload and
 // returns matches_desired for drift detection.
-const ProtocolMinor = 31
+// 32: ApplyWorkload and ObserveWorkload carry separate Deployment and Service
+// revision witnesses so a partial approved update retries fail closed.
+const ProtocolMinor = 32
 
 // maxUpdateMsgBytes is the gRPC message size cap on both ends of the
 // session/join connections (ADR-W003 W5). SelfUpdate ships the new binary

@@ -1334,9 +1334,18 @@ message WorkloadSpec {
 message ApplyWorkload {
   WorkloadAuthority authority = 1;
   WorkloadSpec workload = 2;
-  // Empty only for first creation. Otherwise this is the revision observed
-  // when the Plan was made; a different stored revision refuses stale work.
+  // Empty only when the Deployment was absent. Otherwise this is its
+  // separately observed revision; a different stored revision refuses stale
+  // work. Keeping the two object witnesses separate lets an approved retry
+  // finish when the Deployment write succeeded but the Service write did not.
   string expected_revision = 3;
+  // The separately observed Service revision (protocol minor 32). Empty when
+  // the Service was absent.
+  string expected_service_revision = 4;
+  // Distinguishes a minor-32 caller that observed no Service (the empty value
+  // above is authoritative) from a pre-minor-32 caller that omitted the new
+  // field. Only the latter receives the original single-witness fallback.
+  bool separate_revision_witnesses = 5;
 }
 
 message ApplyWorkloadResult {
@@ -1389,6 +1398,10 @@ message ObserveWorkloadResult {
   string service_uid = 14;
   string service_resource_version = 15;
   bool matches_desired = 16;
+  // The Service's own accepted-revision witness (protocol minor 32). revision
+  // remains the Deployment witness, falling back to this value only when the
+  // Deployment is absent for wire compatibility with the original contract.
+  string service_revision = 17;
 }
 
 message WorkloadLogs {

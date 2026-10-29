@@ -11,15 +11,16 @@ import (
 )
 
 type clusterMemory struct {
-	present        bool
-	matches        bool
-	failApply      bool
-	partialService bool
-	serviceOnly    bool
-	lastApply      ClusterRequest
-	lastDelete     ClusterRequest
-	revision       string
-	rv             string
+	present         bool
+	matches         bool
+	failApply       bool
+	partialService  bool
+	serviceOnly     bool
+	lastApply       ClusterRequest
+	lastDelete      ClusterRequest
+	revision        string
+	serviceRevision string
+	rv              string
 }
 
 func (m *clusterMemory) Apply(_ context.Context, req ClusterRequest) (ClusterResult, error) {
@@ -36,8 +37,12 @@ func (m *clusterMemory) Apply(_ context.Context, req ClusterRequest) (ClusterRes
 		if m.serviceOnly {
 			uid, deploymentRV = "", ""
 		}
+		serviceRevision := m.serviceRevision
+		if serviceUID != "" && serviceRevision == "" {
+			serviceRevision = m.revision
+		}
 		return ClusterResult{Found: true, UID: uid, ResourceVersion: deploymentRV, Revision: m.revision,
-			ServiceUID: serviceUID, ServiceResourceVersion: m.rv, MatchesDesired: m.matches,
+			ServiceUID: serviceUID, ServiceResourceVersion: m.rv, ServiceRevision: serviceRevision, MatchesDesired: m.matches,
 			Generation: 1, ObservedGeneration: 1, Replicas: 1, ReadyReplicas: 1}, nil
 	case OpApplyWorkload:
 		m.lastApply = req
@@ -45,7 +50,7 @@ func (m *clusterMemory) Apply(_ context.Context, req ClusterRequest) (ClusterRes
 			m.failApply = false
 			return ClusterResult{}, errors.New("leader term ended")
 		}
-		m.present, m.matches, m.partialService, m.serviceOnly, m.revision, m.rv = true, true, false, false, req.Authority.AcceptedRevision, "rv-1"
+		m.present, m.matches, m.partialService, m.serviceOnly, m.revision, m.serviceRevision, m.rv = true, true, false, false, req.Authority.AcceptedRevision, req.Authority.AcceptedRevision, "rv-1"
 		return ClusterResult{Found: true, UID: "uid-1", ResourceVersion: m.rv}, nil
 	case OpDeleteWorkload:
 		m.lastDelete = req
@@ -60,6 +65,24 @@ func (m *clusterMemory) Apply(_ context.Context, req ClusterRequest) (ClusterRes
 		return ClusterResult{}, nil
 	}
 	return ClusterResult{}, errors.New("unknown op")
+}
+
+func TestClusterApplyCarriesSeparateObjectRevisionWitnesses(t *testing.T) {
+	desired := clusterDesired()[:1]
+	desired[0].Container.Expose = []uint32{8080}
+	want := desired[0]
+	k := resKey{want.Kind, want.Metadata.Name}
+	m := &clusterMemory{present: true, revision: "rev-b", serviceRevision: "rev-a", rv: "rv-1"}
+	r := newReconciler(nil)
+	r.Cluster = m
+	r.ClusterAuthority = func(plan.PlanStep) (Authority, error) {
+		return Authority{AcceptedRevision: "rev-b", PlanID: "plan-211", StepDigest: "sha256:reviewed", LeaderEpoch: 7}, nil
+	}
+	step := plan.PlanStep{Action: plan.ActionUpdate, Kind: resource.KindContainer, Name: want.Metadata.Name}
+	result := r.applyClusterContainerStep(t.Context(), "@cluster", step, map[resKey]resource.Resource{k: want}, desired, map[resKey]ClusterResult{k: {Found: true, Revision: "rev-b", ServiceRevision: "rev-a"}})
+	if !result.Applied || m.lastApply.ExpectedRevision != "rev-b" || m.lastApply.ExpectedServiceRevision != "rev-a" {
+		t.Fatalf("separate revision witnesses were not preserved: result=%+v request=%+v", result, m.lastApply)
+	}
 }
 
 func clusterDesired() []resource.Resource {

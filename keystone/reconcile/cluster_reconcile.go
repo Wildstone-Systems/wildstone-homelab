@@ -68,7 +68,7 @@ func (r *Reconciler) applyClusterContainerStep(ctx context.Context, nodeID strin
 			sr.Error = err.Error()
 			return sr
 		}
-		req := ClusterRequest{Op: OpApplyWorkload, Name: step.Name, Authority: auth, Workload: intent, ExpectedRevision: before.Revision}
+		req := ClusterRequest{Op: OpApplyWorkload, Name: step.Name, Authority: auth, Workload: intent, ExpectedRevision: before.Revision, ExpectedServiceRevision: before.ServiceRevision}
 		if _, err := r.Cluster.Apply(ctx, req); err != nil {
 			sr.Error = err.Error()
 			sr.Retryable = true

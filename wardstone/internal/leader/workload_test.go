@@ -22,6 +22,7 @@ type workloadFake struct {
 	deleteDeploymentUID, deleteDeploymentRV string
 	deleteServiceUID, deleteServiceRV       string
 	applyStarted                            chan struct{}
+	failServiceApply                        bool
 	failServiceUpdate                       bool
 	failDeploymentDelete                    bool
 	beforeDeploymentApply                   func()
@@ -137,6 +138,10 @@ func (f *workloadFake) CreateService(_ context.Context, s *kubeapi.Service) (*ku
 	return clone(s), nil
 }
 func (f *workloadFake) ApplyService(_ context.Context, s *kubeapi.Service) (*kubeapi.Service, error) {
+	if f.failServiceApply {
+		f.failServiceApply = false
+		return nil, errors.New("transient Service apply")
+	}
 	if f.s == nil || s.Metadata.ResourceVersion == "" || s.Metadata.ResourceVersion != f.s.Metadata.ResourceVersion {
 		return nil, &kubeapi.StatusError{Code: 409, Reason: "Conflict"}
 	}
@@ -182,7 +187,7 @@ func workload() *wsv1.WorkloadSpec {
 
 func TestGeneratedWorkloadArmsRoundTripWithoutRawPayload(t *testing.T) {
 	operations := []*wsv1.Operation{
-		{Op: &wsv1.Operation_ApplyWorkload{ApplyWorkload: &wsv1.ApplyWorkload{Authority: authority(7, "rev-a"), Workload: workload(), ExpectedRevision: "rev-before"}}},
+		{Op: &wsv1.Operation_ApplyWorkload{ApplyWorkload: &wsv1.ApplyWorkload{Authority: authority(7, "rev-a"), Workload: workload(), ExpectedRevision: "deployment-before", ExpectedServiceRevision: "service-before", SeparateRevisionWitnesses: true}}},
 		{Op: &wsv1.Operation_DeleteWorkload{DeleteWorkload: &wsv1.DeleteWorkload{Authority: authority(7, "rev-b"), Name: "tools-it-tools", Uid: "deployment-uid", ResourceVersion: "12", ServiceUid: "service-uid", ServiceResourceVersion: "13"}}},
 		{Op: &wsv1.Operation_ObserveWorkload{ObserveWorkload: &wsv1.ObserveWorkload{Name: "tools-it-tools"}}},
 		{Op: &wsv1.Operation_WorkloadLogs{WorkloadLogs: &wsv1.WorkloadLogs{Name: "tools-it-tools", Tail: 25, SinceUnixSec: 10, LimitBytes: 4096}}},
@@ -408,7 +413,7 @@ func TestObserveFindsAnOrphanedService(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if observed.Uid != "" || observed.ResourceVersion != "" || observed.ServiceUid != applied.ServiceUid || observed.ServiceResourceVersion != applied.ServiceResourceVersion || observed.Revision != "rev-a" || observed.MatchesDesired {
+	if observed.Uid != "" || observed.ResourceVersion != "" || observed.ServiceUid != applied.ServiceUid || observed.ServiceResourceVersion != applied.ServiceResourceVersion || observed.Revision != "rev-a" || observed.ServiceRevision != "rev-a" || observed.MatchesDesired {
 		t.Fatalf("orphaned Service observation %+v", observed)
 	}
 }
@@ -430,6 +435,45 @@ func TestApplyRepairsAServiceOnlyWorkloadWithExactRevision(t *testing.T) {
 	}
 	if f.d == nil || f.s == nil || f.d.Metadata.Annotations[revisionAnnotation] != "rev-b" || f.s.Metadata.Annotations[revisionAnnotation] != "rev-b" {
 		t.Fatalf("Service-only repair did not converge: deployment=%+v service=%+v", f.d, f.s)
+	}
+}
+
+func TestApplyResumesAPartialUpdateWithSeparateRevisionWitnesses(t *testing.T) {
+	f := &workloadFake{}
+	x := WorkloadExecutor{Client: f, Epoch: 7, Context: context.Background()}
+	if _, err := x.Apply(context.Background(), &wsv1.ApplyWorkload{Authority: authority(7, "rev-a"), Workload: workload()}); err != nil {
+		t.Fatal(err)
+	}
+	updated := workload()
+	updated.Ports[0].ServicePort = 9090
+	f.failServiceApply = true
+	if _, err := x.Apply(context.Background(), &wsv1.ApplyWorkload{Authority: authority(7, "rev-b"), ExpectedRevision: "rev-a", ExpectedServiceRevision: "rev-a", SeparateRevisionWitnesses: true, Workload: updated}); err == nil {
+		t.Fatal("partial update unexpectedly succeeded")
+	}
+	observed, err := x.Observe(context.Background(), &wsv1.ObserveWorkload{Name: updated.Name, Desired: updated})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if observed.Revision != "rev-b" || observed.ServiceRevision != "rev-a" || observed.MatchesDesired {
+		t.Fatalf("partial update witnesses = %+v", observed)
+	}
+	if _, err := x.Apply(context.Background(), &wsv1.ApplyWorkload{Authority: authority(7, "rev-b"), ExpectedRevision: observed.Revision, ExpectedServiceRevision: observed.ServiceRevision, SeparateRevisionWitnesses: true, Workload: updated}); err != nil {
+		t.Fatalf("separately witnessed retry: %v", err)
+	}
+	if f.d.Metadata.Annotations[revisionAnnotation] != "rev-b" || f.s.Metadata.Annotations[revisionAnnotation] != "rev-b" || f.s.Spec.Ports[0].Port != 9090 {
+		t.Fatalf("partial update did not converge: deployment=%+v service=%+v", f.d, f.s)
+	}
+}
+
+func TestSeparateServiceWitnessPreservesObservedAbsence(t *testing.T) {
+	f := &workloadFake{}
+	x := WorkloadExecutor{Client: f, Epoch: 7, Context: context.Background()}
+	if _, err := x.Apply(context.Background(), &wsv1.ApplyWorkload{Authority: authority(7, "rev-a"), Workload: workload()}); err != nil {
+		t.Fatal(err)
+	}
+	req := &wsv1.ApplyWorkload{Authority: authority(7, "rev-b"), ExpectedRevision: "rev-a", SeparateRevisionWitnesses: true, Workload: workload()}
+	if _, err := x.Apply(context.Background(), req); !IsRefusal(err) {
+		t.Fatalf("Service absent from the observation was overwritten: %v", err)
 	}
 }
 

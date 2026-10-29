@@ -215,13 +215,21 @@ func (x WorkloadExecutor) Apply(requestCtx context.Context, req *wsv1.ApplyWorkl
 	}
 	service, serviceErr := x.Client.GetService(ctx, w.GetName())
 	serviceExists := serviceErr == nil
+	expectedServiceRevision := req.GetExpectedServiceRevision()
+	if !req.GetSeparateRevisionWitnesses() {
+		// Preserve the original single-witness contract for pre-minor-32
+		// callers. The explicit marker distinguishes them from a new caller that
+		// observed no Service and therefore carries an authoritative empty
+		// Service witness.
+		expectedServiceRevision = req.GetExpectedRevision()
+	}
 	if serviceErr == nil {
 		if err := owned(service.Metadata, w.GetName()); err != nil {
 			return nil, err
 		}
 		stored := service.Metadata.Annotations[revisionAnnotation]
-		if stored != req.GetExpectedRevision() && stored != req.GetAuthority().GetAcceptedRevision() {
-			return nil, &Refusal{Reason: fmt.Sprintf("Service observed revision %q, expected %q", stored, req.GetExpectedRevision())}
+		if stored != expectedServiceRevision && stored != req.GetAuthority().GetAcceptedRevision() {
+			return nil, &Refusal{Reason: fmt.Sprintf("Service observed revision %q, expected %q", stored, expectedServiceRevision)}
 		}
 	} else if !kubeapi.IsNotFound(serviceErr) {
 		return nil, serviceErr
@@ -241,7 +249,7 @@ func (x WorkloadExecutor) Apply(requestCtx context.Context, req *wsv1.ApplyWorkl
 		// A surviving owned Service is the compare-and-set witness for a
 		// Service-only observation. It permits the reviewed repair to recreate
 		// the missing Deployment without turning a stale update into a create.
-		if req.GetExpectedRevision() != "" && (!serviceExists || service.Metadata.Annotations[revisionAnnotation] != req.GetExpectedRevision()) {
+		if req.GetExpectedRevision() != "" && (!serviceExists || service.Metadata.Annotations[revisionAnnotation] != expectedServiceRevision) {
 			return nil, &Refusal{Reason: "workload disappeared after the Plan was made"}
 		}
 	default:
@@ -437,8 +445,9 @@ func (x WorkloadExecutor) Observe(ctx context.Context, req *wsv1.ObserveWorkload
 			return nil, err
 		}
 		r.ServiceUid, r.ServiceResourceVersion = service.Metadata.UID, service.Metadata.ResourceVersion
+		r.ServiceRevision = service.Metadata.Annotations[revisionAnnotation]
 		if r.Revision == "" {
-			r.Revision = service.Metadata.Annotations[revisionAnnotation]
+			r.Revision = r.ServiceRevision
 		}
 	}
 	if desired := req.GetDesired(); desired != nil {
