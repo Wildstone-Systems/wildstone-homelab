@@ -5416,7 +5416,6 @@ func (x *ListBlockDevicesResult) GetDevices() []*BlockDevice {
 //   - every option must match ^[a-zA-Z0-9._=/-]+$ (no commas/whitespace —
 //     fstab field injection); nosuid and nodev are mandatory and appended
 //     if the caller omitted them.
-//
 // The agent owns a marker-delimited block in /etc/fstab ("# BEGIN
 // wildstone-managed" / "# END wildstone-managed") — lines outside that
 // block are never touched. Ordering: the actual mount is attempted FIRST;
@@ -8590,8 +8589,14 @@ type ObserveWorkloadResult struct {
 	// remains the Deployment witness, falling back to this value only when the
 	// Deployment is absent for wire compatibility with the original contract.
 	ServiceRevision string `protobuf:"bytes,17,opt,name=service_revision,json=serviceRevision,proto3" json:"service_revision,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// The approved Plan step stamped on the same object as revision (protocol
+	// minor 33). These fields let Keystone distinguish an interrupted approved
+	// Create from an unrelated owned workload after the global accepted
+	// revision advances.
+	PlanId        string `protobuf:"bytes,18,opt,name=plan_id,json=planId,proto3" json:"plan_id,omitempty"`
+	StepDigest    string `protobuf:"bytes,19,opt,name=step_digest,json=stepDigest,proto3" json:"step_digest,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ObserveWorkloadResult) Reset() {
@@ -8739,6 +8744,20 @@ func (x *ObserveWorkloadResult) GetMatchesDesired() bool {
 func (x *ObserveWorkloadResult) GetServiceRevision() string {
 	if x != nil {
 		return x.ServiceRevision
+	}
+	return ""
+}
+
+func (x *ObserveWorkloadResult) GetPlanId() string {
+	if x != nil {
+		return x.PlanId
+	}
+	return ""
+}
+
+func (x *ObserveWorkloadResult) GetStepDigest() string {
+	if x != nil {
+		return x.StepDigest
 	}
 	return ""
 }
@@ -9429,7 +9448,7 @@ const file_wardstone_v1_wardstone_proto_rawDesc = "" +
 	"\x04type\x18\x01 \x01(\tR\x04type\x12\x16\n" +
 	"\x06status\x18\x02 \x01(\tR\x06status\x12\x16\n" +
 	"\x06reason\x18\x03 \x01(\tR\x06reason\x12\x18\n" +
-	"\amessage\x18\x04 \x01(\tR\amessage\"\xa6\x05\n" +
+	"\amessage\x18\x04 \x01(\tR\amessage\"\xe0\x05\n" +
 	"\x15ObserveWorkloadResult\x12\x10\n" +
 	"\x03uid\x18\x01 \x01(\tR\x03uid\x12)\n" +
 	"\x10resource_version\x18\x02 \x01(\tR\x0fresourceVersion\x12\x1a\n" +
@@ -9453,7 +9472,10 @@ const file_wardstone_v1_wardstone_proto_rawDesc = "" +
 	"serviceUid\x128\n" +
 	"\x18service_resource_version\x18\x0f \x01(\tR\x16serviceResourceVersion\x12'\n" +
 	"\x0fmatches_desired\x18\x10 \x01(\bR\x0ematchesDesired\x12)\n" +
-	"\x10service_revision\x18\x11 \x01(\tR\x0fserviceRevision\"}\n" +
+	"\x10service_revision\x18\x11 \x01(\tR\x0fserviceRevision\x12\x17\n" +
+	"\aplan_id\x18\x12 \x01(\tR\x06planId\x12\x1f\n" +
+	"\vstep_digest\x18\x13 \x01(\tR\n" +
+	"stepDigest\"}\n" +
 	"\fWorkloadLogs\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x12\n" +
 	"\x04tail\x18\x02 \x01(\rR\x04tail\x12$\n" +

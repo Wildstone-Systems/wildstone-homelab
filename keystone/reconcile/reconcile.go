@@ -196,10 +196,11 @@ type Reconciler struct {
 	// Service ports for the cluster group, which is reconciled separately
 	// from host-scoped resources.
 	ClusterRoutes []resource.Resource
-	// ClusterRevision identifies an owned Deployment left by an approved
-	// Create in this accepted revision, so a missing Service can resume
-	// that exact Create after leadership changes.
-	ClusterRevision string
+	// ClusterCreateRecovery verifies that an observed workload carries the
+	// exact queued Plan/step witness for a reviewed Create. The object's stamp,
+	// rather than the latest whole-Statefile revision, survives unrelated
+	// accepted changes while still refusing another Plan's workload.
+	ClusterCreateRecovery func(plan.PlanStep, string, string) bool
 
 	// Providers routes provider-backed kinds (currently only
 	// resource.KindDnsRecord, ADR-W004 A5) to their external-resource
@@ -673,7 +674,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, nodeID string, desired []res
 			st := &p.Steps[i]
 			seen := clusterSeen[resKey{st.Kind, st.Name}]
 			if st.Kind == resource.KindContainer && st.Backend == "k3s" && st.Action == plan.ActionUpdate &&
-				seen.Found && (seen.ServiceUID == "" || seen.RolloutPending) && seen.Revision != "" && seen.Revision == r.ClusterRevision {
+				seen.Found && (seen.UID == "" || seen.ServiceUID == "" || seen.RolloutPending) && seen.Revision != "" {
 				// A partial approved Create observes as an Update once its
 				// Deployment exists. A complete Create does too while Kubernetes
 				// is still observing the generation or bringing replicas Ready,
@@ -684,7 +685,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, nodeID string, desired []res
 				// approval.
 				create := *st
 				create.Action = plan.ActionCreate
-				if r.Authorize != nil && r.Authorize(create) {
+				if r.ClusterCreateRecovery != nil && r.ClusterCreateRecovery(create, seen.PlanID, seen.StepDigest) {
 					st.Action = plan.ActionCreate
 				}
 			}

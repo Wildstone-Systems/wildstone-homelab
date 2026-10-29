@@ -52,13 +52,13 @@ func (a *GatewayClusterApplier) Apply(ctx context.Context, req ClusterRequest) (
 	}
 	compatible := false
 	for _, n := range nodes {
-		if n.NodeID == node && n.ProtocolMinor >= 32 {
+		if n.NodeID == node && n.ProtocolMinor >= 33 {
 			compatible = true
 			break
 		}
 	}
 	if !compatible {
-		return ClusterResult{}, &ClusterUnavailable{fmt.Errorf("cluster: leader %s requires protocol minor 32 for separate workload revision witnesses", node)}
+		return ClusterResult{}, &ClusterUnavailable{fmt.Errorf("cluster: leader %s requires protocol minor 33 for approved workload recovery witnesses", node)}
 	}
 	if req.Op != OpWorkloadStatus && term.Epoch != req.Authority.LeaderEpoch {
 		return ClusterResult{}, &ClusterUnavailable{fmt.Errorf("cluster: leadership changed before dispatch")}
@@ -114,7 +114,7 @@ func (a *GatewayClusterApplier) Apply(ctx context.Context, req ClusterRequest) (
 		if r == nil {
 			return ClusterResult{}, fmt.Errorf("cluster: missing ObserveWorkload result")
 		}
-		return ClusterResult{Found: true, UID: r.GetUid(), ResourceVersion: r.GetResourceVersion(), Revision: r.GetRevision(), ServiceUID: r.GetServiceUid(), ServiceResourceVersion: r.GetServiceResourceVersion(), ServiceRevision: r.GetServiceRevision(), MatchesDesired: r.GetMatchesDesired(), Generation: r.GetGeneration(), ObservedGeneration: r.GetObservedGeneration(), ReadyReplicas: int(r.GetReadyReplicas()), Replicas: int(r.GetReplicas())}, nil
+		return ClusterResult{Found: true, UID: r.GetUid(), ResourceVersion: r.GetResourceVersion(), Revision: r.GetRevision(), PlanID: r.GetPlanId(), StepDigest: r.GetStepDigest(), ServiceUID: r.GetServiceUid(), ServiceResourceVersion: r.GetServiceResourceVersion(), ServiceRevision: r.GetServiceRevision(), MatchesDesired: r.GetMatchesDesired(), Generation: r.GetGeneration(), ObservedGeneration: r.GetObservedGeneration(), ReadyReplicas: int(r.GetReadyReplicas()), Replicas: int(r.GetReplicas())}, nil
 	}
 }
 

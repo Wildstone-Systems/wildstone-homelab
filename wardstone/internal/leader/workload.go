@@ -447,6 +447,8 @@ func (x WorkloadExecutor) Observe(ctx context.Context, req *wsv1.ObserveWorkload
 		}
 		r.Uid, r.ResourceVersion = d.Metadata.UID, d.Metadata.ResourceVersion
 		r.Revision = d.Metadata.Annotations[revisionAnnotation]
+		r.PlanId = d.Metadata.Annotations[planAnnotation]
+		r.StepDigest = d.Metadata.Annotations[stepAnnotation]
 		r.Generation, r.ObservedGeneration = d.Metadata.Generation, d.Status.ObservedGeneration
 		r.Replicas, r.UpdatedReplicas = uint32(d.Status.Replicas), uint32(d.Status.UpdatedReplicas)
 		r.ReadyReplicas, r.AvailableReplicas = uint32(d.Status.ReadyReplicas), uint32(d.Status.AvailableReplicas)
@@ -459,6 +461,8 @@ func (x WorkloadExecutor) Observe(ctx context.Context, req *wsv1.ObserveWorkload
 		r.ServiceRevision = service.Metadata.Annotations[revisionAnnotation]
 		if r.Revision == "" {
 			r.Revision = r.ServiceRevision
+			r.PlanId = service.Metadata.Annotations[planAnnotation]
+			r.StepDigest = service.Metadata.Annotations[stepAnnotation]
 		}
 	}
 	if desired := req.GetDesired(); desired != nil {

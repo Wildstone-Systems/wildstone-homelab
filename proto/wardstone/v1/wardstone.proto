@@ -1402,6 +1402,12 @@ message ObserveWorkloadResult {
   // remains the Deployment witness, falling back to this value only when the
   // Deployment is absent for wire compatibility with the original contract.
   string service_revision = 17;
+  // The approved Plan step stamped on the same object as revision (protocol
+  // minor 33). These fields let Keystone distinguish an interrupted approved
+  // Create from an unrelated owned workload after the global accepted
+  // revision advances.
+  string plan_id = 18;
+  string step_digest = 19;
 }
 
 message WorkloadLogs {

@@ -176,7 +176,10 @@ import (
 // returns matches_desired for drift detection.
 // 32: ApplyWorkload and ObserveWorkload carry separate Deployment and Service
 // revision witnesses so a partial approved update retries fail closed.
-const ProtocolMinor = 32
+// 33: ObserveWorkload returns the approved Plan id and step digest stamped on
+// the object supplying its revision witness, so partial Create recovery does
+// not depend on the latest whole-Statefile revision.
+const ProtocolMinor = 33
 
 // maxUpdateMsgBytes is the gRPC message size cap on both ends of the
 // session/join connections (ADR-W003 W5). SelfUpdate ships the new binary

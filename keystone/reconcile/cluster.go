@@ -142,6 +142,8 @@ type ClusterResult struct {
 	UID                    string
 	ResourceVersion        string
 	Revision               string
+	PlanID                 string
+	StepDigest             string
 	ServiceUID             string
 	ServiceResourceVersion string
 	ServiceRevision        string

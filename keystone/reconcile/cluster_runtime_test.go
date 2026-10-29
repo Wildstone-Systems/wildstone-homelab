@@ -20,6 +20,8 @@ type clusterMemory struct {
 	lastDelete        ClusterRequest
 	revision          string
 	serviceRevision   string
+	planID            string
+	stepDigest        string
 	rv                string
 	rolloutPending    bool
 	generationPending bool
@@ -51,7 +53,7 @@ func (m *clusterMemory) Apply(_ context.Context, req ClusterRequest) (ClusterRes
 		if m.generationPending {
 			observedGeneration = 0
 		}
-		return ClusterResult{Found: true, UID: uid, ResourceVersion: deploymentRV, Revision: m.revision,
+		return ClusterResult{Found: true, UID: uid, ResourceVersion: deploymentRV, Revision: m.revision, PlanID: m.planID, StepDigest: m.stepDigest,
 			ServiceUID: serviceUID, ServiceResourceVersion: m.rv, ServiceRevision: serviceRevision, MatchesDesired: m.matches,
 			Generation: 1, ObservedGeneration: observedGeneration, Replicas: 1, ReadyReplicas: readyReplicas}, nil
 	case OpApplyWorkload:
@@ -60,7 +62,7 @@ func (m *clusterMemory) Apply(_ context.Context, req ClusterRequest) (ClusterRes
 			m.failApply = false
 			return ClusterResult{}, errors.New("leader term ended")
 		}
-		m.present, m.matches, m.partialService, m.serviceOnly, m.revision, m.serviceRevision, m.rv = true, true, false, false, req.Authority.AcceptedRevision, req.Authority.AcceptedRevision, "rv-1"
+		m.present, m.matches, m.partialService, m.serviceOnly, m.revision, m.serviceRevision, m.planID, m.stepDigest, m.rv = true, true, false, false, req.Authority.AcceptedRevision, req.Authority.AcceptedRevision, req.Authority.PlanID, req.Authority.StepDigest, "rv-1"
 		return ClusterResult{Found: true, UID: "uid-1", ResourceVersion: m.rv}, nil
 	case OpDeleteWorkload:
 		m.lastDelete = req
@@ -101,7 +103,6 @@ func TestClusterPartialUpdateKeepsItsApprovedUpdateAction(t *testing.T) {
 	m := &clusterMemory{present: true, partialService: true, revision: "accepted-rev", rv: "rv-1"}
 	r := newReconciler(nil)
 	r.Cluster = m
-	r.ClusterRevision = "accepted-rev"
 	r.Authorize = func(st plan.PlanStep) bool { return st.Action == plan.ActionUpdate }
 	r.ClusterAuthority = func(st plan.PlanStep) (Authority, error) {
 		if st.Action != plan.ActionUpdate {
@@ -128,11 +129,13 @@ func TestClusterRolloutWaitKeepsItsApprovedCreateAction(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			desired := clusterDesired()[:1]
 			desired[0].Container.Expose = []uint32{8080}
-			m := &clusterMemory{present: true, matches: true, revision: "accepted-rev", serviceRevision: "accepted-rev", rv: "rv-1", rolloutPending: tc.rolloutPending, generationPending: tc.generationPending}
+			m := &clusterMemory{present: true, matches: true, revision: "accepted-rev", serviceRevision: "accepted-rev", planID: "plan-211", stepDigest: "sha256:reviewed", rv: "rv-1", rolloutPending: tc.rolloutPending, generationPending: tc.generationPending}
 			r := newReconciler(nil)
 			r.Cluster = m
-			r.ClusterRevision = "accepted-rev"
 			r.Authorize = func(st plan.PlanStep) bool { return st.Action == plan.ActionCreate }
+			r.ClusterCreateRecovery = func(st plan.PlanStep, planID, stepDigest string) bool {
+				return st.Action == plan.ActionCreate && planID == "plan-211" && stepDigest == "sha256:reviewed"
+			}
 			r.ClusterAuthority = func(st plan.PlanStep) (Authority, error) {
 				if st.Action != plan.ActionCreate {
 					t.Fatalf("cluster authority requested for %s, want Create", st.Action)
@@ -160,7 +163,6 @@ func TestClusterRolloutWaitKeepsItsApprovedUpdateAction(t *testing.T) {
 	m := &clusterMemory{present: true, matches: true, revision: "accepted-rev", serviceRevision: "accepted-rev", rv: "rv-1", rolloutPending: true}
 	r := newReconciler(nil)
 	r.Cluster = m
-	r.ClusterRevision = "accepted-rev"
 	r.Authorize = func(st plan.PlanStep) bool { return st.Action == plan.ActionUpdate }
 	r.ClusterAuthority = func(st plan.PlanStep) (Authority, error) {
 		if st.Action != plan.ActionUpdate {
@@ -172,6 +174,64 @@ func TestClusterRolloutWaitKeepsItsApprovedUpdateAction(t *testing.T) {
 	waiting, err := r.Reconcile(t.Context(), "@cluster", desired)
 	if err != nil || !waiting.Retryable || waiting.PendingApproval || len(waiting.Steps) != 1 || waiting.Steps[0].Step.Action != plan.ActionUpdate {
 		t.Fatalf("matching rollout lost its approved Update while waiting: outcome=%+v err=%v", waiting, err)
+	}
+}
+
+func TestClusterPartialCreateSurvivesUnrelatedAcceptedRevision(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		partialService bool
+		serviceOnly    bool
+	}{
+		{name: "missing Service", partialService: true},
+		{name: "missing Deployment", serviceOnly: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			desired := clusterDesired()[:1]
+			desired[0].Container.Expose = []uint32{8080}
+			m := &clusterMemory{present: true, partialService: tc.partialService, serviceOnly: tc.serviceOnly, revision: "create-rev", serviceRevision: "create-rev", planID: "plan-211", stepDigest: "sha256:reviewed", rv: "rv-1"}
+			r := newReconciler(nil)
+			r.Cluster = m
+			r.Authorize = func(st plan.PlanStep) bool { return st.Action == plan.ActionCreate }
+			r.ClusterCreateRecovery = func(st plan.PlanStep, planID, stepDigest string) bool {
+				return st.Action == plan.ActionCreate && planID == "plan-211" && stepDigest == "sha256:reviewed"
+			}
+			r.ClusterAuthority = func(st plan.PlanStep) (Authority, error) {
+				if st.Action != plan.ActionCreate {
+					t.Fatalf("cluster authority requested for %s, want Create", st.Action)
+				}
+				return Authority{AcceptedRevision: "unrelated-new-rev", PlanID: "plan-211", StepDigest: "sha256:reviewed", LeaderEpoch: 7}, nil
+			}
+
+			outcome, err := r.Reconcile(t.Context(), "@cluster", desired)
+			if err != nil || !outcome.Applied || outcome.PendingApproval || m.partialService || m.serviceOnly || m.lastApply.ExpectedRevision != "create-rev" || m.lastApply.Authority.AcceptedRevision != "unrelated-new-rev" {
+				t.Fatalf("partial Create did not survive an unrelated accepted revision: outcome=%+v request=%+v err=%v", outcome, m.lastApply, err)
+			}
+		})
+	}
+}
+
+func TestClusterPartialCreateRequiresExactPlanStepWitness(t *testing.T) {
+	for _, tc := range []struct{ name, planID, stepDigest string }{
+		{name: "missing witness"},
+		{name: "different Plan", planID: "plan-other", stepDigest: "sha256:reviewed"},
+		{name: "different step", planID: "plan-211", stepDigest: "sha256:other"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			desired := clusterDesired()[:1]
+			desired[0].Container.Expose = []uint32{8080}
+			m := &clusterMemory{present: true, partialService: true, revision: "create-rev", planID: tc.planID, stepDigest: tc.stepDigest, rv: "rv-1"}
+			r := newReconciler(nil)
+			r.Cluster = m
+			r.Authorize = func(st plan.PlanStep) bool { return st.Action == plan.ActionCreate }
+			r.ClusterCreateRecovery = func(st plan.PlanStep, planID, stepDigest string) bool {
+				return st.Action == plan.ActionCreate && planID == "plan-211" && stepDigest == "sha256:reviewed"
+			}
+			outcome, err := r.Reconcile(t.Context(), "@cluster", desired)
+			if err != nil || !outcome.PendingApproval || !m.partialService || m.lastApply.Op != "" {
+				t.Fatalf("unrelated workload witness resumed Create: outcome=%+v request=%+v err=%v", outcome, m.lastApply, err)
+			}
+		})
 	}
 }
 
@@ -194,8 +254,10 @@ func TestClusterPlanApplyDriftDeleteAndLeaderRetry(t *testing.T) {
 	newRec := func(epoch uint64, approve bool) *Reconciler {
 		r := newReconciler(&GatewayApplier{Gateway: h.gw})
 		r.Cluster = m
-		r.ClusterRevision = "accepted-rev"
 		r.Authorize = func(st plan.PlanStep) bool { return approve }
+		r.ClusterCreateRecovery = func(st plan.PlanStep, planID, stepDigest string) bool {
+			return st.Action == plan.ActionCreate && planID == "plan-211" && stepDigest == "sha256:reviewed"
+		}
 		r.ClusterAuthority = func(st plan.PlanStep) (Authority, error) {
 			return Authority{AcceptedRevision: "accepted-rev", PlanID: "plan-211", StepDigest: "sha256:reviewed", LeaderEpoch: epoch}, nil
 		}
@@ -237,11 +299,13 @@ func TestClusterPlanApplyDriftDeleteAndLeaderRetry(t *testing.T) {
 	r.Authorize = func(st plan.PlanStep) bool { return st.Action == plan.ActionCreate }
 	r.ClusterRoutes = desired[1:]
 	m.revision = "another-revision"
+	m.planID = "another-plan"
 	unrelated, err := r.Reconcile(t.Context(), "@cluster", desired[:1])
 	if err != nil || !unrelated.PendingApproval || !m.partialService {
 		t.Fatalf("unrelated partial workload used Create approval: outcome=%+v err=%v", unrelated, err)
 	}
 	m.revision = "accepted-rev"
+	m.planID = "plan-211"
 	resumed, err := r.Reconcile(t.Context(), "@cluster", desired[:1])
 	if err != nil || !resumed.Applied || m.partialService || m.lastApply.ExpectedRevision != "accepted-rev" {
 		t.Fatalf("partial Create did not resume: outcome=%+v request=%+v err=%v", resumed, m.lastApply, err)

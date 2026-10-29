@@ -386,7 +386,7 @@ func TestObserveAndLogsAreOwnedAndBounded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(obs.PodNodes, []string{"node-a", "node-b"}) || obs.RestartCount != 2 || obs.ServiceUid == "" {
+	if !reflect.DeepEqual(obs.PodNodes, []string{"node-a", "node-b"}) || obs.RestartCount != 2 || obs.ServiceUid == "" || obs.PlanId != "plan-1" || obs.StepDigest != "step-1" {
 		t.Fatalf("observe %+v", obs)
 	}
 	logs, err := x.Logs(context.Background(), &wsv1.WorkloadLogs{Name: "tools-it-tools", LimitBytes: 6})
@@ -413,7 +413,7 @@ func TestObserveFindsAnOrphanedService(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if observed.Uid != "" || observed.ResourceVersion != "" || observed.ServiceUid != applied.ServiceUid || observed.ServiceResourceVersion != applied.ServiceResourceVersion || observed.Revision != "rev-a" || observed.ServiceRevision != "rev-a" || observed.MatchesDesired {
+	if observed.Uid != "" || observed.ResourceVersion != "" || observed.ServiceUid != applied.ServiceUid || observed.ServiceResourceVersion != applied.ServiceResourceVersion || observed.Revision != "rev-a" || observed.ServiceRevision != "rev-a" || observed.PlanId != "plan-1" || observed.StepDigest != "step-1" || observed.MatchesDesired {
 		t.Fatalf("orphaned Service observation %+v", observed)
 	}
 }
