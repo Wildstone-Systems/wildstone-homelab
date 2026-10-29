@@ -463,6 +463,11 @@ type Package struct {
 	// the same as "everyone": what it grants is decided by the
 	// entitlement rows, which default to deny.
 	AccessGroups []string `yaml:"accessGroups,omitempty" json:"accessGroups,omitempty"`
+	// Platforms is the closed set of host OS/architectures on which this
+	// package's Container and Job workloads may run. Omission preserves the
+	// pre-field compatibility contract; declared platforms fail closed when
+	// the selected node cannot report a matching typed HostFacts value.
+	Platforms []Platform `yaml:"platforms,omitempty" json:"platforms,omitempty"`
 	// Devices labels every device a template can map, and Deployment
 	// says what each component can safely do across machines
 	// (deployment.go). Both optional; informational until a multi-node
@@ -570,6 +575,9 @@ func (p *Package) Validate() error {
 		if !named {
 			return &ValidationError{Field: "params", Msg: "an instanced package must declare a required \"instance\" param"}
 		}
+	}
+	if err := validatePlatforms(p); err != nil {
+		return err
 	}
 
 	if err := validateDeployment(p); err != nil {

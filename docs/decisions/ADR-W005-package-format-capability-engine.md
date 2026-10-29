@@ -147,6 +147,16 @@ Package format v1 gains two optional top-level fields, `devices` and `deployment
 
 The parser rejects unknown fields (`KnownFields(true)`), so a Keystone that predates them cannot load a package that uses them. They therefore ship in two releases: parser and lint support first, catalog packages using them after (contract §7).
 
+### A6. Package platform eligibility (2026-10-29, #231)
+
+Package format v1 gains an optional top-level `platforms` list. Its closed values are
+`linux/amd64` and `linux/arm64`; omitting the field preserves compatibility. A
+declared package that renders a Container or Job is admitted only when every selected
+Wardstone reports a matching OS and architecture through typed HostFacts. Missing,
+unknown, or mismatched facts fail before Keystone creates a Plan or sends any mutating
+operation. This is parser, lint, and admission support only: catalog declarations and
+registry selection remain later work.
+
 ---
 
 # Part B — Codebase contract

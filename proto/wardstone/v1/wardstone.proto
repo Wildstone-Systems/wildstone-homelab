@@ -835,6 +835,11 @@ message HostFactsResult {
   bool engine_leader = 14;
   // The active local term's epoch, or zero when engine_leader is false.
   uint64 leader_epoch = 15;
+  // Canonical host architecture (protocol minor 35). The initial closed
+  // vocabulary is "amd64" and "arm64", matching kubernetes.io/arch.
+  // Empty means an older agent or an unsupported/unknown architecture;
+  // callers must not infer a match from os alone.
+  string architecture = 16;
 }
 
 message Health {}

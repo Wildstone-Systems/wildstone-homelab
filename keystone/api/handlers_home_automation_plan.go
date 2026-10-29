@@ -174,7 +174,7 @@ func (s *Server) homeAutomationOrchestrate(r *http.Request, id principal.Identit
 
 	if !propose {
 		if packageStep {
-			body, st, err := s.proposeCapability(id, next.pkg, next.Params, true)
+			body, st, err := s.proposeCapability(r.Context(), id, next.pkg, next.Params, true)
 			if err != nil {
 				o.refuse(st, err)
 			} else {
@@ -190,7 +190,7 @@ func (s *Server) homeAutomationOrchestrate(r *http.Request, id principal.Identit
 	if !packageStep {
 		return o, http.StatusConflict, fmt.Errorf("nothing to propose: %s", next.Reason)
 	}
-	body, st, err := s.proposeCapability(id, next.pkg, next.Params, false)
+	body, st, err := s.proposeCapability(r.Context(), id, next.pkg, next.Params, false)
 	if err != nil {
 		o.refuse(st, err)
 		return o, st, err

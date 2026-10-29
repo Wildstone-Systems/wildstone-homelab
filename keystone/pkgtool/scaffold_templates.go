@@ -46,6 +46,11 @@ metadata:
   # packages may serve one capability — the four ingress profiles do —
   # and the profile is what tells them apart.
   profile: __PROFILE__
+# TODO: if the image is not published for both supported architectures,
+# uncomment this and name exactly what it supports. Omission preserves
+# compatibility; a declaration makes install/update fail closed before
+# mutation when the selected node does not match.
+# platforms: [linux/amd64, linux/arm64]
 # What this package needs from the rest of the deployment. Traits, not
 # package names: you depend on "something that provides single sign-on",
 # and the deployment decides which package that is.
@@ -192,6 +197,11 @@ metadata:
   version: 0.1.0
   capability: __CAPABILITY__
   profile: __PROFILE__
+# TODO: declare only the architectures for which this adapter image is
+# published. Omit the field only when compatibility is intentionally
+# unchanged; declared values are linux/amd64 and linux/arm64, and a
+# mismatch must fail closed before mutation.
+# platforms: [linux/amd64, linux/arm64]
 params:
   - { name: node, required: true, source: node, example: "wildstone", description: "Which machine runs the adapter." }
   # As the ADAPTER can reach it. The Keystone API binds loopback and the

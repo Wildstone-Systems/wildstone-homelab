@@ -45,6 +45,7 @@ func (a *Agent) hostFacts() (*wsv1.OpResult_HostFacts, *wsv1.OpError) {
 		RootDiskTotalBytes: diskTotal,
 		RootDiskFreeBytes:  diskFree,
 		AgentVersion:       a.cfg.Version,
+		Architecture:       hostArchitecture(),
 		Engine:             engine,
 		EngineVersion:      engineVersion,
 		EngineLeader:       epoch != 0,
