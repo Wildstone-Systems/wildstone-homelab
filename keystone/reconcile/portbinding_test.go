@@ -240,7 +240,8 @@ func TestRuntimeIdentityIsRefusedOnAnOlderAgent(t *testing.T) {
 		t.Fatal("agent never connected")
 	}
 	app := containerResource("app", testDigestImage)
-	app.Container.RuntimeIdentity = &resource.ContainerRuntimeIdentity{UID: 1000}
+	app.Container.RuntimeIdentity = testRuntimeIdentity(1000)
+	app.Container.Mounts = append(app.Container.Mounts, resource.Mount{Source: "/run/dbus", Target: "/run/dbus", ReadOnly: true})
 	r := newReconciler(&GatewayApplier{Gateway: h.gw})
 	r.AgentProtocolMinor = func(string) (uint32, bool) { return resource.RuntimeIdentityProtocolMinor - 1, true }
 	out, err := r.Reconcile(context.Background(), "node-a", []resource.Resource{app})

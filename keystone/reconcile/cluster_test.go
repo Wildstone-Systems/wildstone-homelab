@@ -207,7 +207,7 @@ func TestApplyWorkloadRefusesARestartPolicyItCannotCarry(t *testing.T) {
 
 func TestApplyWorkloadRefusesRuntimeIdentityUntilBackendSupportsIt(t *testing.T) {
 	r := clusterContainer()
-	r.Container.RuntimeIdentity = &resource.ContainerRuntimeIdentity{UID: 1000}
+	r.Container.RuntimeIdentity = testRuntimeIdentity(1000)
 	if _, err := cluster.applyWorkload(r, pkgspec.ComponentDecl{}, WorkloadPolicy{}, nil, testAuthority); err == nil || !strings.Contains(err.Error(), "runtimeIdentity") {
 		t.Fatalf("err = %v, want runtimeIdentity refusal", err)
 	}

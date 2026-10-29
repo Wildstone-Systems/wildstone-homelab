@@ -305,7 +305,7 @@ type ContainerResources struct {
 // these directly to Docker's User and a later Kubernetes backend can map them
 // directly to runAsUser/runAsGroup without looking up host accounts.
 type ContainerRuntimeIdentity struct {
-	UID int64  `yaml:"uid" json:"uid"`
+	UID *int64 `yaml:"uid" json:"uid"`
 	GID *int64 `yaml:"gid,omitempty" json:"gid,omitempty"`
 }
 
@@ -1519,9 +1519,13 @@ func validateContainerHardening(r *Resource) error {
 			return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.runtimeIdentity",
 				Msg: "is not supported by the k3s backend yet"}
 		}
-		if id.UID < 0 || id.UID > maxContainerRuntimeID {
+		if id.UID == nil {
 			return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.runtimeIdentity.uid",
-				Msg: fmt.Sprintf("%d must be between 0 and %d", id.UID, maxContainerRuntimeID)}
+				Msg: "is required when runtimeIdentity is present"}
+		}
+		if *id.UID < 0 || *id.UID > maxContainerRuntimeID {
+			return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.runtimeIdentity.uid",
+				Msg: fmt.Sprintf("%d must be between 0 and %d", *id.UID, maxContainerRuntimeID)}
 		}
 		if id.GID != nil && (*id.GID < 0 || *id.GID > maxContainerRuntimeID) {
 			return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.runtimeIdentity.gid",

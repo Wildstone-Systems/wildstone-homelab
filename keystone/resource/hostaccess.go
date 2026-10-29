@@ -164,38 +164,44 @@ func (s *ContainerSpec) RequiredProtocolMinor() uint32 {
 	if s == nil {
 		return 0
 	}
+	var required uint32
+	require := func(minor uint32) {
+		if minor > required {
+			required = minor
+		}
+	}
 	if s.UsesHostSystemMount() {
-		return HostSystemMountProtocolMinor
+		require(HostSystemMountProtocolMinor)
 	}
 	if s.RuntimeIdentity != nil {
-		return RuntimeIdentityProtocolMinor
+		require(RuntimeIdentityProtocolMinor)
 	}
 	if s.HostNetwork() {
-		return HostNetworkProtocolMinor
+		require(HostNetworkProtocolMinor)
 	}
 	for _, c := range s.CapAdd {
 		if c == "IPC_LOCK" {
-			return IPCLockProtocolMinor
+			require(IPCLockProtocolMinor)
 		}
 	}
 	if s.usesHardeningFields() {
-		return HardeningProtocolMinor
+		require(HardeningProtocolMinor)
 	}
 	if len(s.Devices) > 0 || len(s.CapAdd) > 0 {
-		return HostAccessProtocolMinor
+		require(HostAccessProtocolMinor)
 	}
 	for _, p := range s.Ports {
 		if m, ok := ParsePortMapping(p); ok && m.Protocol == "udp" {
-			return HostAccessProtocolMinor
+			require(HostAccessProtocolMinor)
 		}
 	}
-	return 0
+	return required
 }
 
 // usesHardeningFields reports whether the spec sets any H1 field, so
 // RequiredProtocolMinor can gate on the HIGHEST minor a spec actually
 // needs: a plan that uses hardening AND a device still needs only minor
-// 18 (and host networking plus either needs only 19), since each minor is
+// 18 (and host networking plus either needs only 23), since each minor is
 // defined to also carry everything earlier ones did (v1
 // evolves additively, ADR-W003) and an agent new enough for hardening is
 // new enough for devices too.

@@ -93,7 +93,7 @@ func (dockerTranslator) ensureContainer(name string, spec *resource.ContainerSpe
 	}
 	var runtimeIdentity *wsv1.ContainerRuntimeIdentity
 	if id := spec.RuntimeIdentity; id != nil {
-		runtimeIdentity = &wsv1.ContainerRuntimeIdentity{Uid: id.UID, Gid: id.GID}
+		runtimeIdentity = &wsv1.ContainerRuntimeIdentity{Uid: *id.UID, Gid: id.GID}
 	}
 	// Host networking (protocol minor 23): refuseIfAgentTooOld keeps a
 	// host-mode spec away from an agent that would ignore this and start

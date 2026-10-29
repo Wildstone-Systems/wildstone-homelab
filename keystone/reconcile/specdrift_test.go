@@ -67,7 +67,7 @@ func TestForgedCurrentLabelCannotHideHardeningDrift(t *testing.T) {
 	}
 	gid := int64(1001)
 	want := containerResource("app", testDigestImage)
-	want.Container.RuntimeIdentity = &resource.ContainerRuntimeIdentity{UID: 1000, GID: &gid}
+	want.Container.RuntimeIdentity = testRuntimeIdentity(1000, gid)
 	want.Container.ReadOnlyRootfs = true
 	want.Container.CapDrop = []string{"ALL"}
 	want.Container.NoNewPrivileges = true
@@ -121,7 +121,7 @@ func TestRuntimeIdentityLifecycle(t *testing.T) {
 	r := newReconciler(&GatewayApplier{Gateway: h.gw})
 	r.Approve = func(*plan.Plan) bool { return true }
 	want := containerResource("app", testDigestImage)
-	want.Container.RuntimeIdentity = &resource.ContainerRuntimeIdentity{UID: 1000}
+	want.Container.RuntimeIdentity = testRuntimeIdentity(1000)
 	if out, err := r.Reconcile(context.Background(), "node-a", []resource.Resource{want}); err != nil || !out.Applied {
 		t.Fatalf("create: outcome=%+v err=%v", out, err)
 	}
@@ -139,7 +139,7 @@ func TestRuntimeIdentityLifecycle(t *testing.T) {
 	}
 
 	changed := containerResource("app", testDigestImage)
-	changed.Container.RuntimeIdentity = &resource.ContainerRuntimeIdentity{UID: 1001}
+	changed.Container.RuntimeIdentity = testRuntimeIdentity(1001)
 	if out, err := r.Reconcile(context.Background(), "node-a", []resource.Resource{changed}); err != nil || !out.Applied || len(out.Plan.Steps) != 1 {
 		t.Fatalf("approved identity update: outcome=%+v err=%v", out, err)
 	}
@@ -155,4 +155,12 @@ func TestRuntimeIdentityLifecycle(t *testing.T) {
 	if _, exists := agent.containerExists("app"); exists {
 		t.Fatal("container still exists after approved delete")
 	}
+}
+
+func testRuntimeIdentity(uid int64, gid ...int64) *resource.ContainerRuntimeIdentity {
+	id := &resource.ContainerRuntimeIdentity{UID: &uid}
+	if len(gid) > 0 {
+		id.GID = &gid[0]
+	}
+	return id
 }

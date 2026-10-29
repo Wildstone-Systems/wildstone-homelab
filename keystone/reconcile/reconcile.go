@@ -1078,8 +1078,11 @@ func containerHardeningMatches(want *resource.ContainerSpec, got *wsv1.InspectCo
 		return want.RuntimeIdentity == nil
 	}
 	if id := want.RuntimeIdentity; id != nil {
+		if id.UID == nil {
+			return false
+		}
 		observed := got.GetRuntimeIdentity()
-		if observed == nil || observed.GetUid() != id.UID || (observed.Gid == nil) != (id.GID == nil) {
+		if observed == nil || observed.GetUid() != *id.UID || (observed.Gid == nil) != (id.GID == nil) {
 			return false
 		}
 		if id.GID != nil && observed.GetGid() != *id.GID {

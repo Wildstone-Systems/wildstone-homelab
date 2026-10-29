@@ -143,7 +143,9 @@ func TestRequiredProtocolMinor(t *testing.T) {
 		"hardening+device": {ContainerSpec{Image: "x", ReadOnlyRootfs: true, Devices: []DeviceMapping{{Source: "/dev/net/tun"}}}, HardeningProtocolMinor},
 		"hostNetwork":      {ContainerSpec{Image: "x", NetworkMode: NetworkModeHost}, HostNetworkProtocolMinor},
 		"host+hardening":   {ContainerSpec{Image: "x", NetworkMode: NetworkModeHost, ReadOnlyRootfs: true, CapAdd: []string{"NET_RAW"}}, HostNetworkProtocolMinor},
-		"runtimeIdentity":  {ContainerSpec{Image: "x", RuntimeIdentity: &ContainerRuntimeIdentity{UID: 1000}}, RuntimeIdentityProtocolMinor},
+		"runtimeIdentity":  {ContainerSpec{Image: "x", RuntimeIdentity: testRuntimeIdentity(1000)}, RuntimeIdentityProtocolMinor},
+		"runtime+dbus": {ContainerSpec{Image: "x", RuntimeIdentity: testRuntimeIdentity(1000),
+			Mounts: []Mount{{Source: "/run/dbus", Target: "/run/dbus", ReadOnly: true}}}, RuntimeIdentityProtocolMinor},
 		"host+dbus": {ContainerSpec{Image: "x", NetworkMode: NetworkModeHost, CapAdd: []string{"NET_ADMIN", "NET_RAW"},
 			Mounts: []Mount{{Source: "cfg", Target: "/config"}, {Source: "/run/dbus", Target: "/run/dbus", ReadOnly: true}}}, HostSystemMountProtocolMinor},
 		"volume only": {ContainerSpec{Image: "x", Mounts: []Mount{{Source: "cfg", Target: "/config"}}}, 0},
@@ -186,15 +188,16 @@ func TestContainerHardeningFieldsAreValidated(t *testing.T) {
 		"cpus negative":             func(s *ContainerSpec) { s.Resources = &ContainerResources{Cpus: "-1"} },
 		"pidsLimit negative":        func(s *ContainerSpec) { s.Resources = &ContainerResources{PidsLimit: -1} },
 		"shmSize not a size string": func(s *ContainerSpec) { s.ShmSize = "huge" },
-		"runtime uid negative":      func(s *ContainerSpec) { s.RuntimeIdentity = &ContainerRuntimeIdentity{UID: -1} },
-		"runtime uid too large":     func(s *ContainerSpec) { s.RuntimeIdentity = &ContainerRuntimeIdentity{UID: 1 << 32} },
+		"runtime uid missing":       func(s *ContainerSpec) { s.RuntimeIdentity = &ContainerRuntimeIdentity{} },
+		"runtime gid only":          func(s *ContainerSpec) { gid := int64(1000); s.RuntimeIdentity = &ContainerRuntimeIdentity{GID: &gid} },
+		"runtime uid negative":      func(s *ContainerSpec) { s.RuntimeIdentity = testRuntimeIdentity(-1) },
+		"runtime uid too large":     func(s *ContainerSpec) { s.RuntimeIdentity = testRuntimeIdentity(1 << 32) },
 		"runtime identity on k3s": func(s *ContainerSpec) {
 			s.Backend = "k3s"
-			s.RuntimeIdentity = &ContainerRuntimeIdentity{UID: 1000}
+			s.RuntimeIdentity = testRuntimeIdentity(1000)
 		},
 		"runtime gid negative": func(s *ContainerSpec) {
-			gid := int64(-1)
-			s.RuntimeIdentity = &ContainerRuntimeIdentity{UID: 1000, GID: &gid}
+			s.RuntimeIdentity = testRuntimeIdentity(1000, -1)
 		},
 	} {
 		if err := containerWith(mutate).Validate(); err == nil {
@@ -237,6 +240,32 @@ spec:
 			t.Errorf("uid %q was accepted", value)
 		}
 	}
+	explicitRoot := strings.Replace(string(mustMarshalResource(t, r)), "uid: 1000", "uid: 0", 1)
+	parsedRoot, err := Unmarshal([]byte(explicitRoot))
+	if err != nil || parsedRoot.Validate() != nil || parsedRoot.Container.RuntimeIdentity.UID == nil || *parsedRoot.Container.RuntimeIdentity.UID != 0 {
+		t.Fatalf("explicit uid 0 must remain distinguishable from an omitted uid: resource=%+v err=%v", parsedRoot, err)
+	}
+	for name, identity := range map[string]string{
+		"empty":    "{}",
+		"gid only": `{"gid":1001}`,
+	} {
+		encoded, err := json.Marshal(r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		doc := strings.Replace(string(encoded), `"runtimeIdentity":{"uid":1000,"gid":1001}`, `"runtimeIdentity":`+identity, 1)
+		if parsed, err := Unmarshal([]byte(doc)); err == nil && parsed.Validate() == nil {
+			t.Errorf("%s runtime identity was accepted", name)
+		}
+	}
+}
+
+func testRuntimeIdentity(uid int64, gid ...int64) *ContainerRuntimeIdentity {
+	id := &ContainerRuntimeIdentity{UID: &uid}
+	if len(gid) > 0 {
+		id.GID = &gid[0]
+	}
+	return id
 }
 
 func mustMarshalResource(t *testing.T, r Resource) []byte {
