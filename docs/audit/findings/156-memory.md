@@ -247,7 +247,7 @@ the vector half never becomes a path that ranks before it filters
 
 ### F-156-05 — The bounded embedding client exists; the index job queue has neither producer nor consumer
 
-- **Current status:** partial
+- **Current status:** open
 - **Current evidence:** `keystone/butler/provider/ollama_embed.go` implements the bounded Ollama adapter; `keystone/butlerlive/embedder.go` binds it to the exact current Agent route and live privacy checks. The coordinator-gated producer/consumer and recall wiring remain separate #233/#234 work.
 - **Current owner:** chickenrat17
 - **Tracking:** #311
