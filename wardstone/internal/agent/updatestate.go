@@ -8,9 +8,9 @@ package agent
 // between the promoting process and the (re-exec'd or systemd-restarted)
 // process that must confirm or be reverted:
 //
-//   - selfUpdate (selfupdate.go) writes it right after staging the new
-//     binary and right before promoting: {"pending": version, "deadline":
-//     now+2m}.
+//   - selfUpdate (selfupdate.go), or the signed Wardstone RunPlaybook path,
+//     writes it right after staging the new binary and right before promoting:
+//     {"pending": version, "deadline": now+2m}.
 //   - The FIRST successful Keystone session establishment after that
 //     (confirmUpdateIfPending, called from session()) deletes it and logs
 //     Info "self-update confirmed" — proof the promoted binary can talk to
@@ -58,8 +58,8 @@ func (a *Agent) updateStatePath() string {
 	return updateStatePath(a.cfg.DataDir)
 }
 
-// writeUpdateState atomically writes the pending-update marker. Called by
-// selfUpdate after staging the new binary and before promoting it.
+// writeUpdateState atomically writes the pending-update marker. Called by the
+// shared promotion path after staging the new binary and before promoting it.
 func writeUpdateState(dataDir, version string) error {
 	st := updateState{Pending: version, Deadline: time.Now().Add(updateDeadlineWindow)}
 	b, err := json.Marshal(st)
@@ -68,6 +68,38 @@ func writeUpdateState(dataDir, version string) error {
 	}
 	if err := writeFileAtomic(updateStatePath(dataDir), b, 0o600); err != nil {
 		return fmt.Errorf("write update state: %w", err)
+	}
+	return nil
+}
+
+// promoteUpdateCandidate moves BinaryPath-next into service while preserving
+// BinaryPath-prev and arming the same reconnect health gate used by
+// SelfUpdate. RunPlaybook's Wardstone update path uses this after the signed
+// fixed playbook has staged and version-probed the candidate, so both update
+// entry points have one rollback implementation.
+func (a *Agent) promoteUpdateCandidate(version string) error {
+	current := a.cfg.BinaryPath
+	next := current + "-next"
+	prev := current + "-prev"
+
+	// Write the marker before replacing the live path: a crash immediately
+	// after promotion must still be recoverable by CheckUpdateState.
+	if err := writeUpdateState(a.cfg.DataDir, version); err != nil {
+		os.Remove(next)
+		return err
+	}
+	os.Remove(prev)
+	if err := os.Rename(current, prev); err != nil && !os.IsNotExist(err) {
+		os.Remove(next)
+		os.Remove(a.updateStatePath())
+		return fmt.Errorf("demote current: %w", err)
+	}
+	if err := os.Rename(next, current); err != nil {
+		// Best-effort restoration keeps the old process' on-disk generation
+		// usable when promotion fails before any re-exec.
+		os.Rename(prev, current)
+		os.Remove(a.updateStatePath())
+		return fmt.Errorf("promote: %w", err)
 	}
 	return nil
 }

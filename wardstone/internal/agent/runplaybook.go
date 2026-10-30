@@ -110,6 +110,14 @@ func (a *Agent) runPlaybook(ctx context.Context, op *wsv1.RunPlaybook) (*wsv1.Op
 	if after == "" {
 		return nil, opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "updated version could not be observed")
 	}
+	if op.GetIdentity() == wsv1.PlaybookIdentity_PLAYBOOK_IDENTITY_WARDSTONE_UPDATE {
+		// The fixed playbook stages BinaryPath-next. Probe it before promotion,
+		// then use ADR-W003's existing A/B reconnect gate rather than replacing
+		// the sole known-good generation in place.
+		if err := a.promoteUpdateCandidate(op.GetWardstoneUpdate().GetRelease()); err != nil {
+			return nil, opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "Wardstone candidate promotion failed")
+		}
+	}
 	return &wsv1.OpResult_RunPlaybook{RunPlaybook: &wsv1.RunPlaybookResult{
 		Identity: op.GetIdentity(), Version: op.GetVersion(), Phase: wsv1.PlaybookPhase_PLAYBOOK_PHASE_COMPLETE,
 		RebootRequired: rebootErr == nil, BeforeVersion: before, AfterVersion: after,
@@ -129,6 +137,9 @@ func (a *Agent) afterRunPlaybookResultSent(op *wsv1.Operation, res *wsv1.OpResul
 	switch request.GetIdentity() {
 	case wsv1.PlaybookIdentity_PLAYBOOK_IDENTITY_WARDSTONE_UPDATE:
 		if request.GetWardstoneUpdate() != nil {
+			if _, err := os.Stat(a.updateStatePath()); err != nil {
+				return
+			}
 			a.execSelf()
 		}
 	case wsv1.PlaybookIdentity_PLAYBOOK_IDENTITY_OS_UPDATE:
@@ -168,6 +179,9 @@ func (a *Agent) probePlaybookVersion(ctx context.Context, identity wsv1.Playbook
 	name := "/usr/local/bin/k3s"
 	if identity == wsv1.PlaybookIdentity_PLAYBOOK_IDENTITY_WARDSTONE_UPDATE {
 		name = a.cfg.BinaryPath
+		if _, err := os.Stat(name + "-next"); err == nil {
+			name += "-next"
+		}
 	}
 	pctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()

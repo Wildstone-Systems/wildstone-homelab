@@ -31,36 +31,17 @@ func (a *Agent) selfUpdate(op *wsv1.SelfUpdate) (*wsv1.OpResult_SelfUpdate, *wsv
 		return nil, opErr(wsv1.ErrorCode_ERROR_CODE_VERIFICATION, "binary signature rejected")
 	}
 
-	current := a.cfg.BinaryPath
-	next := current + "-next"
-	prev := current + "-prev"
+	next := a.cfg.BinaryPath + "-next"
 
 	if err := os.WriteFile(next, op.GetBinary(), 0o755); err != nil {
 		return nil, opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "stage: %v", err)
 	}
 
-	// Write the health-gate marker BEFORE promoting (ADR-W003 W5): once the
-	// live binary is replaced, a crash on the very next line must still
-	// leave evidence for CheckUpdateState to find and revert on the next
-	// start. Writing it after promotion would risk exactly that race.
-	if err := writeUpdateState(a.cfg.DataDir, op.GetVersion()); err != nil {
-		os.Remove(next)
+	if err := a.promoteUpdateCandidate(op.GetVersion()); err != nil {
 		return nil, opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "%v", err)
 	}
-
-	// Keep exactly one rollback generation.
-	os.Remove(prev)
-	if err := os.Rename(current, prev); err != nil && !os.IsNotExist(err) {
-		os.Remove(next)
-		os.Remove(a.updateStatePath())
-		return nil, opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "demote current: %v", err)
-	}
-	if err := os.Rename(next, current); err != nil {
-		// Try to restore the previous binary before reporting failure.
-		os.Rename(prev, current)
-		os.Remove(a.updateStatePath())
-		return nil, opErr(wsv1.ErrorCode_ERROR_CODE_RUNTIME, "promote: %v", err)
-	}
+	current := a.cfg.BinaryPath
+	prev := current + "-prev"
 	a.log.Info("self-update staged and promoted", "version", op.GetVersion(), "path", current)
 	return &wsv1.OpResult_SelfUpdate{SelfUpdate: &wsv1.SelfUpdateResult{
 		StagedPath:   current,

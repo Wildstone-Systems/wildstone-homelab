@@ -34,9 +34,9 @@
         dest: "{{ wildstone_stage }}"
         remote_src: true
         include: wardstoned
-    - name: Install the verified candidate
+    - name: Stage the verified candidate for Wardstone's A/B health gate
       ansible.builtin.copy:
         src: "{{ wildstone_stage }}/wardstoned"
-        dest: /usr/local/bin/wardstoned
+        dest: /usr/local/bin/wardstoned-next
         remote_src: true
         mode: "0755"

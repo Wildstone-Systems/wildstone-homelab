@@ -54,7 +54,11 @@ func runPlaybookAgent(t *testing.T) (*Agent, *int) {
 	t.Helper()
 	dir, pub := signedRunPlaybookSet(t)
 	calls := 0
-	a := &Agent{cfg: Config{DataDir: t.TempDir(), PlaybookDir: dir, PlaybookPublicKey: pub, AnsiblePath: "/usr/bin/ansible-playbook", RebootRequiredPath: filepath.Join(t.TempDir(), "reboot-required")}}
+	binPath := filepath.Join(t.TempDir(), "wardstoned")
+	if err := os.WriteFile(binPath, []byte("working-binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	a := &Agent{cfg: Config{DataDir: t.TempDir(), BinaryPath: binPath, PlaybookDir: dir, PlaybookPublicKey: pub, AnsiblePath: "/usr/bin/ansible-playbook", RebootRequiredPath: filepath.Join(t.TempDir(), "reboot-required")}}
 	probes := 0
 	a.playbookVersion = func(context.Context, wsv1.PlaybookIdentity) string {
 		probes++
@@ -86,6 +90,11 @@ func runPlaybookAgent(t *testing.T) (*Agent, *int) {
 		}
 		if len(env) != 4 || !strings.HasPrefix(env[0], "ANSIBLE_CONFIG="+dir) {
 			t.Fatalf("env = %q", env)
+		}
+		if strings.HasSuffix(args[4], "wardstone-update.yml") {
+			if err := os.WriteFile(a.cfg.BinaryPath+"-next", []byte("candidate-binary"), 0o755); err != nil {
+				t.Fatal(err)
+			}
 		}
 		return nil
 	}
@@ -201,6 +210,68 @@ func TestRunPlaybookCancellationIsTypedAndRedacted(t *testing.T) {
 	}
 }
 
+func TestRunPlaybookWardstoneUpdateUsesABReconnectGate(t *testing.T) {
+	a, _ := runPlaybookAgent(t)
+	oldBinary, err := os.ReadFile(a.cfg.BinaryPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, oerr := a.runPlaybook(t.Context(), validWardstoneRun())
+	if oerr != nil || res.RunPlaybook.GetPhase() != wsv1.PlaybookPhase_PLAYBOOK_PHASE_COMPLETE {
+		t.Fatalf("runPlaybook = %+v, %v", res, oerr)
+	}
+	if got, err := os.ReadFile(a.cfg.BinaryPath + "-prev"); err != nil || !reflect.DeepEqual(got, oldBinary) {
+		t.Fatalf("rollback generation = %q, %v", got, err)
+	}
+	if got, err := os.ReadFile(a.cfg.BinaryPath); err != nil || string(got) != "candidate-binary" {
+		t.Fatalf("promoted candidate = %q, %v", got, err)
+	}
+	st, ok, err := readUpdateState(a.cfg.DataDir)
+	if err != nil || !ok || st.Pending != "v1.2.3" || !st.Deadline.After(time.Now()) {
+		t.Fatalf("update state = %+v, ok=%v, err=%v", st, ok, err)
+	}
+	st.Deadline = time.Now().Add(-time.Minute)
+	b, err := json.Marshal(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(a.updateStatePath(), b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	reexecuted := false
+	if err := CheckUpdateState(Config{BinaryPath: a.cfg.BinaryPath, DataDir: a.cfg.DataDir, ExecSelf: func() { reexecuted = true }}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if !reexecuted {
+		t.Fatal("expired candidate did not re-exec the restored generation")
+	}
+	if got, err := os.ReadFile(a.cfg.BinaryPath); err != nil || !reflect.DeepEqual(got, oldBinary) {
+		t.Fatalf("expired candidate did not restore working binary: %q, %v", got, err)
+	}
+}
+
+func TestRunPlaybookWardstoneUpdateRefusesMissingCandidateWithoutReplacingCurrent(t *testing.T) {
+	a, calls := runPlaybookAgent(t)
+	a.playbookCommand = func(context.Context, string, []string, []string) error {
+		*calls++
+		return nil
+	}
+	a.playbookVersion = func(context.Context, wsv1.PlaybookIdentity) string { return "observed" }
+	want, err := os.ReadFile(a.cfg.BinaryPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, oerr := a.runPlaybook(t.Context(), validWardstoneRun()); oerr == nil {
+		t.Fatal("missing staged candidate unexpectedly succeeded")
+	}
+	if got, err := os.ReadFile(a.cfg.BinaryPath); err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("working binary changed = %q, %v", got, err)
+	}
+	if _, err := os.Stat(a.updateStatePath()); !os.IsNotExist(err) {
+		t.Fatalf("rollback gate armed without a candidate: %v", err)
+	}
+}
+
 func TestRunPlaybookWireSchemaIsClosedAndRoundTrips(t *testing.T) {
 	in := &wsv1.Operation{Op: &wsv1.Operation_RunPlaybook{RunPlaybook: validK3sRun()}}
 	b, err := proto.Marshal(in)
@@ -260,7 +331,14 @@ func TestRunPlaybookDisruptiveActionsFollowSuccessfulResultSend(t *testing.T) {
 				c.RebootRequiredPath = filepath.Join(t.TempDir(), "reboot-required")
 			})
 			a.playbookVersion = func(context.Context, wsv1.PlaybookIdentity) string { return "observed" }
-			a.playbookCommand = func(context.Context, string, []string, []string) error { return nil }
+			a.playbookCommand = func(context.Context, string, []string, []string) error {
+				if tc.op.GetIdentity() == wsv1.PlaybookIdentity_PLAYBOOK_IDENTITY_WARDSTONE_UPDATE {
+					if err := os.WriteFile(a.cfg.BinaryPath+"-next", []byte("candidate-binary"), 0o755); err != nil {
+						t.Fatal(err)
+					}
+				}
+				return nil
+			}
 			if tc.mark {
 				if err := os.WriteFile(a.cfg.RebootRequiredPath, []byte("required"), 0o600); err != nil {
 					t.Fatal(err)
@@ -319,6 +397,9 @@ func TestRunPlaybookLifecycleActionsRequireSuccessfulCompleteResult(t *testing.T
 	} {
 		a.afterRunPlaybookResultSent(&wsv1.Operation{Op: &wsv1.Operation_RunPlaybook{RunPlaybook: tc.op}}, tc.res)
 	}
+	wardstoneRequest := validWardstoneRun()
+	wardstoneComplete := &wsv1.OpResult{Result: &wsv1.OpResult_RunPlaybook{RunPlaybook: &wsv1.RunPlaybookResult{Identity: wsv1.PlaybookIdentity_PLAYBOOK_IDENTITY_WARDSTONE_UPDATE, Phase: wsv1.PlaybookPhase_PLAYBOOK_PHASE_COMPLETE}}}
+	a.afterRunPlaybookResultSent(&wsv1.Operation{Op: &wsv1.Operation_RunPlaybook{RunPlaybook: wardstoneRequest}}, wardstoneComplete)
 	if activated != 0 {
 		t.Fatalf("failed or incomplete result activated %d lifecycle actions", activated)
 	}
