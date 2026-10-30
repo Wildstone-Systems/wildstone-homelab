@@ -58,6 +58,7 @@ func TestOllamaEmbedderBoundsAndRedactsFailures(t *testing.T) {
 		{"malformed", `not-json`, ErrEmbeddingMalformed},
 		{"empty", `{"embeddings":[[]]}`, ErrEmbeddingBounds},
 		{"multiple", `{"embeddings":[[1],[2]]}`, ErrEmbeddingMalformed},
+		{"null-coordinate", `{"embeddings":[[1,null,3]]}`, ErrEmbeddingMalformed},
 		{"non-finite", `{"embeddings":[[1e999]]}`, ErrEmbeddingMalformed},
 		{"float32-overflow", `{"embeddings":[[1e100]]}`, ErrEmbeddingBounds},
 		{"trailing", `{"embeddings":[[1]]} {}`, ErrEmbeddingMalformed},
@@ -125,6 +126,7 @@ func TestOllamaEmbedderDistinguishesTimeoutAndTransport(t *testing.T) {
 		want error
 	}{
 		{"timeout", context.DeadlineExceeded, context.DeadlineExceeded},
+		{"canceled", context.Canceled, context.Canceled},
 		{"transport", errors.New("private transport detail"), ErrEmbeddingUnavailable},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -136,8 +138,8 @@ func TestOllamaEmbedderDistinguishesTimeoutAndTransport(t *testing.T) {
 			if !errors.Is(err, tc.want) {
 				t.Fatalf("error = %v, want %v", err, tc.want)
 			}
-			if tc.name == "transport" && strings.Contains(err.Error(), "private transport detail") {
-				t.Fatalf("transport detail leaked: %v", err)
+			if strings.Contains(err.Error(), "example.internal") || strings.Contains(err.Error(), "private transport detail") {
+				t.Fatalf("transport detail leaked for %s: %v", tc.name, err)
 			}
 		})
 	}

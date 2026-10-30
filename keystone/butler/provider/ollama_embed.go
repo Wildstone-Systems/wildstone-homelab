@@ -40,7 +40,7 @@ type ollamaEmbedRequest struct {
 }
 
 type ollamaEmbedResponse struct {
-	Embeddings [][]float64 `json:"embeddings"`
+	Embeddings [][]*float64 `json:"embeddings"`
 }
 
 func (p *OllamaEmbedder) Embed(ctx context.Context, text string) ([]float32, error) {
@@ -72,8 +72,11 @@ func (p *OllamaEmbedder) Embed(ctx context.Context, text string) ([]float32, err
 		return req, nil
 	})
 	if err != nil {
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return nil, err
+		if errors.Is(err, context.Canceled) {
+			return nil, context.Canceled
+		}
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, context.DeadlineExceeded
 		}
 		if checked, ok := unwrapAttemptCheckError(err); ok {
 			return nil, checked
@@ -107,10 +110,10 @@ func (p *OllamaEmbedder) Embed(ctx context.Context, text string) ([]float32, err
 	}
 	vector := make([]float32, len(values))
 	for i, value := range values {
-		if math.IsNaN(value) || math.IsInf(value, 0) {
+		if value == nil || math.IsNaN(*value) || math.IsInf(*value, 0) {
 			return nil, ErrEmbeddingMalformed
 		}
-		vector[i] = float32(value)
+		vector[i] = float32(*value)
 		if math.IsInf(float64(vector[i]), 0) {
 			return nil, ErrEmbeddingBounds
 		}
