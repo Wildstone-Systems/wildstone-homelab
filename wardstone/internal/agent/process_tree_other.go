@@ -1,4 +1,4 @@
-//go:build windows
+//go:build !linux
 
 package agent
 
@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-// Wardstone is deployed on Linux. Keep cross-compilation working on Windows;
+// Wardstone is deployed on Linux. Keep other builds working;
 // CommandContext still terminates the direct child and WaitDelay bounds any
 // inherited output pipes there.
 func configureProcessTreeCancellation(cmd *exec.Cmd) {
