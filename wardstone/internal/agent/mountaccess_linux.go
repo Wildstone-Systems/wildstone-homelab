@@ -52,6 +52,13 @@ func runMountAccessCheck(ctx context.Context, root string, uid, gid uint32) wsv1
 	if len(root) == 0 || len(root) > 4096 || strings.IndexByte(root, 0) >= 0 || !filepath.IsAbs(root) {
 		return wsv1.MountAccessFailureReason_MOUNT_ACCESS_FAILURE_REASON_UNAVAILABLE
 	}
+	// Distinguish an absent root before the credential-isolated helper starts.
+	// Other lookup failures deliberately fall through: root-squashed storage may
+	// deny wardstoned's root identity while allowing the requested workload
+	// identity, which is the authority that must decide the probe result.
+	if _, err := os.Stat(root); errors.Is(err, os.ErrNotExist) {
+		return wsv1.MountAccessFailureReason_MOUNT_ACCESS_FAILURE_REASON_UNAVAILABLE
+	}
 	rootReader, rootWriter, err := os.Pipe()
 	if err != nil {
 		return wsv1.MountAccessFailureReason_MOUNT_ACCESS_FAILURE_REASON_UNAVAILABLE

@@ -37,6 +37,9 @@ func mountAccessEnsure(name, hash, volume string, uid, gid int64, preflight bool
 }
 
 func TestMountAccessPreflightUsesEffectiveIdentityAndLeavesCurrentWorkload(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("requires root to install an explicitly empty supplementary-group set")
+	}
 	root := t.TempDir()
 	fake, h := mountAccessHarness(t, "library", root)
 	uid, gid := int64(os.Getuid()), int64(os.Getgid())
@@ -55,9 +58,6 @@ func TestMountAccessPreflightUsesEffectiveIdentityAndLeavesCurrentWorkload(t *te
 		t.Fatal(err)
 	}
 	deniedUID, deniedGID := int64(65534), int64(65534)
-	if os.Geteuid() != 0 {
-		deniedUID, deniedGID = uid+1, gid+1
-	}
 	res := dispatch(t, h, "node-a", mountAccessEnsure("app", "v2", "library", deniedUID, deniedGID, true))
 	oe := res.GetError()
 	if oe == nil || oe.GetMountAccessFailure().GetReason() != wsv1.MountAccessFailureReason_MOUNT_ACCESS_FAILURE_REASON_IDENTITY_DENIED {
@@ -73,16 +73,14 @@ func TestMountAccessPreflightUsesEffectiveIdentityAndLeavesCurrentWorkload(t *te
 		t.Fatalf("failed preflight replaced the current workload: %+v", current)
 	}
 
-	if os.Geteuid() == 0 {
-		if err := os.Chmod(filepath.Dir(root), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.Chown(root, int(deniedUID), int(deniedGID)); err != nil {
-			t.Fatal(err)
-		}
-		if res = dispatch(t, h, "node-a", mountAccessEnsure("app", "v2", "library", deniedUID, deniedGID, true)); res.GetError() != nil {
-			t.Fatalf("safe retry after permission correction: %+v", res.GetError())
-		}
+	if err := os.Chmod(filepath.Dir(root), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chown(root, int(deniedUID), int(deniedGID)); err != nil {
+		t.Fatal(err)
+	}
+	if res = dispatch(t, h, "node-a", mountAccessEnsure("app", "v2", "library", deniedUID, deniedGID, true)); res.GetError() != nil {
+		t.Fatalf("safe retry after permission correction: %+v", res.GetError())
 	}
 }
 
