@@ -269,6 +269,12 @@ type Agent struct {
 	activeLeaderEpoch atomic.Uint64
 	workloadMu        sync.RWMutex
 	workloads         *leader.WorkloadExecutor
+	// updateMu serializes every binary update from admission through the
+	// post-result activation boundary. SelfUpdate and the signed Wardstone
+	// RunPlaybook share BinaryPath-next, BinaryPath-prev, and update-state.json;
+	// allowing their session goroutines to overlap can destroy the known-good
+	// rollback generation or promote the other request's candidate.
+	updateMu sync.Mutex
 	// runtime is the node's container runtime; the Docker Engine client
 	// is the only one (runtime.go).
 	runtime runtimeBackend
@@ -693,6 +699,10 @@ func (a *Agent) session(ctx context.Context) error {
 			return err
 		}
 		go func(m *wsv1.KeystoneMessage) {
+			if updatesWardstoneBinary(m.GetOp()) {
+				a.updateMu.Lock()
+				defer a.updateMu.Unlock()
+			}
 			res := a.verifyAndDispatch(ctx, m.GetOpId(), m.GetOp(), m.GetOpSignature(), pinnedPub, guard)
 			sendMu.Lock()
 			sendErr := stream.Send(&wsv1.AgentMessage{Msg: &wsv1.AgentMessage_Result{Result: res}})
@@ -714,6 +724,24 @@ func (a *Agent) session(ctx context.Context) error {
 			}
 			a.afterRunPlaybookResultSent(m.GetOp(), res)
 		}(msg)
+	}
+}
+
+// updatesWardstoneBinary identifies the two closed protocol paths that share
+// Wardstone's A/B update files. The session goroutine holds updateMu across
+// verification, staging, promotion, result delivery, and activation so a
+// second request cannot touch those files in the vulnerable post-result gap.
+func updatesWardstoneBinary(op *wsv1.Operation) bool {
+	if op == nil {
+		return false
+	}
+	switch arm := op.GetOp().(type) {
+	case *wsv1.Operation_SelfUpdate:
+		return arm.SelfUpdate != nil
+	case *wsv1.Operation_RunPlaybook:
+		return arm.RunPlaybook != nil && arm.RunPlaybook.GetIdentity() == wsv1.PlaybookIdentity_PLAYBOOK_IDENTITY_WARDSTONE_UPDATE
+	default:
+		return false
 	}
 }
 

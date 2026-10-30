@@ -197,6 +197,7 @@ func (a *Agent) probePlaybookVersion(ctx context.Context, identity wsv1.Playbook
 
 func (a *Agent) runAnsible(ctx context.Context, name string, args, env []string) error {
 	cmd := exec.CommandContext(ctx, name, args...)
+	configureProcessTreeCancellation(cmd)
 	cmd.Dir = a.cfg.PlaybookDir
 	cmd.Env = env
 	// Command output is never returned or logged. Keep a small tail only so a

@@ -3,6 +3,8 @@ package agent
 import (
 	"context"
 	"crypto/ed25519"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"os"
@@ -376,6 +378,80 @@ func TestRunPlaybookDisruptiveActionsFollowSuccessfulResultSend(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestWardstoneRunPlaybookSerializesWithSelfUpdateThroughActivation(t *testing.T) {
+	dir, playbookPub := signedRunPlaybookSet(t)
+	updatePub, updatePriv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := startGateway(t, []string{"runplaybook-update-lock-token"}, "")
+	a, _ := newTestAgent(t, h, "node-runplaybook-update-lock", "runplaybook-update-lock-token", func(c *Config) {
+		c.PlaybookDir = dir
+		c.PlaybookPublicKey = playbookPub
+		c.UpdatePublicKey = updatePub
+		c.AnsiblePath = "/usr/bin/ansible-playbook"
+		c.ExecSelf = func() {}
+	})
+	a.playbookVersion = func(context.Context, wsv1.PlaybookIdentity) string { return "observed" }
+	playbookStarted := make(chan struct{})
+	releasePlaybook := make(chan struct{})
+	a.playbookCommand = func(context.Context, string, []string, []string) error {
+		if err := os.WriteFile(a.cfg.BinaryPath+"-next", []byte("playbook-candidate"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		close(playbookStarted)
+		<-releasePlaybook
+		return nil
+	}
+	if !h.gw.WaitConnected("node-runplaybook-update-lock", 10*time.Second) {
+		t.Fatal("agent never connected")
+	}
+
+	type dispatchResult struct {
+		res *wsv1.OpResult
+		err error
+	}
+	playbookDone := make(chan dispatchResult, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		res, err := h.gw.Dispatch(ctx, "node-runplaybook-update-lock", &wsv1.Operation{Op: &wsv1.Operation_RunPlaybook{RunPlaybook: validWardstoneRun()}})
+		playbookDone <- dispatchResult{res: res, err: err}
+	}()
+	<-playbookStarted
+
+	selfBinary := []byte("self-update-candidate")
+	selfSum := sha256.Sum256(selfBinary)
+	selfDone := make(chan dispatchResult, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		res, err := h.gw.Dispatch(ctx, "node-runplaybook-update-lock", &wsv1.Operation{Op: &wsv1.Operation_SelfUpdate{SelfUpdate: &wsv1.SelfUpdate{
+			Binary: selfBinary, Signature: ed25519.Sign(updatePriv, selfSum[:]), Version: "v2", Sha256Hex: hex.EncodeToString(selfSum[:]),
+		}}})
+		selfDone <- dispatchResult{res: res, err: err}
+	}()
+
+	select {
+	case got := <-selfDone:
+		t.Fatalf("SelfUpdate bypassed active RunPlaybook update: %+v", got)
+	case <-time.After(150 * time.Millisecond):
+	}
+	close(releasePlaybook)
+	if got := <-playbookDone; got.err != nil || got.res.GetRunPlaybook() == nil {
+		t.Fatalf("RunPlaybook result = %+v, %v", got.res, got.err)
+	}
+	if got := <-selfDone; got.err != nil || !got.res.GetSelfUpdate().GetPromoted() {
+		t.Fatalf("SelfUpdate result = %+v, %v", got.res, got.err)
+	}
+	if got, err := os.ReadFile(a.cfg.BinaryPath + "-prev"); err != nil || string(got) != "playbook-candidate" {
+		t.Fatalf("serialized rollback generation = %q, %v", got, err)
+	}
+	if got, err := os.ReadFile(a.cfg.BinaryPath); err != nil || string(got) != string(selfBinary) {
+		t.Fatalf("serialized current generation = %q, %v", got, err)
 	}
 }
 
