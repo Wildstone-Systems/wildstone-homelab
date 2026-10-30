@@ -71,10 +71,12 @@ func TestPackagePlatformEligibilityPrecedesProposal(t *testing.T) {
 		wantCode   int
 		want       string
 		wantProbes int
+		bound      []string
 	}{
 		{name: "omitted preserves compatibility", kind: "Container", nodes: "n1", wantCode: http.StatusCreated},
-		{name: "matching container", platforms: "platforms: [linux/amd64]\n", kind: "Container", nodes: "n1", facts: map[string][2]string{"n1": {"linux", "amd64"}}, wantCode: http.StatusCreated, wantProbes: 1},
-		{name: "matching job", platforms: "platforms: [linux/arm64]\n", kind: "Job", nodes: "n1", facts: map[string][2]string{"n1": {"linux", "arm64"}}, wantCode: http.StatusCreated, wantProbes: 1},
+		{name: "matching container", platforms: "platforms: [linux/amd64]\n", kind: "Container", nodes: "n1", facts: map[string][2]string{"n1": {"linux", "amd64"}}, wantCode: http.StatusCreated, wantProbes: 1, bound: []string{"linux/amd64"}},
+		{name: "matching job", platforms: "platforms: [linux/arm64]\n", kind: "Job", nodes: "n1", facts: map[string][2]string{"n1": {"linux", "arm64"}}, wantCode: http.StatusCreated, wantProbes: 1, bound: []string{"linux/arm64"}},
+		{name: "canonical multi-platform set", platforms: "platforms: [linux/arm64, linux/amd64]\n", kind: "Container", nodes: "n1", facts: map[string][2]string{"n1": {"linux", "amd64"}}, wantCode: http.StatusCreated, wantProbes: 1, bound: []string{"linux/amd64", "linux/arm64"}},
 		{name: "mismatch", platforms: "platforms: [linux/amd64]\n", kind: "Container", nodes: "n1", facts: map[string][2]string{"n1": {"linux", "arm64"}}, wantCode: http.StatusBadRequest, want: "reports linux/arm64", wantProbes: 1},
 		{name: "old agent missing architecture", platforms: "platforms: [linux/amd64]\n", kind: "Container", nodes: "n1", facts: map[string][2]string{"n1": {"linux", ""}}, wantCode: http.StatusBadRequest, want: "protocol minor 35", wantProbes: 1},
 		{name: "every selected node", platforms: "platforms: [linux/amd64]\n", kind: "Container", nodes: "n1,n2", facts: map[string][2]string{"n1": {"linux", "amd64"}, "n2": {"linux", "arm64"}}, wantCode: http.StatusBadRequest, want: "node n2 reports linux/arm64", wantProbes: 2},
@@ -125,6 +127,26 @@ func TestPackagePlatformEligibilityPrecedesProposal(t *testing.T) {
 			}
 			if tc.wantCode != http.StatusCreated && len(plans) != 0 {
 				t.Fatalf("refused platform left a partial plan: %+v", plans)
+			}
+			if tc.wantCode == http.StatusCreated && len(tc.bound) > 0 {
+				if code := h.approve(plans[0].ID); code != http.StatusOK {
+					t.Fatalf("approve platform plan = %d", code)
+				}
+				desired, err := h.s.State.Load()
+				if err != nil || len(desired) != len(strings.Split(tc.nodes, ",")) {
+					t.Fatalf("approved desired state = %+v, %v", desired, err)
+				}
+				for _, workload := range desired {
+					got := []string(nil)
+					if workload.Container != nil {
+						got = workload.Container.Platforms
+					} else if workload.Job != nil {
+						got = workload.Job.Run.Platforms
+					}
+					if strings.Join(got, ",") != strings.Join(tc.bound, ",") {
+						t.Fatalf("approved %s lost its platform constraint: %+v", workload.Kind, got)
+					}
+				}
 			}
 		})
 	}

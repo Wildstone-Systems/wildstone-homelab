@@ -70,6 +70,10 @@ func (r *Reconciler) applyClusterContainerStep(ctx context.Context, nodeID strin
 			sr.Error = "cluster: desired Container is missing"
 			return sr
 		}
+		if ne := r.refuseIfPlatformMismatch(ctx, want.Metadata.Node, want.Container.Platforms); ne != "" {
+			sr.Error = ne
+			return sr
+		}
 		intent, err := ClusterIntent(want, all)
 		if err != nil {
 			sr.Error = err.Error()

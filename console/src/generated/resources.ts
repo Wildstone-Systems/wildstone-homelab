@@ -56,6 +56,7 @@ export interface ContainerRuntimeIdentity {
 
 export interface ContainerSpec {
   backend?: string;
+  platforms?: string[];
   image: string;
   env?: Record<string, string>;
   ports?: string[];

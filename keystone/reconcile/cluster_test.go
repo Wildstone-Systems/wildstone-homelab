@@ -183,6 +183,7 @@ func TestEveryContainerFieldIsCarriedOrHandled(t *testing.T) {
 	}
 	handled := map[string]string{
 		"Backend":         "selects the cluster translator before request construction",
+		"Platforms":       "ClusterIntent maps one closed architecture to standard node selectors; dispatch also rechecks current HostFacts",
 		"Expose":          "ClusterIntent turns internal ports into bounded Service ports",
 		"Restart":         "a workload always restarts; any other policy is refused",
 		"RunNetwork":      "execution-only metadata for Keystone-run one-shots, never serialized",

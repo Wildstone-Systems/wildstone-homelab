@@ -204,6 +204,39 @@ func TestValidateContainerAcceptsDigest(t *testing.T) {
 	}
 }
 
+func TestValidateWorkloadPlatforms(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		platforms []string
+		wantErr   string
+	}{
+		{name: "omitted"},
+		{name: "closed values", platforms: []string{"linux/amd64", "linux/arm64"}},
+		{name: "unknown", platforms: []string{"linux/riscv64"}, wantErr: "not supported"},
+		{name: "duplicate", platforms: []string{"linux/amd64", "linux/amd64"}, wantErr: "duplicates"},
+		{name: "empty", platforms: []string{""}, wantErr: "not supported"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, kind := range []Kind{KindContainer, KindJob} {
+				r := Resource{Kind: kind, Metadata: Metadata{Name: "app", Owner: "system", Node: "node-a"}}
+				spec := ContainerSpec{Image: validDigest(), Platforms: tc.platforms}
+				if kind == KindContainer {
+					r.Container = &spec
+				} else {
+					r.Job = &JobSpec{Run: spec}
+				}
+				err := r.Validate()
+				if tc.wantErr == "" && err != nil {
+					t.Fatalf("%s: unexpected validation error: %v", kind, err)
+				}
+				if tc.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tc.wantErr)) {
+					t.Fatalf("%s: validation error = %v, want %q", kind, err, tc.wantErr)
+				}
+			}
+		})
+	}
+}
+
 func TestValidateDnsRecordBadType(t *testing.T) {
 	r := Resource{
 		Kind:     KindDnsRecord,

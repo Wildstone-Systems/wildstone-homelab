@@ -755,6 +755,9 @@ func (s *Server) proposeCapabilityBackend(ctx context.Context, id principal.Iden
 	if err := s.checkPackagePlatforms(ctx, pkg, rendered); err != nil {
 		return nil, http.StatusBadRequest, err
 	}
+	if err := bindPackagePlatforms(pkg, rendered); err != nil {
+		return nil, http.StatusBadRequest, err
+	}
 	// Reconfiguration without a choice keeps this installation's accepted
 	// backend. Match its rendered owner so another instance of the same
 	// package cannot change this one's placement.

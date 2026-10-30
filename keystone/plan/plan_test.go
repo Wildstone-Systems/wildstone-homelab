@@ -97,6 +97,27 @@ func TestDiffIdenticalIsNoSteps(t *testing.T) {
 	}
 }
 
+func TestDiffWorkloadPlatformConstraintIsReviewed(t *testing.T) {
+	for _, kind := range []resource.Kind{resource.KindContainer, resource.KindJob} {
+		before := cont("app", imgA(), nil)
+		before.Kind = kind
+		if kind == resource.KindJob {
+			before.Job = &resource.JobSpec{Run: *before.Container}
+			before.Container = nil
+		}
+		after := before
+		if kind == resource.KindContainer {
+			after.Container = &resource.ContainerSpec{Image: imgA(), Platforms: []string{"linux/amd64"}}
+		} else {
+			after.Job = &resource.JobSpec{Run: resource.ContainerSpec{Image: imgA(), Platforms: []string{"linux/amd64"}}}
+		}
+		p := Diff([]resource.Resource{after}, []resource.Resource{before})
+		if len(p.Steps) != 1 || p.Steps[0].Action != ActionUpdate || p.Steps[0].Digest != Digest(after) {
+			t.Fatalf("%s platform constraint was not bound to a reviewed update: %+v", kind, p)
+		}
+	}
+}
+
 func TestDiffContainerImageChangeIsMediumUpdate(t *testing.T) {
 	desired := []resource.Resource{cont("c1", imgB(), nil)}
 	observed := []resource.Resource{cont("c1", imgA(), nil)}
