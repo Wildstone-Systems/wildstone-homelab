@@ -259,6 +259,47 @@ func TestRuntimeIdentityIsRefusedOnAnOlderAgent(t *testing.T) {
 	}
 }
 
+func TestMountAccessPreflightIsCarriedAndRefusedOnAnOlderAgent(t *testing.T) {
+	spec := &resource.ContainerSpec{
+		Image: testDigestImage, RuntimeIdentity: testRuntimeIdentity(1000, 1000),
+		PreflightMountAccess: true,
+		Mounts:               []resource.Mount{{Source: "data", Target: "/data"}},
+	}
+	if op := docker.ensureContainer("app", spec, ContainerNetwork, "", nil).GetEnsureContainer(); !op.GetPreflightMountAccess() {
+		t.Fatal("preflightMountAccess did not reach EnsureContainer")
+	}
+	plain := *spec
+	plain.PreflightMountAccess = false
+	if specHash(&plain, ContainerNetwork, "", nil) == specHash(spec, ContainerNetwork, "", nil) {
+		t.Fatal("preflightMountAccess did not change the approved runtime hash")
+	}
+
+	h := startGateway(t, []string{"tok"})
+	agent := newTestAgent(t, h, "node-a", "tok")
+	if !h.gw.WaitConnected("node-a", 10*time.Second) {
+		t.Fatal("agent never connected")
+	}
+	app := containerResource("app", testDigestImage)
+	app.Container.RuntimeIdentity = testRuntimeIdentity(1000, 1000)
+	app.Container.PreflightMountAccess = true
+	app.Container.Mounts = []resource.Mount{{Source: "data", Target: "/data"}}
+	r := newReconciler(&GatewayApplier{Gateway: h.gw})
+	r.AgentProtocolMinor = func(string) (uint32, bool) { return resource.MountAccessPreflightProtocolMinor - 1, true }
+	out, err := r.Reconcile(context.Background(), "node-a", []resource.Resource{app})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := agent.containerExists("app"); exists || agent.opCount("EnsureContainer") != 0 || agent.opCount("PullImage") != 0 {
+		t.Fatalf("old agent was mutated: %+v", out)
+	}
+	msg := out.Steps[0].Error
+	for _, want := range []string{"protocol minor 37", "preflightMountAccess", "minor 36", "upgrade wardstoned", "before any pull or mutation"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("step error %q does not say %q", msg, want)
+		}
+	}
+}
+
 // TestMinor12SpecIsRefusedOnAnOlderAgent: the one-minor-skew guarantee
 // makes a minor-11 agent a legitimate peer, and it IGNORES the minor-12
 // fields rather than refusing them — so "53:53/udp" reaches it as a

@@ -1967,6 +1967,12 @@ func (r *Reconciler) refuseIfAgentTooOld(nodeID string, step plan.PlanStep, spec
 	if !known || have >= need {
 		return ""
 	}
+	if spec.PreflightMountAccess {
+		return fmt.Sprintf("%s/%s needs wardstone protocol minor %d (preflightMountAccess under numeric runtimeIdentity) "+
+			"and the agent on node %s speaks minor %d: upgrade wardstoned there first. An older agent would silently "+
+			"skip the effective-identity storage check and replace the existing container, so it is refused before any pull or mutation",
+			step.Kind, step.Name, need, nodeID, have)
+	}
 	if spec.RuntimeIdentity != nil {
 		return fmt.Sprintf("%s/%s needs wardstone protocol minor %d (numeric runtimeIdentity) and the agent on node %s "+
 			"speaks minor %d: upgrade wardstoned there first. An older agent would silently use the image-default user, "+

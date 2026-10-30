@@ -187,7 +187,11 @@ import (
 // 36: adds the closed, signed, local-only RunPlaybook operation (ADR-W050
 // §2.7). No playbook bytes, path, argv, environment, or free-form map crosses
 // the wire.
-const ProtocolMinor = 36
+// 37: EnsureContainer.preflight_mount_access proves every declared
+// read-write mount under runtime_identity before an existing container is
+// stopped or removed. Failures expose only the container target and a closed
+// reason enum; source paths and raw filesystem errors remain node-local.
+const ProtocolMinor = 37
 
 // maxUpdateMsgBytes is the gRPC message size cap on both ends of the
 // session/join connections (ADR-W003 W5). SelfUpdate ships the new binary

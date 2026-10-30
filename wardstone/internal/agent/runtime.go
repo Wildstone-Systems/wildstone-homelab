@@ -18,6 +18,9 @@ import (
 // The result types still carry Docker's field names. A second backend
 // fills them in; renaming them is not needed to add one.
 type runtimeBackend interface {
+	// mountAccessIdentitySupported reports whether a numeric host UID/GID probe
+	// represents the runtime identity (no remapping or supplementary groups).
+	mountAccessIdentitySupported(ctx context.Context) (bool, error)
 	inspect(ctx context.Context, name string) (*containerInspect, error)
 	create(ctx context.Context, name string, body createBody) (string, error)
 	start(ctx context.Context, id string) error
