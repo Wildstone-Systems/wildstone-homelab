@@ -77,31 +77,3 @@ func (s *Server) checkPackagePlatforms(ctx context.Context, pkg *pkgspec.Package
 	}
 	return nil
 }
-
-// bindPackagePlatforms carries the package declaration into the exact
-// workload documents a Person reviews and approves. Sorting gives the set a
-// canonical representation, so declaration order cannot create a false diff.
-func bindPackagePlatforms(pkg *pkgspec.Package, rendered []resource.Resource) error {
-	if len(pkg.Platforms) == 0 {
-		return nil
-	}
-	platforms := make([]string, len(pkg.Platforms))
-	for i, platform := range pkg.Platforms {
-		platforms[i] = string(platform)
-	}
-	sort.Strings(platforms)
-	for i := range rendered {
-		switch rendered[i].Kind {
-		case resource.KindContainer:
-			rendered[i].Container.Platforms = append([]string(nil), platforms...)
-		case resource.KindJob:
-			rendered[i].Job.Run.Platforms = append([]string(nil), platforms...)
-		default:
-			continue
-		}
-		if err := rendered[i].Validate(); err != nil {
-			return err
-		}
-	}
-	return nil
-}

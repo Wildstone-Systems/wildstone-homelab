@@ -10,6 +10,7 @@ package api
 // Nothing is applied here: the Owner still approves.
 
 import (
+	"context"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -19,8 +20,10 @@ import (
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/agentapi"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/capability"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/catalog"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/pkgspec"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/resource"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/runtimedb"
+	wsv1 "github.com/Wildstone-Systems/wildstone-homelab/proto/gen/wardstone/v1"
 )
 
 // hermesCatalogHarness is a household running the shipped catalog, so
@@ -143,6 +146,52 @@ func TestExecutionProfileChangeFilesARestartPlanForAPackagedRuntime(t *testing.T
 	}
 	if content := configContentFor(t, current, "agent-hermes-health-config"); strings.Contains(content, "- terminal") {
 		t.Errorf("the restart plan applied itself: the live ConfigFile already carries the sandboxed toolsets:\n%s", content)
+	}
+}
+
+func TestExecutionProfileChangeRechecksPackagePlatformBeforePlan(t *testing.T) {
+	h := hermesCatalogHarness(t)
+	createAgent(t, h, "health")
+	if res := h.do(runtimedb.RoleAdmin, http.MethodPut, "/api/v1/butlers/health/runtime",
+		map[string]any{"type": "hermes"}, nil); res.StatusCode != http.StatusOK {
+		t.Fatalf("PUT native->hermes = %d", res.StatusCode)
+	}
+	installCapability(t, h, "agent-hermes", hermesParams("health"))
+	pkg, err := h.s.Catalog.Get("agent-hermes", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg.Platforms = []pkgspec.Platform{pkgspec.PlatformLinuxAMD64}
+	h.s.Agents = applierFunc(func(_ context.Context, node string, op *wsv1.Operation) (*wsv1.OpResult, error) {
+		if _, ok := op.GetOp().(*wsv1.Operation_HostFacts); !ok {
+			t.Fatalf("runtime platform admission dispatched %T, want HostFacts", op.GetOp())
+		}
+		return &wsv1.OpResult{Result: &wsv1.OpResult_HostFacts{HostFacts: &wsv1.HostFactsResult{
+			Os: "linux", Architecture: "arm64",
+		}}}, nil
+	})
+	before, err := h.s.DB.ListPlans(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var out struct {
+		Error string `json:"error"`
+	}
+	res := h.do(runtimedb.RoleAdmin, http.MethodPut, "/api/v1/butlers/health/runtime",
+		map[string]any{"type": "hermes", "executionProfileRef": "sandboxed"}, &out)
+	if res.StatusCode != http.StatusBadGateway {
+		t.Fatalf("incompatible re-render = %d %q, want 502", res.StatusCode, out.Error)
+	}
+	if !strings.Contains(out.Error, "supports linux/amd64") || !strings.Contains(out.Error, "reports linux/arm64") {
+		t.Fatalf("incompatible re-render error = %q", out.Error)
+	}
+	after, err := h.s.DB.ListPlans(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after) != len(before) {
+		t.Fatalf("incompatible re-render filed a plan: %d -> %d", len(before), len(after))
 	}
 }
 

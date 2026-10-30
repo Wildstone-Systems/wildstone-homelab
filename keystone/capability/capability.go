@@ -327,6 +327,33 @@ func (e *Engine) Expand(pkg *pkgspec.Package, params map[string]string, catalog 
 		return nil, err
 	}
 
+	// Platform eligibility is part of the package's workload contract, not
+	// merely admission-time metadata. Stamp it in the shared expansion path
+	// so every proposal path (including packaged-runtime re-renders) carries
+	// the constraint into the exact resource the Owner approves and the
+	// executor later rechecks. Canonical ordering keeps declaration order
+	// from creating false Plan diffs.
+	if len(pkg.Platforms) > 0 {
+		platforms := make([]string, len(pkg.Platforms))
+		for i, platform := range pkg.Platforms {
+			platforms[i] = string(platform)
+		}
+		sort.Strings(platforms)
+		for i := range out {
+			switch out[i].Kind {
+			case resource.KindContainer:
+				out[i].Container.Platforms = append([]string(nil), platforms...)
+			case resource.KindJob:
+				out[i].Job.Run.Platforms = append([]string(nil), platforms...)
+			default:
+				continue
+			}
+			if err := out[i].Validate(); err != nil {
+				return nil, &TemplateError{Package: pkg.Metadata.Name, Err: fmt.Errorf("validating platform-bound resource: %w", err)}
+			}
+		}
+	}
+
 	return out, nil
 }
 
