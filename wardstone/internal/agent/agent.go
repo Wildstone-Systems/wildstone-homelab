@@ -277,6 +277,9 @@ type Agent struct {
 	// takes effect after a promoted self-update — see selfUpdate and the
 	// session send-path comment below for the ordering guarantee.
 	execSelf func()
+	// rebootHost performs the local reboot requested by an OS RunPlaybook.
+	// Like execSelf, it is called only after the successful result send.
+	rebootHost func()
 	// playbookCommand is fixed to runAnsible in production. Tests replace it
 	// after New to observe argv without starting a process.
 	playbookCommand func(context.Context, string, []string, []string) error
@@ -364,6 +367,7 @@ func New(cfg Config) (*Agent, error) {
 	} else {
 		a.execSelf = a.defaultExecSelf
 	}
+	a.rebootHost = a.defaultRebootHost
 	return a, nil
 }
 
@@ -697,21 +701,18 @@ func (a *Agent) session(ctx context.Context) error {
 				a.log.Warn("result send failed", "op_id", m.GetOpId(), "error", sendErr)
 				return
 			}
-			// Re-exec ordering guarantee (ADR-W003 W5): selfUpdate must not
-			// re-exec itself before Keystone has the OpResult — Keystone's
-			// Dispatch is waiting on it, and re-exec replaces this process
-			// image immediately with no chance to flush anything after. So
-			// selfUpdate only stages+promotes+writes the state file; it
-			// never calls execSelf directly. Instead, THIS goroutine — the
-			// one handling the SelfUpdate op — checks its own just-sent
-			// result after the send succeeds (outside sendMu, so it never
-			// blocks other in-flight result sends) and re-execs only then.
-			// Checking res (not a shared flag) ties the re-exec to exactly
-			// the op that requested it, so a concurrent unrelated op never
-			// triggers a spurious re-exec.
+			// Disruptive lifecycle ordering guarantee (ADR-W003 W5 and
+			// ADR-W050 section 2.7): self-update, Wardstone replacement, and
+			// a permitted OS reboot must not stop this process before Keystone
+			// has the OpResult. Checking this goroutine's own request/result
+			// after the successful send ties the action to exactly the
+			// completed operation; private playbook input cleanup has also
+			// already run by the time dispatch returns.
 			if su := res.GetSelfUpdate(); su.GetPromoted() {
 				a.execSelf()
+				return
 			}
+			a.afterRunPlaybookResultSent(m.GetOp(), res)
 		}(msg)
 	}
 }

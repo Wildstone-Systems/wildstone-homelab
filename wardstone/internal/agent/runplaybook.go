@@ -116,6 +116,42 @@ func (a *Agent) runPlaybook(ctx context.Context, op *wsv1.RunPlaybook) (*wsv1.Op
 	}}, nil
 }
 
+// afterRunPlaybookResultSent activates only lifecycle changes that would
+// terminate the operation executor. Playbooks stage the host change and return;
+// the session goroutine calls this only after Keystone has received the typed
+// result. This is the same send-before-reexec boundary used by SelfUpdate.
+func (a *Agent) afterRunPlaybookResultSent(op *wsv1.Operation, res *wsv1.OpResult) {
+	result := res.GetRunPlaybook()
+	request := op.GetRunPlaybook()
+	if result == nil || request == nil || result.GetPhase() != wsv1.PlaybookPhase_PLAYBOOK_PHASE_COMPLETE || result.GetIdentity() != request.GetIdentity() {
+		return
+	}
+	switch request.GetIdentity() {
+	case wsv1.PlaybookIdentity_PLAYBOOK_IDENTITY_WARDSTONE_UPDATE:
+		if request.GetWardstoneUpdate() != nil {
+			a.execSelf()
+		}
+	case wsv1.PlaybookIdentity_PLAYBOOK_IDENTITY_OS_UPDATE:
+		if request.GetOsUpdate().GetRebootIfRequired() && result.GetRebootRequired() {
+			a.rebootHost()
+		}
+	}
+}
+
+// defaultRebootHost hands the fixed local reboot to systemd without waiting
+// for shutdown. Ansible's reboot action intentionally refuses connection=local;
+// this runs only from the post-result session path above, with no request data
+// in its executable or argv.
+func (a *Agent) defaultRebootHost() {
+	cmd := exec.Command("/usr/bin/systemctl", "--no-block", "reboot")
+	cmd.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LANG=C"}
+	sink := &boundedDiscard{remaining: 4096}
+	cmd.Stdout, cmd.Stderr = sink, sink
+	if err := cmd.Run(); err != nil {
+		a.log.Error("post-result host reboot handoff failed", "error", err)
+	}
+}
+
 func (a *Agent) probePlaybookVersion(ctx context.Context, identity wsv1.PlaybookIdentity) string {
 	if identity == wsv1.PlaybookIdentity_PLAYBOOK_IDENTITY_OS_UPDATE {
 		b, err := os.ReadFile("/etc/os-release")

@@ -241,6 +241,89 @@ func TestRunPlaybookGatewayEndToEnd(t *testing.T) {
 	}
 }
 
+func TestRunPlaybookDisruptiveActionsFollowSuccessfulResultSend(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		op   *wsv1.RunPlaybook
+		mark bool
+	}{
+		{name: "os reboot", op: validOSRun(), mark: true},
+		{name: "wardstone reexec", op: validWardstoneRun()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir, pub := signedRunPlaybookSet(t)
+			h := startGateway(t, []string{"runplaybook-lifecycle-token"}, "")
+			a, _ := newTestAgent(t, h, "node-runplaybook-lifecycle", "runplaybook-lifecycle-token", func(c *Config) {
+				c.PlaybookDir = dir
+				c.PlaybookPublicKey = pub
+				c.AnsiblePath = "/usr/bin/ansible-playbook"
+				c.RebootRequiredPath = filepath.Join(t.TempDir(), "reboot-required")
+			})
+			a.playbookVersion = func(context.Context, wsv1.PlaybookIdentity) string { return "observed" }
+			a.playbookCommand = func(context.Context, string, []string, []string) error { return nil }
+			if tc.mark {
+				if err := os.WriteFile(a.cfg.RebootRequiredPath, []byte("required"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			activated := make(chan string, 1)
+			a.rebootHost = func() { activated <- "reboot" }
+			a.execSelf = func() { activated <- "reexec" }
+			if !h.gw.WaitConnected("node-runplaybook-lifecycle", 10*time.Second) {
+				t.Fatal("agent never connected")
+			}
+			res := dispatch(t, h, "node-runplaybook-lifecycle", &wsv1.Operation{Op: &wsv1.Operation_RunPlaybook{RunPlaybook: tc.op}})
+			if res.GetRunPlaybook().GetPhase() != wsv1.PlaybookPhase_PLAYBOOK_PHASE_COMPLETE {
+				t.Fatalf("dispatch result = %+v", res)
+			}
+			want := "reexec"
+			if tc.mark {
+				want = "reboot"
+			}
+			select {
+			case got := <-activated:
+				if got != want {
+					t.Fatalf("activation = %q, want %q", got, want)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatalf("%s was not activated after result delivery", want)
+			}
+			entries, err := os.ReadDir(a.cfg.DataDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, entry := range entries {
+				if strings.HasPrefix(entry.Name(), "runplaybook-") {
+					t.Fatalf("private input remained at activation: %s", entry.Name())
+				}
+			}
+		})
+	}
+}
+
+func TestRunPlaybookLifecycleActionsRequireSuccessfulCompleteResult(t *testing.T) {
+	a, _ := runPlaybookAgent(t)
+	activated := 0
+	a.rebootHost = func() { activated++ }
+	a.execSelf = func() { activated++ }
+	request := validOSRun()
+	for _, tc := range []struct {
+		op  *wsv1.RunPlaybook
+		res *wsv1.OpResult
+	}{
+		{op: request, res: &wsv1.OpResult{Result: &wsv1.OpResult_Error{Error: &wsv1.OpError{Code: wsv1.ErrorCode_ERROR_CODE_RUNTIME}}}},
+		{op: request, res: &wsv1.OpResult{Result: &wsv1.OpResult_RunPlaybook{RunPlaybook: &wsv1.RunPlaybookResult{Identity: wsv1.PlaybookIdentity_PLAYBOOK_IDENTITY_OS_UPDATE, Phase: wsv1.PlaybookPhase_PLAYBOOK_PHASE_EXECUTING, RebootRequired: true}}}},
+		{op: request, res: &wsv1.OpResult{Result: &wsv1.OpResult_RunPlaybook{RunPlaybook: &wsv1.RunPlaybookResult{Identity: wsv1.PlaybookIdentity_PLAYBOOK_IDENTITY_OS_UPDATE, Phase: wsv1.PlaybookPhase_PLAYBOOK_PHASE_COMPLETE}}}},
+		{op: &wsv1.RunPlaybook{Identity: wsv1.PlaybookIdentity_PLAYBOOK_IDENTITY_OS_UPDATE, Parameters: &wsv1.RunPlaybook_OsUpdate{OsUpdate: &wsv1.OsUpdateParams{}}}, res: &wsv1.OpResult{Result: &wsv1.OpResult_RunPlaybook{RunPlaybook: &wsv1.RunPlaybookResult{Identity: wsv1.PlaybookIdentity_PLAYBOOK_IDENTITY_OS_UPDATE, Phase: wsv1.PlaybookPhase_PLAYBOOK_PHASE_COMPLETE, RebootRequired: true}}}},
+		{op: request, res: &wsv1.OpResult{Result: &wsv1.OpResult_RunPlaybook{RunPlaybook: &wsv1.RunPlaybookResult{Identity: wsv1.PlaybookIdentity_PLAYBOOK_IDENTITY_WARDSTONE_UPDATE, Phase: wsv1.PlaybookPhase_PLAYBOOK_PHASE_COMPLETE, RebootRequired: true}}}},
+	} {
+		a.afterRunPlaybookResultSent(&wsv1.Operation{Op: &wsv1.Operation_RunPlaybook{RunPlaybook: tc.op}}, tc.res)
+	}
+	if activated != 0 {
+		t.Fatalf("failed or incomplete result activated %d lifecycle actions", activated)
+	}
+}
+
 func TestRunPlaybookProductionPathsMustBeAbsolute(t *testing.T) {
 	base := Config{NodeID: "node-a", KeystoneAddr: "127.0.0.1:1", DataDir: t.TempDir(), BinaryPath: filepath.Join(t.TempDir(), "wardstoned")}
 	for _, mutate := range []func(*Config){

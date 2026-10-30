@@ -40,9 +40,3 @@
         dest: /usr/local/bin/wardstoned
         remote_src: true
         mode: "0755"
-      notify: Restart Wardstone
-  handlers:
-    - name: Restart Wardstone
-      ansible.builtin.systemd:
-        name: wardstoned
-        state: restarted
