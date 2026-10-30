@@ -1,0 +1,41 @@
+---
+- name: Apply one pinned local k3s patch update
+  hosts: localhost
+  connection: local
+  become: true
+  gather_facts: true
+  vars:
+    wildstone_arch_suffix: "{{ {'x86_64': '', 'aarch64': '-arm64'}[ansible_facts['architecture']] | default('unsupported') }}"
+    wildstone_release_url: "https://github.com/k3s-io/k3s/releases/download/{{ k3s_release | urlencode }}/k3s{{ wildstone_arch_suffix }}"
+    wildstone_candidate: "/var/lib/wildstone/k3s/{{ k3s_release }}/k3s"
+  tasks:
+    - name: Require the typed supported release and signed digest
+      ansible.builtin.assert:
+        that:
+          - k3s_release is match('^v1\.(3[0-9]|[4-9][0-9])\.[0-9]+\+k3s[0-9]+$')
+          - k3s_sha256 is match('^[a-f0-9]{64}$')
+          - wildstone_arch_suffix != 'unsupported'
+        quiet: true
+    - name: Create the fixed staging directory
+      ansible.builtin.file:
+        path: "{{ wildstone_candidate | dirname }}"
+        state: directory
+        mode: "0755"
+    - name: Download exactly the reviewed k3s binary
+      ansible.builtin.get_url:
+        url: "{{ wildstone_release_url }}"
+        dest: "{{ wildstone_candidate }}"
+        checksum: "sha256:{{ k3s_sha256 }}"
+        mode: "0755"
+    - name: Replace k3s only after digest verification
+      ansible.builtin.copy:
+        src: "{{ wildstone_candidate }}"
+        dest: /usr/local/bin/k3s
+        remote_src: true
+        mode: "0755"
+      notify: Restart k3s
+  handlers:
+    - name: Restart k3s
+      ansible.builtin.systemd:
+        name: k3s
+        state: restarted

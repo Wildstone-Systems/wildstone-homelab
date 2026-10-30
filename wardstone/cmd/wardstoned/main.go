@@ -6,6 +6,7 @@ package main
 
 import (
 	"context"
+	"encoding/hex"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -35,6 +36,8 @@ func main() {
 	engineAPIs := flag.String("engine-apis", "", "comma-separated local Kubernetes API URLs, one for every server; empty disables leader election")
 	engineCA := flag.String("engine-ca", "", "Kubernetes API CA PEM, required with -engine-apis")
 	engineToken := flag.String("engine-token", "", "path to this node's scoped Wardstone token, required with -engine-apis")
+	playbookDir := flag.String("playbook-dir", "/usr/lib/wildstone/playbooks/current", "directory containing the shipped signed playbook set")
+	playbookPublicKey := flag.String("playbook-public-key", "", "hex ed25519 public key for the signed playbook manifest")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
 
@@ -44,16 +47,27 @@ func main() {
 	}
 
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	var playbookPub []byte
+	if *playbookPublicKey != "" {
+		var err error
+		playbookPub, err = hex.DecodeString(*playbookPublicKey)
+		if err != nil || len(playbookPub) != 32 {
+			fmt.Fprintln(os.Stderr, "wardstoned: -playbook-public-key must be a 32-byte ed25519 key in hex")
+			os.Exit(2)
+		}
+	}
 	cfg := agent.Config{
-		NodeID:          *nodeID,
-		KeystoneAddr:    *keystone,
-		DataDir:         *dataDir,
-		JoinToken:       *joinToken,
-		CAFingerprint:   *caFingerprint,
-		EngineCAFile:    *engineCA,
-		EngineTokenFile: *engineToken,
-		Version:         version,
-		Logger:          log,
+		NodeID:            *nodeID,
+		KeystoneAddr:      *keystone,
+		DataDir:           *dataDir,
+		JoinToken:         *joinToken,
+		CAFingerprint:     *caFingerprint,
+		EngineCAFile:      *engineCA,
+		EngineTokenFile:   *engineToken,
+		Version:           version,
+		PlaybookDir:       *playbookDir,
+		PlaybookPublicKey: playbookPub,
+		Logger:            log,
 	}
 	if *engineAPIs != "" {
 		for _, addr := range strings.Split(*engineAPIs, ",") {

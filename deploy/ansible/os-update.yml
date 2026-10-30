@@ -1,0 +1,13 @@
+---
+- name: Apply the fixed local operating-system update
+  hosts: localhost
+  connection: local
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Upgrade installed Debian-family packages
+      ansible.builtin.apt:
+        update_cache: true
+        upgrade: dist
+      environment:
+        DEBIAN_FRONTEND: noninteractive

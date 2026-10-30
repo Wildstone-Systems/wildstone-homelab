@@ -1999,6 +1999,44 @@ install_chat_adapter
 install_agent_bridge
 install_mail_adapter
 
+# Install the exact signed playbook set shipped by this release. Verification
+# happens before the live directory changes; an old release without the asset
+# leaves RunPlaybook disabled rather than accepting an unsigned local set.
+PLAYBOOK_ARGS=""
+if release_has playbooks.tar.gz; then
+  fetch_binary wild-playbooks
+  fetch_asset playbooks.tar.gz
+  if ! command -v ansible-playbook >/dev/null; then
+    apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get install -y ansible-core
+  fi
+  playbook_stage="$WORK/playbook-stage"
+  mkdir -p "$playbook_stage"
+  tar -tzf "$WORK/playbooks.tar.gz" | while IFS= read -r member; do
+    case "$member" in
+      playbooks|playbooks/|playbooks/*|playbooks.public-key) ;;
+      *) fail "playbooks.tar.gz contains an unexpected path: $member" ;;
+    esac
+    case "/$member/" in
+      */../*|*//* ) fail "playbooks.tar.gz contains an unsafe path: $member" ;;
+    esac
+  done
+  tar -xzf "$WORK/playbooks.tar.gz" -C "$playbook_stage"
+  playbook_pub="$(tr -d '[:space:]' < "$playbook_stage/playbooks.public-key")"
+  [ "${#playbook_pub}" -eq 64 ] || fail "playbooks.public-key is not an ed25519 public key"
+  wild-playbooks verify -pub "$playbook_pub" "$playbook_stage/playbooks" \
+    || fail "the shipped playbook set did not verify"
+  install -d -m 0755 /usr/lib/wildstone/playbooks
+  rm -rf /usr/lib/wildstone/playbooks/current.new
+  mv "$playbook_stage/playbooks" /usr/lib/wildstone/playbooks/current.new
+  rm -rf /usr/lib/wildstone/playbooks/current
+  mv /usr/lib/wildstone/playbooks/current.new /usr/lib/wildstone/playbooks/current
+  install -m 0644 "$playbook_stage/playbooks.public-key" /usr/lib/wildstone/playbooks/playbooks.public-key
+  PLAYBOOK_ARGS="-playbook-dir /usr/lib/wildstone/playbooks/current -playbook-public-key $playbook_pub"
+else
+  log "this release has no playbooks.tar.gz; typed host updates remain disabled"
+fi
+
 # The node identity and secret store used to live at
 # /etc/wildstone/wardstone — inside the managed prefix the ingress
 # packages bind-mount into Caddy. Move an existing one rather than
@@ -2032,6 +2070,7 @@ CA_FINGERPRINT=$CA_FINGERPRINT
 ENGINE_APIS=$ENGINE_APIS
 ENGINE_CA=$ENGINE_CA
 ENGINE_ARGS=$ENGINE_ARGS
+PLAYBOOK_ARGS=$PLAYBOOK_ARGS
 EOF
 
 install_unit wardstoned <<'UNIT'
@@ -2043,7 +2082,7 @@ Requires=docker.service
 
 [Service]
 EnvironmentFile=/etc/wildstone/wardstoned.env
-ExecStart=/usr/local/bin/wardstoned -node-id ${NODE_ID} -keystone ${KEYSTONE_ADDR} -join-token ${JOIN_TOKEN} -ca-fingerprint ${CA_FINGERPRINT} $ENGINE_ARGS
+ExecStart=/usr/local/bin/wardstoned -node-id ${NODE_ID} -keystone ${KEYSTONE_ADDR} -join-token ${JOIN_TOKEN} -ca-fingerprint ${CA_FINGERPRINT} $ENGINE_ARGS $PLAYBOOK_ARGS
 Restart=on-failure
 RestartSec=3
 UMask=0077

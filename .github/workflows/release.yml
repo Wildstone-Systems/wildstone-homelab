@@ -50,6 +50,7 @@ jobs:
         env:
           CGO_ENABLED: "0"
           NODE_CACHE: ${{ runner.tool_cache }}/wildstone-node
+          PLAYBOOK_SIGNING_SEED: ${{ secrets.WARDSTONE_UPDATE_SIGNING_SEED }}
         run: |
           set -euo pipefail
           mkdir -p dist
@@ -65,6 +66,7 @@ jobs:
           }
           build keystone   keystone  ./cmd/keystone
           build wardstoned wardstone ./cmd/wardstoned
+          build wild-playbooks wardstone ./cmd/wild-playbooks
           build wild       cli       ./cmd/wild
           # The chat transport adapter (ADR-W033 B7.1). Shipped as a
           # binary like everything else, and that is the whole of its
@@ -104,6 +106,22 @@ jobs:
           # megabytes of art inside the binary, and this is how a theme
           # gets its picture without reopening that.
           tar -czf dist/wallpapers.tar.gz -C wallpapers .
+          # Host-update playbooks are useful only as one signed set. The
+          # offline Wardstone update key signs the exact manifest; no private
+          # key is placed in an artifact or the checkout.
+          [ "${#PLAYBOOK_SIGNING_SEED}" -eq 64 ] \
+            || { echo "WARDSTONE_UPDATE_SIGNING_SEED must be a 32-byte hex seed"; exit 1; }
+          playbook_stage="$RUNNER_TEMP/wildstone-playbooks"
+          mkdir -p "$playbook_stage/playbooks"
+          cp -a deploy/ansible/. "$playbook_stage/playbooks/"
+          printf '%s\n' "$PLAYBOOK_SIGNING_SEED" > "$RUNNER_TEMP/playbook-signing.key"
+          chmod 0600 "$RUNNER_TEMP/playbook-signing.key"
+          (cd wardstone && go build -trimpath -o "$RUNNER_TEMP/wild-playbooks" ./cmd/wild-playbooks)
+          "$RUNNER_TEMP/wild-playbooks" sign -key "$RUNNER_TEMP/playbook-signing.key" \
+            "$playbook_stage/playbooks" > "$playbook_stage/playbooks.public-key"
+          "$RUNNER_TEMP/wild-playbooks" verify \
+            -pub "$(cat "$playbook_stage/playbooks.public-key")" "$playbook_stage/playbooks"
+          tar -czf dist/playbooks.tar.gz -C "$playbook_stage" playbooks playbooks.public-key
           # The native agent runtime: the bundled sidecar plus a pinned,
           # checksum-verified Node, one archive per architecture
           # (native-agent_linux_<arch>.tar.gz). install.sh puts it in

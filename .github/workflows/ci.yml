@@ -113,6 +113,14 @@ jobs:
             || { echo "release.yml no longer produces wallpapers.tar.gz"; exit 1; }
           grep -q 'wallpapers\.tar\.gz' scripts/install.sh \
             || { echo "install.sh no longer fetches wallpapers.tar.gz"; exit 1; }
+          grep -q 'playbooks\.tar\.gz' .github/workflows/release.yml \
+            || { echo "release.yml no longer produces playbooks.tar.gz"; exit 1; }
+          grep -q 'playbooks\.tar\.gz' scripts/install.sh \
+            || { echo "install.sh no longer fetches playbooks.tar.gz"; exit 1; }
+          grep -q 'build wild-playbooks' .github/workflows/release.yml \
+            || { echo "release.yml no longer builds wild-playbooks"; exit 1; }
+          grep -q 'fetch_binary wild-playbooks' scripts/install.sh \
+            || { echo "install.sh no longer installs wild-playbooks"; exit 1; }
           grep -q 'build-native-agent\.sh' .github/workflows/release.yml \
             || { echo "release.yml no longer builds native-agent_linux_<arch>.tar.gz"; exit 1; }
           grep -q 'native-agent_linux_' scripts/build-native-agent.sh \

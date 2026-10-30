@@ -158,6 +158,8 @@ func opArmFromOperation(op *wsv1.Operation) string {
 		return "Health"
 	case *wsv1.Operation_SelfUpdate:
 		return "SelfUpdate"
+	case *wsv1.Operation_RunPlaybook:
+		return "RunPlaybook"
 	case *wsv1.Operation_RemoveContainer:
 		return "RemoveContainer"
 	case *wsv1.Operation_ContainerStats:
@@ -224,6 +226,8 @@ func opArmFromResult(res *wsv1.OpResult) string {
 		return "Health"
 	case *wsv1.OpResult_SelfUpdate:
 		return "SelfUpdate"
+	case *wsv1.OpResult_RunPlaybook:
+		return "RunPlaybook"
 	case *wsv1.OpResult_RemoveContainer:
 		return "RemoveContainer"
 	case *wsv1.OpResult_ContainerStats:

@@ -94,7 +94,14 @@ func sign(args []string) error {
 	if err := os.WriteFile(filepath.Join(dir, playbook.ManifestFile), manifest, 0o644); err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, playbook.SignatureFile), playbook.Sign(ed25519.NewKeyFromSeed(seed), manifest), 0o644)
+	priv := ed25519.NewKeyFromSeed(seed)
+	if err := os.WriteFile(filepath.Join(dir, playbook.SignatureFile), playbook.Sign(priv, manifest), 0o644); err != nil {
+		return err
+	}
+	// Public and intentionally printable: release packaging records the key
+	// beside the signed set so wardstoned can pin exactly what CI signed.
+	fmt.Println(hex.EncodeToString(priv.Public().(ed25519.PublicKey)))
+	return nil
 }
 
 func verify(args []string) error {

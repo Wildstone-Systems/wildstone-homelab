@@ -184,7 +184,10 @@ import (
 // unchanged spec-hash label cannot hide out-of-band Docker drift.
 // 35: HostFacts reports a bounded canonical architecture (amd64 or arm64),
 // so package platform eligibility can fail closed before workload mutation.
-const ProtocolMinor = 35
+// 36: adds the closed, signed, local-only RunPlaybook operation (ADR-W050
+// §2.7). No playbook bytes, path, argv, environment, or free-form map crosses
+// the wire.
+const ProtocolMinor = 36
 
 // maxUpdateMsgBytes is the gRPC message size cap on both ends of the
 // session/join connections (ADR-W003 W5). SelfUpdate ships the new binary
@@ -213,11 +216,15 @@ type Config struct {
 	// falls back to trust-on-first-use and logs a loud Warn.
 	CAFingerprint string
 
-	ManagedPrefixes []string // default: /etc/wildstone, /srv/wildstone
-	DockerEndpoint  string   // default: unix:///var/run/docker.sock
-	BinaryPath      string   // self-update target; default: os.Executable()
-	UpdatePublicKey []byte   // ed25519, baked in at build in production
-	Version         string
+	ManagedPrefixes    []string // default: /etc/wildstone, /srv/wildstone
+	DockerEndpoint     string   // default: unix:///var/run/docker.sock
+	BinaryPath         string   // self-update target; default: os.Executable()
+	UpdatePublicKey    []byte   // ed25519, baked in at build in production
+	PlaybookDir        string   // signed shipped set; default /usr/lib/wildstone/playbooks/current
+	PlaybookPublicKey  []byte   // ed25519 key for the signed playbook manifest
+	AnsiblePath        string   // fixed executable; default /usr/bin/ansible-playbook
+	RebootRequiredPath string   // default /var/run/reboot-required; tests override
+	Version            string
 
 	// MountRoot is the second hard boundary EnsureMount enforces on top of
 	// ManagedPrefixes (ADR-W003 W6c): the target must resolve under BOTH a
@@ -262,6 +269,12 @@ type Agent struct {
 	activeLeaderEpoch atomic.Uint64
 	workloadMu        sync.RWMutex
 	workloads         *leader.WorkloadExecutor
+	// updateMu serializes every binary update from admission through the
+	// post-result activation boundary. SelfUpdate and the signed Wardstone
+	// RunPlaybook share BinaryPath-next, BinaryPath-prev, and update-state.json;
+	// allowing their session goroutines to overlap can destroy the known-good
+	// rollback generation or promote the other request's candidate.
+	updateMu sync.Mutex
 	// runtime is the node's container runtime; the Docker Engine client
 	// is the only one (runtime.go).
 	runtime runtimeBackend
@@ -270,6 +283,13 @@ type Agent struct {
 	// takes effect after a promoted self-update — see selfUpdate and the
 	// session send-path comment below for the ordering guarantee.
 	execSelf func()
+	// rebootHost performs the local reboot requested by an OS RunPlaybook.
+	// Like execSelf, it is called only after the successful result send.
+	rebootHost func()
+	// playbookCommand is fixed to runAnsible in production. Tests replace it
+	// after New to observe argv without starting a process.
+	playbookCommand func(context.Context, string, []string, []string) error
+	playbookVersion func(context.Context, wsv1.PlaybookIdentity) string
 }
 
 func New(cfg Config) (*Agent, error) {
@@ -308,6 +328,24 @@ func New(cfg Config) (*Agent, error) {
 		}
 		cfg.BinaryPath = exe
 	}
+	if cfg.PlaybookDir == "" {
+		cfg.PlaybookDir = "/usr/lib/wildstone/playbooks/current"
+	}
+	if !filepath.IsAbs(cfg.PlaybookDir) {
+		return nil, fmt.Errorf("PlaybookDir must be absolute")
+	}
+	if cfg.AnsiblePath == "" {
+		cfg.AnsiblePath = "/usr/bin/ansible-playbook"
+	}
+	if !filepath.IsAbs(cfg.AnsiblePath) {
+		return nil, fmt.Errorf("AnsiblePath must be absolute")
+	}
+	if cfg.RebootRequiredPath == "" {
+		cfg.RebootRequiredPath = "/var/run/reboot-required"
+	}
+	if !filepath.IsAbs(cfg.RebootRequiredPath) {
+		return nil, fmt.Errorf("RebootRequiredPath must be absolute")
+	}
 	if cfg.BackoffBase == 0 {
 		cfg.BackoffBase = 500 * time.Millisecond
 	}
@@ -328,11 +366,14 @@ func New(cfg Config) (*Agent, error) {
 		return nil, err
 	}
 	a := &Agent{cfg: cfg, log: cfg.Logger.With("node", cfg.NodeID), runtime: docker}
+	a.playbookCommand = a.runAnsible
+	a.playbookVersion = a.probePlaybookVersion
 	if cfg.ExecSelf != nil {
 		a.execSelf = cfg.ExecSelf
 	} else {
 		a.execSelf = a.defaultExecSelf
 	}
+	a.rebootHost = a.defaultRebootHost
 	return a, nil
 }
 
@@ -658,6 +699,10 @@ func (a *Agent) session(ctx context.Context) error {
 			return err
 		}
 		go func(m *wsv1.KeystoneMessage) {
+			if updatesWardstoneBinary(m.GetOp()) {
+				a.updateMu.Lock()
+				defer a.updateMu.Unlock()
+			}
 			res := a.verifyAndDispatch(ctx, m.GetOpId(), m.GetOp(), m.GetOpSignature(), pinnedPub, guard)
 			sendMu.Lock()
 			sendErr := stream.Send(&wsv1.AgentMessage{Msg: &wsv1.AgentMessage_Result{Result: res}})
@@ -666,22 +711,37 @@ func (a *Agent) session(ctx context.Context) error {
 				a.log.Warn("result send failed", "op_id", m.GetOpId(), "error", sendErr)
 				return
 			}
-			// Re-exec ordering guarantee (ADR-W003 W5): selfUpdate must not
-			// re-exec itself before Keystone has the OpResult — Keystone's
-			// Dispatch is waiting on it, and re-exec replaces this process
-			// image immediately with no chance to flush anything after. So
-			// selfUpdate only stages+promotes+writes the state file; it
-			// never calls execSelf directly. Instead, THIS goroutine — the
-			// one handling the SelfUpdate op — checks its own just-sent
-			// result after the send succeeds (outside sendMu, so it never
-			// blocks other in-flight result sends) and re-execs only then.
-			// Checking res (not a shared flag) ties the re-exec to exactly
-			// the op that requested it, so a concurrent unrelated op never
-			// triggers a spurious re-exec.
+			// Disruptive lifecycle ordering guarantee (ADR-W003 W5 and
+			// ADR-W050 section 2.7): self-update, Wardstone replacement, and
+			// a permitted OS reboot must not stop this process before Keystone
+			// has the OpResult. Checking this goroutine's own request/result
+			// after the successful send ties the action to exactly the
+			// completed operation; private playbook input cleanup has also
+			// already run by the time dispatch returns.
 			if su := res.GetSelfUpdate(); su.GetPromoted() {
 				a.execSelf()
+				return
 			}
+			a.afterRunPlaybookResultSent(m.GetOp(), res)
 		}(msg)
+	}
+}
+
+// updatesWardstoneBinary identifies the two closed protocol paths that share
+// Wardstone's A/B update files. The session goroutine holds updateMu across
+// verification, staging, promotion, result delivery, and activation so a
+// second request cannot touch those files in the vulnerable post-result gap.
+func updatesWardstoneBinary(op *wsv1.Operation) bool {
+	if op == nil {
+		return false
+	}
+	switch arm := op.GetOp().(type) {
+	case *wsv1.Operation_SelfUpdate:
+		return arm.SelfUpdate != nil
+	case *wsv1.Operation_RunPlaybook:
+		return arm.RunPlaybook != nil && arm.RunPlaybook.GetIdentity() == wsv1.PlaybookIdentity_PLAYBOOK_IDENTITY_WARDSTONE_UPDATE
+	default:
+		return false
 	}
 }
 

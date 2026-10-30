@@ -1,0 +1,42 @@
+---
+- name: Activate the previously verified Wardstone candidate
+  hosts: localhost
+  connection: local
+  become: true
+  gather_facts: true
+  vars:
+    wildstone_arch: "{{ {'x86_64': 'amd64', 'aarch64': 'arm64'}[ansible_facts['architecture']] | default('unsupported') }}"
+    wildstone_stage: "/var/lib/wildstone/wardstone-update/{{ wardstone_release }}"
+    wildstone_archive: "{{ wildstone_stage }}/wardstoned.tar.gz"
+    wildstone_release_url: "https://github.com/Wildstone-Systems/wildstone-homelab/releases/download/{{ wardstone_release | urlencode }}/wardstoned_linux_{{ wildstone_arch }}.tar.gz"
+  tasks:
+    - name: Require the typed release and digest
+      ansible.builtin.assert:
+        that:
+          - wardstone_release is match('^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$')
+          - wardstone_sha256 is match('^[a-f0-9]{64}$')
+          - wildstone_arch != 'unsupported'
+        quiet: true
+    - name: Create the fixed staging directory
+      ansible.builtin.file:
+        path: "{{ wildstone_stage }}"
+        state: directory
+        mode: "0755"
+    - name: Download exactly the reviewed Wardstone archive
+      ansible.builtin.get_url:
+        url: "{{ wildstone_release_url }}"
+        dest: "{{ wildstone_archive }}"
+        checksum: "sha256:{{ wardstone_sha256 }}"
+        mode: "0644"
+    - name: Extract the verified Wardstone archive
+      ansible.builtin.unarchive:
+        src: "{{ wildstone_archive }}"
+        dest: "{{ wildstone_stage }}"
+        remote_src: true
+        include: wardstoned
+    - name: Stage the verified candidate for Wardstone's A/B health gate
+      ansible.builtin.copy:
+        src: "{{ wildstone_stage }}/wardstoned"
+        dest: /usr/local/bin/wardstoned-next
+        remote_src: true
+        mode: "0755"
