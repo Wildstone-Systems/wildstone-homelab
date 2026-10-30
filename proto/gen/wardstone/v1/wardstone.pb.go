@@ -5741,6 +5741,7 @@ func (x *ListBlockDevicesResult) GetDevices() []*BlockDevice {
 //   - every option must match ^[a-zA-Z0-9._=/-]+$ (no commas/whitespace —
 //     fstab field injection); nosuid and nodev are mandatory and appended
 //     if the caller omitted them.
+//
 // The agent owns a marker-delimited block in /etc/fstab ("# BEGIN
 // wildstone-managed" / "# END wildstone-managed") — lines outside that
 // block are never touched. Ordering: the actual mount is attempted FIRST;
