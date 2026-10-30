@@ -2698,8 +2698,8 @@ type EnsureContainer struct {
 	// optional gid likewise distinguishes uid-only from uid:gid. Keystone never
 	// sends names or other free-form account expressions.
 	RuntimeIdentity *ContainerRuntimeIdentity `protobuf:"bytes,19,opt,name=runtime_identity,json=runtimeIdentity,proto3" json:"runtime_identity,omitempty"`
-	// Before replacing or creating the container, prove that every declared
-	// read-write mount is usable by runtime_identity (protocol minor 37).
+	// Before replacing or creating the container, check create/write/sync/rename/
+	// delete in declared writable mounts under runtime_identity (protocol minor 37).
 	// Wardstone derives the checked roots from mounts; no command, executable,
 	// account name, or additional host path crosses the wire. Read-only mounts
 	// are never mutated. Keystone refuses this option without runtime_identity

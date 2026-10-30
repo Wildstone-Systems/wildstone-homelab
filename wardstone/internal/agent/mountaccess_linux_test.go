@@ -4,7 +4,11 @@ package agent
 
 import (
 	"context"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -277,5 +281,232 @@ func TestMountAccessReportsUnconfirmedCleanup(t *testing.T) {
 	t.Cleanup(func() { mountAccessUnlinkat = previous })
 	if got := mountAccessProbe(t.TempDir(), ".wildstone-access-00000000000000000000000000000000.tmp", ".wildstone-access-00000000000000000000000000000000.done"); got != mountAccessExitCleanupIncomplete {
 		t.Fatalf("unconfirmed cleanup exit = %v, want cleanup incomplete", got)
+	}
+}
+
+// TestMountAccessDelayedSupervisor is a subprocess fixture, not a D-state
+// simulation. It deliberately delays exit after cancellation so the caller's
+// deadline and the capacity retained by a live helper can be tested separately.
+func TestMountAccessDelayedSupervisor(t *testing.T) {
+	mode := os.Getenv("WILDSTONE_TEST_MOUNT_ACCESS")
+	if mode == "unexpected" {
+		os.Exit(99)
+	}
+	if mode == "leaf" {
+		ready := os.NewFile(4, "ready")
+		_, _ = ready.Write([]byte{1})
+		_ = ready.Close()
+		release := os.NewFile(3, "release")
+		var one [1]byte
+		_, _ = release.Read(one[:])
+		_ = release.Close()
+		os.Exit(0)
+	}
+	if mode == "orphan-root" {
+		cmd := exec.Command("/proc/self/exe", "-test.run=^TestMountAccessDelayedSupervisor$")
+		cmd.Env = append(os.Environ(), "WILDSTONE_TEST_MOUNT_ACCESS=leaf")
+		cmd.ExtraFiles = []*os.File{os.NewFile(3, "release"), os.NewFile(4, "ready")}
+		if cmd.Start() != nil {
+			os.Exit(1)
+		}
+		// Deliberately orphan the leaf, as a root worker killed during blocked
+		// descendant I/O would. The dedicated supervisor must adopt and reap it.
+		os.Exit(0)
+	}
+	if mode != "delayed" {
+		return
+	}
+	if _, ok := readMountAccessRequest(3); !ok {
+		os.Exit(1)
+	}
+	if unix.Prctl(unix.PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) != nil {
+		os.Exit(1)
+	}
+	cmd := exec.Command("/proc/self/exe", "-test.run=^TestMountAccessDelayedSupervisor$")
+	cmd.Env = append(os.Environ(), "WILDSTONE_TEST_MOUNT_ACCESS=orphan-root")
+	cmd.ExtraFiles = []*os.File{os.NewFile(5, "release"), os.NewFile(6, "ready")}
+	if cmd.Run() != nil {
+		os.Exit(1)
+	}
+	// This fixture intentionally postpones cancellation completion. Exercise
+	// the production reaping barrier while the orphaned leaf remains alive.
+	os.Exit(reapMountAccessDescendants(0))
+}
+
+func TestMountAccessRetainsCapacityUntilConfirmedExit(t *testing.T) {
+	previousSlots, previousCommand := mountAccessSlots, mountAccessSupervisorCommand
+	mountAccessSlots = make(chan struct{}, 1)
+	defer func() { mountAccessSlots, mountAccessSupervisorCommand = previousSlots, previousCommand }()
+	releaseReader, releaseWriter, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer releaseReader.Close()
+	defer releaseWriter.Close()
+	readyReader, readyWriter, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer readyReader.Close()
+	defer readyWriter.Close()
+	calls := 0
+	mountAccessSupervisorCommand = func(string, string, string, uint32, uint32) *exec.Cmd {
+		calls++
+		cmd := exec.Command("/proc/self/exe", "-test.run=^TestMountAccessDelayedSupervisor$")
+		cmd.Env = append(os.Environ(), "WILDSTONE_TEST_MOUNT_ACCESS=delayed", "GORACE=atexit_sleep_ms=0")
+		cmd.ExtraFiles = []*os.File{releaseReader, readyWriter}
+		return cmd
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	type outcome struct {
+		exit             int
+		timedOut, reaped bool
+	}
+	result := make(chan outcome, 1)
+	go func() {
+		exit, timedOut, reaped := runMountAccessSupervisor(ctx, mountAccessActionProbe, mountAccessRequest{Root: "/unused"}, "", "", 0, 0)
+		result <- outcome{exit, timedOut, reaped}
+	}()
+	if err := readyReader.SetReadDeadline(time.Now().Add(10 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	var one [1]byte
+	if _, err := io.ReadFull(readyReader, one[:]); err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	cancel()
+	select {
+	case got := <-result:
+		if !got.timedOut || got.reaped {
+			t.Fatalf("deadline result = %+v, want timeout with unconfirmed exit", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("caller did not return while helper remained alive")
+	}
+	if time.Since(start) > time.Second {
+		t.Fatal("deadline return exceeded grace and scheduling allowance")
+	}
+	if exit, timedOut, _ := runMountAccessSupervisor(context.Background(), mountAccessActionProbe, mountAccessRequest{Root: "/unused"}, "", "", 0, 0); exit != mountAccessExitUnavailable || timedOut {
+		t.Fatalf("admission at capacity: exit=%d timeout=%v", exit, timedOut)
+	}
+	if calls != 1 {
+		t.Fatalf("started %d helpers despite occupied capacity", calls)
+	}
+	_ = releaseWriter.Close()
+	deadline := time.Now().Add(5 * time.Second)
+	for len(mountAccessSlots) != 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if len(mountAccessSlots) != 0 {
+		t.Fatal("confirmed helper exit did not release capacity")
+	}
+	mountAccessSupervisorCommand = previousCommand
+	root, data := t.TempDir(), t.TempDir()
+	ctx, cancel = context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if got := runMountAccessAdmission(ctx, root, Config{ManagedPrefixes: []string{root}, DataDir: data}); got != wsv1.MountAccessFailureReason_MOUNT_ACCESS_FAILURE_REASON_UNSPECIFIED {
+		t.Fatalf("probe admission did not recover after reaping: %v", got)
+	}
+}
+
+func TestMountAccessBoundedAdmissionPreservesConfinement(t *testing.T) {
+	root, data, outside := t.TempDir(), t.TempDir(), t.TempDir()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cfg := Config{ManagedPrefixes: []string{root}, DataDir: data}
+	if got := runMountAccessAdmission(ctx, root, cfg); got != wsv1.MountAccessFailureReason_MOUNT_ACCESS_FAILURE_REASON_UNSPECIFIED {
+		t.Fatalf("valid managed root: %v", got)
+	}
+	if got := runMountAccessAdmission(ctx, outside, cfg); got != wsv1.MountAccessFailureReason_MOUNT_ACCESS_FAILURE_REASON_UNAVAILABLE {
+		t.Fatalf("outside prefix: %v", got)
+	}
+	cfg.ManagedPrefixes = []string{data}
+	if got := runMountAccessAdmission(ctx, data, cfg); got != wsv1.MountAccessFailureReason_MOUNT_ACCESS_FAILURE_REASON_UNAVAILABLE {
+		t.Fatalf("agent data overlap: %v", got)
+	}
+}
+
+func TestMountAccessRefusesMappedDockerWithoutReplacingCurrent(t *testing.T) {
+	for _, option := range []string{"name=userns", "name=rootless"} {
+		t.Run(option, func(t *testing.T) {
+			fake, h := mountAccessHarness(t, "library", t.TempDir())
+			if res := dispatch(t, h, "node-a", mountAccessEnsure("app", "v1", "library", 0, 0, false)); res.GetError() != nil {
+				t.Fatal(res.GetError())
+			}
+			fake.mu.Lock()
+			fake.securityOptions = []string{option}
+			fake.mu.Unlock()
+			res := dispatch(t, h, "node-a", mountAccessEnsure("app", "v2", "library", 0, 0, true))
+			if res.GetError().GetMountAccessFailure().GetReason() != wsv1.MountAccessFailureReason_MOUNT_ACCESS_FAILURE_REASON_UNSUPPORTED_BACKEND {
+				t.Fatalf("mapped Docker result: %v", res.GetError())
+			}
+			fake.mu.Lock()
+			defer fake.mu.Unlock()
+			if current := fake.containers["app"]; current == nil || !current.running || current.labels[SpecHashLabel] != "v1" {
+				t.Fatalf("refusal replaced current workload: %+v", current)
+			}
+		})
+	}
+}
+
+func TestMountAccessUnexpectedSupervisorExitRetainsCapacity(t *testing.T) {
+	previousSlots, previousCommand := mountAccessSlots, mountAccessSupervisorCommand
+	mountAccessSlots = make(chan struct{}, 1)
+	defer func() { mountAccessSlots, mountAccessSupervisorCommand = previousSlots, previousCommand }()
+	mountAccessSupervisorCommand = func(string, string, string, uint32, uint32) *exec.Cmd {
+		cmd := exec.Command("/proc/self/exe", "-test.run=^TestMountAccessDelayedSupervisor$")
+		cmd.Env = append(os.Environ(), "WILDSTONE_TEST_MOUNT_ACCESS=unexpected", "GORACE=atexit_sleep_ms=0")
+		return cmd
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, timedOut, reaped := runMountAccessSupervisor(ctx, mountAccessActionProbe, mountAccessRequest{Root: "/unused"}, "", "", 0, 0)
+	if timedOut || reaped {
+		t.Fatalf("unexpected exit: timeout=%v reaped=%v", timedOut, reaped)
+	}
+	if len(mountAccessSlots) != 1 {
+		t.Fatal("unexpected supervisor exit released unconfirmed descendant capacity")
+	}
+}
+
+func TestMountAccessRuntimeMetadataSharesProbeDeadline(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+	runtime, err := newDockerClient(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	previous := mountAccessTimeout
+	mountAccessTimeout = 20 * time.Millisecond
+	defer func() { mountAccessTimeout = previous }()
+	a := &Agent{runtime: runtime}
+	start := time.Now()
+	oe := a.preflightMountAccess(context.Background(), mountAccessEnsure("app", "v2", "library", 0, 0, true).GetEnsureContainer())
+	if oe.GetMountAccessFailure().GetReason() != wsv1.MountAccessFailureReason_MOUNT_ACCESS_FAILURE_REASON_TIMEOUT {
+		t.Fatalf("stalled metadata result: %v", oe)
+	}
+	if time.Since(start) > time.Second {
+		t.Fatal("metadata used Docker's longer general-purpose timeout")
+	}
+}
+
+func TestMountAccessUnknownRuntimeIdentityIsRefused(t *testing.T) {
+	for _, payload := range []string{`{}`, `{"SecurityOptions":null}`, `{"SecurityOptions":["name=userns"]}`, `{"SecurityOptions":["name=rootless"]}`} {
+		t.Run(payload, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, payload) }))
+			defer server.Close()
+			runtime, err := newDockerClient(server.URL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ok, err := runtime.mountAccessIdentitySupported(context.Background())
+			if err != nil || ok {
+				t.Fatalf("unknown/mapped identity supported=%v err=%v", ok, err)
+			}
+		})
 	}
 }

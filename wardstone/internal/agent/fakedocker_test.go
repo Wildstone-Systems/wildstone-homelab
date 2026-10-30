@@ -76,8 +76,9 @@ type fakeDocker struct {
 	// pullAuth is the X-Registry-Auth header the last pull carried, so a
 	// test can assert both that a credential reached Docker and that one
 	// did not reach a registry it was not for.
-	pullAuth  string
-	pullImage string
+	pullAuth        string
+	pullImage       string
+	securityOptions []string
 }
 
 var containerPath = regexp.MustCompile(`^/containers/([^/]+)(/(json|start|stop|logs|stats))?$`)
@@ -151,6 +152,14 @@ func (f *fakeDocker) handle(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
+	if r.URL.Path == "/info" {
+		options := f.securityOptions
+		if options == nil {
+			options = []string{}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"SecurityOptions": options})
+		return
+	}
 	if r.URL.Path == "/containers/create" && r.Method == http.MethodPost {
 		name := r.URL.Query().Get("name")
 		if _, exists := f.containers[name]; exists {

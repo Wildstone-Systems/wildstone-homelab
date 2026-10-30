@@ -405,6 +405,44 @@ create/write/sync/rename/delete sequence in an isolated child before any
 existing container is stopped. The wire carries no helper command or new host
 path, and failures return only the container target plus a closed reason.
 
+This is a point-in-time probe of those operations, not proof of the complete
+container security environment or future storage availability. It supports
+rootful Docker without user-namespace remapping, an explicit numeric UID/GID
+and no supplementary groups. Rootless/remapped Docker and unknown identity
+models are refused before mutation. Read-only mounts are not probed.
+
+The preflight has one shared five-second budget for Docker identity/mount
+metadata, writable bind confinement checks, directory acquisition and probes.
+Cleanup has a separate five-second budget. Each canceled supervisor gets at
+most 100 milliseconds of caller-side exit grace, so a timed-out preflight
+returns within 10.2 seconds plus local process-launch/scheduler overhead.
+These budgets bound the check, not the rest of the Docker apply operation.
+
+Only disposable workers touch checked writable mount paths, including the
+existing symlink/confinement and agent-data exclusion checks for host binds.
+A filesystem-free supervisor first tries root-side descriptor acquisition to
+avoid requiring the workload to traverse Docker's host-only ancestors. Only
+an access-denied acquisition may try an identity-side path open for
+root-squashed storage. Every probe drops supplementary groups explicitly.
+No other fallback is attempted; unsupported combinations fail closed.
+
+Cancellation closes a private pipe. The supervisor requests SIGKILL for its
+worker process group and remains as a Linux child subreaper until every
+worker has exited and been reaped. An uninterruptible filesystem operation
+can delay that exit indefinitely. Four supervisor trees may be active per
+daemon, at most twelve helper processes; an unconfirmed exit retains its slot
+and further probes at capacity return unavailable. Slots are released only
+after confirmed reaping. After daemon exit, pipe EOF still requests worker
+termination; restarting the daemon resets its local admission accounting.
+Operators must not repeatedly restart a daemon to bypass exhausted capacity.
+
+Cleanup is best effort and bounded. If probe exit is unconfirmed, cleanup
+cannot establish that the probe will not later create or rename its sentinel;
+the result remains cleanup incomplete even if the cleanup worker succeeds.
+Real root-squashed and stalled NFS evidence remains an owner-operated gate for
+claiming NFS support ready; synthetic lifecycle tests are not that evidence.
+
+
 ### Sizing note for the planner
 
 W1–W4 are small (each well under a day of subagent work); W5 and W6c are

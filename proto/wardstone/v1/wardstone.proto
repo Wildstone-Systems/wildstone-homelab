@@ -358,8 +358,8 @@ message EnsureContainer {
   // sends names or other free-form account expressions.
   ContainerRuntimeIdentity runtime_identity = 19;
 
-  // Before replacing or creating the container, prove that every declared
-  // read-write mount is usable by runtime_identity (protocol minor 37).
+  // Before replacing or creating the container, check create/write/sync/rename/
+  // delete in declared writable mounts under runtime_identity (protocol minor 37).
   // Wardstone derives the checked roots from mounts; no command, executable,
   // account name, or additional host path crosses the wire. Read-only mounts
   // are never mutated. Keystone refuses this option without runtime_identity

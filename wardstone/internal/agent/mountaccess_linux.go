@@ -6,13 +6,16 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -24,11 +27,12 @@ const (
 	mountAccessHelperArg = "__wildstone_mount_access_helper"
 	mountAccessWorkerArg = "__wildstone_mount_access_worker"
 
-	mountAccessActionProbe   = "probe"
-	mountAccessActionCleanup = "cleanup"
-	mountAccessRoleRoot      = "root"
-	mountAccessRoleIdentity  = "identity"
-	mountAccessRoleFD        = "fd"
+	mountAccessActionProbe     = "probe"
+	mountAccessActionCleanup   = "cleanup"
+	mountAccessActionAdmission = "admission"
+	mountAccessRoleRoot        = "root"
+	mountAccessRoleIdentity    = "identity"
+	mountAccessRoleFD          = "fd"
 )
 
 const (
@@ -38,10 +42,39 @@ const (
 	mountAccessExitUnsupported
 	mountAccessExitCleanupIncomplete
 	mountAccessExitRetryIdentity
+	mountAccessExitUnconfirmed
 )
 
-var mountAccessTimeout = 5 * time.Second
 var mountAccessCleanupTimeout = 5 * time.Second
+
+// Capacity belongs to a supervisor until its entire worker tree is reaped,
+// including after the caller has returned. Four trees mean at most twelve
+// processes (supervisor, root worker and identity worker per tree).
+var mountAccessSlots = make(chan struct{}, 4)
+var mountAccessReapGrace = 100 * time.Millisecond
+
+// Only tests replace the launcher; the production command is fixed.
+var mountAccessSupervisorCommand = func(action, tmpName, doneName string, uid, gid uint32) *exec.Cmd {
+	return exec.Command("/proc/self/exe", mountAccessHelperArg, action, tmpName, doneName, strconv.FormatUint(uint64(uid), 10), strconv.FormatUint(uint64(gid), 10))
+}
+
+type mountAccessRequest struct {
+	Root            string
+	ManagedPrefixes []string
+	DataDir         string
+}
+
+func runMountAccessAdmission(ctx context.Context, root string, cfg Config) wsv1.MountAccessFailureReason {
+	// Admission performs the same existing confinement checks, but in a worker:
+	// EvalSymlinks and even a stat of an unavailable bind source can block.
+	const stem = ".wildstone-access-00000000000000000000000000000000"
+	exit, timedOut, _ := runMountAccessSupervisor(ctx, mountAccessActionAdmission,
+		mountAccessRequest{Root: root, ManagedPrefixes: cfg.ManagedPrefixes, DataDir: cfg.DataDir}, stem+".tmp", stem+".done", 0, 0)
+	if timedOut {
+		return wsv1.MountAccessFailureReason_MOUNT_ACCESS_FAILURE_REASON_TIMEOUT
+	}
+	return mountAccessReason(exit)
+}
 
 // Test seam between the effective-identity operations and the final root
 // identity recheck. Production leaves it as a no-op.
@@ -53,7 +86,8 @@ var mountAccessUnlinkat = unix.Unlinkat
 // inherited pipe. The supervisor never touches the filesystem: a root worker
 // anchors paths hidden below host-only ancestors, while an identity worker is
 // the fallback for root-squashed storage. Blocking lookups therefore remain in
-// a worker process that dies with the bounded supervisor.
+// a worker process. The supervisor stays alive until every descendant is reaped;
+// cancellation requests termination rather than claiming immediate exit.
 func init() {
 	if len(os.Args) == 7 && os.Args[1] == mountAccessHelperArg {
 		uid, uidErr := strconv.ParseUint(os.Args[5], 10, 32)
@@ -86,15 +120,15 @@ func runMountAccessCheck(ctx context.Context, root string, uid, gid uint32) wsv1
 
 	checkCtx, cancel := context.WithTimeout(ctx, mountAccessTimeout)
 	defer cancel()
-	exit, timedOut := runMountAccessSupervisor(checkCtx, mountAccessActionProbe, root, tmpName, doneName, uid, gid)
-	if timedOut {
+	exit, timedOut, reaped := runMountAccessSupervisor(checkCtx, mountAccessActionProbe, mountAccessRequest{Root: root}, tmpName, doneName, uid, gid)
+	if timedOut || !reaped {
 		// Cancellation may have killed the worker between create and unlink.
 		// Cleanup gets its own bounded supervisor because the caller's context
 		// is already expired. No filesystem operation runs in wardstoned.
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), mountAccessCleanupTimeout)
 		defer cleanupCancel()
-		cleanupExit, cleanupTimedOut := runMountAccessSupervisor(cleanupCtx, mountAccessActionCleanup, root, tmpName, doneName, uid, gid)
-		if cleanupTimedOut || cleanupExit != 0 {
+		cleanupExit, cleanupTimedOut, _ := runMountAccessSupervisor(cleanupCtx, mountAccessActionCleanup, mountAccessRequest{Root: root}, tmpName, doneName, uid, gid)
+		if !reaped || cleanupTimedOut || cleanupExit != 0 {
 			return wsv1.MountAccessFailureReason_MOUNT_ACCESS_FAILURE_REASON_CLEANUP_INCOMPLETE
 		}
 		return wsv1.MountAccessFailureReason_MOUNT_ACCESS_FAILURE_REASON_TIMEOUT
@@ -102,63 +136,168 @@ func runMountAccessCheck(ctx context.Context, root string, uid, gid uint32) wsv1
 	return mountAccessReason(exit)
 }
 
-func runMountAccessSupervisor(ctx context.Context, action, root, tmpName, doneName string, uid, gid uint32) (int, bool) {
+// runMountAccessSupervisor bounds the caller, not the lifetime of Linux I/O.
+// Closing fd 4 requests cancellation. The dedicated subreaper stays alive and
+// holds its admission slot until all descendants really exit, even if SIGKILL
+// remains pending on a worker in uninterruptible filesystem I/O.
+func runMountAccessSupervisor(ctx context.Context, action string, request mountAccessRequest, tmpName, doneName string, uid, gid uint32) (int, bool, bool) {
+	if ctx.Err() != nil {
+		return mountAccessExitUnavailable, true, true
+	}
+	slots := mountAccessSlots
+	select {
+	case slots <- struct{}{}:
+	default:
+		return mountAccessExitUnavailable, false, true
+	}
+	started := false
+	defer func() {
+		if !started {
+			<-slots
+		}
+	}()
+	payload, err := json.Marshal(request)
+	if err != nil || len(payload) > 65536 {
+		return mountAccessExitUnavailable, false, true
+	}
 	rootReader, rootWriter, err := os.Pipe()
 	if err != nil {
-		return mountAccessExitUnavailable, false
+		return mountAccessExitUnavailable, false, true
 	}
 	defer rootReader.Close() //nolint:errcheck
 	defer rootWriter.Close() //nolint:errcheck
-
-	cmd := exec.Command("/proc/self/exe", mountAccessHelperArg, action, tmpName, doneName, strconv.FormatUint(uint64(uid), 10), strconv.FormatUint(uint64(gid), 10))
-	cmd.ExtraFiles = []*os.File{rootReader}
-	cmd.SysProcAttr = &syscall.SysProcAttr{Pdeathsig: syscall.SIGKILL}
+	cancelReader, cancelWriter, err := os.Pipe()
+	if err != nil {
+		return mountAccessExitUnavailable, false, true
+	}
+	defer cancelReader.Close() //nolint:errcheck
+	defer cancelWriter.Close() //nolint:errcheck
+	cmd := mountAccessSupervisorCommand(action, tmpName, doneName, uid, gid)
+	cmd.ExtraFiles = append([]*os.File{rootReader, cancelReader}, cmd.ExtraFiles...)
+	// No parent-death SIGKILL: pipe EOF must let the subreaper kill and reap
+	// its workers after daemon exit, too.
 	if err = cmd.Start(); err != nil {
-		return mountAccessExitCode(err), false
+		return mountAccessExitCode(err), false, true
 	}
+	started = true
 	_ = rootReader.Close()
-	_, writeErr := io.WriteString(rootWriter, root)
-	closeErr := rootWriter.Close()
-	if writeErr != nil || closeErr != nil {
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
-		if ctx.Err() != nil {
-			return mountAccessExitUnavailable, true
-		}
-		return mountAccessExitUnavailable, false
-	}
-
+	_ = cancelReader.Close()
+	go func() {
+		_, _ = rootWriter.Write(payload)
+		_ = rootWriter.Close()
+	}()
 	wait := make(chan error, 1)
-	go func() { wait <- cmd.Wait() }()
+	go func() {
+		err := cmd.Wait()
+		_ = rootWriter.Close()
+		// A supervisor killed externally may not have reaped its descendants.
+		// Retain capacity conservatively when its completion is unconfirmed.
+		if mountAccessSupervisorExitConfirmed(err) {
+			<-slots
+		}
+		wait <- err
+	}()
 	select {
 	case err = <-wait:
-		return processExitCode(err), false
-	case <-ctx.Done():
-		_ = cmd.Process.Kill()
-		// The supervisor performs no filesystem syscalls, so it should exit
-		// immediately even when its worker is stuck in an uninterruptible mount.
-		// Keep the caller bounded if the platform nevertheless delays reaping it.
-		select {
-		case <-wait:
-		case <-time.After(time.Second):
+		if ctx.Err() != nil {
+			return mountAccessExitUnavailable, true, mountAccessSupervisorExitConfirmed(err)
 		}
-		return mountAccessExitUnavailable, true
+		return processExitCode(err), false, mountAccessSupervisorExitConfirmed(err)
+	case <-ctx.Done():
+		_ = cancelWriter.Close()
+		timer := time.NewTimer(mountAccessReapGrace)
+		defer timer.Stop()
+		select {
+		case err := <-wait:
+			return mountAccessExitUnavailable, true, mountAccessSupervisorExitConfirmed(err)
+		case <-timer.C:
+			return mountAccessExitUnavailable, true, false
+		}
+	}
+}
+
+// Only the fixed supervisor's closed exit statuses confirm that it reached
+// its reaping barrier (or refused the request before launching any worker).
+func mountAccessSupervisorExitConfirmed(err error) bool {
+	if err == nil {
+		return true
+	}
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		return false
+	}
+	code := exitErr.ExitCode()
+	return code >= mountAccessExitUnavailable && code <= mountAccessExitCleanupIncomplete
+}
+
+type mountAccessWorkerTree struct {
+	mu       sync.Mutex
+	canceled bool
+	pid      int
+}
+
+func (tree *mountAccessWorkerTree) cancel() {
+	tree.mu.Lock()
+	defer tree.mu.Unlock()
+	tree.canceled = true
+	if tree.pid != 0 {
+		_ = unix.Kill(-tree.pid, unix.SIGKILL)
 	}
 }
 
 func mountAccessSupervisor(action, tmpName, doneName string, uid, gid uint32) int {
-	root, ok := readMountAccessRoot(3)
+	// This is a disposable process, so subreaping changes no daemon behavior.
+	if unix.Prctl(unix.PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) != nil {
+		return mountAccessExitUnsupported
+	}
+	tree := &mountAccessWorkerTree{}
+	cancelPipe := os.NewFile(4, "mount-access-cancel")
+	if cancelPipe == nil {
+		return mountAccessExitUnavailable
+	}
+	defer cancelPipe.Close() //nolint:errcheck
+	unix.CloseOnExec(4)
+	go func() {
+		var one [1]byte
+		_, _ = cancelPipe.Read(one[:]) // cancellation or parent exit closes the pipe
+		tree.cancel()
+	}()
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, syscall.SIGTERM, syscall.SIGINT)
+	defer signal.Stop(signals)
+	go func() { <-signals; tree.cancel() }()
+	request, ok := readMountAccessRequest(3)
 	if !ok || !validMountAccessAction(action) || !validSentinelName(tmpName, ".tmp") || !validSentinelName(doneName, ".done") {
 		return mountAccessExitUnavailable
 	}
-	exit := startMountAccessWorker(action, mountAccessRoleRoot, root, tmpName, doneName, uid, gid, nil)
+	exit := tree.start(action, mountAccessRoleRoot, request, tmpName, doneName, uid, gid, nil)
 	if exit == mountAccessExitRetryIdentity {
-		exit = startMountAccessWorker(action, mountAccessRoleIdentity, root, tmpName, doneName, uid, gid, mountAccessCredential(action, uid, gid))
+		exit = tree.start(action, mountAccessRoleIdentity, request, tmpName, doneName, uid, gid, mountAccessCredential(action, uid, gid))
 	}
-	return exit
+	return reapMountAccessDescendants(exit)
 }
 
-func startMountAccessWorker(action, role, root, tmpName, doneName string, uid, gid uint32, credential *syscall.Credential) int {
+func reapMountAccessDescendants(exit int) int {
+	// cmd.Wait reaped the direct worker. A killed root worker may have left a
+	// descriptor worker behind; subreaping lets us wait for that actual exit.
+	for {
+		_, err := unix.Wait4(-1, nil, 0, nil)
+		if errors.Is(err, unix.EINTR) {
+			continue
+		}
+		if errors.Is(err, unix.ECHILD) {
+			if exit != 0 && (exit < mountAccessExitUnavailable || exit > mountAccessExitCleanupIncomplete) {
+				return mountAccessExitUnavailable
+			}
+			return exit
+		}
+		if err != nil {
+			return mountAccessExitUnconfirmed
+		}
+	}
+}
+
+func (tree *mountAccessWorkerTree) start(action, role string, request mountAccessRequest, tmpName, doneName string, uid, gid uint32, credential *syscall.Credential) int {
 	rootReader, rootWriter, err := os.Pipe()
 	if err != nil {
 		return mountAccessExitUnavailable
@@ -167,19 +306,36 @@ func startMountAccessWorker(action, role, root, tmpName, doneName string, uid, g
 	defer rootWriter.Close() //nolint:errcheck
 	cmd := exec.Command("/proc/self/exe", mountAccessWorkerArg, action, role, tmpName, doneName, strconv.FormatUint(uint64(uid), 10), strconv.FormatUint(uint64(gid), 10))
 	cmd.ExtraFiles = []*os.File{rootReader}
-	cmd.SysProcAttr = &syscall.SysProcAttr{Credential: credential, Pdeathsig: syscall.SIGKILL}
-	if err = cmd.Start(); err != nil {
+	cmd.SysProcAttr = &syscall.SysProcAttr{Credential: credential, Pdeathsig: syscall.SIGKILL, Setpgid: true}
+	tree.mu.Lock()
+	if tree.canceled {
+		tree.mu.Unlock()
+		return mountAccessExitUnavailable
+	}
+	err = cmd.Start()
+	if err == nil {
+		tree.pid = cmd.Process.Pid
+	}
+	tree.mu.Unlock()
+	if err != nil {
 		return mountAccessExitCode(err)
 	}
 	_ = rootReader.Close()
-	_, writeErr := io.WriteString(rootWriter, root)
-	closeErr := rootWriter.Close()
-	if writeErr != nil || closeErr != nil {
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
-		return mountAccessExitUnavailable
+	// The request is bounded and written while the worker is supervised; on
+	// cancellation the killed worker closes its reader and unblocks this pipe.
+	payload, err := json.Marshal(request)
+	if err == nil {
+		_, err = rootWriter.Write(payload)
 	}
-	return processExitCode(cmd.Wait())
+	_ = rootWriter.Close()
+	if err != nil {
+		tree.cancel()
+	}
+	exit := processExitCode(cmd.Wait())
+	tree.mu.Lock()
+	tree.pid = 0
+	tree.mu.Unlock()
+	return exit
 }
 
 func mountAccessWorker(action, role, tmpName, doneName string, uid, gid uint32) int {
@@ -189,9 +345,23 @@ func mountAccessWorker(action, role, tmpName, doneName string, uid, gid uint32) 
 	if role == mountAccessRoleFD {
 		return mountAccessOnFD(action, 3, tmpName, doneName)
 	}
-	root, ok := readMountAccessRoot(3)
+	request, ok := readMountAccessRequest(3)
+	root := request.Root
 	if !ok {
 		return mountAccessExitUnavailable
+	}
+	if action == mountAccessActionAdmission {
+		if role != mountAccessRoleRoot {
+			return mountAccessExitUnavailable
+		}
+		a := &Agent{cfg: Config{ManagedPrefixes: request.ManagedPrefixes, DataDir: request.DataDir}}
+		if _, err := a.resolveManaged(root); err != nil {
+			return mountAccessExitUnavailable
+		}
+		if err := a.checkBindSource(root); err != nil {
+			return mountAccessExitUnavailable
+		}
+		return 0
 	}
 	if role == mountAccessRoleIdentity {
 		return mountAccessOnPath(action, root, tmpName, doneName)
@@ -333,15 +503,18 @@ func mountAccessRootUnchanged(root string, opened *unix.Stat_t) bool {
 	return unix.Fstat(fd, &current) == nil && current.Dev == opened.Dev && current.Ino == opened.Ino
 }
 
-func readMountAccessRoot(fd int) (string, bool) {
-	rootPipe := os.NewFile(uintptr(fd), "mount-access-root-pipe")
-	if rootPipe == nil {
-		return "", false
+func readMountAccessRequest(fd int) (mountAccessRequest, bool) {
+	pipe := os.NewFile(uintptr(fd), "mount-access-request")
+	if pipe == nil {
+		return mountAccessRequest{}, false
 	}
-	rootBytes, err := io.ReadAll(io.LimitReader(rootPipe, 4097))
-	_ = rootPipe.Close()
-	root := string(rootBytes)
-	return root, err == nil && validMountAccessRoot(root)
+	defer pipe.Close() //nolint:errcheck
+	payload, err := io.ReadAll(io.LimitReader(pipe, 65537))
+	var request mountAccessRequest
+	if err != nil || len(payload) > 65536 || json.Unmarshal(payload, &request) != nil {
+		return request, false
+	}
+	return request, validMountAccessRoot(request.Root)
 }
 
 func validMountAccessRoot(root string) bool {
@@ -349,7 +522,7 @@ func validMountAccessRoot(root string) bool {
 }
 
 func validMountAccessAction(action string) bool {
-	return action == mountAccessActionProbe || action == mountAccessActionCleanup
+	return action == mountAccessActionProbe || action == mountAccessActionCleanup || action == mountAccessActionAdmission
 }
 
 func validSentinelName(name, suffix string) bool {

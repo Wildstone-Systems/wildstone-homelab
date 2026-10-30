@@ -260,8 +260,9 @@ type ContainerSpec struct {
 	// before. Numeric fields deliberately cannot carry a host account name,
 	// passwd lookup, path or other free-form account expression.
 	RuntimeIdentity *ContainerRuntimeIdentity `yaml:"runtimeIdentity,omitempty" json:"runtimeIdentity,omitempty"`
-	// PreflightMountAccess proves each declared read-write mount is usable by
-	// RuntimeIdentity immediately before container create or replacement.
+	// PreflightMountAccess checks create/write/sync/rename/delete under the
+	// numeric RuntimeIdentity immediately before container create or replacement.
+	// Success covers those operations at that moment, not future availability.
 	// Omission preserves the previous spec hash and behavior.
 	PreflightMountAccess bool `yaml:"preflightMountAccess,omitempty" json:"preflightMountAccess,omitempty"`
 	// RunNetwork is execution-only metadata for Keystone-created one-shot

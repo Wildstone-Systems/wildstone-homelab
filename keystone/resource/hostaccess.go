@@ -136,7 +136,7 @@ const HardeningProtocolMinor = 18
 // refuse before mutation whenever runtimeIdentity is present.
 const RuntimeIdentityProtocolMinor = 34
 
-// MountAccessPreflightProtocolMinor is the first minor that proves declared
+// MountAccessPreflightProtocolMinor is the first minor that checks declared
 // read-write mounts under the requested effective identity before replacing a
 // container. An older Wardstone would ignore the opt-in and perform the
 // destructive create/update without the approved safety check.

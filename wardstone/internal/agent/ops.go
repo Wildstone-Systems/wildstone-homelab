@@ -620,6 +620,14 @@ func (a *Agent) ensureContainer(ctx context.Context, op *wsv1.EnsureContainer) (
 			}
 			continue
 		}
+		if op.GetPreflightMountAccess() && strings.Contains(m.GetSource(), "/") {
+			// Confinement checks traverse the filesystem too. For opted-in
+			// host binds they run inside the bounded admission worker below.
+			if !filepath.IsAbs(m.GetSource()) || !a.underManagedPrefix(filepath.Clean(m.GetSource())) {
+				return nil, mountAccessError(m.GetTarget(), wsv1.MountAccessFailureReason_MOUNT_ACCESS_FAILURE_REASON_UNAVAILABLE)
+			}
+			continue
+		}
 		if strings.Contains(m.GetSource(), "/") { // host path, not a named volume
 			if _, oerr := a.resolveManaged(m.GetSource()); oerr != nil {
 				if op.GetPreflightMountAccess() && !m.GetReadOnly() {
