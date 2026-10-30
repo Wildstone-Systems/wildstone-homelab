@@ -422,6 +422,110 @@ func (WorkloadStrategy) EnumDescriptor() ([]byte, []int) {
 	return file_wardstone_v1_wardstone_proto_rawDescGZIP(), []int{6}
 }
 
+type PlaybookIdentity int32
+
+const (
+	PlaybookIdentity_PLAYBOOK_IDENTITY_UNSPECIFIED      PlaybookIdentity = 0
+	PlaybookIdentity_PLAYBOOK_IDENTITY_OS_UPDATE        PlaybookIdentity = 1
+	PlaybookIdentity_PLAYBOOK_IDENTITY_K3S_PATCH_UPDATE PlaybookIdentity = 2
+	PlaybookIdentity_PLAYBOOK_IDENTITY_WARDSTONE_UPDATE PlaybookIdentity = 3
+)
+
+// Enum value maps for PlaybookIdentity.
+var (
+	PlaybookIdentity_name = map[int32]string{
+		0: "PLAYBOOK_IDENTITY_UNSPECIFIED",
+		1: "PLAYBOOK_IDENTITY_OS_UPDATE",
+		2: "PLAYBOOK_IDENTITY_K3S_PATCH_UPDATE",
+		3: "PLAYBOOK_IDENTITY_WARDSTONE_UPDATE",
+	}
+	PlaybookIdentity_value = map[string]int32{
+		"PLAYBOOK_IDENTITY_UNSPECIFIED":      0,
+		"PLAYBOOK_IDENTITY_OS_UPDATE":        1,
+		"PLAYBOOK_IDENTITY_K3S_PATCH_UPDATE": 2,
+		"PLAYBOOK_IDENTITY_WARDSTONE_UPDATE": 3,
+	}
+)
+
+func (x PlaybookIdentity) Enum() *PlaybookIdentity {
+	p := new(PlaybookIdentity)
+	*p = x
+	return p
+}
+
+func (x PlaybookIdentity) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (PlaybookIdentity) Descriptor() protoreflect.EnumDescriptor {
+	return file_wardstone_v1_wardstone_proto_enumTypes[7].Descriptor()
+}
+
+func (PlaybookIdentity) Type() protoreflect.EnumType {
+	return &file_wardstone_v1_wardstone_proto_enumTypes[7]
+}
+
+func (x PlaybookIdentity) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use PlaybookIdentity.Descriptor instead.
+func (PlaybookIdentity) EnumDescriptor() ([]byte, []int) {
+	return file_wardstone_v1_wardstone_proto_rawDescGZIP(), []int{7}
+}
+
+type PlaybookPhase int32
+
+const (
+	PlaybookPhase_PLAYBOOK_PHASE_UNSPECIFIED PlaybookPhase = 0
+	PlaybookPhase_PLAYBOOK_PHASE_VALIDATED   PlaybookPhase = 1
+	PlaybookPhase_PLAYBOOK_PHASE_EXECUTING   PlaybookPhase = 2
+	PlaybookPhase_PLAYBOOK_PHASE_COMPLETE    PlaybookPhase = 3
+)
+
+// Enum value maps for PlaybookPhase.
+var (
+	PlaybookPhase_name = map[int32]string{
+		0: "PLAYBOOK_PHASE_UNSPECIFIED",
+		1: "PLAYBOOK_PHASE_VALIDATED",
+		2: "PLAYBOOK_PHASE_EXECUTING",
+		3: "PLAYBOOK_PHASE_COMPLETE",
+	}
+	PlaybookPhase_value = map[string]int32{
+		"PLAYBOOK_PHASE_UNSPECIFIED": 0,
+		"PLAYBOOK_PHASE_VALIDATED":   1,
+		"PLAYBOOK_PHASE_EXECUTING":   2,
+		"PLAYBOOK_PHASE_COMPLETE":    3,
+	}
+)
+
+func (x PlaybookPhase) Enum() *PlaybookPhase {
+	p := new(PlaybookPhase)
+	*p = x
+	return p
+}
+
+func (x PlaybookPhase) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (PlaybookPhase) Descriptor() protoreflect.EnumDescriptor {
+	return file_wardstone_v1_wardstone_proto_enumTypes[8].Descriptor()
+}
+
+func (PlaybookPhase) Type() protoreflect.EnumType {
+	return &file_wardstone_v1_wardstone_proto_enumTypes[8]
+}
+
+func (x PlaybookPhase) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use PlaybookPhase.Descriptor instead.
+func (PlaybookPhase) EnumDescriptor() ([]byte, []int) {
+	return file_wardstone_v1_wardstone_proto_rawDescGZIP(), []int{8}
+}
+
 type JoinRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	JoinToken     string                 `protobuf:"bytes,1,opt,name=join_token,json=joinToken,proto3" json:"join_token,omitempty"` // one-time, minted by installer/Keystone
@@ -896,6 +1000,7 @@ type Operation struct {
 	//	*Operation_DeleteWorkload
 	//	*Operation_ObserveWorkload
 	//	*Operation_WorkloadLogs
+	//	*Operation_RunPlaybook
 	Op            isOperation_Op `protobuf_oneof:"op"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1316,6 +1421,15 @@ func (x *Operation) GetWorkloadLogs() *WorkloadLogs {
 	return nil
 }
 
+func (x *Operation) GetRunPlaybook() *RunPlaybook {
+	if x != nil {
+		if x, ok := x.Op.(*Operation_RunPlaybook); ok {
+			return x.RunPlaybook
+		}
+	}
+	return nil
+}
+
 type isOperation_Op interface {
 	isOperation_Op()
 }
@@ -1488,6 +1602,10 @@ type Operation_WorkloadLogs struct {
 	WorkloadLogs *WorkloadLogs `protobuf:"bytes,42,opt,name=workload_logs,json=workloadLogs,proto3,oneof"` // protocol minor 30
 }
 
+type Operation_RunPlaybook struct {
+	RunPlaybook *RunPlaybook `protobuf:"bytes,43,opt,name=run_playbook,json=runPlaybook,proto3,oneof"` // protocol minor 36
+}
+
 func (*Operation_EnsureContainer) isOperation_Op() {}
 
 func (*Operation_StopContainer) isOperation_Op() {}
@@ -1572,6 +1690,8 @@ func (*Operation_ObserveWorkload) isOperation_Op() {}
 
 func (*Operation_WorkloadLogs) isOperation_Op() {}
 
+func (*Operation_RunPlaybook) isOperation_Op() {}
+
 type OpResult struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	OpId  string                 `protobuf:"bytes,1,opt,name=op_id,json=opId,proto3" json:"op_id,omitempty"`
@@ -1620,6 +1740,7 @@ type OpResult struct {
 	//	*OpResult_DeleteWorkload
 	//	*OpResult_ObserveWorkload
 	//	*OpResult_WorkloadLogs
+	//	*OpResult_RunPlaybook
 	Result        isOpResult_Result `protobuf_oneof:"result"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -2056,6 +2177,15 @@ func (x *OpResult) GetWorkloadLogs() *WorkloadLogsResult {
 	return nil
 }
 
+func (x *OpResult) GetRunPlaybook() *RunPlaybookResult {
+	if x != nil {
+		if x, ok := x.Result.(*OpResult_RunPlaybook); ok {
+			return x.RunPlaybook
+		}
+	}
+	return nil
+}
+
 type isOpResult_Result interface {
 	isOpResult_Result()
 }
@@ -2232,6 +2362,10 @@ type OpResult_WorkloadLogs struct {
 	WorkloadLogs *WorkloadLogsResult `protobuf:"bytes,44,opt,name=workload_logs,json=workloadLogs,proto3,oneof"` // protocol minor 30
 }
 
+type OpResult_RunPlaybook struct {
+	RunPlaybook *RunPlaybookResult `protobuf:"bytes,45,opt,name=run_playbook,json=runPlaybook,proto3,oneof"` // protocol minor 36
+}
+
 func (*OpResult_Error) isOpResult_Result() {}
 
 func (*OpResult_EnsureContainer) isOpResult_Result() {}
@@ -2317,6 +2451,8 @@ func (*OpResult_DeleteWorkload) isOpResult_Result() {}
 func (*OpResult_ObserveWorkload) isOpResult_Result() {}
 
 func (*OpResult_WorkloadLogs) isOpResult_Result() {}
+
+func (*OpResult_RunPlaybook) isOpResult_Result() {}
 
 type OpError struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -9038,6 +9174,356 @@ func (x *ContainerRuntimeIdentity) GetGid() int64 {
 	return 0
 }
 
+// Appended to preserve all earlier declaration indices. RunPlaybook is the
+// only Ansible execution boundary: identity plus a matching typed parameter
+// arm selects one shipped, signed local playbook. No YAML, path, argv,
+// environment, or free-form values cross the wire.
+type RunPlaybook struct {
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	Identity PlaybookIdentity       `protobuf:"varint,1,opt,name=identity,proto3,enum=wardstone.v1.PlaybookIdentity" json:"identity,omitempty"`
+	Version  string                 `protobuf:"bytes,2,opt,name=version,proto3" json:"version,omitempty"`
+	// Types that are valid to be assigned to Parameters:
+	//
+	//	*RunPlaybook_OsUpdate
+	//	*RunPlaybook_K3SPatchUpdate
+	//	*RunPlaybook_WardstoneUpdate
+	Parameters    isRunPlaybook_Parameters `protobuf_oneof:"parameters"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RunPlaybook) Reset() {
+	*x = RunPlaybook{}
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[112]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RunPlaybook) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RunPlaybook) ProtoMessage() {}
+
+func (x *RunPlaybook) ProtoReflect() protoreflect.Message {
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[112]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RunPlaybook.ProtoReflect.Descriptor instead.
+func (*RunPlaybook) Descriptor() ([]byte, []int) {
+	return file_wardstone_v1_wardstone_proto_rawDescGZIP(), []int{112}
+}
+
+func (x *RunPlaybook) GetIdentity() PlaybookIdentity {
+	if x != nil {
+		return x.Identity
+	}
+	return PlaybookIdentity_PLAYBOOK_IDENTITY_UNSPECIFIED
+}
+
+func (x *RunPlaybook) GetVersion() string {
+	if x != nil {
+		return x.Version
+	}
+	return ""
+}
+
+func (x *RunPlaybook) GetParameters() isRunPlaybook_Parameters {
+	if x != nil {
+		return x.Parameters
+	}
+	return nil
+}
+
+func (x *RunPlaybook) GetOsUpdate() *OsUpdateParams {
+	if x != nil {
+		if x, ok := x.Parameters.(*RunPlaybook_OsUpdate); ok {
+			return x.OsUpdate
+		}
+	}
+	return nil
+}
+
+func (x *RunPlaybook) GetK3SPatchUpdate() *K3SPatchUpdateParams {
+	if x != nil {
+		if x, ok := x.Parameters.(*RunPlaybook_K3SPatchUpdate); ok {
+			return x.K3SPatchUpdate
+		}
+	}
+	return nil
+}
+
+func (x *RunPlaybook) GetWardstoneUpdate() *WardstoneUpdateParams {
+	if x != nil {
+		if x, ok := x.Parameters.(*RunPlaybook_WardstoneUpdate); ok {
+			return x.WardstoneUpdate
+		}
+	}
+	return nil
+}
+
+type isRunPlaybook_Parameters interface {
+	isRunPlaybook_Parameters()
+}
+
+type RunPlaybook_OsUpdate struct {
+	OsUpdate *OsUpdateParams `protobuf:"bytes,3,opt,name=os_update,json=osUpdate,proto3,oneof"`
+}
+
+type RunPlaybook_K3SPatchUpdate struct {
+	K3SPatchUpdate *K3SPatchUpdateParams `protobuf:"bytes,4,opt,name=k3s_patch_update,json=k3sPatchUpdate,proto3,oneof"`
+}
+
+type RunPlaybook_WardstoneUpdate struct {
+	WardstoneUpdate *WardstoneUpdateParams `protobuf:"bytes,5,opt,name=wardstone_update,json=wardstoneUpdate,proto3,oneof"`
+}
+
+func (*RunPlaybook_OsUpdate) isRunPlaybook_Parameters() {}
+
+func (*RunPlaybook_K3SPatchUpdate) isRunPlaybook_Parameters() {}
+
+func (*RunPlaybook_WardstoneUpdate) isRunPlaybook_Parameters() {}
+
+type OsUpdateParams struct {
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	RebootIfRequired bool                   `protobuf:"varint,1,opt,name=reboot_if_required,json=rebootIfRequired,proto3" json:"reboot_if_required,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *OsUpdateParams) Reset() {
+	*x = OsUpdateParams{}
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[113]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *OsUpdateParams) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*OsUpdateParams) ProtoMessage() {}
+
+func (x *OsUpdateParams) ProtoReflect() protoreflect.Message {
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[113]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use OsUpdateParams.ProtoReflect.Descriptor instead.
+func (*OsUpdateParams) Descriptor() ([]byte, []int) {
+	return file_wardstone_v1_wardstone_proto_rawDescGZIP(), []int{113}
+}
+
+func (x *OsUpdateParams) GetRebootIfRequired() bool {
+	if x != nil {
+		return x.RebootIfRequired
+	}
+	return false
+}
+
+type K3SPatchUpdateParams struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Release       string                 `protobuf:"bytes,1,opt,name=release,proto3" json:"release,omitempty"`
+	Sha256Hex     string                 `protobuf:"bytes,2,opt,name=sha256_hex,json=sha256Hex,proto3" json:"sha256_hex,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *K3SPatchUpdateParams) Reset() {
+	*x = K3SPatchUpdateParams{}
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[114]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *K3SPatchUpdateParams) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*K3SPatchUpdateParams) ProtoMessage() {}
+
+func (x *K3SPatchUpdateParams) ProtoReflect() protoreflect.Message {
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[114]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use K3SPatchUpdateParams.ProtoReflect.Descriptor instead.
+func (*K3SPatchUpdateParams) Descriptor() ([]byte, []int) {
+	return file_wardstone_v1_wardstone_proto_rawDescGZIP(), []int{114}
+}
+
+func (x *K3SPatchUpdateParams) GetRelease() string {
+	if x != nil {
+		return x.Release
+	}
+	return ""
+}
+
+func (x *K3SPatchUpdateParams) GetSha256Hex() string {
+	if x != nil {
+		return x.Sha256Hex
+	}
+	return ""
+}
+
+type WardstoneUpdateParams struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Release       string                 `protobuf:"bytes,1,opt,name=release,proto3" json:"release,omitempty"`
+	Sha256Hex     string                 `protobuf:"bytes,2,opt,name=sha256_hex,json=sha256Hex,proto3" json:"sha256_hex,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *WardstoneUpdateParams) Reset() {
+	*x = WardstoneUpdateParams{}
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[115]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WardstoneUpdateParams) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WardstoneUpdateParams) ProtoMessage() {}
+
+func (x *WardstoneUpdateParams) ProtoReflect() protoreflect.Message {
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[115]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WardstoneUpdateParams.ProtoReflect.Descriptor instead.
+func (*WardstoneUpdateParams) Descriptor() ([]byte, []int) {
+	return file_wardstone_v1_wardstone_proto_rawDescGZIP(), []int{115}
+}
+
+func (x *WardstoneUpdateParams) GetRelease() string {
+	if x != nil {
+		return x.Release
+	}
+	return ""
+}
+
+func (x *WardstoneUpdateParams) GetSha256Hex() string {
+	if x != nil {
+		return x.Sha256Hex
+	}
+	return ""
+}
+
+type RunPlaybookResult struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	Identity       PlaybookIdentity       `protobuf:"varint,1,opt,name=identity,proto3,enum=wardstone.v1.PlaybookIdentity" json:"identity,omitempty"`
+	Version        string                 `protobuf:"bytes,2,opt,name=version,proto3" json:"version,omitempty"`
+	Phase          PlaybookPhase          `protobuf:"varint,3,opt,name=phase,proto3,enum=wardstone.v1.PlaybookPhase" json:"phase,omitempty"`
+	RebootRequired bool                   `protobuf:"varint,4,opt,name=reboot_required,json=rebootRequired,proto3" json:"reboot_required,omitempty"`
+	BeforeVersion  string                 `protobuf:"bytes,5,opt,name=before_version,json=beforeVersion,proto3" json:"before_version,omitempty"`
+	AfterVersion   string                 `protobuf:"bytes,6,opt,name=after_version,json=afterVersion,proto3" json:"after_version,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *RunPlaybookResult) Reset() {
+	*x = RunPlaybookResult{}
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[116]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RunPlaybookResult) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RunPlaybookResult) ProtoMessage() {}
+
+func (x *RunPlaybookResult) ProtoReflect() protoreflect.Message {
+	mi := &file_wardstone_v1_wardstone_proto_msgTypes[116]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RunPlaybookResult.ProtoReflect.Descriptor instead.
+func (*RunPlaybookResult) Descriptor() ([]byte, []int) {
+	return file_wardstone_v1_wardstone_proto_rawDescGZIP(), []int{116}
+}
+
+func (x *RunPlaybookResult) GetIdentity() PlaybookIdentity {
+	if x != nil {
+		return x.Identity
+	}
+	return PlaybookIdentity_PLAYBOOK_IDENTITY_UNSPECIFIED
+}
+
+func (x *RunPlaybookResult) GetVersion() string {
+	if x != nil {
+		return x.Version
+	}
+	return ""
+}
+
+func (x *RunPlaybookResult) GetPhase() PlaybookPhase {
+	if x != nil {
+		return x.Phase
+	}
+	return PlaybookPhase_PLAYBOOK_PHASE_UNSPECIFIED
+}
+
+func (x *RunPlaybookResult) GetRebootRequired() bool {
+	if x != nil {
+		return x.RebootRequired
+	}
+	return false
+}
+
+func (x *RunPlaybookResult) GetBeforeVersion() string {
+	if x != nil {
+		return x.BeforeVersion
+	}
+	return ""
+}
+
+func (x *RunPlaybookResult) GetAfterVersion() string {
+	if x != nil {
+		return x.AfterVersion
+	}
+	return ""
+}
+
 var File_wardstone_v1_wardstone_proto protoreflect.FileDescriptor
 
 const file_wardstone_v1_wardstone_proto_rawDesc = "" +
@@ -9067,7 +9553,7 @@ const file_wardstone_v1_wardstone_proto_rawDesc = "" +
 	"\x0fKeystoneMessage\x12\x13\n" +
 	"\x05op_id\x18\x01 \x01(\tR\x04opId\x12'\n" +
 	"\x02op\x18\x02 \x01(\v2\x17.wardstone.v1.OperationR\x02op\x12!\n" +
-	"\fop_signature\x18\x03 \x01(\fR\vopSignature\"\xe7\x16\n" +
+	"\fop_signature\x18\x03 \x01(\fR\vopSignature\"\xa7\x17\n" +
 	"\tOperation\x12J\n" +
 	"\x10ensure_container\x18\x01 \x01(\v2\x1d.wardstone.v1.EnsureContainerH\x00R\x0fensureContainer\x12D\n" +
 	"\x0estop_container\x18\x02 \x01(\v2\x1b.wardstone.v1.StopContainerH\x00R\rstopContainer\x12D\n" +
@@ -9119,8 +9605,9 @@ const file_wardstone_v1_wardstone_proto_rawDesc = "" +
 	"\x0eapply_workload\x18' \x01(\v2\x1b.wardstone.v1.ApplyWorkloadH\x00R\rapplyWorkload\x12G\n" +
 	"\x0fdelete_workload\x18( \x01(\v2\x1c.wardstone.v1.DeleteWorkloadH\x00R\x0edeleteWorkload\x12J\n" +
 	"\x10observe_workload\x18) \x01(\v2\x1d.wardstone.v1.ObserveWorkloadH\x00R\x0fobserveWorkload\x12A\n" +
-	"\rworkload_logs\x18* \x01(\v2\x1a.wardstone.v1.WorkloadLogsH\x00R\fworkloadLogsB\x04\n" +
-	"\x02op\"\xaa\x19\n" +
+	"\rworkload_logs\x18* \x01(\v2\x1a.wardstone.v1.WorkloadLogsH\x00R\fworkloadLogs\x12>\n" +
+	"\frun_playbook\x18+ \x01(\v2\x19.wardstone.v1.RunPlaybookH\x00R\vrunPlaybookB\x04\n" +
+	"\x02op\"\xf0\x19\n" +
 	"\bOpResult\x12\x13\n" +
 	"\x05op_id\x18\x01 \x01(\tR\x04opId\x12-\n" +
 	"\x05error\x18\x02 \x01(\v2\x15.wardstone.v1.OpErrorH\x00R\x05error\x12P\n" +
@@ -9174,7 +9661,8 @@ const file_wardstone_v1_wardstone_proto_rawDesc = "" +
 	"\x0eapply_workload\x18) \x01(\v2!.wardstone.v1.ApplyWorkloadResultH\x00R\rapplyWorkload\x12M\n" +
 	"\x0fdelete_workload\x18* \x01(\v2\".wardstone.v1.DeleteWorkloadResultH\x00R\x0edeleteWorkload\x12P\n" +
 	"\x10observe_workload\x18+ \x01(\v2#.wardstone.v1.ObserveWorkloadResultH\x00R\x0fobserveWorkload\x12G\n" +
-	"\rworkload_logs\x18, \x01(\v2 .wardstone.v1.WorkloadLogsResultH\x00R\fworkloadLogsB\b\n" +
+	"\rworkload_logs\x18, \x01(\v2 .wardstone.v1.WorkloadLogsResultH\x00R\fworkloadLogs\x12D\n" +
+	"\frun_playbook\x18- \x01(\v2\x1f.wardstone.v1.RunPlaybookResultH\x00R\vrunPlaybookB\b\n" +
 	"\x06result\"P\n" +
 	"\aOpError\x12+\n" +
 	"\x04code\x18\x01 \x01(\x0e2\x17.wardstone.v1.ErrorCodeR\x04code\x12\x18\n" +
@@ -9656,7 +10144,32 @@ const file_wardstone_v1_wardstone_proto_rawDesc = "" +
 	"\x18ContainerRuntimeIdentity\x12\x10\n" +
 	"\x03uid\x18\x01 \x01(\x03R\x03uid\x12\x15\n" +
 	"\x03gid\x18\x02 \x01(\x03H\x00R\x03gid\x88\x01\x01B\x06\n" +
-	"\x04_gid*\xa8\x01\n" +
+	"\x04_gid\"\xd0\x02\n" +
+	"\vRunPlaybook\x12:\n" +
+	"\bidentity\x18\x01 \x01(\x0e2\x1e.wardstone.v1.PlaybookIdentityR\bidentity\x12\x18\n" +
+	"\aversion\x18\x02 \x01(\tR\aversion\x12;\n" +
+	"\tos_update\x18\x03 \x01(\v2\x1c.wardstone.v1.OsUpdateParamsH\x00R\bosUpdate\x12N\n" +
+	"\x10k3s_patch_update\x18\x04 \x01(\v2\".wardstone.v1.K3sPatchUpdateParamsH\x00R\x0ek3sPatchUpdate\x12P\n" +
+	"\x10wardstone_update\x18\x05 \x01(\v2#.wardstone.v1.WardstoneUpdateParamsH\x00R\x0fwardstoneUpdateB\f\n" +
+	"\n" +
+	"parameters\">\n" +
+	"\x0eOsUpdateParams\x12,\n" +
+	"\x12reboot_if_required\x18\x01 \x01(\bR\x10rebootIfRequired\"O\n" +
+	"\x14K3sPatchUpdateParams\x12\x18\n" +
+	"\arelease\x18\x01 \x01(\tR\arelease\x12\x1d\n" +
+	"\n" +
+	"sha256_hex\x18\x02 \x01(\tR\tsha256Hex\"P\n" +
+	"\x15WardstoneUpdateParams\x12\x18\n" +
+	"\arelease\x18\x01 \x01(\tR\arelease\x12\x1d\n" +
+	"\n" +
+	"sha256_hex\x18\x02 \x01(\tR\tsha256Hex\"\x91\x02\n" +
+	"\x11RunPlaybookResult\x12:\n" +
+	"\bidentity\x18\x01 \x01(\x0e2\x1e.wardstone.v1.PlaybookIdentityR\bidentity\x12\x18\n" +
+	"\aversion\x18\x02 \x01(\tR\aversion\x121\n" +
+	"\x05phase\x18\x03 \x01(\x0e2\x1b.wardstone.v1.PlaybookPhaseR\x05phase\x12'\n" +
+	"\x0freboot_required\x18\x04 \x01(\bR\x0erebootRequired\x12%\n" +
+	"\x0ebefore_version\x18\x05 \x01(\tR\rbeforeVersion\x12#\n" +
+	"\rafter_version\x18\x06 \x01(\tR\fafterVersion*\xa8\x01\n" +
 	"\tErrorCode\x12\x1a\n" +
 	"\x16ERROR_CODE_UNSPECIFIED\x10\x00\x12\x16\n" +
 	"\x12ERROR_CODE_INVALID\x10\x01\x12\x18\n" +
@@ -9692,7 +10205,17 @@ const file_wardstone_v1_wardstone_proto_rawDesc = "" +
 	"\x10WorkloadStrategy\x12!\n" +
 	"\x1dWORKLOAD_STRATEGY_UNSPECIFIED\x10\x00\x12\x1e\n" +
 	"\x1aWORKLOAD_STRATEGY_RECREATE\x10\x01\x12$\n" +
-	" WORKLOAD_STRATEGY_ROLLING_UPDATE\x10\x022\xbf\x02\n" +
+	" WORKLOAD_STRATEGY_ROLLING_UPDATE\x10\x02*\xa6\x01\n" +
+	"\x10PlaybookIdentity\x12!\n" +
+	"\x1dPLAYBOOK_IDENTITY_UNSPECIFIED\x10\x00\x12\x1f\n" +
+	"\x1bPLAYBOOK_IDENTITY_OS_UPDATE\x10\x01\x12&\n" +
+	"\"PLAYBOOK_IDENTITY_K3S_PATCH_UPDATE\x10\x02\x12&\n" +
+	"\"PLAYBOOK_IDENTITY_WARDSTONE_UPDATE\x10\x03*\x88\x01\n" +
+	"\rPlaybookPhase\x12\x1e\n" +
+	"\x1aPLAYBOOK_PHASE_UNSPECIFIED\x10\x00\x12\x1c\n" +
+	"\x18PLAYBOOK_PHASE_VALIDATED\x10\x01\x12\x1c\n" +
+	"\x18PLAYBOOK_PHASE_EXECUTING\x10\x02\x12\x1b\n" +
+	"\x17PLAYBOOK_PHASE_COMPLETE\x10\x032\xbf\x02\n" +
 	"\x0fKeystoneGateway\x12=\n" +
 	"\x04Join\x12\x19.wardstone.v1.JoinRequest\x1a\x1a.wardstone.v1.JoinResponse\x12H\n" +
 	"\aSession\x12\x1a.wardstone.v1.AgentMessage\x1a\x1d.wardstone.v1.KeystoneMessage(\x010\x01\x12@\n" +
@@ -9711,8 +10234,8 @@ func file_wardstone_v1_wardstone_proto_rawDescGZIP() []byte {
 	return file_wardstone_v1_wardstone_proto_rawDescData
 }
 
-var file_wardstone_v1_wardstone_proto_enumTypes = make([]protoimpl.EnumInfo, 7)
-var file_wardstone_v1_wardstone_proto_msgTypes = make([]protoimpl.MessageInfo, 117)
+var file_wardstone_v1_wardstone_proto_enumTypes = make([]protoimpl.EnumInfo, 9)
+var file_wardstone_v1_wardstone_proto_msgTypes = make([]protoimpl.MessageInfo, 122)
 var file_wardstone_v1_wardstone_proto_goTypes = []any{
 	(ErrorCode)(0),                        // 0: wardstone.v1.ErrorCode
 	(ContainerNetworkMode)(0),             // 1: wardstone.v1.ContainerNetworkMode
@@ -9721,259 +10244,274 @@ var file_wardstone_v1_wardstone_proto_goTypes = []any{
 	(RadioKind)(0),                        // 4: wardstone.v1.RadioKind
 	(ReadinessState)(0),                   // 5: wardstone.v1.ReadinessState
 	(WorkloadStrategy)(0),                 // 6: wardstone.v1.WorkloadStrategy
-	(*JoinRequest)(nil),                   // 7: wardstone.v1.JoinRequest
-	(*JoinResponse)(nil),                  // 8: wardstone.v1.JoinResponse
-	(*RenewRequest)(nil),                  // 9: wardstone.v1.RenewRequest
-	(*RenewResponse)(nil),                 // 10: wardstone.v1.RenewResponse
-	(*AgentMessage)(nil),                  // 11: wardstone.v1.AgentMessage
-	(*Hello)(nil),                         // 12: wardstone.v1.Hello
-	(*KeystoneMessage)(nil),               // 13: wardstone.v1.KeystoneMessage
-	(*Operation)(nil),                     // 14: wardstone.v1.Operation
-	(*OpResult)(nil),                      // 15: wardstone.v1.OpResult
-	(*OpError)(nil),                       // 16: wardstone.v1.OpError
-	(*EnsureContainer)(nil),               // 17: wardstone.v1.EnsureContainer
-	(*ContainerResources)(nil),            // 18: wardstone.v1.ContainerResources
-	(*PortBinding)(nil),                   // 19: wardstone.v1.PortBinding
-	(*DeviceMapping)(nil),                 // 20: wardstone.v1.DeviceMapping
-	(*Mount)(nil),                         // 21: wardstone.v1.Mount
-	(*EnsureContainerResult)(nil),         // 22: wardstone.v1.EnsureContainerResult
-	(*StopContainer)(nil),                 // 23: wardstone.v1.StopContainer
-	(*StopContainerResult)(nil),           // 24: wardstone.v1.StopContainerResult
-	(*ContainerLogs)(nil),                 // 25: wardstone.v1.ContainerLogs
-	(*ContainerLogsResult)(nil),           // 26: wardstone.v1.ContainerLogsResult
-	(*PullImage)(nil),                     // 27: wardstone.v1.PullImage
-	(*PullImageResult)(nil),               // 28: wardstone.v1.PullImageResult
-	(*RemoveContainer)(nil),               // 29: wardstone.v1.RemoveContainer
-	(*RemoveContainerResult)(nil),         // 30: wardstone.v1.RemoveContainerResult
-	(*ContainerStats)(nil),                // 31: wardstone.v1.ContainerStats
-	(*ContainerStatsResult)(nil),          // 32: wardstone.v1.ContainerStatsResult
-	(*InspectContainer)(nil),              // 33: wardstone.v1.InspectContainer
-	(*InspectContainerResult)(nil),        // 34: wardstone.v1.InspectContainerResult
-	(*PruneImages)(nil),                   // 35: wardstone.v1.PruneImages
-	(*PruneImagesResult)(nil),             // 36: wardstone.v1.PruneImagesResult
-	(*EnsureVolume)(nil),                  // 37: wardstone.v1.EnsureVolume
-	(*EnsureVolumeResult)(nil),            // 38: wardstone.v1.EnsureVolumeResult
-	(*SnapshotDir)(nil),                   // 39: wardstone.v1.SnapshotDir
-	(*SnapshotDirResult)(nil),             // 40: wardstone.v1.SnapshotDirResult
-	(*MeasureUsage)(nil),                  // 41: wardstone.v1.MeasureUsage
-	(*MeasureUsageResult)(nil),            // 42: wardstone.v1.MeasureUsageResult
-	(*DiskSpace)(nil),                     // 43: wardstone.v1.DiskSpace
-	(*DiskSpaceResult)(nil),               // 44: wardstone.v1.DiskSpaceResult
-	(*WriteManagedFile)(nil),              // 45: wardstone.v1.WriteManagedFile
-	(*WriteManagedFileResult)(nil),        // 46: wardstone.v1.WriteManagedFileResult
-	(*SeedVolumeFile)(nil),                // 47: wardstone.v1.SeedVolumeFile
-	(*SeedVolumeFileResult)(nil),          // 48: wardstone.v1.SeedVolumeFileResult
-	(*StatVolumeFile)(nil),                // 49: wardstone.v1.StatVolumeFile
-	(*StatVolumeFileResult)(nil),          // 50: wardstone.v1.StatVolumeFileResult
-	(*ListDirectory)(nil),                 // 51: wardstone.v1.ListDirectory
-	(*ListDirectoryResult)(nil),           // 52: wardstone.v1.ListDirectoryResult
-	(*ReadManagedFile)(nil),               // 53: wardstone.v1.ReadManagedFile
-	(*ReadManagedFileResult)(nil),         // 54: wardstone.v1.ReadManagedFileResult
-	(*HostFacts)(nil),                     // 55: wardstone.v1.HostFacts
-	(*HostFactsResult)(nil),               // 56: wardstone.v1.HostFactsResult
-	(*Health)(nil),                        // 57: wardstone.v1.Health
-	(*HealthResult)(nil),                  // 58: wardstone.v1.HealthResult
-	(*SelfUpdate)(nil),                    // 59: wardstone.v1.SelfUpdate
-	(*SelfUpdateResult)(nil),              // 60: wardstone.v1.SelfUpdateResult
-	(*ListBlockDevices)(nil),              // 61: wardstone.v1.ListBlockDevices
-	(*BlockDevice)(nil),                   // 62: wardstone.v1.BlockDevice
-	(*ListBlockDevicesResult)(nil),        // 63: wardstone.v1.ListBlockDevicesResult
-	(*EnsureMount)(nil),                   // 64: wardstone.v1.EnsureMount
-	(*EnsureMountResult)(nil),             // 65: wardstone.v1.EnsureMountResult
-	(*TestNfs)(nil),                       // 66: wardstone.v1.TestNfs
-	(*TestNfsResult)(nil),                 // 67: wardstone.v1.TestNfsResult
-	(*TestSmb)(nil),                       // 68: wardstone.v1.TestSmb
-	(*TestSmbResult)(nil),                 // 69: wardstone.v1.TestSmbResult
-	(*ListPorts)(nil),                     // 70: wardstone.v1.ListPorts
-	(*ListeningPort)(nil),                 // 71: wardstone.v1.ListeningPort
-	(*ListPortsResult)(nil),               // 72: wardstone.v1.ListPortsResult
-	(*ProbeTcp)(nil),                      // 73: wardstone.v1.ProbeTcp
-	(*ProbeTcpResult)(nil),                // 74: wardstone.v1.ProbeTcpResult
-	(*ProbeHttp)(nil),                     // 75: wardstone.v1.ProbeHttp
-	(*ProbeHttpResult)(nil),               // 76: wardstone.v1.ProbeHttpResult
-	(*EnsureDockerNetwork)(nil),           // 77: wardstone.v1.EnsureDockerNetwork
-	(*EnsureDockerNetworkResult)(nil),     // 78: wardstone.v1.EnsureDockerNetworkResult
-	(*SystemdUnitStatus)(nil),             // 79: wardstone.v1.SystemdUnitStatus
-	(*SystemdUnitStatusResult)(nil),       // 80: wardstone.v1.SystemdUnitStatusResult
-	(*TimeSyncStatus)(nil),                // 81: wardstone.v1.TimeSyncStatus
-	(*TimeSyncStatusResult)(nil),          // 82: wardstone.v1.TimeSyncStatusResult
-	(*EnsureSecret)(nil),                  // 83: wardstone.v1.EnsureSecret
-	(*EnsureSecretResult)(nil),            // 84: wardstone.v1.EnsureSecretResult
-	(*PutSecret)(nil),                     // 85: wardstone.v1.PutSecret
-	(*PutSecretResult)(nil),               // 86: wardstone.v1.PutSecretResult
-	(*ListSecrets)(nil),                   // 87: wardstone.v1.ListSecrets
-	(*SecretInfo)(nil),                    // 88: wardstone.v1.SecretInfo
-	(*ListSecretsResult)(nil),             // 89: wardstone.v1.ListSecretsResult
-	(*ExportSecretBundle)(nil),            // 90: wardstone.v1.ExportSecretBundle
-	(*ExportSecretBundleResult)(nil),      // 91: wardstone.v1.ExportSecretBundleResult
-	(*ImportSecretBundle)(nil),            // 92: wardstone.v1.ImportSecretBundle
-	(*ImportSecretBundleResult)(nil),      // 93: wardstone.v1.ImportSecretBundleResult
-	(*EraseSecret)(nil),                   // 94: wardstone.v1.EraseSecret
-	(*EraseSecretResult)(nil),             // 95: wardstone.v1.EraseSecretResult
-	(*ListRadios)(nil),                    // 96: wardstone.v1.ListRadios
-	(*Radio)(nil),                         // 97: wardstone.v1.Radio
-	(*ListRadiosResult)(nil),              // 98: wardstone.v1.ListRadiosResult
-	(*HomeAutomationReadiness)(nil),       // 99: wardstone.v1.HomeAutomationReadiness
-	(*ReadinessCheck)(nil),                // 100: wardstone.v1.ReadinessCheck
-	(*NodeInterface)(nil),                 // 101: wardstone.v1.NodeInterface
-	(*HomeAutomationReadinessResult)(nil), // 102: wardstone.v1.HomeAutomationReadinessResult
-	(*IssueLeaderEpochRequest)(nil),       // 103: wardstone.v1.IssueLeaderEpochRequest
-	(*IssueLeaderEpochResponse)(nil),      // 104: wardstone.v1.IssueLeaderEpochResponse
-	(*WorkloadAuthority)(nil),             // 105: wardstone.v1.WorkloadAuthority
-	(*WorkloadPort)(nil),                  // 106: wardstone.v1.WorkloadPort
-	(*WorkloadSecurity)(nil),              // 107: wardstone.v1.WorkloadSecurity
-	(*WorkloadSpec)(nil),                  // 108: wardstone.v1.WorkloadSpec
-	(*ApplyWorkload)(nil),                 // 109: wardstone.v1.ApplyWorkload
-	(*ApplyWorkloadResult)(nil),           // 110: wardstone.v1.ApplyWorkloadResult
-	(*DeleteWorkload)(nil),                // 111: wardstone.v1.DeleteWorkload
-	(*DeleteWorkloadResult)(nil),          // 112: wardstone.v1.DeleteWorkloadResult
-	(*ObserveWorkload)(nil),               // 113: wardstone.v1.ObserveWorkload
-	(*WorkloadCondition)(nil),             // 114: wardstone.v1.WorkloadCondition
-	(*ObserveWorkloadResult)(nil),         // 115: wardstone.v1.ObserveWorkloadResult
-	(*WorkloadLogs)(nil),                  // 116: wardstone.v1.WorkloadLogs
-	(*WorkloadLogsResult)(nil),            // 117: wardstone.v1.WorkloadLogsResult
-	(*ContainerRuntimeIdentity)(nil),      // 118: wardstone.v1.ContainerRuntimeIdentity
-	nil,                                   // 119: wardstone.v1.EnsureContainer.EnvEntry
-	nil,                                   // 120: wardstone.v1.EnsureContainer.LabelsEntry
-	nil,                                   // 121: wardstone.v1.InspectContainerResult.LabelsEntry
-	nil,                                   // 122: wardstone.v1.WorkloadSpec.EnvEntry
-	nil,                                   // 123: wardstone.v1.WorkloadSpec.NodeSelectorEntry
+	(PlaybookIdentity)(0),                 // 7: wardstone.v1.PlaybookIdentity
+	(PlaybookPhase)(0),                    // 8: wardstone.v1.PlaybookPhase
+	(*JoinRequest)(nil),                   // 9: wardstone.v1.JoinRequest
+	(*JoinResponse)(nil),                  // 10: wardstone.v1.JoinResponse
+	(*RenewRequest)(nil),                  // 11: wardstone.v1.RenewRequest
+	(*RenewResponse)(nil),                 // 12: wardstone.v1.RenewResponse
+	(*AgentMessage)(nil),                  // 13: wardstone.v1.AgentMessage
+	(*Hello)(nil),                         // 14: wardstone.v1.Hello
+	(*KeystoneMessage)(nil),               // 15: wardstone.v1.KeystoneMessage
+	(*Operation)(nil),                     // 16: wardstone.v1.Operation
+	(*OpResult)(nil),                      // 17: wardstone.v1.OpResult
+	(*OpError)(nil),                       // 18: wardstone.v1.OpError
+	(*EnsureContainer)(nil),               // 19: wardstone.v1.EnsureContainer
+	(*ContainerResources)(nil),            // 20: wardstone.v1.ContainerResources
+	(*PortBinding)(nil),                   // 21: wardstone.v1.PortBinding
+	(*DeviceMapping)(nil),                 // 22: wardstone.v1.DeviceMapping
+	(*Mount)(nil),                         // 23: wardstone.v1.Mount
+	(*EnsureContainerResult)(nil),         // 24: wardstone.v1.EnsureContainerResult
+	(*StopContainer)(nil),                 // 25: wardstone.v1.StopContainer
+	(*StopContainerResult)(nil),           // 26: wardstone.v1.StopContainerResult
+	(*ContainerLogs)(nil),                 // 27: wardstone.v1.ContainerLogs
+	(*ContainerLogsResult)(nil),           // 28: wardstone.v1.ContainerLogsResult
+	(*PullImage)(nil),                     // 29: wardstone.v1.PullImage
+	(*PullImageResult)(nil),               // 30: wardstone.v1.PullImageResult
+	(*RemoveContainer)(nil),               // 31: wardstone.v1.RemoveContainer
+	(*RemoveContainerResult)(nil),         // 32: wardstone.v1.RemoveContainerResult
+	(*ContainerStats)(nil),                // 33: wardstone.v1.ContainerStats
+	(*ContainerStatsResult)(nil),          // 34: wardstone.v1.ContainerStatsResult
+	(*InspectContainer)(nil),              // 35: wardstone.v1.InspectContainer
+	(*InspectContainerResult)(nil),        // 36: wardstone.v1.InspectContainerResult
+	(*PruneImages)(nil),                   // 37: wardstone.v1.PruneImages
+	(*PruneImagesResult)(nil),             // 38: wardstone.v1.PruneImagesResult
+	(*EnsureVolume)(nil),                  // 39: wardstone.v1.EnsureVolume
+	(*EnsureVolumeResult)(nil),            // 40: wardstone.v1.EnsureVolumeResult
+	(*SnapshotDir)(nil),                   // 41: wardstone.v1.SnapshotDir
+	(*SnapshotDirResult)(nil),             // 42: wardstone.v1.SnapshotDirResult
+	(*MeasureUsage)(nil),                  // 43: wardstone.v1.MeasureUsage
+	(*MeasureUsageResult)(nil),            // 44: wardstone.v1.MeasureUsageResult
+	(*DiskSpace)(nil),                     // 45: wardstone.v1.DiskSpace
+	(*DiskSpaceResult)(nil),               // 46: wardstone.v1.DiskSpaceResult
+	(*WriteManagedFile)(nil),              // 47: wardstone.v1.WriteManagedFile
+	(*WriteManagedFileResult)(nil),        // 48: wardstone.v1.WriteManagedFileResult
+	(*SeedVolumeFile)(nil),                // 49: wardstone.v1.SeedVolumeFile
+	(*SeedVolumeFileResult)(nil),          // 50: wardstone.v1.SeedVolumeFileResult
+	(*StatVolumeFile)(nil),                // 51: wardstone.v1.StatVolumeFile
+	(*StatVolumeFileResult)(nil),          // 52: wardstone.v1.StatVolumeFileResult
+	(*ListDirectory)(nil),                 // 53: wardstone.v1.ListDirectory
+	(*ListDirectoryResult)(nil),           // 54: wardstone.v1.ListDirectoryResult
+	(*ReadManagedFile)(nil),               // 55: wardstone.v1.ReadManagedFile
+	(*ReadManagedFileResult)(nil),         // 56: wardstone.v1.ReadManagedFileResult
+	(*HostFacts)(nil),                     // 57: wardstone.v1.HostFacts
+	(*HostFactsResult)(nil),               // 58: wardstone.v1.HostFactsResult
+	(*Health)(nil),                        // 59: wardstone.v1.Health
+	(*HealthResult)(nil),                  // 60: wardstone.v1.HealthResult
+	(*SelfUpdate)(nil),                    // 61: wardstone.v1.SelfUpdate
+	(*SelfUpdateResult)(nil),              // 62: wardstone.v1.SelfUpdateResult
+	(*ListBlockDevices)(nil),              // 63: wardstone.v1.ListBlockDevices
+	(*BlockDevice)(nil),                   // 64: wardstone.v1.BlockDevice
+	(*ListBlockDevicesResult)(nil),        // 65: wardstone.v1.ListBlockDevicesResult
+	(*EnsureMount)(nil),                   // 66: wardstone.v1.EnsureMount
+	(*EnsureMountResult)(nil),             // 67: wardstone.v1.EnsureMountResult
+	(*TestNfs)(nil),                       // 68: wardstone.v1.TestNfs
+	(*TestNfsResult)(nil),                 // 69: wardstone.v1.TestNfsResult
+	(*TestSmb)(nil),                       // 70: wardstone.v1.TestSmb
+	(*TestSmbResult)(nil),                 // 71: wardstone.v1.TestSmbResult
+	(*ListPorts)(nil),                     // 72: wardstone.v1.ListPorts
+	(*ListeningPort)(nil),                 // 73: wardstone.v1.ListeningPort
+	(*ListPortsResult)(nil),               // 74: wardstone.v1.ListPortsResult
+	(*ProbeTcp)(nil),                      // 75: wardstone.v1.ProbeTcp
+	(*ProbeTcpResult)(nil),                // 76: wardstone.v1.ProbeTcpResult
+	(*ProbeHttp)(nil),                     // 77: wardstone.v1.ProbeHttp
+	(*ProbeHttpResult)(nil),               // 78: wardstone.v1.ProbeHttpResult
+	(*EnsureDockerNetwork)(nil),           // 79: wardstone.v1.EnsureDockerNetwork
+	(*EnsureDockerNetworkResult)(nil),     // 80: wardstone.v1.EnsureDockerNetworkResult
+	(*SystemdUnitStatus)(nil),             // 81: wardstone.v1.SystemdUnitStatus
+	(*SystemdUnitStatusResult)(nil),       // 82: wardstone.v1.SystemdUnitStatusResult
+	(*TimeSyncStatus)(nil),                // 83: wardstone.v1.TimeSyncStatus
+	(*TimeSyncStatusResult)(nil),          // 84: wardstone.v1.TimeSyncStatusResult
+	(*EnsureSecret)(nil),                  // 85: wardstone.v1.EnsureSecret
+	(*EnsureSecretResult)(nil),            // 86: wardstone.v1.EnsureSecretResult
+	(*PutSecret)(nil),                     // 87: wardstone.v1.PutSecret
+	(*PutSecretResult)(nil),               // 88: wardstone.v1.PutSecretResult
+	(*ListSecrets)(nil),                   // 89: wardstone.v1.ListSecrets
+	(*SecretInfo)(nil),                    // 90: wardstone.v1.SecretInfo
+	(*ListSecretsResult)(nil),             // 91: wardstone.v1.ListSecretsResult
+	(*ExportSecretBundle)(nil),            // 92: wardstone.v1.ExportSecretBundle
+	(*ExportSecretBundleResult)(nil),      // 93: wardstone.v1.ExportSecretBundleResult
+	(*ImportSecretBundle)(nil),            // 94: wardstone.v1.ImportSecretBundle
+	(*ImportSecretBundleResult)(nil),      // 95: wardstone.v1.ImportSecretBundleResult
+	(*EraseSecret)(nil),                   // 96: wardstone.v1.EraseSecret
+	(*EraseSecretResult)(nil),             // 97: wardstone.v1.EraseSecretResult
+	(*ListRadios)(nil),                    // 98: wardstone.v1.ListRadios
+	(*Radio)(nil),                         // 99: wardstone.v1.Radio
+	(*ListRadiosResult)(nil),              // 100: wardstone.v1.ListRadiosResult
+	(*HomeAutomationReadiness)(nil),       // 101: wardstone.v1.HomeAutomationReadiness
+	(*ReadinessCheck)(nil),                // 102: wardstone.v1.ReadinessCheck
+	(*NodeInterface)(nil),                 // 103: wardstone.v1.NodeInterface
+	(*HomeAutomationReadinessResult)(nil), // 104: wardstone.v1.HomeAutomationReadinessResult
+	(*IssueLeaderEpochRequest)(nil),       // 105: wardstone.v1.IssueLeaderEpochRequest
+	(*IssueLeaderEpochResponse)(nil),      // 106: wardstone.v1.IssueLeaderEpochResponse
+	(*WorkloadAuthority)(nil),             // 107: wardstone.v1.WorkloadAuthority
+	(*WorkloadPort)(nil),                  // 108: wardstone.v1.WorkloadPort
+	(*WorkloadSecurity)(nil),              // 109: wardstone.v1.WorkloadSecurity
+	(*WorkloadSpec)(nil),                  // 110: wardstone.v1.WorkloadSpec
+	(*ApplyWorkload)(nil),                 // 111: wardstone.v1.ApplyWorkload
+	(*ApplyWorkloadResult)(nil),           // 112: wardstone.v1.ApplyWorkloadResult
+	(*DeleteWorkload)(nil),                // 113: wardstone.v1.DeleteWorkload
+	(*DeleteWorkloadResult)(nil),          // 114: wardstone.v1.DeleteWorkloadResult
+	(*ObserveWorkload)(nil),               // 115: wardstone.v1.ObserveWorkload
+	(*WorkloadCondition)(nil),             // 116: wardstone.v1.WorkloadCondition
+	(*ObserveWorkloadResult)(nil),         // 117: wardstone.v1.ObserveWorkloadResult
+	(*WorkloadLogs)(nil),                  // 118: wardstone.v1.WorkloadLogs
+	(*WorkloadLogsResult)(nil),            // 119: wardstone.v1.WorkloadLogsResult
+	(*ContainerRuntimeIdentity)(nil),      // 120: wardstone.v1.ContainerRuntimeIdentity
+	(*RunPlaybook)(nil),                   // 121: wardstone.v1.RunPlaybook
+	(*OsUpdateParams)(nil),                // 122: wardstone.v1.OsUpdateParams
+	(*K3SPatchUpdateParams)(nil),          // 123: wardstone.v1.K3sPatchUpdateParams
+	(*WardstoneUpdateParams)(nil),         // 124: wardstone.v1.WardstoneUpdateParams
+	(*RunPlaybookResult)(nil),             // 125: wardstone.v1.RunPlaybookResult
+	nil,                                   // 126: wardstone.v1.EnsureContainer.EnvEntry
+	nil,                                   // 127: wardstone.v1.EnsureContainer.LabelsEntry
+	nil,                                   // 128: wardstone.v1.InspectContainerResult.LabelsEntry
+	nil,                                   // 129: wardstone.v1.WorkloadSpec.EnvEntry
+	nil,                                   // 130: wardstone.v1.WorkloadSpec.NodeSelectorEntry
 }
 var file_wardstone_v1_wardstone_proto_depIdxs = []int32{
-	12,  // 0: wardstone.v1.AgentMessage.hello:type_name -> wardstone.v1.Hello
-	15,  // 1: wardstone.v1.AgentMessage.result:type_name -> wardstone.v1.OpResult
-	14,  // 2: wardstone.v1.KeystoneMessage.op:type_name -> wardstone.v1.Operation
-	17,  // 3: wardstone.v1.Operation.ensure_container:type_name -> wardstone.v1.EnsureContainer
-	23,  // 4: wardstone.v1.Operation.stop_container:type_name -> wardstone.v1.StopContainer
-	25,  // 5: wardstone.v1.Operation.container_logs:type_name -> wardstone.v1.ContainerLogs
-	27,  // 6: wardstone.v1.Operation.pull_image:type_name -> wardstone.v1.PullImage
-	45,  // 7: wardstone.v1.Operation.write_managed_file:type_name -> wardstone.v1.WriteManagedFile
-	53,  // 8: wardstone.v1.Operation.read_managed_file:type_name -> wardstone.v1.ReadManagedFile
-	55,  // 9: wardstone.v1.Operation.host_facts:type_name -> wardstone.v1.HostFacts
-	57,  // 10: wardstone.v1.Operation.health:type_name -> wardstone.v1.Health
-	59,  // 11: wardstone.v1.Operation.self_update:type_name -> wardstone.v1.SelfUpdate
-	29,  // 12: wardstone.v1.Operation.remove_container:type_name -> wardstone.v1.RemoveContainer
-	31,  // 13: wardstone.v1.Operation.container_stats:type_name -> wardstone.v1.ContainerStats
-	35,  // 14: wardstone.v1.Operation.prune_images:type_name -> wardstone.v1.PruneImages
-	37,  // 15: wardstone.v1.Operation.ensure_volume:type_name -> wardstone.v1.EnsureVolume
-	39,  // 16: wardstone.v1.Operation.snapshot_dir:type_name -> wardstone.v1.SnapshotDir
-	41,  // 17: wardstone.v1.Operation.measure_usage:type_name -> wardstone.v1.MeasureUsage
-	61,  // 18: wardstone.v1.Operation.list_block_devices:type_name -> wardstone.v1.ListBlockDevices
-	64,  // 19: wardstone.v1.Operation.ensure_mount:type_name -> wardstone.v1.EnsureMount
-	66,  // 20: wardstone.v1.Operation.test_nfs:type_name -> wardstone.v1.TestNfs
-	68,  // 21: wardstone.v1.Operation.test_smb:type_name -> wardstone.v1.TestSmb
-	70,  // 22: wardstone.v1.Operation.list_ports:type_name -> wardstone.v1.ListPorts
-	73,  // 23: wardstone.v1.Operation.probe_tcp:type_name -> wardstone.v1.ProbeTcp
-	75,  // 24: wardstone.v1.Operation.probe_http:type_name -> wardstone.v1.ProbeHttp
-	77,  // 25: wardstone.v1.Operation.ensure_docker_network:type_name -> wardstone.v1.EnsureDockerNetwork
-	79,  // 26: wardstone.v1.Operation.systemd_unit_status:type_name -> wardstone.v1.SystemdUnitStatus
-	81,  // 27: wardstone.v1.Operation.time_sync_status:type_name -> wardstone.v1.TimeSyncStatus
-	33,  // 28: wardstone.v1.Operation.inspect_container:type_name -> wardstone.v1.InspectContainer
-	83,  // 29: wardstone.v1.Operation.ensure_secret:type_name -> wardstone.v1.EnsureSecret
-	85,  // 30: wardstone.v1.Operation.put_secret:type_name -> wardstone.v1.PutSecret
-	87,  // 31: wardstone.v1.Operation.list_secrets:type_name -> wardstone.v1.ListSecrets
-	47,  // 32: wardstone.v1.Operation.seed_volume_file:type_name -> wardstone.v1.SeedVolumeFile
-	49,  // 33: wardstone.v1.Operation.stat_volume_file:type_name -> wardstone.v1.StatVolumeFile
-	51,  // 34: wardstone.v1.Operation.list_directory:type_name -> wardstone.v1.ListDirectory
-	43,  // 35: wardstone.v1.Operation.disk_space:type_name -> wardstone.v1.DiskSpace
-	90,  // 36: wardstone.v1.Operation.export_secret_bundle:type_name -> wardstone.v1.ExportSecretBundle
-	92,  // 37: wardstone.v1.Operation.import_secret_bundle:type_name -> wardstone.v1.ImportSecretBundle
-	94,  // 38: wardstone.v1.Operation.erase_secret:type_name -> wardstone.v1.EraseSecret
-	96,  // 39: wardstone.v1.Operation.list_radios:type_name -> wardstone.v1.ListRadios
-	99,  // 40: wardstone.v1.Operation.home_automation_readiness:type_name -> wardstone.v1.HomeAutomationReadiness
-	109, // 41: wardstone.v1.Operation.apply_workload:type_name -> wardstone.v1.ApplyWorkload
-	111, // 42: wardstone.v1.Operation.delete_workload:type_name -> wardstone.v1.DeleteWorkload
-	113, // 43: wardstone.v1.Operation.observe_workload:type_name -> wardstone.v1.ObserveWorkload
-	116, // 44: wardstone.v1.Operation.workload_logs:type_name -> wardstone.v1.WorkloadLogs
-	16,  // 45: wardstone.v1.OpResult.error:type_name -> wardstone.v1.OpError
-	22,  // 46: wardstone.v1.OpResult.ensure_container:type_name -> wardstone.v1.EnsureContainerResult
-	24,  // 47: wardstone.v1.OpResult.stop_container:type_name -> wardstone.v1.StopContainerResult
-	26,  // 48: wardstone.v1.OpResult.container_logs:type_name -> wardstone.v1.ContainerLogsResult
-	28,  // 49: wardstone.v1.OpResult.pull_image:type_name -> wardstone.v1.PullImageResult
-	46,  // 50: wardstone.v1.OpResult.write_managed_file:type_name -> wardstone.v1.WriteManagedFileResult
-	54,  // 51: wardstone.v1.OpResult.read_managed_file:type_name -> wardstone.v1.ReadManagedFileResult
-	56,  // 52: wardstone.v1.OpResult.host_facts:type_name -> wardstone.v1.HostFactsResult
-	58,  // 53: wardstone.v1.OpResult.health:type_name -> wardstone.v1.HealthResult
-	60,  // 54: wardstone.v1.OpResult.self_update:type_name -> wardstone.v1.SelfUpdateResult
-	30,  // 55: wardstone.v1.OpResult.remove_container:type_name -> wardstone.v1.RemoveContainerResult
-	32,  // 56: wardstone.v1.OpResult.container_stats:type_name -> wardstone.v1.ContainerStatsResult
-	36,  // 57: wardstone.v1.OpResult.prune_images:type_name -> wardstone.v1.PruneImagesResult
-	38,  // 58: wardstone.v1.OpResult.ensure_volume:type_name -> wardstone.v1.EnsureVolumeResult
-	40,  // 59: wardstone.v1.OpResult.snapshot_dir:type_name -> wardstone.v1.SnapshotDirResult
-	42,  // 60: wardstone.v1.OpResult.measure_usage:type_name -> wardstone.v1.MeasureUsageResult
-	63,  // 61: wardstone.v1.OpResult.list_block_devices:type_name -> wardstone.v1.ListBlockDevicesResult
-	65,  // 62: wardstone.v1.OpResult.ensure_mount:type_name -> wardstone.v1.EnsureMountResult
-	67,  // 63: wardstone.v1.OpResult.test_nfs:type_name -> wardstone.v1.TestNfsResult
-	69,  // 64: wardstone.v1.OpResult.test_smb:type_name -> wardstone.v1.TestSmbResult
-	72,  // 65: wardstone.v1.OpResult.list_ports:type_name -> wardstone.v1.ListPortsResult
-	74,  // 66: wardstone.v1.OpResult.probe_tcp:type_name -> wardstone.v1.ProbeTcpResult
-	76,  // 67: wardstone.v1.OpResult.probe_http:type_name -> wardstone.v1.ProbeHttpResult
-	78,  // 68: wardstone.v1.OpResult.ensure_docker_network:type_name -> wardstone.v1.EnsureDockerNetworkResult
-	80,  // 69: wardstone.v1.OpResult.systemd_unit_status:type_name -> wardstone.v1.SystemdUnitStatusResult
-	82,  // 70: wardstone.v1.OpResult.time_sync_status:type_name -> wardstone.v1.TimeSyncStatusResult
-	34,  // 71: wardstone.v1.OpResult.inspect_container:type_name -> wardstone.v1.InspectContainerResult
-	84,  // 72: wardstone.v1.OpResult.ensure_secret:type_name -> wardstone.v1.EnsureSecretResult
-	86,  // 73: wardstone.v1.OpResult.put_secret:type_name -> wardstone.v1.PutSecretResult
-	89,  // 74: wardstone.v1.OpResult.list_secrets:type_name -> wardstone.v1.ListSecretsResult
-	48,  // 75: wardstone.v1.OpResult.seed_volume_file:type_name -> wardstone.v1.SeedVolumeFileResult
-	50,  // 76: wardstone.v1.OpResult.stat_volume_file:type_name -> wardstone.v1.StatVolumeFileResult
-	52,  // 77: wardstone.v1.OpResult.list_directory:type_name -> wardstone.v1.ListDirectoryResult
-	44,  // 78: wardstone.v1.OpResult.disk_space:type_name -> wardstone.v1.DiskSpaceResult
-	91,  // 79: wardstone.v1.OpResult.export_secret_bundle:type_name -> wardstone.v1.ExportSecretBundleResult
-	93,  // 80: wardstone.v1.OpResult.import_secret_bundle:type_name -> wardstone.v1.ImportSecretBundleResult
-	95,  // 81: wardstone.v1.OpResult.erase_secret:type_name -> wardstone.v1.EraseSecretResult
-	98,  // 82: wardstone.v1.OpResult.list_radios:type_name -> wardstone.v1.ListRadiosResult
-	102, // 83: wardstone.v1.OpResult.home_automation_readiness:type_name -> wardstone.v1.HomeAutomationReadinessResult
-	110, // 84: wardstone.v1.OpResult.apply_workload:type_name -> wardstone.v1.ApplyWorkloadResult
-	112, // 85: wardstone.v1.OpResult.delete_workload:type_name -> wardstone.v1.DeleteWorkloadResult
-	115, // 86: wardstone.v1.OpResult.observe_workload:type_name -> wardstone.v1.ObserveWorkloadResult
-	117, // 87: wardstone.v1.OpResult.workload_logs:type_name -> wardstone.v1.WorkloadLogsResult
-	0,   // 88: wardstone.v1.OpError.code:type_name -> wardstone.v1.ErrorCode
-	119, // 89: wardstone.v1.EnsureContainer.env:type_name -> wardstone.v1.EnsureContainer.EnvEntry
-	19,  // 90: wardstone.v1.EnsureContainer.ports:type_name -> wardstone.v1.PortBinding
-	21,  // 91: wardstone.v1.EnsureContainer.mounts:type_name -> wardstone.v1.Mount
-	120, // 92: wardstone.v1.EnsureContainer.labels:type_name -> wardstone.v1.EnsureContainer.LabelsEntry
-	20,  // 93: wardstone.v1.EnsureContainer.devices:type_name -> wardstone.v1.DeviceMapping
-	18,  // 94: wardstone.v1.EnsureContainer.resources:type_name -> wardstone.v1.ContainerResources
-	1,   // 95: wardstone.v1.EnsureContainer.network_mode:type_name -> wardstone.v1.ContainerNetworkMode
-	118, // 96: wardstone.v1.EnsureContainer.runtime_identity:type_name -> wardstone.v1.ContainerRuntimeIdentity
-	2,   // 97: wardstone.v1.PortBinding.protocol:type_name -> wardstone.v1.PortProtocol
-	121, // 98: wardstone.v1.InspectContainerResult.labels:type_name -> wardstone.v1.InspectContainerResult.LabelsEntry
-	118, // 99: wardstone.v1.InspectContainerResult.runtime_identity:type_name -> wardstone.v1.ContainerRuntimeIdentity
-	62,  // 100: wardstone.v1.ListBlockDevicesResult.devices:type_name -> wardstone.v1.BlockDevice
-	71,  // 101: wardstone.v1.ListPortsResult.ports:type_name -> wardstone.v1.ListeningPort
-	3,   // 102: wardstone.v1.EnsureSecret.kind:type_name -> wardstone.v1.SecretKind
-	88,  // 103: wardstone.v1.ListSecretsResult.secrets:type_name -> wardstone.v1.SecretInfo
-	4,   // 104: wardstone.v1.Radio.kind:type_name -> wardstone.v1.RadioKind
-	97,  // 105: wardstone.v1.ListRadiosResult.radios:type_name -> wardstone.v1.Radio
-	5,   // 106: wardstone.v1.ReadinessCheck.state:type_name -> wardstone.v1.ReadinessState
-	101, // 107: wardstone.v1.HomeAutomationReadinessResult.interfaces:type_name -> wardstone.v1.NodeInterface
-	100, // 108: wardstone.v1.HomeAutomationReadinessResult.checks:type_name -> wardstone.v1.ReadinessCheck
-	2,   // 109: wardstone.v1.WorkloadPort.protocol:type_name -> wardstone.v1.PortProtocol
-	122, // 110: wardstone.v1.WorkloadSpec.env:type_name -> wardstone.v1.WorkloadSpec.EnvEntry
-	106, // 111: wardstone.v1.WorkloadSpec.ports:type_name -> wardstone.v1.WorkloadPort
-	18,  // 112: wardstone.v1.WorkloadSpec.resources:type_name -> wardstone.v1.ContainerResources
-	107, // 113: wardstone.v1.WorkloadSpec.security:type_name -> wardstone.v1.WorkloadSecurity
-	6,   // 114: wardstone.v1.WorkloadSpec.strategy:type_name -> wardstone.v1.WorkloadStrategy
-	123, // 115: wardstone.v1.WorkloadSpec.node_selector:type_name -> wardstone.v1.WorkloadSpec.NodeSelectorEntry
-	105, // 116: wardstone.v1.ApplyWorkload.authority:type_name -> wardstone.v1.WorkloadAuthority
-	108, // 117: wardstone.v1.ApplyWorkload.workload:type_name -> wardstone.v1.WorkloadSpec
-	105, // 118: wardstone.v1.DeleteWorkload.authority:type_name -> wardstone.v1.WorkloadAuthority
-	108, // 119: wardstone.v1.ObserveWorkload.desired:type_name -> wardstone.v1.WorkloadSpec
-	114, // 120: wardstone.v1.ObserveWorkloadResult.conditions:type_name -> wardstone.v1.WorkloadCondition
-	7,   // 121: wardstone.v1.KeystoneGateway.Join:input_type -> wardstone.v1.JoinRequest
-	11,  // 122: wardstone.v1.KeystoneGateway.Session:input_type -> wardstone.v1.AgentMessage
-	9,   // 123: wardstone.v1.KeystoneGateway.Renew:input_type -> wardstone.v1.RenewRequest
-	103, // 124: wardstone.v1.KeystoneGateway.IssueLeaderEpoch:input_type -> wardstone.v1.IssueLeaderEpochRequest
-	8,   // 125: wardstone.v1.KeystoneGateway.Join:output_type -> wardstone.v1.JoinResponse
-	13,  // 126: wardstone.v1.KeystoneGateway.Session:output_type -> wardstone.v1.KeystoneMessage
-	10,  // 127: wardstone.v1.KeystoneGateway.Renew:output_type -> wardstone.v1.RenewResponse
-	104, // 128: wardstone.v1.KeystoneGateway.IssueLeaderEpoch:output_type -> wardstone.v1.IssueLeaderEpochResponse
-	125, // [125:129] is the sub-list for method output_type
-	121, // [121:125] is the sub-list for method input_type
-	121, // [121:121] is the sub-list for extension type_name
-	121, // [121:121] is the sub-list for extension extendee
-	0,   // [0:121] is the sub-list for field type_name
+	14,  // 0: wardstone.v1.AgentMessage.hello:type_name -> wardstone.v1.Hello
+	17,  // 1: wardstone.v1.AgentMessage.result:type_name -> wardstone.v1.OpResult
+	16,  // 2: wardstone.v1.KeystoneMessage.op:type_name -> wardstone.v1.Operation
+	19,  // 3: wardstone.v1.Operation.ensure_container:type_name -> wardstone.v1.EnsureContainer
+	25,  // 4: wardstone.v1.Operation.stop_container:type_name -> wardstone.v1.StopContainer
+	27,  // 5: wardstone.v1.Operation.container_logs:type_name -> wardstone.v1.ContainerLogs
+	29,  // 6: wardstone.v1.Operation.pull_image:type_name -> wardstone.v1.PullImage
+	47,  // 7: wardstone.v1.Operation.write_managed_file:type_name -> wardstone.v1.WriteManagedFile
+	55,  // 8: wardstone.v1.Operation.read_managed_file:type_name -> wardstone.v1.ReadManagedFile
+	57,  // 9: wardstone.v1.Operation.host_facts:type_name -> wardstone.v1.HostFacts
+	59,  // 10: wardstone.v1.Operation.health:type_name -> wardstone.v1.Health
+	61,  // 11: wardstone.v1.Operation.self_update:type_name -> wardstone.v1.SelfUpdate
+	31,  // 12: wardstone.v1.Operation.remove_container:type_name -> wardstone.v1.RemoveContainer
+	33,  // 13: wardstone.v1.Operation.container_stats:type_name -> wardstone.v1.ContainerStats
+	37,  // 14: wardstone.v1.Operation.prune_images:type_name -> wardstone.v1.PruneImages
+	39,  // 15: wardstone.v1.Operation.ensure_volume:type_name -> wardstone.v1.EnsureVolume
+	41,  // 16: wardstone.v1.Operation.snapshot_dir:type_name -> wardstone.v1.SnapshotDir
+	43,  // 17: wardstone.v1.Operation.measure_usage:type_name -> wardstone.v1.MeasureUsage
+	63,  // 18: wardstone.v1.Operation.list_block_devices:type_name -> wardstone.v1.ListBlockDevices
+	66,  // 19: wardstone.v1.Operation.ensure_mount:type_name -> wardstone.v1.EnsureMount
+	68,  // 20: wardstone.v1.Operation.test_nfs:type_name -> wardstone.v1.TestNfs
+	70,  // 21: wardstone.v1.Operation.test_smb:type_name -> wardstone.v1.TestSmb
+	72,  // 22: wardstone.v1.Operation.list_ports:type_name -> wardstone.v1.ListPorts
+	75,  // 23: wardstone.v1.Operation.probe_tcp:type_name -> wardstone.v1.ProbeTcp
+	77,  // 24: wardstone.v1.Operation.probe_http:type_name -> wardstone.v1.ProbeHttp
+	79,  // 25: wardstone.v1.Operation.ensure_docker_network:type_name -> wardstone.v1.EnsureDockerNetwork
+	81,  // 26: wardstone.v1.Operation.systemd_unit_status:type_name -> wardstone.v1.SystemdUnitStatus
+	83,  // 27: wardstone.v1.Operation.time_sync_status:type_name -> wardstone.v1.TimeSyncStatus
+	35,  // 28: wardstone.v1.Operation.inspect_container:type_name -> wardstone.v1.InspectContainer
+	85,  // 29: wardstone.v1.Operation.ensure_secret:type_name -> wardstone.v1.EnsureSecret
+	87,  // 30: wardstone.v1.Operation.put_secret:type_name -> wardstone.v1.PutSecret
+	89,  // 31: wardstone.v1.Operation.list_secrets:type_name -> wardstone.v1.ListSecrets
+	49,  // 32: wardstone.v1.Operation.seed_volume_file:type_name -> wardstone.v1.SeedVolumeFile
+	51,  // 33: wardstone.v1.Operation.stat_volume_file:type_name -> wardstone.v1.StatVolumeFile
+	53,  // 34: wardstone.v1.Operation.list_directory:type_name -> wardstone.v1.ListDirectory
+	45,  // 35: wardstone.v1.Operation.disk_space:type_name -> wardstone.v1.DiskSpace
+	92,  // 36: wardstone.v1.Operation.export_secret_bundle:type_name -> wardstone.v1.ExportSecretBundle
+	94,  // 37: wardstone.v1.Operation.import_secret_bundle:type_name -> wardstone.v1.ImportSecretBundle
+	96,  // 38: wardstone.v1.Operation.erase_secret:type_name -> wardstone.v1.EraseSecret
+	98,  // 39: wardstone.v1.Operation.list_radios:type_name -> wardstone.v1.ListRadios
+	101, // 40: wardstone.v1.Operation.home_automation_readiness:type_name -> wardstone.v1.HomeAutomationReadiness
+	111, // 41: wardstone.v1.Operation.apply_workload:type_name -> wardstone.v1.ApplyWorkload
+	113, // 42: wardstone.v1.Operation.delete_workload:type_name -> wardstone.v1.DeleteWorkload
+	115, // 43: wardstone.v1.Operation.observe_workload:type_name -> wardstone.v1.ObserveWorkload
+	118, // 44: wardstone.v1.Operation.workload_logs:type_name -> wardstone.v1.WorkloadLogs
+	121, // 45: wardstone.v1.Operation.run_playbook:type_name -> wardstone.v1.RunPlaybook
+	18,  // 46: wardstone.v1.OpResult.error:type_name -> wardstone.v1.OpError
+	24,  // 47: wardstone.v1.OpResult.ensure_container:type_name -> wardstone.v1.EnsureContainerResult
+	26,  // 48: wardstone.v1.OpResult.stop_container:type_name -> wardstone.v1.StopContainerResult
+	28,  // 49: wardstone.v1.OpResult.container_logs:type_name -> wardstone.v1.ContainerLogsResult
+	30,  // 50: wardstone.v1.OpResult.pull_image:type_name -> wardstone.v1.PullImageResult
+	48,  // 51: wardstone.v1.OpResult.write_managed_file:type_name -> wardstone.v1.WriteManagedFileResult
+	56,  // 52: wardstone.v1.OpResult.read_managed_file:type_name -> wardstone.v1.ReadManagedFileResult
+	58,  // 53: wardstone.v1.OpResult.host_facts:type_name -> wardstone.v1.HostFactsResult
+	60,  // 54: wardstone.v1.OpResult.health:type_name -> wardstone.v1.HealthResult
+	62,  // 55: wardstone.v1.OpResult.self_update:type_name -> wardstone.v1.SelfUpdateResult
+	32,  // 56: wardstone.v1.OpResult.remove_container:type_name -> wardstone.v1.RemoveContainerResult
+	34,  // 57: wardstone.v1.OpResult.container_stats:type_name -> wardstone.v1.ContainerStatsResult
+	38,  // 58: wardstone.v1.OpResult.prune_images:type_name -> wardstone.v1.PruneImagesResult
+	40,  // 59: wardstone.v1.OpResult.ensure_volume:type_name -> wardstone.v1.EnsureVolumeResult
+	42,  // 60: wardstone.v1.OpResult.snapshot_dir:type_name -> wardstone.v1.SnapshotDirResult
+	44,  // 61: wardstone.v1.OpResult.measure_usage:type_name -> wardstone.v1.MeasureUsageResult
+	65,  // 62: wardstone.v1.OpResult.list_block_devices:type_name -> wardstone.v1.ListBlockDevicesResult
+	67,  // 63: wardstone.v1.OpResult.ensure_mount:type_name -> wardstone.v1.EnsureMountResult
+	69,  // 64: wardstone.v1.OpResult.test_nfs:type_name -> wardstone.v1.TestNfsResult
+	71,  // 65: wardstone.v1.OpResult.test_smb:type_name -> wardstone.v1.TestSmbResult
+	74,  // 66: wardstone.v1.OpResult.list_ports:type_name -> wardstone.v1.ListPortsResult
+	76,  // 67: wardstone.v1.OpResult.probe_tcp:type_name -> wardstone.v1.ProbeTcpResult
+	78,  // 68: wardstone.v1.OpResult.probe_http:type_name -> wardstone.v1.ProbeHttpResult
+	80,  // 69: wardstone.v1.OpResult.ensure_docker_network:type_name -> wardstone.v1.EnsureDockerNetworkResult
+	82,  // 70: wardstone.v1.OpResult.systemd_unit_status:type_name -> wardstone.v1.SystemdUnitStatusResult
+	84,  // 71: wardstone.v1.OpResult.time_sync_status:type_name -> wardstone.v1.TimeSyncStatusResult
+	36,  // 72: wardstone.v1.OpResult.inspect_container:type_name -> wardstone.v1.InspectContainerResult
+	86,  // 73: wardstone.v1.OpResult.ensure_secret:type_name -> wardstone.v1.EnsureSecretResult
+	88,  // 74: wardstone.v1.OpResult.put_secret:type_name -> wardstone.v1.PutSecretResult
+	91,  // 75: wardstone.v1.OpResult.list_secrets:type_name -> wardstone.v1.ListSecretsResult
+	50,  // 76: wardstone.v1.OpResult.seed_volume_file:type_name -> wardstone.v1.SeedVolumeFileResult
+	52,  // 77: wardstone.v1.OpResult.stat_volume_file:type_name -> wardstone.v1.StatVolumeFileResult
+	54,  // 78: wardstone.v1.OpResult.list_directory:type_name -> wardstone.v1.ListDirectoryResult
+	46,  // 79: wardstone.v1.OpResult.disk_space:type_name -> wardstone.v1.DiskSpaceResult
+	93,  // 80: wardstone.v1.OpResult.export_secret_bundle:type_name -> wardstone.v1.ExportSecretBundleResult
+	95,  // 81: wardstone.v1.OpResult.import_secret_bundle:type_name -> wardstone.v1.ImportSecretBundleResult
+	97,  // 82: wardstone.v1.OpResult.erase_secret:type_name -> wardstone.v1.EraseSecretResult
+	100, // 83: wardstone.v1.OpResult.list_radios:type_name -> wardstone.v1.ListRadiosResult
+	104, // 84: wardstone.v1.OpResult.home_automation_readiness:type_name -> wardstone.v1.HomeAutomationReadinessResult
+	112, // 85: wardstone.v1.OpResult.apply_workload:type_name -> wardstone.v1.ApplyWorkloadResult
+	114, // 86: wardstone.v1.OpResult.delete_workload:type_name -> wardstone.v1.DeleteWorkloadResult
+	117, // 87: wardstone.v1.OpResult.observe_workload:type_name -> wardstone.v1.ObserveWorkloadResult
+	119, // 88: wardstone.v1.OpResult.workload_logs:type_name -> wardstone.v1.WorkloadLogsResult
+	125, // 89: wardstone.v1.OpResult.run_playbook:type_name -> wardstone.v1.RunPlaybookResult
+	0,   // 90: wardstone.v1.OpError.code:type_name -> wardstone.v1.ErrorCode
+	126, // 91: wardstone.v1.EnsureContainer.env:type_name -> wardstone.v1.EnsureContainer.EnvEntry
+	21,  // 92: wardstone.v1.EnsureContainer.ports:type_name -> wardstone.v1.PortBinding
+	23,  // 93: wardstone.v1.EnsureContainer.mounts:type_name -> wardstone.v1.Mount
+	127, // 94: wardstone.v1.EnsureContainer.labels:type_name -> wardstone.v1.EnsureContainer.LabelsEntry
+	22,  // 95: wardstone.v1.EnsureContainer.devices:type_name -> wardstone.v1.DeviceMapping
+	20,  // 96: wardstone.v1.EnsureContainer.resources:type_name -> wardstone.v1.ContainerResources
+	1,   // 97: wardstone.v1.EnsureContainer.network_mode:type_name -> wardstone.v1.ContainerNetworkMode
+	120, // 98: wardstone.v1.EnsureContainer.runtime_identity:type_name -> wardstone.v1.ContainerRuntimeIdentity
+	2,   // 99: wardstone.v1.PortBinding.protocol:type_name -> wardstone.v1.PortProtocol
+	128, // 100: wardstone.v1.InspectContainerResult.labels:type_name -> wardstone.v1.InspectContainerResult.LabelsEntry
+	120, // 101: wardstone.v1.InspectContainerResult.runtime_identity:type_name -> wardstone.v1.ContainerRuntimeIdentity
+	64,  // 102: wardstone.v1.ListBlockDevicesResult.devices:type_name -> wardstone.v1.BlockDevice
+	73,  // 103: wardstone.v1.ListPortsResult.ports:type_name -> wardstone.v1.ListeningPort
+	3,   // 104: wardstone.v1.EnsureSecret.kind:type_name -> wardstone.v1.SecretKind
+	90,  // 105: wardstone.v1.ListSecretsResult.secrets:type_name -> wardstone.v1.SecretInfo
+	4,   // 106: wardstone.v1.Radio.kind:type_name -> wardstone.v1.RadioKind
+	99,  // 107: wardstone.v1.ListRadiosResult.radios:type_name -> wardstone.v1.Radio
+	5,   // 108: wardstone.v1.ReadinessCheck.state:type_name -> wardstone.v1.ReadinessState
+	103, // 109: wardstone.v1.HomeAutomationReadinessResult.interfaces:type_name -> wardstone.v1.NodeInterface
+	102, // 110: wardstone.v1.HomeAutomationReadinessResult.checks:type_name -> wardstone.v1.ReadinessCheck
+	2,   // 111: wardstone.v1.WorkloadPort.protocol:type_name -> wardstone.v1.PortProtocol
+	129, // 112: wardstone.v1.WorkloadSpec.env:type_name -> wardstone.v1.WorkloadSpec.EnvEntry
+	108, // 113: wardstone.v1.WorkloadSpec.ports:type_name -> wardstone.v1.WorkloadPort
+	20,  // 114: wardstone.v1.WorkloadSpec.resources:type_name -> wardstone.v1.ContainerResources
+	109, // 115: wardstone.v1.WorkloadSpec.security:type_name -> wardstone.v1.WorkloadSecurity
+	6,   // 116: wardstone.v1.WorkloadSpec.strategy:type_name -> wardstone.v1.WorkloadStrategy
+	130, // 117: wardstone.v1.WorkloadSpec.node_selector:type_name -> wardstone.v1.WorkloadSpec.NodeSelectorEntry
+	107, // 118: wardstone.v1.ApplyWorkload.authority:type_name -> wardstone.v1.WorkloadAuthority
+	110, // 119: wardstone.v1.ApplyWorkload.workload:type_name -> wardstone.v1.WorkloadSpec
+	107, // 120: wardstone.v1.DeleteWorkload.authority:type_name -> wardstone.v1.WorkloadAuthority
+	110, // 121: wardstone.v1.ObserveWorkload.desired:type_name -> wardstone.v1.WorkloadSpec
+	116, // 122: wardstone.v1.ObserveWorkloadResult.conditions:type_name -> wardstone.v1.WorkloadCondition
+	7,   // 123: wardstone.v1.RunPlaybook.identity:type_name -> wardstone.v1.PlaybookIdentity
+	122, // 124: wardstone.v1.RunPlaybook.os_update:type_name -> wardstone.v1.OsUpdateParams
+	123, // 125: wardstone.v1.RunPlaybook.k3s_patch_update:type_name -> wardstone.v1.K3sPatchUpdateParams
+	124, // 126: wardstone.v1.RunPlaybook.wardstone_update:type_name -> wardstone.v1.WardstoneUpdateParams
+	7,   // 127: wardstone.v1.RunPlaybookResult.identity:type_name -> wardstone.v1.PlaybookIdentity
+	8,   // 128: wardstone.v1.RunPlaybookResult.phase:type_name -> wardstone.v1.PlaybookPhase
+	9,   // 129: wardstone.v1.KeystoneGateway.Join:input_type -> wardstone.v1.JoinRequest
+	13,  // 130: wardstone.v1.KeystoneGateway.Session:input_type -> wardstone.v1.AgentMessage
+	11,  // 131: wardstone.v1.KeystoneGateway.Renew:input_type -> wardstone.v1.RenewRequest
+	105, // 132: wardstone.v1.KeystoneGateway.IssueLeaderEpoch:input_type -> wardstone.v1.IssueLeaderEpochRequest
+	10,  // 133: wardstone.v1.KeystoneGateway.Join:output_type -> wardstone.v1.JoinResponse
+	15,  // 134: wardstone.v1.KeystoneGateway.Session:output_type -> wardstone.v1.KeystoneMessage
+	12,  // 135: wardstone.v1.KeystoneGateway.Renew:output_type -> wardstone.v1.RenewResponse
+	106, // 136: wardstone.v1.KeystoneGateway.IssueLeaderEpoch:output_type -> wardstone.v1.IssueLeaderEpochResponse
+	133, // [133:137] is the sub-list for method output_type
+	129, // [129:133] is the sub-list for method input_type
+	129, // [129:129] is the sub-list for extension type_name
+	129, // [129:129] is the sub-list for extension extendee
+	0,   // [0:129] is the sub-list for field type_name
 }
 
 func init() { file_wardstone_v1_wardstone_proto_init() }
@@ -10028,6 +10566,7 @@ func file_wardstone_v1_wardstone_proto_init() {
 		(*Operation_DeleteWorkload)(nil),
 		(*Operation_ObserveWorkload)(nil),
 		(*Operation_WorkloadLogs)(nil),
+		(*Operation_RunPlaybook)(nil),
 	}
 	file_wardstone_v1_wardstone_proto_msgTypes[8].OneofWrappers = []any{
 		(*OpResult_Error)(nil),
@@ -10073,15 +10612,21 @@ func file_wardstone_v1_wardstone_proto_init() {
 		(*OpResult_DeleteWorkload)(nil),
 		(*OpResult_ObserveWorkload)(nil),
 		(*OpResult_WorkloadLogs)(nil),
+		(*OpResult_RunPlaybook)(nil),
 	}
 	file_wardstone_v1_wardstone_proto_msgTypes[111].OneofWrappers = []any{}
+	file_wardstone_v1_wardstone_proto_msgTypes[112].OneofWrappers = []any{
+		(*RunPlaybook_OsUpdate)(nil),
+		(*RunPlaybook_K3SPatchUpdate)(nil),
+		(*RunPlaybook_WardstoneUpdate)(nil),
+	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_wardstone_v1_wardstone_proto_rawDesc), len(file_wardstone_v1_wardstone_proto_rawDesc)),
-			NumEnums:      7,
-			NumMessages:   117,
+			NumEnums:      9,
+			NumMessages:   122,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

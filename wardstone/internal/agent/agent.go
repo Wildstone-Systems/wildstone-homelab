@@ -184,7 +184,10 @@ import (
 // unchanged spec-hash label cannot hide out-of-band Docker drift.
 // 35: HostFacts reports a bounded canonical architecture (amd64 or arm64),
 // so package platform eligibility can fail closed before workload mutation.
-const ProtocolMinor = 35
+// 36: adds the closed, signed, local-only RunPlaybook operation (ADR-W050
+// §2.7). No playbook bytes, path, argv, environment, or free-form map crosses
+// the wire.
+const ProtocolMinor = 36
 
 // maxUpdateMsgBytes is the gRPC message size cap on both ends of the
 // session/join connections (ADR-W003 W5). SelfUpdate ships the new binary
@@ -213,11 +216,15 @@ type Config struct {
 	// falls back to trust-on-first-use and logs a loud Warn.
 	CAFingerprint string
 
-	ManagedPrefixes []string // default: /etc/wildstone, /srv/wildstone
-	DockerEndpoint  string   // default: unix:///var/run/docker.sock
-	BinaryPath      string   // self-update target; default: os.Executable()
-	UpdatePublicKey []byte   // ed25519, baked in at build in production
-	Version         string
+	ManagedPrefixes    []string // default: /etc/wildstone, /srv/wildstone
+	DockerEndpoint     string   // default: unix:///var/run/docker.sock
+	BinaryPath         string   // self-update target; default: os.Executable()
+	UpdatePublicKey    []byte   // ed25519, baked in at build in production
+	PlaybookDir        string   // signed shipped set; default /usr/lib/wildstone/playbooks/current
+	PlaybookPublicKey  []byte   // ed25519 key for the signed playbook manifest
+	AnsiblePath        string   // fixed executable; default /usr/bin/ansible-playbook
+	RebootRequiredPath string   // default /var/run/reboot-required; tests override
+	Version            string
 
 	// MountRoot is the second hard boundary EnsureMount enforces on top of
 	// ManagedPrefixes (ADR-W003 W6c): the target must resolve under BOTH a
@@ -270,6 +277,10 @@ type Agent struct {
 	// takes effect after a promoted self-update — see selfUpdate and the
 	// session send-path comment below for the ordering guarantee.
 	execSelf func()
+	// playbookCommand is fixed to runAnsible in production. Tests replace it
+	// after New to observe argv without starting a process.
+	playbookCommand func(context.Context, string, []string, []string) error
+	playbookVersion func(context.Context, wsv1.PlaybookIdentity) string
 }
 
 func New(cfg Config) (*Agent, error) {
@@ -308,6 +319,24 @@ func New(cfg Config) (*Agent, error) {
 		}
 		cfg.BinaryPath = exe
 	}
+	if cfg.PlaybookDir == "" {
+		cfg.PlaybookDir = "/usr/lib/wildstone/playbooks/current"
+	}
+	if !filepath.IsAbs(cfg.PlaybookDir) {
+		return nil, fmt.Errorf("PlaybookDir must be absolute")
+	}
+	if cfg.AnsiblePath == "" {
+		cfg.AnsiblePath = "/usr/bin/ansible-playbook"
+	}
+	if !filepath.IsAbs(cfg.AnsiblePath) {
+		return nil, fmt.Errorf("AnsiblePath must be absolute")
+	}
+	if cfg.RebootRequiredPath == "" {
+		cfg.RebootRequiredPath = "/var/run/reboot-required"
+	}
+	if !filepath.IsAbs(cfg.RebootRequiredPath) {
+		return nil, fmt.Errorf("RebootRequiredPath must be absolute")
+	}
 	if cfg.BackoffBase == 0 {
 		cfg.BackoffBase = 500 * time.Millisecond
 	}
@@ -328,6 +357,8 @@ func New(cfg Config) (*Agent, error) {
 		return nil, err
 	}
 	a := &Agent{cfg: cfg, log: cfg.Logger.With("node", cfg.NodeID), runtime: docker}
+	a.playbookCommand = a.runAnsible
+	a.playbookVersion = a.probePlaybookVersion
 	if cfg.ExecSelf != nil {
 		a.execSelf = cfg.ExecSelf
 	} else {

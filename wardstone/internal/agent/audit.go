@@ -184,6 +184,11 @@ func auditFields(op *wsv1.Operation) (arm string, fields []slog.Attr) {
 		return "ObserveWorkload", []slog.Attr{slog.String("name", o.ObserveWorkload.GetName())}
 	case *wsv1.Operation_WorkloadLogs:
 		return "WorkloadLogs", []slog.Attr{slog.String("name", o.WorkloadLogs.GetName())}
+	case *wsv1.Operation_RunPlaybook:
+		return "RunPlaybook", []slog.Attr{
+			slog.String("identity", o.RunPlaybook.GetIdentity().String()),
+			slog.String("version", o.RunPlaybook.GetVersion()),
+		}
 	default:
 		// Unknown/future op arm (protocol skew, or a new arm someone forgot
 		// to add a case for above): log the fact that something was

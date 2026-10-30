@@ -151,6 +151,7 @@ message Operation {
     DeleteWorkload delete_workload = 40; // protocol minor 30
     ObserveWorkload observe_workload = 41; // protocol minor 30
     WorkloadLogs workload_logs = 42; // protocol minor 30
+    RunPlaybook run_playbook = 43; // protocol minor 36
   }
 }
 
@@ -200,6 +201,7 @@ message OpResult {
     DeleteWorkloadResult delete_workload = 42; // protocol minor 30
     ObserveWorkloadResult observe_workload = 43; // protocol minor 30
     WorkloadLogsResult workload_logs = 44; // protocol minor 30
+    RunPlaybookResult run_playbook = 45; // protocol minor 36
   }
 }
 
@@ -1453,4 +1455,55 @@ message WorkloadLogsResult {
 message ContainerRuntimeIdentity {
   int64 uid = 1;
   optional int64 gid = 2;
+}
+
+// Appended to preserve all earlier declaration indices. RunPlaybook is the
+// only Ansible execution boundary: identity plus a matching typed parameter
+// arm selects one shipped, signed local playbook. No YAML, path, argv,
+// environment, or free-form values cross the wire.
+message RunPlaybook {
+  PlaybookIdentity identity = 1;
+  string version = 2;
+  oneof parameters {
+    OsUpdateParams os_update = 3;
+    K3sPatchUpdateParams k3s_patch_update = 4;
+    WardstoneUpdateParams wardstone_update = 5;
+  }
+}
+
+enum PlaybookIdentity {
+  PLAYBOOK_IDENTITY_UNSPECIFIED = 0;
+  PLAYBOOK_IDENTITY_OS_UPDATE = 1;
+  PLAYBOOK_IDENTITY_K3S_PATCH_UPDATE = 2;
+  PLAYBOOK_IDENTITY_WARDSTONE_UPDATE = 3;
+}
+
+message OsUpdateParams {
+  bool reboot_if_required = 1;
+}
+
+message K3sPatchUpdateParams {
+  string release = 1;
+  string sha256_hex = 2;
+}
+
+message WardstoneUpdateParams {
+  string release = 1;
+  string sha256_hex = 2;
+}
+
+enum PlaybookPhase {
+  PLAYBOOK_PHASE_UNSPECIFIED = 0;
+  PLAYBOOK_PHASE_VALIDATED = 1;
+  PLAYBOOK_PHASE_EXECUTING = 2;
+  PLAYBOOK_PHASE_COMPLETE = 3;
+}
+
+message RunPlaybookResult {
+  PlaybookIdentity identity = 1;
+  string version = 2;
+  PlaybookPhase phase = 3;
+  bool reboot_required = 4;
+  string before_version = 5;
+  string after_version = 6;
 }

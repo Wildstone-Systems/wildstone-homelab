@@ -283,6 +283,11 @@ func (a *Agent) dispatchOp(ctx context.Context, opID string, op *wsv1.Operation)
 		} else {
 			res.Result = &wsv1.OpResult_WorkloadLogs{WorkloadLogs: r}
 		}
+	case *wsv1.Operation_RunPlaybook:
+		var r *wsv1.OpResult_RunPlaybook
+		if r, oerr = a.runPlaybook(ctx, o.RunPlaybook); oerr == nil {
+			res.Result = r
+		}
 	default:
 		oerr = opErr(wsv1.ErrorCode_ERROR_CODE_INVALID, "unknown operation — agent too old for this Keystone? (protocol skew)")
 	}

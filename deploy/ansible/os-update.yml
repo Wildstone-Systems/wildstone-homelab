@@ -1,0 +1,21 @@
+---
+- name: Apply the fixed local operating-system update
+  hosts: localhost
+  connection: local
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Upgrade installed Debian-family packages
+      ansible.builtin.apt:
+        update_cache: true
+        upgrade: dist
+      environment:
+        DEBIAN_FRONTEND: noninteractive
+    - name: Read the reboot-required marker
+      ansible.builtin.stat:
+        path: /var/run/reboot-required
+      register: wildstone_reboot
+    - name: Reboot only when the reviewed typed parameter permits it
+      ansible.builtin.reboot:
+        reboot_timeout: 900
+      when: reboot_if_required | bool and wildstone_reboot.stat.exists

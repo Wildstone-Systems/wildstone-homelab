@@ -1,0 +1,4 @@
+wildstone-runplaybooks-catalog-v1
+os-update 1 os-update-v1 os-update.yml
+k3s-patch-update 1 k3s-patch-update-v1 k3s-upgrade.yml
+wardstone-update 1 wardstone-update-v1 wardstone-update.yml
