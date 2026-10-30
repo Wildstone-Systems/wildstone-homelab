@@ -138,6 +138,31 @@ func TestMountAccessPreflightOpensRootAsRequestedIdentity(t *testing.T) {
 	}
 }
 
+func TestMountAccessPreflightDoesNotRequireIdentityAccessToHostAncestors(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("requires root to create a host-only ancestor and identity-owned root")
+	}
+	const targetID = 65534
+	hostOnly := t.TempDir()
+	root := filepath.Join(hostOnly, "volume-data")
+	if err := os.Mkdir(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chown(root, targetID, targetID); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(hostOnly, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if got := runMountAccessCheck(context.Background(), root, targetID, targetID); got != wsv1.MountAccessFailureReason_MOUNT_ACCESS_FAILURE_REASON_UNSPECIFIED {
+		t.Fatalf("identity-owned root below host-only ancestor = %v, want success", got)
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("sentinel cleanup: entries=%v err=%v", entries, err)
+	}
+}
+
 func TestMountAccessPreflightReportsOnlyTargetAndClosedReason(t *testing.T) {
 	root := t.TempDir()
 	_, h := mountAccessHarness(t, "present", root)
