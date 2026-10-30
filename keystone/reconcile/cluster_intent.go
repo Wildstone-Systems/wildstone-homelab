@@ -34,6 +34,16 @@ func ClusterIntent(want resource.Resource, all []resource.Resource) (*WorkloadSp
 	if err != nil {
 		return nil, err
 	}
+	// A single supported architecture maps directly to Kubernetes's closed
+	// node-selector vocabulary. Both closed architectures need no selector.
+	if len(want.Container.Platforms) == 1 {
+		os, arch, ok := strings.Cut(want.Container.Platforms[0], "/")
+		if !ok {
+			return nil, fmt.Errorf("cluster: invalid workload platform %q", want.Container.Platforms[0])
+		}
+		req.Workload.NodeSelector["kubernetes.io/os"] = os
+		req.Workload.NodeSelector["kubernetes.io/arch"] = arch
+	}
 	ports := map[uint32]bool{}
 	for _, p := range want.Container.Expose {
 		ports[p] = true

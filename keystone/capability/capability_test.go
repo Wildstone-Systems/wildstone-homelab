@@ -55,6 +55,41 @@ func TestExpandSubstitutesParamAndStampsOwner(t *testing.T) {
 	}
 }
 
+func TestExpandStampsCanonicalPackagePlatformsOnEveryWorkload(t *testing.T) {
+	pkg := simplePackage()
+	pkg.Platforms = []pkgspec.Platform{pkgspec.PlatformLinuxARM64, pkgspec.PlatformLinuxAMD64}
+	pkg.Templates = append(pkg.Templates, `apiVersion: wildstone.dev/v1
+kind: Job
+metadata: { name: widget-job, node: "{{ .Params.node }}" }
+spec:
+  run:
+    image: "ghcr.io/example/widget@sha256:1111111111111111111111111111111111111111111111111111111111111111"
+`)
+
+	got, err := NewEngine().Expand(pkg, map[string]string{"node": "node-a"}, NewCatalog())
+	if err != nil {
+		t.Fatalf("Expand: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("resources = %d, want 2", len(got))
+	}
+	want := "linux/amd64,linux/arm64"
+	for _, r := range got {
+		var platforms []string
+		switch r.Kind {
+		case resource.KindContainer:
+			platforms = r.Container.Platforms
+		case resource.KindJob:
+			platforms = r.Job.Run.Platforms
+		default:
+			t.Fatalf("unexpected resource kind %s", r.Kind)
+		}
+		if joined := strings.Join(platforms, ","); joined != want {
+			t.Errorf("%s platforms = %q, want %q", r.Kind, joined, want)
+		}
+	}
+}
+
 func TestExpandRejectsYAMLInjectingParam(t *testing.T) {
 	pkg := simplePackage()
 	// A param value with an embedded newline + YAML key would, without

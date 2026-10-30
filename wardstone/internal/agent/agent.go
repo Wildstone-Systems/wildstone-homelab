@@ -182,7 +182,9 @@ import (
 // 34: EnsureContainer carries a numeric runtime identity and
 // InspectContainer returns authoritative identity/hardening metadata so an
 // unchanged spec-hash label cannot hide out-of-band Docker drift.
-const ProtocolMinor = 34
+// 35: HostFacts reports a bounded canonical architecture (amd64 or arm64),
+// so package platform eligibility can fail closed before workload mutation.
+const ProtocolMinor = 35
 
 // maxUpdateMsgBytes is the gRPC message size cap on both ends of the
 // session/join connections (ADR-W003 W5). SelfUpdate ships the new binary

@@ -605,7 +605,7 @@ func containerEqual(a, b *resource.ContainerSpec) bool {
 	if a == nil || b == nil {
 		return a == b
 	}
-	if backendOf(a) != backendOf(b) || a.Image != b.Image || a.Restart != b.Restart || a.NetworkMode != b.NetworkMode || !uint32SetEqual(a.Expose, b.Expose) {
+	if backendOf(a) != backendOf(b) || !stringSliceEqual(a.Platforms, b.Platforms) || a.Image != b.Image || a.Restart != b.Restart || a.NetworkMode != b.NetworkMode || !uint32SetEqual(a.Expose, b.Expose) {
 		return false
 	}
 	if len(a.Env) != len(b.Env) {

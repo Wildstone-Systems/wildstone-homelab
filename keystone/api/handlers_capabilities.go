@@ -709,7 +709,7 @@ func (s *Server) enableCapability(r *http.Request, id principal.Identity) (any, 
 	if err != nil {
 		return nil, http.StatusNotFound, err
 	}
-	return s.proposeCapabilityBackend(id, pkg, req.Params, req.Backend, req.DryRun)
+	return s.proposeCapabilityBackend(r.Context(), id, pkg, req.Params, req.Backend, req.DryRun)
 }
 
 // proposeCapability expands one catalog package with params and files
@@ -717,11 +717,11 @@ func (s *Server) enableCapability(r *http.Request, id principal.Identity) (any, 
 // the capability endpoint and the home-automation orchestration API
 // (#447), so a package step the orchestrator proposes is exactly the
 // plan the Services page would have made.
-func (s *Server) proposeCapability(id principal.Identity, pkg *pkgspec.Package, params map[string]string, dryRun bool) (any, int, error) {
-	return s.proposeCapabilityBackend(id, pkg, params, "", dryRun)
+func (s *Server) proposeCapability(ctx context.Context, id principal.Identity, pkg *pkgspec.Package, params map[string]string, dryRun bool) (any, int, error) {
+	return s.proposeCapabilityBackend(ctx, id, pkg, params, "", dryRun)
 }
 
-func (s *Server) proposeCapabilityBackend(id principal.Identity, pkg *pkgspec.Package, params map[string]string, backend string, dryRun bool) (any, int, error) {
+func (s *Server) proposeCapabilityBackend(ctx context.Context, id principal.Identity, pkg *pkgspec.Package, params map[string]string, backend string, dryRun bool) (any, int, error) {
 	if backend != "" && backend != "docker" && backend != "k3s" {
 		return nil, http.StatusBadRequest, fmt.Errorf("backend must be docker or k3s")
 	}
@@ -750,6 +750,9 @@ func (s *Server) proposeCapabilityBackend(id principal.Identity, pkg *pkgspec.Pa
 		// Expansion failures are the operator's input being wrong — a
 		// missing required param, an unsatisfied requirement — not a
 		// server fault.
+		return nil, http.StatusBadRequest, err
+	}
+	if err := s.checkPackagePlatforms(ctx, pkg, rendered); err != nil {
 		return nil, http.StatusBadRequest, err
 	}
 	// Reconfiguration without a choice keeps this installation's accepted

@@ -180,6 +180,12 @@ type ContainerSpec struct {
 	// Docker for every Statefile written before the k3s opt-in existed.
 	// An explicit k3s choice is reviewed as part of the resource digest.
 	Backend string `yaml:"backend,omitempty" json:"backend,omitempty"`
+	// Platforms is the closed package-declared execution constraint carried
+	// into approved desired state. Keystone rechecks current typed HostFacts
+	// immediately before dispatch. It is deliberately part of the reviewed
+	// spec and runtime hash: changing the eligible execution set is an approved
+	// workload update, not invisible package metadata.
+	Platforms []string `yaml:"platforms,omitempty" json:"platforms,omitempty"`
 	// Image must be digest-pinned (ADR-W003 A4.2 regex).
 	Image string            `yaml:"image"`
 	Env   map[string]string `yaml:"env,omitempty"`
@@ -1409,6 +1415,18 @@ func validateContainer(r *Resource) error {
 	}
 	if r.Container.Backend != "" && r.Container.Backend != "docker" && r.Container.Backend != "k3s" {
 		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.backend", Msg: "must be docker or k3s"}
+	}
+	seenPlatforms := map[string]bool{}
+	for i, platform := range r.Container.Platforms {
+		if platform != "linux/amd64" && platform != "linux/arm64" {
+			return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: fmt.Sprintf("spec.platforms[%d]", i),
+				Msg: fmt.Sprintf("%q is not supported: use linux/amd64 or linux/arm64", platform)}
+		}
+		if seenPlatforms[platform] {
+			return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: fmt.Sprintf("spec.platforms[%d]", i),
+				Msg: fmt.Sprintf("duplicates %q", platform)}
+		}
+		seenPlatforms[platform] = true
 	}
 	if !digestPinRegexp.MatchString(r.Container.Image) {
 		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.image", Msg: "must be digest-pinned (repo@sha256:<64 hex>), tags are refused"}

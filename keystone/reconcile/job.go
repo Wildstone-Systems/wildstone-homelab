@@ -190,6 +190,10 @@ func (r *Reconciler) applyJobStep(ctx context.Context, nodeID string, step plan.
 			return sr
 		}
 		run := jobRunSpec(want.Job)
+		if ne := r.refuseIfPlatformMismatch(ctx, nodeID, run.Platforms); ne != "" {
+			sr.Error = ne
+			return sr
+		}
 		if ne := r.refuseIfAgentTooOld(nodeID, step, run); ne != "" {
 			sr.Error = ne
 			return sr

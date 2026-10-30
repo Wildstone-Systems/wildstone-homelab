@@ -95,6 +95,10 @@ type Node struct {
 	ID            string
 	ProtocolMinor uint32
 	Connected     bool
+	// OS/Architecture are the bounded HostFacts platform. Empty values let
+	// tests model old agents and missing facts without inventing a match.
+	OS           string
+	Architecture string
 
 	// What the read-only probes report (#434, #436).
 	Interfaces []*wsv1.NodeInterface
@@ -151,7 +155,7 @@ func New() *Fleet { return &Fleet{nodes: map[string]*Node{}} }
 func (f *Fleet) Add(id string, minor uint32) *Node {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	n := &Node{ID: id, ProtocolMinor: minor, Connected: true,
+	n := &Node{ID: id, ProtocolMinor: minor, Connected: true, OS: "linux", Architecture: "amd64",
 		Containers: map[string]*Container{}, Volumes: map[string]bool{}, VolumeFiles: map[string]map[string][]byte{},
 		Secrets: map[string]uint32{}, Files: map[string][]byte{}, fileSource: map[string]string{}}
 	f.nodes[id] = n
@@ -527,7 +531,7 @@ func (n *Node) handle(op *wsv1.Operation, kind string, rec *Op) *wsv1.OpResult {
 	case *wsv1.Operation_Health:
 		return &wsv1.OpResult{Result: &wsv1.OpResult_Health{Health: &wsv1.HealthResult{Ok: true, Detail: "fakenode"}}}
 	case *wsv1.Operation_HostFacts:
-		return &wsv1.OpResult{Result: &wsv1.OpResult_HostFacts{HostFacts: &wsv1.HostFactsResult{Hostname: n.ID, Os: "linux", NumCpu: 4,
+		return &wsv1.OpResult{Result: &wsv1.OpResult_HostFacts{HostFacts: &wsv1.HostFactsResult{Hostname: n.ID, Os: n.OS, Architecture: n.Architecture, NumCpu: 4,
 			MemTotalBytes: 8 << 30, RootDiskTotalBytes: 64 << 30, RootDiskFreeBytes: 32 << 30, AgentVersion: "fakenode"}}}
 	case *wsv1.Operation_DiskSpace:
 		return &wsv1.OpResult{Result: &wsv1.OpResult_DiskSpace{DiskSpace: &wsv1.DiskSpaceResult{TotalBytes: 64 << 30, FreeBytes: 32 << 30,

@@ -13,12 +13,15 @@ import (
 func TestNodeFactsWithoutHouseholdHome(t *testing.T) {
 	h := newHarness(t)
 	applier := &factsApplier{facts: &wsv1.HostFactsResult{
+		Os: "linux", Architecture: "arm64",
 		Engine: "k3s", EngineVersion: "v1.37.1+k3s1",
 		EngineLeader: true, LeaderEpoch: 5,
 	}}
 	h.s.Agents = applier
 	var got struct {
 		Node          string `json:"node"`
+		OS            string `json:"os"`
+		Architecture  string `json:"architecture"`
 		Engine        string `json:"engine"`
 		EngineVersion string `json:"engineVersion"`
 		EngineLeader  bool   `json:"engineLeader"`
@@ -27,7 +30,7 @@ func TestNodeFactsWithoutHouseholdHome(t *testing.T) {
 	if resp := h.do(runtimedb.RoleOperator, http.MethodGet, "/api/v1/nodes/node-a/facts", nil, &got); resp.StatusCode != http.StatusOK {
 		t.Fatalf("node facts = %d, want 200", resp.StatusCode)
 	}
-	if got.Node != "node-a" || got.Engine != "k3s" || got.EngineVersion != "v1.37.1+k3s1" || !got.EngineLeader || got.LeaderEpoch != 5 {
+	if got.Node != "node-a" || got.OS != "linux" || got.Architecture != "arm64" || got.Engine != "k3s" || got.EngineVersion != "v1.37.1+k3s1" || !got.EngineLeader || got.LeaderEpoch != 5 {
 		t.Fatalf("node facts = %+v", got)
 	}
 	applier.facts.EngineLeader, applier.facts.LeaderEpoch = false, 0

@@ -16,6 +16,7 @@ metadata:
   version: 1.0.0
   capability: photos
   profile: immich
+platforms: [linux/amd64, linux/arm64]
 requires:
   - { trait: identity, mode: oidc }
 params:
@@ -62,6 +63,12 @@ func TestLoadAndParseWellFormed(t *testing.T) {
 	if len(pkg.AgentTools) != 1 {
 		t.Fatalf("AgentTools = %d, want 1", len(pkg.AgentTools))
 	}
+	if len(pkg.Platforms) != 2 || pkg.Platforms[0] != PlatformLinuxAMD64 || pkg.Platforms[1] != PlatformLinuxARM64 {
+		t.Fatalf("Platforms = %v", pkg.Platforms)
+	}
+	if !pkg.SupportsPlatform("linux", "arm64") || pkg.SupportsPlatform("linux", "riscv64") {
+		t.Fatalf("SupportsPlatform returned the wrong closed-vocabulary match")
+	}
 
 	dir := t.TempDir()
 	path := filepath.Join(dir, "package.yaml")
@@ -74,6 +81,38 @@ func TestLoadAndParseWellFormed(t *testing.T) {
 	}
 	if loaded.Metadata.Name != pkg.Metadata.Name {
 		t.Errorf("Load mismatch: %q vs %q", loaded.Metadata.Name, pkg.Metadata.Name)
+	}
+}
+
+func TestValidatePlatforms(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		platforms string
+		want      string
+	}{
+		{name: "omitted", platforms: "", want: ""},
+		{name: "amd64", platforms: "platforms: [linux/amd64]\n", want: ""},
+		{name: "arm64", platforms: "platforms: [linux/arm64]\n", want: ""},
+		{name: "empty list", platforms: "platforms: []\n", want: "must not be empty"},
+		{name: "empty", platforms: "platforms: ['']\n", want: "platforms[0]"},
+		{name: "duplicate", platforms: "platforms: [linux/amd64, linux/amd64]\n", want: "declared twice"},
+		{name: "unknown os", platforms: "platforms: [windows/amd64]\n", want: "not supported"},
+		{name: "unknown architecture", platforms: "platforms: [linux/riscv64]\n", want: "not supported"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			doc := strings.Replace(wellFormed, "platforms: [linux/amd64, linux/arm64]\n", tc.platforms, 1)
+			pkg, err := Parse([]byte(doc))
+			if err != nil {
+				t.Fatalf("Parse: %v", err)
+			}
+			err = pkg.Validate()
+			if tc.want == "" && err != nil {
+				t.Fatalf("Validate: %v", err)
+			}
+			if tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)) {
+				t.Fatalf("Validate = %v, want %q", err, tc.want)
+			}
+		})
 	}
 }
 

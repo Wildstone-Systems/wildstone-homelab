@@ -66,6 +66,19 @@ func TestEveryShapeLeavesTODOs(t *testing.T) {
 	}
 }
 
+func TestContainerScaffoldsExplainPlatformDeclaration(t *testing.T) {
+	for _, shape := range []string{"service", "sidecar"} {
+		content, err := Render(ScaffoldOptions{Name: "example-app", Shape: shape})
+		if err != nil {
+			t.Fatal(err)
+		}
+		body := string(content)
+		if !strings.Contains(body, "platforms: [linux/amd64, linux/arm64]") || !strings.Contains(body, "fail closed") {
+			t.Errorf("%s scaffold does not explain the closed platform declaration", shape)
+		}
+	}
+}
+
 // TestScaffoldNamesReachEverythingDerivedFromThem. The package name
 // becomes a directory, resource names, a container name and — with
 // dashes mapped to underscores — an event type namespace. A name that

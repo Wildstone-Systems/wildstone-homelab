@@ -52,7 +52,7 @@ func (s *Server) nodeFacts(r *http.Request, _ principal.Identity) (any, int, err
 		return nil, http.StatusBadGateway, fmt.Errorf("node %s returned no HostFacts", node)
 	}
 	return map[string]any{
-		"node": node, "engine": facts.GetEngine(),
+		"node": node, "os": facts.GetOs(), "architecture": facts.GetArchitecture(), "engine": facts.GetEngine(),
 		"engineVersion": facts.GetEngineVersion(),
 		"engineLeader":  facts.GetEngineLeader(),
 		"leaderEpoch":   facts.GetLeaderEpoch(),

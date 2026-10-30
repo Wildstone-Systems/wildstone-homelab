@@ -4988,7 +4988,12 @@ type HostFactsResult struct {
 	// opened. A Lease holder alone is not an active leader.
 	EngineLeader bool `protobuf:"varint,14,opt,name=engine_leader,json=engineLeader,proto3" json:"engine_leader,omitempty"`
 	// The active local term's epoch, or zero when engine_leader is false.
-	LeaderEpoch   uint64 `protobuf:"varint,15,opt,name=leader_epoch,json=leaderEpoch,proto3" json:"leader_epoch,omitempty"`
+	LeaderEpoch uint64 `protobuf:"varint,15,opt,name=leader_epoch,json=leaderEpoch,proto3" json:"leader_epoch,omitempty"`
+	// Canonical host architecture (protocol minor 35). The initial closed
+	// vocabulary is "amd64" and "arm64", matching kubernetes.io/arch.
+	// Empty means an older agent or an unsupported/unknown architecture;
+	// callers must not infer a match from os alone.
+	Architecture  string `protobuf:"bytes,16,opt,name=architecture,proto3" json:"architecture,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -5126,6 +5131,13 @@ func (x *HostFactsResult) GetLeaderEpoch() uint64 {
 		return x.LeaderEpoch
 	}
 	return 0
+}
+
+func (x *HostFactsResult) GetArchitecture() string {
+	if x != nil {
+		return x.Architecture
+	}
+	return ""
 }
 
 type Health struct {
@@ -9339,7 +9351,7 @@ const file_wardstone_v1_wardstone_proto_rawDesc = "" +
 	"\x15ReadManagedFileResult\x12\x18\n" +
 	"\acontent\x18\x01 \x01(\fR\acontent\x12*\n" +
 	"\x11source_sha256_hex\x18\x02 \x01(\tR\x0fsourceSha256Hex\"\v\n" +
-	"\tHostFacts\"\xa3\x04\n" +
+	"\tHostFacts\"\xc7\x04\n" +
 	"\x0fHostFactsResult\x12\x1a\n" +
 	"\bhostname\x18\x01 \x01(\tR\bhostname\x12\x0e\n" +
 	"\x02os\x18\x02 \x01(\tR\x02os\x12\x16\n" +
@@ -9356,7 +9368,8 @@ const file_wardstone_v1_wardstone_proto_rawDesc = "" +
 	"\x06engine\x18\f \x01(\tR\x06engine\x12%\n" +
 	"\x0eengine_version\x18\r \x01(\tR\rengineVersion\x12#\n" +
 	"\rengine_leader\x18\x0e \x01(\bR\fengineLeader\x12!\n" +
-	"\fleader_epoch\x18\x0f \x01(\x04R\vleaderEpoch\"\b\n" +
+	"\fleader_epoch\x18\x0f \x01(\x04R\vleaderEpoch\x12\"\n" +
+	"\farchitecture\x18\x10 \x01(\tR\farchitecture\"\b\n" +
 	"\x06Health\"6\n" +
 	"\fHealthResult\x12\x0e\n" +
 	"\x02ok\x18\x01 \x01(\bR\x02ok\x12\x16\n" +
