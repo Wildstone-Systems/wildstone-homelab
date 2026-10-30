@@ -622,8 +622,21 @@ func (a *Agent) ensureContainer(ctx context.Context, op *wsv1.EnsureContainer) (
 		}
 		if strings.Contains(m.GetSource(), "/") { // host path, not a named volume
 			if _, oerr := a.resolveManaged(m.GetSource()); oerr != nil {
+				if op.GetPreflightMountAccess() && !m.GetReadOnly() {
+					return nil, mountAccessError(m.GetTarget(), wsv1.MountAccessFailureReason_MOUNT_ACCESS_FAILURE_REASON_UNAVAILABLE)
+				}
 				return nil, oerr
 			}
+		}
+		// This check used to run only while constructing Docker binds, after
+		// an existing container could already have been removed. Keep every
+		// mount refusal in the validation phase, and in particular before an
+		// opted-in access probe can touch its root.
+		if oerr := a.checkBindSource(m.GetSource()); oerr != nil {
+			if op.GetPreflightMountAccess() && !m.GetReadOnly() {
+				return nil, mountAccessError(m.GetTarget(), wsv1.MountAccessFailureReason_MOUNT_ACCESS_FAILURE_REASON_UNAVAILABLE)
+			}
+			return nil, oerr
 		}
 	}
 	// Materialize secret/<name> env references from the node store
@@ -690,6 +703,19 @@ func (a *Agent) ensureContainer(ctx context.Context, op *wsv1.EnsureContainer) (
 	runtimeUser, oe := runtimeIdentityToDockerUser(op.GetRuntimeIdentity())
 	if oe != nil {
 		return nil, oe
+	}
+	if op.GetPreflightMountAccess() {
+		if op.GetRuntimeIdentity() == nil {
+			return nil, opErr(wsv1.ErrorCode_ERROR_CODE_INVALID,
+				"mount access preflight requires a numeric runtime identity")
+		}
+		if op.GetRuntimeIdentity().Gid == nil {
+			return nil, opErr(wsv1.ErrorCode_ERROR_CODE_INVALID,
+				"mount access preflight requires an explicit numeric gid")
+		}
+		if oe := a.preflightMountAccess(ctx, op); oe != nil {
+			return nil, oe
+		}
 	}
 	// Host networking (protocol minor 23), up front for the same reason
 	// as everything above: an incompatible combination must fail with the
@@ -806,9 +832,6 @@ func (a *Agent) ensureContainer(ctx context.Context, op *wsv1.EnsureContainer) (
 	}
 	var binds []string
 	for _, m := range op.GetMounts() {
-		if oe := a.checkBindSource(m.GetSource()); oe != nil {
-			return nil, oe
-		}
 		b := m.GetSource() + ":" + m.GetTarget()
 		if m.GetReadOnly() {
 			b += ":ro"

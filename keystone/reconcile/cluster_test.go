@@ -182,12 +182,13 @@ func TestEveryContainerFieldIsCarriedOrHandled(t *testing.T) {
 		"NoNewPrivileges": true, "Resources": true, "ShmSize": true, "NetworkMode": true,
 	}
 	handled := map[string]string{
-		"Backend":         "selects the cluster translator before request construction",
-		"Platforms":       "ClusterIntent maps one closed architecture to standard node selectors; dispatch also rechecks current HostFacts",
-		"Expose":          "ClusterIntent turns internal ports into bounded Service ports",
-		"Restart":         "a workload always restarts; any other policy is refused",
-		"RunNetwork":      "execution-only metadata for Keystone-run one-shots, never serialized",
-		"RuntimeIdentity": "refused until the k3s backend implements numeric runAsUser/runAsGroup",
+		"Backend":              "selects the cluster translator before request construction",
+		"Platforms":            "ClusterIntent maps one closed architecture to standard node selectors; dispatch also rechecks current HostFacts",
+		"Expose":               "ClusterIntent turns internal ports into bounded Service ports",
+		"Restart":              "a workload always restarts; any other policy is refused",
+		"RunNetwork":           "execution-only metadata for Keystone-run one-shots, never serialized",
+		"RuntimeIdentity":      "refused until the k3s backend implements numeric runAsUser/runAsGroup",
+		"PreflightMountAccess": "refused until the k3s backend implements effective-identity storage checks",
 	}
 	tp := reflect.TypeOf(resource.ContainerSpec{})
 	for i := 0; i < tp.NumField(); i++ {
@@ -211,5 +212,13 @@ func TestApplyWorkloadRefusesRuntimeIdentityUntilBackendSupportsIt(t *testing.T)
 	r.Container.RuntimeIdentity = testRuntimeIdentity(1000)
 	if _, err := cluster.applyWorkload(r, pkgspec.ComponentDecl{}, WorkloadPolicy{}, nil, testAuthority); err == nil || !strings.Contains(err.Error(), "runtimeIdentity") {
 		t.Fatalf("err = %v, want runtimeIdentity refusal", err)
+	}
+}
+
+func TestApplyWorkloadRefusesMountAccessPreflightUntilBackendSupportsIt(t *testing.T) {
+	r := clusterContainer()
+	r.Container.PreflightMountAccess = true
+	if _, err := cluster.applyWorkload(r, pkgspec.ComponentDecl{}, WorkloadPolicy{}, nil, testAuthority); err == nil || !strings.Contains(err.Error(), "preflightMountAccess") {
+		t.Fatalf("err = %v, want preflightMountAccess refusal", err)
 	}
 }

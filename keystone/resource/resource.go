@@ -260,6 +260,10 @@ type ContainerSpec struct {
 	// before. Numeric fields deliberately cannot carry a host account name,
 	// passwd lookup, path or other free-form account expression.
 	RuntimeIdentity *ContainerRuntimeIdentity `yaml:"runtimeIdentity,omitempty" json:"runtimeIdentity,omitempty"`
+	// PreflightMountAccess proves each declared read-write mount is usable by
+	// RuntimeIdentity immediately before container create or replacement.
+	// Omission preserves the previous spec hash and behavior.
+	PreflightMountAccess bool `yaml:"preflightMountAccess,omitempty" json:"preflightMountAccess,omitempty"`
 	// RunNetwork is execution-only metadata for Keystone-created one-shot
 	// containers. It is deliberately absent from YAML and spec hashing: a
 	// package cannot choose a Docker network, while the backup engine can
@@ -1549,6 +1553,14 @@ func validateContainerHardening(r *Resource) error {
 			return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.runtimeIdentity.gid",
 				Msg: fmt.Sprintf("%d must be between 0 and %d", *id.GID, maxContainerRuntimeID)}
 		}
+	}
+	if c.PreflightMountAccess && c.RuntimeIdentity == nil {
+		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.preflightMountAccess",
+			Msg: "requires runtimeIdentity so the effective uid/gid is explicit"}
+	}
+	if c.PreflightMountAccess && c.RuntimeIdentity.GID == nil {
+		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "spec.runtimeIdentity.gid",
+			Msg: "is required when preflightMountAccess is enabled"}
 	}
 	addedSet := make(map[string]bool, len(c.CapAdd))
 	for _, a := range c.CapAdd {

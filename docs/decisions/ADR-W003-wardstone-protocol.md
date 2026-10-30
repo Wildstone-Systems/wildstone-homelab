@@ -398,6 +398,13 @@ Create only when that durable Plan/step stamp matches the still-queued exact
 Create approval; an unrelated Statefile revision may advance without granting
 authority over an object written by another Plan.
 
+Protocol minor 37 adds an opt-in effective-identity mount-access preflight to
+the typed `EnsureContainer` operation. Wardstone derives the checked roots from
+the approved mounts and numeric runtime UID/GID, then performs a bounded
+create/write/sync/rename/delete sequence in an isolated child before any
+existing container is stopped. The wire carries no helper command or new host
+path, and failures return only the container target plus a closed reason.
+
 ### Sizing note for the planner
 
 W1–W4 are small (each well under a day of subagent work); W5 and W6c are

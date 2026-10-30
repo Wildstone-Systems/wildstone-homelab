@@ -208,6 +208,11 @@ message OpResult {
 message OpError {
   ErrorCode code = 1;
   string message = 2;
+  // Present only when an opted-in container mount-access preflight fails
+  // (protocol minor 37). The source host path and raw filesystem error are
+  // deliberately absent: the reviewed container target and a closed reason
+  // are the complete public diagnostic.
+  MountAccessFailure mount_access_failure = 3;
 }
 
 enum ErrorCode {
@@ -352,6 +357,14 @@ message EnsureContainer {
   // optional gid likewise distinguishes uid-only from uid:gid. Keystone never
   // sends names or other free-form account expressions.
   ContainerRuntimeIdentity runtime_identity = 19;
+
+  // Before replacing or creating the container, prove that every declared
+  // read-write mount is usable by runtime_identity (protocol minor 37).
+  // Wardstone derives the checked roots from mounts; no command, executable,
+  // account name, or additional host path crosses the wire. Read-only mounts
+  // are never mutated. Keystone refuses this option without runtime_identity
+  // and refuses agents below minor 37 rather than letting one ignore it.
+  bool preflight_mount_access = 20;
 }
 
 // ContainerNetworkMode is a closed set on purpose: Docker also accepts
@@ -1506,4 +1519,22 @@ message RunPlaybookResult {
   bool reboot_required = 4;
   string before_version = 5;
   string after_version = 6;
+}
+
+// Appended to preserve the declaration indices of every pre-minor-37 wire
+// type in generated code. References above may point forward in protobuf.
+enum MountAccessFailureReason {
+  MOUNT_ACCESS_FAILURE_REASON_UNSPECIFIED = 0;
+  MOUNT_ACCESS_FAILURE_REASON_UNAVAILABLE = 1;
+  MOUNT_ACCESS_FAILURE_REASON_IDENTITY_DENIED = 2;
+  MOUNT_ACCESS_FAILURE_REASON_READ_ONLY = 3;
+  MOUNT_ACCESS_FAILURE_REASON_TIMEOUT = 4;
+  MOUNT_ACCESS_FAILURE_REASON_CLEANUP_INCOMPLETE = 5;
+  MOUNT_ACCESS_FAILURE_REASON_UNSUPPORTED_BACKEND = 6;
+}
+
+message MountAccessFailure {
+  // Container-local target from the approved Mount, never its host source.
+  string target = 1;
+  MountAccessFailureReason reason = 2;
 }

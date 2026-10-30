@@ -136,6 +136,12 @@ const HardeningProtocolMinor = 18
 // refuse before mutation whenever runtimeIdentity is present.
 const RuntimeIdentityProtocolMinor = 34
 
+// MountAccessPreflightProtocolMinor is the first minor that proves declared
+// read-write mounts under the requested effective identity before replacing a
+// container. An older Wardstone would ignore the opt-in and perform the
+// destructive create/update without the approved safety check.
+const MountAccessPreflightProtocolMinor = 37
+
 // IPCLockProtocolMinor is the wardstone protocol minor whose closed
 // capability allowlist first admits IPC_LOCK. An older agent still
 // refuses it as FORBIDDEN, so a spec asking for it is gated on this
@@ -175,6 +181,9 @@ func (s *ContainerSpec) RequiredProtocolMinor() uint32 {
 	}
 	if s.RuntimeIdentity != nil {
 		require(RuntimeIdentityProtocolMinor)
+	}
+	if s.PreflightMountAccess {
+		require(MountAccessPreflightProtocolMinor)
 	}
 	if s.HostNetwork() {
 		require(HostNetworkProtocolMinor)
