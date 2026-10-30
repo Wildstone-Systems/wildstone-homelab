@@ -27,7 +27,7 @@ func ResolveEmbedder(db *runtimedb.DB, agent string, privacy *runtimedb.PrivacyT
 		if privacy == nil {
 			return runtimedb.ErrPrivacy
 		}
-		if err := privacy.Check(); err != nil {
+		if err := privacy.CheckModel(b.ModelKind); err != nil {
 			return err
 		}
 		current, err := db.GetButlerBySeq(b.Seq)

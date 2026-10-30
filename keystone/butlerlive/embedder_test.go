@@ -127,6 +127,29 @@ func TestResolvedEmbedderFailsClosedWhenAssignmentChanges(t *testing.T) {
 	}
 }
 
+func TestResolvedEmbedderRejectsProcessingClassChangedBeforeResolution(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		fmt.Fprint(w, `{"embeddings":[[1,2,3]]}`)
+	}))
+	defer server.Close()
+	db, privacy := embedderFixture(t, server.URL, runtimedb.ModelLocal)
+	if err := db.UpsertModel(runtimedb.Model{Name: "cloud-route", Kind: runtimedb.ModelCloud, Provider: "ollama", ProviderModel: "embed-model", Endpoint: server.URL, Readiness: runtimedb.ModelReady, Enabled: true}, "owner"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := db.SetButlerRoute("memory-agent", "cloud-route", "owner"); err != nil {
+		t.Fatal(err)
+	}
+	embedder, err := ResolveEmbedder(db, "memory-agent", privacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = embedder.Embed(context.Background(), "synthetic memory"); !errors.Is(err, runtimedb.ErrPrivacy) || calls.Load() != 0 {
+		t.Fatalf("changed processing class: err=%v calls=%d", err, calls.Load())
+	}
+}
+
 func TestResolvedEmbedderRechecksAssignmentBeforeRetry(t *testing.T) {
 	var calls atomic.Int32
 	var db *runtimedb.DB

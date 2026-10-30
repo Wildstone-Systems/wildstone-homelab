@@ -150,8 +150,18 @@ func TrackMemoryPrivacy(ctx context.Context, seq int64, err error) error {
 	return nil
 }
 func (p *PrivacyTurn) Check() error {
+	return p.CheckModel(p.model)
+}
+
+// CheckModel verifies the turn against the processing class that will receive
+// its content. A turn's class is fixed at admission; silently substituting a
+// different class could apply local-only policy to a cloud attempt.
+func (p *PrivacyTurn) CheckModel(model string) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if model != p.model {
+		return ErrPrivacy
+	}
 	if err := p.includeTaskSources(); err != nil {
 		return err
 	}
