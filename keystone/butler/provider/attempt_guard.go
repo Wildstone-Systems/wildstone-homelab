@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"errors"
 	"net/http"
 )
 
@@ -23,10 +24,22 @@ func WithAttemptCheck(ctx context.Context, check func() error) context.Context {
 
 type checkedTransport struct{ base http.RoundTripper }
 
+type attemptCheckError struct{ error }
+
+func (e attemptCheckError) Unwrap() error { return e.error }
+
+func unwrapAttemptCheckError(err error) (error, bool) {
+	var checked attemptCheckError
+	if errors.As(err, &checked) {
+		return checked.error, true
+	}
+	return nil, false
+}
+
 func (t checkedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if check, _ := req.Context().Value(attemptCheckKey{}).(func() error); check != nil {
 		if err := check(); err != nil {
-			return nil, err
+			return nil, attemptCheckError{err}
 		}
 	}
 	return t.base.RoundTrip(req)

@@ -155,20 +155,25 @@ butlerlive already takes it.
 Indexing is a job rather than an inline write because embedding is slow
 and a person waiting on an answer should not wait on it.
 
-### 4. Embeddings — the one genuine gap
+### 4. Embeddings — adapter delivered, indexing still pending
 
-There is no embedding client. The store side is ready: with a query
+The bounded provider seam and Ollama `/api/embed` adapter now exist. The
+adapter accepts text only, takes its endpoint and model from the exact Agent
+assignment, rejects oversized or malformed results, pins the first successful
+dimension, and rechecks the live route and privacy policy before every HTTP
+attempt and after return. The store side is ready: with a query
 embedding, `SearchIndex` also retrieves rows by cosine similarity alone
 (floor `minSemanticSimilarity`) under the same permission predicate as the
-keyword path. Nothing yet produces or passes embeddings.
-`IndexDocument.Embedding` is optional and
+keyword path. The coordinator-gated index worker and recall call sites do not
+yet resolve the adapter or pass embeddings, so keyword-only remains an
+explicit supported deployment. `IndexDocument.Embedding` is optional and
 its comment is explicit that nil "is a working configuration and not a
 degraded one", so **bm25 alone works on day one** and A3's "hybrid
 meaning/keyword" is reachable afterwards.
 
-Ollama serves `/api/embeddings`. It wants a `provider.Embedder` seam
-alongside the chat provider, wired the same way and from the same
-assignment, so a Butler's memory is embedded by a model the household
+Ollama serves `/api/embed`. The `provider.Embedder` seam sits alongside the
+chat provider and is resolved from the same assignment, so a Butler's memory
+is embedded by a model the household
 chose. `butler_index_measurements` exists to compare keyword against
 hybrid on real data, which makes the upgrade a measurement rather than
 an opinion.
@@ -194,7 +199,7 @@ an opinion.
      and the tool refuses rather than storing the wrong half.
    - A note is indexed inline rather than queued. Step 3's queue is for
      documents, where the slow part is the embedding; a note is one row
-     and there is no embedder, so queueing it would mean telling
+     and no producer resolves the embedder yet, so queueing it would mean telling
      somebody it is remembered while `recall` cannot find it.
    - The seams moved from `cmd/keystone` to `butlerstore`, beside the
      ledger. The read path could live in a closure in a main function;
