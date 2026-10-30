@@ -1693,6 +1693,10 @@ func (r *Reconciler) applyContainerStep(ctx context.Context, nodeID string, step
 			sr.Error = "internal: no desired Container spec for " + step.Name
 			return sr
 		}
+		if ne := r.refuseIfPlatformMismatch(ctx, nodeID, want.Metadata.Platforms); ne != "" {
+			sr.Error = ne
+			return sr
+		}
 		// Pull before ensure: the agent's ensureContainer deliberately
 		// never pulls (closed op surface — creation and image fetching are
 		// separate audited operations), and digest-pinned refs are never

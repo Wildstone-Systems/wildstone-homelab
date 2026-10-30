@@ -159,6 +159,10 @@ type Metadata struct {
 	// anything not produced by a package; readers must treat empty as
 	// "unknown" rather than "not mine".
 	Package string `yaml:"package,omitempty"`
+	// Platforms is the package's approved workload platform constraint.
+	// It travels with desired state so reconciliation can recheck the node
+	// immediately before dispatch, after the proposal-time check.
+	Platforms string `yaml:"platforms,omitempty"`
 	// Node is the Wardstone node id this resource is applied to. Required
 	// for node-scoped kinds and rejected for the rest; the registry's
 	// nodeScoped flag is the single source of that split, and Validate
@@ -1359,6 +1363,18 @@ func (r *Resource) Validate() error {
 	if !entry.nodeScoped && r.Metadata.Node != "" {
 		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "metadata.node",
 			Msg: fmt.Sprintf("must be empty: %s is applied through a provider, not a node agent", r.Kind)}
+	}
+	if r.Metadata.Platforms != "" && r.Kind != KindContainer && r.Kind != KindJob {
+		return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "metadata.platforms", Msg: "only Container and Job workloads may declare platforms"}
+	}
+	if r.Metadata.Platforms != "" {
+		seenPlatforms := map[string]bool{}
+		for _, platform := range strings.Split(r.Metadata.Platforms, ",") {
+			if platform != "linux/amd64" && platform != "linux/arm64" || seenPlatforms[platform] {
+				return &ValidationError{Kind: r.Kind, Name: r.Metadata.Name, Field: "metadata.platforms", Msg: "must contain distinct supported platforms (linux/amd64, linux/arm64)"}
+			}
+			seenPlatforms[platform] = true
+		}
 	}
 	if err := r.validateSpecExclusivity(); err != nil {
 		return err

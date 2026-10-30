@@ -408,6 +408,9 @@ func specEqual(a, b resource.Resource) bool {
 	if a.Kind != b.Kind {
 		return false
 	}
+	if (a.Kind == resource.KindContainer || a.Kind == resource.KindJob) && a.Metadata.Platforms != b.Metadata.Platforms {
+		return false
+	}
 	switch a.Kind {
 	case resource.KindContainer:
 		return containerEqual(a.Container, b.Container)

@@ -34,6 +34,13 @@ func ClusterIntent(want resource.Resource, all []resource.Resource) (*WorkloadSp
 	if err != nil {
 		return nil, err
 	}
+	if want.Metadata.Platforms != "" {
+		req.Workload.NodeSelector["kubernetes.io/os"] = "linux"
+		if !strings.Contains(want.Metadata.Platforms, ",") {
+			_, arch, _ := strings.Cut(want.Metadata.Platforms, "/")
+			req.Workload.NodeSelector["kubernetes.io/arch"] = arch
+		}
+	}
 	ports := map[uint32]bool{}
 	for _, p := range want.Container.Expose {
 		ports[p] = true

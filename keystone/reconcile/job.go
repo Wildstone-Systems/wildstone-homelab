@@ -189,6 +189,10 @@ func (r *Reconciler) applyJobStep(ctx context.Context, nodeID string, step plan.
 			sr.Error = "internal: no desired Job spec for " + step.Name
 			return sr
 		}
+		if ne := r.refuseIfPlatformMismatch(ctx, nodeID, want.Metadata.Platforms); ne != "" {
+			sr.Error = ne
+			return sr
+		}
 		run := jobRunSpec(want.Job)
 		if ne := r.refuseIfAgentTooOld(nodeID, step, run); ne != "" {
 			sr.Error = ne
