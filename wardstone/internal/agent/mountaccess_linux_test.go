@@ -86,6 +86,60 @@ func TestMountAccessPreflightUsesEffectiveIdentityAndLeavesCurrentWorkload(t *te
 	}
 }
 
+func TestMountAccessPreflightClearsAgentSupplementaryGroups(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("requires root to install a different child identity")
+	}
+	groups, err := os.Getgroups()
+	if err != nil {
+		t.Fatal(err)
+	}
+	const targetID = 65534
+	group := -1
+	for _, candidate := range groups {
+		if candidate != targetID {
+			group = candidate
+			break
+		}
+	}
+	if group < 0 {
+		t.Skip("agent has no distinct supplementary group")
+	}
+	root := t.TempDir()
+	if err := os.Chmod(filepath.Dir(root), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chown(root, 0, group); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(root, 0o770); err != nil {
+		t.Fatal(err)
+	}
+	if got := runMountAccessCheck(context.Background(), root, targetID, targetID); got != wsv1.MountAccessFailureReason_MOUNT_ACCESS_FAILURE_REASON_IDENTITY_DENIED {
+		t.Fatalf("supplementary-group-only access = %v, want identity denied", got)
+	}
+}
+
+func TestMountAccessPreflightOpensRootAsRequestedIdentity(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("requires root to create an identity-owned fixture")
+	}
+	const targetID = 65534
+	root := t.TempDir()
+	if err := os.Chmod(filepath.Dir(root), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chown(root, targetID, targetID); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if got := runMountAccessCheck(context.Background(), root, targetID, targetID); got != wsv1.MountAccessFailureReason_MOUNT_ACCESS_FAILURE_REASON_UNSPECIFIED {
+		t.Fatalf("identity-owned root = %v, want success", got)
+	}
+}
+
 func TestMountAccessPreflightReportsOnlyTargetAndClosedReason(t *testing.T) {
 	root := t.TempDir()
 	_, h := mountAccessHarness(t, "present", root)
@@ -186,8 +240,8 @@ func TestMountAccessRefusesRootReplacementAfterProbe(t *testing.T) {
 		}
 	}
 	t.Cleanup(func() { mountAccessPostCheck = previous })
-	if got := runMountAccessCheck(context.Background(), root, uint32(os.Getuid()), uint32(os.Getgid())); got != wsv1.MountAccessFailureReason_MOUNT_ACCESS_FAILURE_REASON_UNAVAILABLE {
-		t.Fatalf("replaced root = %v, want unavailable", got)
+	if got := mountAccessProbe(root, ".wildstone-access-00000000000000000000000000000000.tmp", ".wildstone-access-00000000000000000000000000000000.done"); got != mountAccessExitUnavailable {
+		t.Fatalf("replaced root exit = %v, want unavailable", got)
 	}
 	if entries, _ := os.ReadDir(outside); len(entries) != 0 {
 		t.Fatalf("replacement target was inspected or mutated: %v", entries)
@@ -198,7 +252,7 @@ func TestMountAccessReportsUnconfirmedCleanup(t *testing.T) {
 	previous := mountAccessUnlinkat
 	mountAccessUnlinkat = func(int, string, int) error { return unix.EPERM }
 	t.Cleanup(func() { mountAccessUnlinkat = previous })
-	if got := runMountAccessCheck(context.Background(), t.TempDir(), uint32(os.Getuid()), uint32(os.Getgid())); got != wsv1.MountAccessFailureReason_MOUNT_ACCESS_FAILURE_REASON_CLEANUP_INCOMPLETE {
-		t.Fatalf("unconfirmed cleanup = %v, want cleanup incomplete", got)
+	if got := mountAccessProbe(t.TempDir(), ".wildstone-access-00000000000000000000000000000000.tmp", ".wildstone-access-00000000000000000000000000000000.done"); got != mountAccessExitCleanupIncomplete {
+		t.Fatalf("unconfirmed cleanup exit = %v, want cleanup incomplete", got)
 	}
 }
