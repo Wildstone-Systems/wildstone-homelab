@@ -217,7 +217,7 @@ func TestASessionThatCannotNameItsScopeGetsNoMemoryAtAll(t *testing.T) {
 // what it is.
 //
 // Indexing is a queued job for documents, where the slow part is the
-// embedding. A note is one row and there is no embedder: queueing it
+// embedding. A note is one row and no producer resolves the embedder yet: queueing it
 // would mean telling somebody it is remembered while recall cannot find
 // it. And the hit carries the record's subject and kind, because a
 // free-floating sentence answers no question about "my" anything.

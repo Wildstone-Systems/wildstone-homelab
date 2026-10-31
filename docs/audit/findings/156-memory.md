@@ -58,7 +58,7 @@ household's memory, because nothing in this session could reach it.
 | 2 | §6 | Audiences: Personal / Household / Selected people / Private | **missing** | F-156-02 |
 | 3 | §6 | The subject of a memory is not automatically in its audience | **missing** | F-156-02 — no mechanism; the gift-list denial is vacuous |
 | 4 | §6 | Default audience follows the source | **missing** | F-156-03 — the audience is a constant, not derived |
-| 5 | §6, §13 | Semantic recall is required; the product is not prescribed | **missing** | F-156-04, F-156-05 |
+| 5 | §6, §13 | Semantic recall is required; the product is not prescribed | **partial** | F-156-04, F-156-05 |
 | 6 | §6 | Vector index finds related records when wording is fuzzy | **missing** | F-156-04 |
 | 7 | §6 | Record shape: stable ID, household, subject, audience, source, contributor, creation + event dates, version, status, sensitivity/retention | **partial** | F-156-06 |
 | 8 | §6 | Status: current, superseded, disputed, expired, deleted | **partial** | F-156-06 |
@@ -216,7 +216,7 @@ it is the only outcome.
 ### F-156-04 — Semantic recall cannot retrieve: candidates come only from the FTS match
 
 - **Current status:** open
-- **Current evidence:** Partially delivered in `9537d63be6fd995eee821170a00f2e01ab143fc4` (#575); retained as open until the remaining semantic integration is verified. `SearchIndex` in `keystone/runtimedb/butlerindex.go` now unions a vector candidate query (same permission predicate, cosine floor `minSemanticSimilarity`) with the FTS candidates, so a vocabulary-mismatched chunk is retrieved when its embedding is close; covered by `TestSemanticCandidates*`. Still open: no embedder produces embeddings (F-156-05), and the `recall` callers pass none.
+- **Current evidence:** Partially delivered in `9537d63be6fd995eee821170a00f2e01ab143fc4` (#575); retained as open until the remaining semantic integration is verified. `SearchIndex` in `keystone/runtimedb/butlerindex.go` now unions a vector candidate query (same permission predicate, cosine floor `minSemanticSimilarity`) with the FTS candidates, so a vocabulary-mismatched chunk is retrieved when its embedding is close; covered by `TestSemanticCandidates*`. The bounded embedder seam now exists (F-156-05), but no production worker or `recall` caller invokes it yet.
 - **Current owner:** chickenrat17
 - **Tracking:** #311
 
@@ -245,20 +245,20 @@ keyword and nearest-neighbour, both under one permission clause**, so
 the vector half never becomes a path that ranks before it filters
 (`butlerindex.go:198-206` is explicit that no such path may exist).
 
-### F-156-05 — There is no embedding client; the index job queue has neither producer nor consumer
+### F-156-05 — The bounded embedding client exists; the index job queue has neither producer nor consumer
 
 - **Current status:** open
-- **Current evidence:** `keystone/runtimedb/butlermemory.go` has no embedding client producer or index-job consumer; the semantic path is absent.
+- **Current evidence:** `keystone/butler/provider/ollama_embed.go` implements the bounded Ollama adapter; `keystone/butlerlive/embedder.go` binds it to the exact current Agent route and live privacy checks. The coordinator-gated producer/consumer and recall wiring remain separate #233/#234 work.
 - **Current owner:** chickenrat17
 - **Tracking:** #311
 
 - **Audit status:** missing
 - **Audit evidence:** `grep -rn 'QueueIndexJob\|ClaimIndexJob\|FinishIndexJob\|RecordIndexMeasurement' --include=*.go` returns **no callers outside `keystone/runtimedb`**, tests included for the first three; `IndexDocument.Embedding` is set at exactly one non-test site — `keystone/butlerstore/memory.go:185-189` — where it is left nil.
 
-Confirms established finding 4 in #151. `butler_index_jobs`, its
-priority scheme and its claim/finish protocol are complete and dead.
-`butlerstore/memory.go:172-181` says so in its own comment: *"there is
-no embedder yet"*. Every row in `butler_index` therefore has
+Confirms established finding 4 in #151, now partially addressed.
+`butler_index_jobs`, its priority scheme and its claim/finish protocol are
+complete but still have no production producer or consumer. Every production
+row in `butler_index` therefore still has
 `embedding IS NULL`, and the hybrid path in `SearchIndex` has never
 run against real data.
 

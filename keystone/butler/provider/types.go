@@ -10,12 +10,31 @@ package provider
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strconv"
 	"time"
 )
+
+var (
+	// ErrEmbedderNotConfigured means the Agent's assigned route has no
+	// server-owned embedding adapter. It is deliberately distinct from an
+	// adapter that was configured and became unavailable.
+	ErrEmbedderNotConfigured = errors.New("provider: embedder not configured")
+	ErrEmbeddingUnavailable  = errors.New("provider: embedder unavailable")
+	ErrEmbeddingBounds       = errors.New("provider: embedding bounds exceeded")
+	ErrEmbeddingMalformed    = errors.New("provider: malformed embedding response")
+	ErrEmbeddingDimension    = errors.New("provider: embedding dimension changed")
+)
+
+// Embedder is the bounded provider-neutral seam used by semantic memory.
+// The caller supplies text only. Provider kind, endpoint, model, credentials,
+// processing class and identity all remain server-owned configuration.
+type Embedder interface {
+	Embed(ctx context.Context, text string) ([]float32, error)
+}
 
 // Tool is a provider-neutral tool declaration: a name, a human-readable
 // description, and a JSON-schema-shaped parameter spec (the same shape as
