@@ -90,15 +90,10 @@ func (p *DeploymentPublisher) Promote(req DeploymentRequest) (runtimedb.Deployme
 		files[name] = append([]byte(nil), data...)
 	}
 	req.Files = files
-	material, err := json.Marshal(struct {
-		Repo    string
-		Request DeploymentRequest
-	}{p.Repo.Identity(), req})
+	binding, err := deploymentBinding(p.Repo.Identity(), req)
 	if err != nil {
 		return runtimedb.DeploymentPromotion{}, err
 	}
-	sum := sha256.Sum256(material)
-	binding := hex.EncodeToString(sum[:])
 	if err := p.authorize(req); err != nil {
 		return runtimedb.DeploymentPromotion{}, err
 	}
@@ -151,17 +146,26 @@ func (p *DeploymentPublisher) Promote(req DeploymentRequest) (runtimedb.Deployme
 	if err := p.authorize(req); err != nil {
 		return row, err
 	}
-	head, err := p.Repo.Head()
+	effect := func() error {
+		head, err := p.Repo.Head()
+		if err != nil {
+			return err
+		}
+		if head == row.CandidateRevision {
+			return nil
+		}
+		if row.State == "promoted" || head != row.ExpectedRevision {
+			return statefile.ErrDiverged
+		}
+		return p.Repo.Promote(row.ExpectedRevision, row.CandidateRevision)
+	}
+	approval, err := p.DB.GetPlan(req.PlanID)
 	if err != nil {
 		return row, err
 	}
-	if head != row.CandidateRevision {
-		if row.State == "promoted" || head != row.ExpectedRevision {
-			return row, statefile.ErrDiverged
-		}
-		if err := p.Repo.Promote(row.ExpectedRevision, row.CandidateRevision); err != nil {
-			return row, err
-		}
+	err = p.DB.WithDeploymentApproval(req.PlanID, approval.PlanJSON, binding, req.AcceptedRevision, effect)
+	if err != nil {
+		return row, err
 	}
 	if p.interrupt != nil {
 		if err := p.interrupt("promoted"); err != nil {
@@ -173,4 +177,17 @@ func (p *DeploymentPublisher) Promote(req DeploymentRequest) (runtimedb.Deployme
 	}
 	row.State = "promoted"
 	return row, nil
+}
+
+// deploymentBinding is identity only; it does not grant execution authority.
+func deploymentBinding(repositoryIdentity string, req DeploymentRequest) (string, error) {
+	material, err := json.Marshal(struct {
+		Repo    string
+		Request DeploymentRequest
+	}{repositoryIdentity, req})
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(material)
+	return hex.EncodeToString(sum[:]), nil
 }
