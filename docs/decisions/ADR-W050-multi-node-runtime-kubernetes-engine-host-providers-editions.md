@@ -40,28 +40,42 @@ Keystone owns product intent and approval; Flux owns application reconciliation;
 
 Retained enforcement requirements: ordinary runtime credentials cannot change admission/RBAC or mint privileged infrastructure grants. Privileged pods, host paths and host networking require explicitly reviewed infrastructure exceptions; chart adoption cannot silently bypass them. Agent-facing interfaces never expose pod exec/attach or cluster credentials. Direct owner/break-glass administration is a separately authorized path, not an agent capability. Fixed signed host playbooks remain local, selected by name/version with closed typed parameters; no user-supplied playbook, free extra-vars or cross-node administrative credentials are introduced.
 
-## 3. Statefile and standard deployment output
+## 3. Local configuration and standard deployment output
+
+### Local-first configuration boundary — owner correction, 2026-11-01
+
+The public Wildstone source repository contains software, documentation and synthetic fixtures only. Each installation keeps its Statefile, deployment repository, household settings, secrets and deployment identifiers on local storage, outside the source checkout. No external Git remote, GitHub account, Gitea deployment or Internet configuration-publication service is required. Installation checks for Git and installs the supported local prerequisite if absent; it never initializes deployment configuration inside the source checkout or inherits its remotes.
+
+Git publication means promoting exact approved output to the locally served deployment ref. The canonical product Statefile and derived output may share an installation-owned repository with isolated refs, or use separate local repositories; neither may use the public source checkout. The deployment repository has no external push remote by default. No automatic push, synchronization, telemetry upload or backup of deployment details to GitHub is allowed.
+
+Flux needs a supported source transport; a working directory or file:// URL is not a GitRepository source. #257 must integrate an established local read-only Git endpoint reachable by source-controller. Evaluate existing Git/OpenSSH upload-pack support with a restricted read-only account/key before adding a full Git hosting platform; HTTP(S) is another supported transport if separately selected. No arbitrary shell access, receive-pack/write access, public listener or unauthenticated exposure is implied. Verify pod-to-endpoint connectivity, access restrictions and endpoint independence from a running Keystone process. Avoid a custom Git protocol server. Protect the served repository from Kubernetes/application writes.
+
+Configuration promotion is a local commit/ref update with expected-old-ref comparison, durable journaling and restart recovery; a network Git push is not required. Acknowledgment loss between local promotion and product DB recording still requires reconciliation. Flux only reads the promoted ref; partial/unapproved trees must never be visible through it. Owners' direct local ref changes are external administration and must be detected.
+
+This is local configuration/control, not a claim of air-gapped artifact installation: acquiring public charts, images and updates may still use upstream registries. Never upload local deployment files to obtain those artifacts. Fully offline artifact caching is separate work.
+
+### Standard projection
 
 Keep Statefile household, capability, policy and audit semantics. Do not ask Flux to interpret proprietary Wildstone resources. Extend the existing accepted-revision/publication foundation to produce a narrow deterministic deployment projection containing ordinary Flux Kustomizations, HelmReleases, validated values and approved source/encrypted-secret references.
 
 - Statefile is canonical product input; deployment YAML is derived, exportable output, not a second independently editable product database.
 - Review binds the source revision, integration/renderer version, output tree digest, chart artifact identity and configuration/secret-reference versions. Pin immutable artifacts or verify content digests; a version string alone does not prove unchanged bytes.
 - Flux reads only an explicitly managed deployment branch/path, never a developer working tree or an unaccepted Statefile branch. Separate privileged bootstrap configuration from ordinary application output.
-- Only publish an approved projection. Journal prepared, accepted, remotely published and observed revisions. Use expected-parent compare-and-swap, idempotent operation IDs and recovery after uncertain Git outcomes; never force-push over owner changes.
-- Track publication, Flux source revision, Kustomization/Helm generation and application readiness separately. A push or Helm Ready alone is not proof of application usability.
+- Only publish an approved projection. Journal prepared, accepted, locally promoted and Flux-observed revisions. Use expected-parent compare-and-swap, idempotent operation IDs and recovery after uncertain Git outcomes; never force-push over owner changes.
+- Track publication, Flux source revision, Kustomization/Helm generation and application readiness separately. A promoted commit or Helm Ready alone is not proof of application usability.
 - Flux and Helm reconciliation use scoped ServiceAccounts; ordinary application publication cannot modify cluster RBAC, admission, bootstrap or arbitrary namespaces. Verify chart dependencies, hooks, valuesFrom, post-rendering and decryption permissions as part of the authority boundary.
 - Destructive pruning/uninstall, persistent-volume retention and chart-generated resource-name changes must be visible in review. Validate deletionPolicy, Helm uninstall behavior and PVC ownership before publication or handoff; an ordinary upgrade must not silently authorize data deletion.
 - No chart auto-updates/image automation on the managed path may bypass review. Approved settings define ongoing runtime convergence; ordinary controller retries do not require a new approval for each attempt.
 - Keystone needs scoped Git publication and read-only operational observation, not cluster-admin or direct workload apply.
 
-Git publication and the runtime database are not a distributed atomic transaction. Explicit recovery of crash-before-push, push-before-ack, remote conflict and superseded approval is required in #254. Branch write access is deployment authority; protection and credentials enforce the normal approval route. An unrestricted administrator can bypass it and must not be described as contained.
+Local Git refs and the runtime database are not one atomic transaction. Explicit recovery of crash-before-promotion, promotion-before-DB-ack, local ref conflict and superseded approval is required in #257. Local repository ownership, file permissions and read-only serving credentials enforce the normal approval route; hosted branch protection is not a required dependency. An unrestricted administrator can bypass it and must not be described as contained.
 
 ## 4. Direct Flux and power-user ownership
 
 Owners may use standard Flux, Helm, Git and Kubernetes tools. Wildstone is a household interface and integration layer, not a fork of Flux or a mandatory gateway to its APIs.
 
 - Wildstone-managed instances have an explicit namespace/release/path inventory. Separate owner-managed releases are supported and not overwritten.
-- Changes to managed product input enter the normal proposal/review path. A privileged direct deployment-branch push is an external administrative change, not implicit Wildstone approval: report divergence, stop automatic publication on conflict and require adoption/review or relinquishment.
+- Changes to managed product input enter the normal proposal/review path. A privileged direct deployment-ref update is an external administrative change, not implicit Wildstone approval: report divergence, stop automatic publication on conflict and require adoption/review or relinquishment.
 - Arbitrary deployment YAML is not automatically reverse-translated to Statefile. Unsupported external configurations remain owner-managed.
 - Adoption/relinquishment is explicit and reviewed, with data retention and Flux inventory/pruning behavior checked before handoff. Two reconcilers must never own the same object.
 - Live edits to Flux-owned objects may be reverted by Flux. Durable owner edits belong in the relevant Git source.
@@ -77,6 +91,15 @@ Reuse the accepted deployment/device capability semantics (#179/#182) where appl
 The Console is a household GUI, not a complete Flux administration dashboard. Status should aggregate upstream facts with timestamps, readiness/dependency distinctions and actionable explanations. Application adapters remain necessary for actions such as searching a library; Helm only handles deployment.
 
 ## 6. Recovery and availability
+
+### Sequence: operate locally, integrate optional backups later
+
+Get the local approval -> Git promotion -> Flux -> application readiness path operating first (#257/#258). New backup destination setup or recovery implementation is not a prerequisite for that synthetic non-destructive development proof. Preserve existing data and backup behavior; deferring integration is not permission for destructive migration or a recoverability/HA claim.
+
+The existing S3 endpoint work has been built/tested according to the owner. Reuse it later to back up installation configuration/history, application data and required recovery material with appropriate consistency/encryption. The backup endpoint is optional and must not be Flux's authoritative deployment source or required for normal operation. Hetzner support is a later separately selected adapter; determine object-storage versus Storage Box protocol requirements then rather than assuming all Hetzner services are S3.
+
+Local Git history is not off-host backup: host/storage loss can remove both live configuration and history. Retain independent-recovery requirements for later supported migration/release acceptance, with keys stored separately from encrypted backup data. No GitHub configuration backup is part of this design.
+
 
 Preserve W051/recovery requirements: management-independent recovery, off-host keys/instructions, application-consistent recovery groups, restore alongside, no destructive reset, truthful stale/unknown status and external failure observation.
 
