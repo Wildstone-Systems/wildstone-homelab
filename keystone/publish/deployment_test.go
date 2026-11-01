@@ -270,3 +270,36 @@ func TestDeploymentExactPlanBoundary(t *testing.T) {
 		})
 	}
 }
+
+func TestDeploymentRevocationAfterRefAdvancePreservesUnknownOutcome(t *testing.T) {
+	p, req := deploymentHarness(t)
+	p.interrupt = func(phase string) error {
+		if phase != "promoted" {
+			return nil
+		}
+		if err := p.DB.DisableButlerMember("example-owner", "example-other-owner"); err != nil {
+			return err
+		}
+		return errors.New("example interruption before journal acknowledgment")
+	}
+	row, err := p.Promote(req)
+	if err == nil {
+		t.Fatal("expected interruption")
+	}
+	before, err := p.Repo.Head()
+	if err != nil || before != row.CandidateRevision {
+		t.Fatal("advanced ref lost", err)
+	}
+	restarted := &DeploymentPublisher{Repo: p.Repo, DB: p.DB, Gate: p.Gate}
+	if _, err := restarted.Promote(req); err == nil {
+		t.Fatal("revoked approval resumed an effect")
+	}
+	after, err := p.Repo.Head()
+	if err != nil || after != before {
+		t.Fatal("ref was rewound after revocation", err)
+	}
+	journal, err := p.DB.GetDeploymentPromotion(req.OperationID)
+	if err != nil || journal.State != "prepared" {
+		t.Fatal("unknown outcome falsely acknowledged", err)
+	}
+}
