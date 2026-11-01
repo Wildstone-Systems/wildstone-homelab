@@ -44,6 +44,8 @@ import (
 // and `created_at` mean the same thing wherever they appear, and a new
 // table reusing them needs no ceremony. A new name does.
 var dismissed = map[string]string{
+	"operation_id":        "deployment_promotions: DeploymentPublisher.Promote passes DeploymentRequest.OperationID as an idempotency/journal identifier, not an actor or party",
+	"binding":             "deployment_promotions: DeploymentPublisher.Promote passes hex(SHA256(JSON{repository identity, request})); a review-material fingerprint, not a party reference",
 	"publication_id":      "names a desired-state publication journal row (ADR-W007 A8), not a party",
 	"tree_digest":         "a git tree object id: the digest of a Statefile revision, not a party",
 	"candidate_revision":  "a git commit id a publication would accept, not a party",
