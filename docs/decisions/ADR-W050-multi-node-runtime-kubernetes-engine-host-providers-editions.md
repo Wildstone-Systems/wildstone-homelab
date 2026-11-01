@@ -38,6 +38,8 @@ SOPS does not replace all credential custody. Certificate issuance/internal CA, 
 
 Keystone owns product intent and approval; Flux owns application reconciliation; Kubernetes owns scheduling. Wardstone is not a competing application reconciler. Bootstrap/break-glass administration stays separate from runtime authority.
 
+Retained enforcement requirements: ordinary runtime credentials cannot change admission/RBAC or mint privileged infrastructure grants. Privileged pods, host paths and host networking require explicitly reviewed infrastructure exceptions; chart adoption cannot silently bypass them. Agent-facing interfaces never expose pod exec/attach or cluster credentials. Direct owner/break-glass administration is a separately authorized path, not an agent capability. Fixed signed host playbooks remain local, selected by name/version with closed typed parameters; no user-supplied playbook, free extra-vars or cross-node administrative credentials are introduced.
+
 ## 3. Statefile and standard deployment output
 
 Keep Statefile household, capability, policy and audit semantics. Do not ask Flux to interpret proprietary Wildstone resources. Extend the existing accepted-revision/publication foundation to produce a narrow deterministic deployment projection containing ordinary Flux Kustomizations, HelmReleases, validated values and approved source/encrypted-secret references.
@@ -48,6 +50,7 @@ Keep Statefile household, capability, policy and audit semantics. Do not ask Flu
 - Only publish an approved projection. Journal prepared, accepted, remotely published and observed revisions. Use expected-parent compare-and-swap, idempotent operation IDs and recovery after uncertain Git outcomes; never force-push over owner changes.
 - Track publication, Flux source revision, Kustomization/Helm generation and application readiness separately. A push or Helm Ready alone is not proof of application usability.
 - Flux and Helm reconciliation use scoped ServiceAccounts; ordinary application publication cannot modify cluster RBAC, admission, bootstrap or arbitrary namespaces. Verify chart dependencies, hooks, valuesFrom, post-rendering and decryption permissions as part of the authority boundary.
+- Destructive pruning/uninstall, persistent-volume retention and chart-generated resource-name changes must be visible in review. Validate deletionPolicy, Helm uninstall behavior and PVC ownership before publication or handoff; an ordinary upgrade must not silently authorize data deletion.
 - No chart auto-updates/image automation on the managed path may bypass review. Approved settings define ongoing runtime convergence; ordinary controller retries do not require a new approval for each attempt.
 - Keystone needs scoped Git publication and read-only operational observation, not cluster-admin or direct workload apply.
 
