@@ -54,23 +54,28 @@ Issue numbers remain traceable. Update live bodies and labels; remove agent:read
 | #173 | Remain blocked | Talos separately decided and scheduled; not needed for this transition |
 | #180 | Block and revise | Keep unattended recovery, partitions, single-writer storage, least privilege and independent recovery; replace custom leader-specific tests with actual selected controller behavior |
 | #240 | Block and revise | Stable URLs through Traefik and Services; LAN/tailnet/optional public connector survival; automatic recovery requirement retained |
-| #254 | New, blocked | Approval-bound Audiobookshelf projection/publication/observation; architecture merge and explicit scheduling first |
+| #254 | Open tracker | #256 completed in #261; #257 local approval/ref promotion and #258 observation remain |
 
 Adjacent package-audit/Docker compatibility work (#242/#243, #244, #246/#247) is not automatically canceled: it protects current installs or provides useful operational evidence. Do not expand it into a second Kubernetes deployment system. Open PR #245 is existing Docker mount-access safety, not a Flux integration PR.
 
-## 4. Statefile to Flux integration
+## 4. Local Statefile to Flux integration
+
+Owner correction (2026-11-01): the public software repository and private local installation configuration are separate. All household/deployment files remain local initially; no hosted deployment Git repository or GitHub push is required or permitted by default. Publication below means local promotion, not Internet distribution. Install/check Git locally and keep local repositories outside the source checkout with no inherited external remote.
+
+#257 must use an established read-only local Git source transport accessible to Flux (HTTP(S) or SSH), not a mounted working tree/file:// source or a new bespoke server. Restricted Git/OpenSSH upload-pack is the first candidate to evaluate. Scope its account/key, listener/network access and repository reads; prohibit remote writes/arbitrary shell and verify operation while Keystone is down. This source endpoint is a small local installed prerequisite, not a mandatory Gitea platform or GitHub dependency.
+
 
 Flux consumes standard configuration, not Wildstone resource schemas.
 
 1. Proposal snapshots accepted Statefile input and the tested integration definition.
 2. Deterministic projection produces standard Flux/Helm resources. Bind reviewed output digest and immutable chart/source identity before approval.
 3. Owner approves through existing Plan path; agents cannot approve/apply.
-4. Existing durable publication machinery is extended to publish only authorized output to a dedicated deployment branch/path, with expected-parent checks.
+4. Existing durable publication machinery promotes only authorized output to the locally served deployment ref/path, using expected-old-ref compare-and-swap and durable journal recovery. No external push is involved.
 5. Flux reads that branch/path and reconciles through scoped Kustomization/HelmRelease ServiceAccounts.
 6. Keystone observes exact source revision, generations, Helm outcome and application readiness through its public API.
 7. Report distinct accepted, publishing, published, reconciling, ready, failed and unknown outcomes; no inferred success after timeout.
 
-Keep canonical product Statefile and derived deployment output distinct without creating two editable sources of truth. Reuse a single Git repository with isolated branches/paths if suitable; no mandatory new Git service. The first slice must specify remote/local crash recovery and concurrent-edit behavior, not assume a database transaction makes Git push atomic.
+Keep canonical product Statefile and derived deployment output distinct without creating two editable sources of truth. Use installation-owned local repositories/refs, never the public source checkout. Keep external remotes absent by default. The first slice must specify local ref/DB crash recovery, concurrent edits and Flux transport unavailability; a DB transaction does not atomically update Git refs.
 
 Privileged bootstrap, RBAC/admission and key installation are separately owned. Scope chart hooks, source references, dependencies and valuesFrom; Helm configuration can carry substantial authority. No plaintext secrets or model-visible credentials.
 
@@ -80,18 +85,25 @@ Owners can use Flux directly. Wildstone provides a household GUI, tested integra
 
 - Separate owner-managed releases/namespaces are supported without Wildstone mutation.
 - Managed input edits use normal reviewed proposals; arbitrary deployment output is not reverse-translated.
-- External writes to the deployment branch invalidate publication assumptions. Report unreviewed external administration, refuse conflicting publication and require explicit review/adoption or relinquishment.
-- Branch permissions and Git credentials are part of approval enforcement; no claim an unrestricted administrator cannot bypass Wildstone.
+- Direct owner changes to the locally served deployment ref invalidate publication assumptions. Report unreviewed external administration, refuse conflicting publication and require explicit review/adoption or relinquishment.
+- Local file ownership/ref write authority and read-only transport credentials are part of approval enforcement; no claim an unrestricted administrator cannot bypass Wildstone.
 - Handoff/adoption checks Flux inventories and pruning first; deleting an old declaration must not inadvertently uninstall a live app or delete data.
 - Export is standard usable YAML. Flux/apps continue when Keystone is unavailable; new product changes may wait.
 - API-level application capabilities remain separate from deployment and use scoped user/service credentials.
 
 ## 6. Evidence and acceptance gates
 
+### Immediate scope and deferred backup integration
+
+First prove #257 local promotion/source delivery and #258 observed local operation, using synthetic data and the existing development VM without disruption. Do not add an S3, Hetzner or hosted-Git setup dependency to these slices.
+
+Existing S3 endpoint integration has already been built/tested according to the owner and is reused/updated later. Optional backup destinations hold copies for file/configuration recovery, not the active Flux source. Hetzner is later work with protocol/product selection deferred. Local Git alone does not protect against host loss; retain backup and recovery requirements for supported migration/production acceptance, but do not implement new backup/recovery work before the operating path.
+
+
 | Gate | Evidence | Must not infer |
 |---|---|---|
 | A — architecture/backlog | In-place W050/plan revision; completed vs superseded issues recorded; incompatible ready work blocked | Runtime migration or removal |
-| B — #254 integration | Deterministic reviewed output; publish crash/retry/conflict tests; denied unauthorized changes; scoped observation; owner-operated synthetic Audiobookshelf change | Broad catalog support or HA |
+| B — #254 integration | Deterministic reviewed output; local-promotion crash/retry/conflict and read-only source-transport tests; denied unauthorized changes; scoped observation; owner-operated synthetic Audiobookshelf change | Broad catalog support or HA |
 | C — platform integration | Link existing sanitized identity/backup work; prove required certificate, secret, storage and restore behavior for selected deployment; no automatic rerun of work merely because done elsewhere | Untested combinations or recovery methods |
 | D — migration/management | #165/#166/#168; existing-data migration, new-write-preserving rollback, management-independent restore | Fixture success equals actual management recovery |
 | E — multi-node safety | #180/#240; partitions, node return, quorum, storage exclusion, unattended core recovery and actual controller restart; measured RTO/RPO | Single-node results or same-host VMs prove physical HA |

@@ -2,6 +2,12 @@
 
 Status: experimental #256 implementation; proposed ADR-W005 A7 extension under accepted W050. No live catalog entry, install endpoint, Git publication, cluster access or existing-release adoption. #257 and #258 implement those later boundaries.
 
+## Local installation boundary
+
+Generated deployment configuration is local installation data, never public source-repository content. #257 promotes it into a locally served Git ref; Flux reads that ref over an established restricted HTTP(S)/SSH transport. No GitHub deployment remote or external push is required.
+
+The upstream GitRepository in source.yaml below is a different source: it fetches publicly published chart code. It does not receive household values, secret references or generated files. That artifact-download dependency is not a requirement to host local configuration externally. Air-gapped chart/image mirroring is separate work. Optional S3 backup reuse and later Hetzner support are deferred until local operation works; neither is the active source for Flux.
+
 ## Source evaluation
 
 The authorized private proof uses bdclark's `audiobookshelf` chart 0.1.6. The upstream tag resolves to commit `c424d45686c631ce9840306a9d1c804e5bb4f148`; the chart declares appVersion 2.37.2 and MIT licensing. It includes a values schema and chart tests, with no chart dependencies in this revision. This is a community chart, not an official Audiobookshelf support guarantee. Continued release activity and compatible upgrades must be re-evaluated before updates are accepted.
