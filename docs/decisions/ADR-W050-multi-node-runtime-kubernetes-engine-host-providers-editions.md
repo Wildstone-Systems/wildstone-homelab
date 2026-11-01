@@ -1,288 +1,111 @@
-# ADR-W050: Multi-node runtime — a Kubernetes engine, host providers and two editions
+# ADR-W050: Composed homelab platform — Kubernetes, Helm and Flux
 
-- **Status:** accepted by the maintainer on 2026-10-24; design direction, not yet implemented. Post-alpha.
-- **Acceptance evidence:** maintainer acceptance after the proposal merged in #152. Implementation is authorized only through bounded issues the owner schedules (first #151, then #129); both stay `agent:blocked` until then.
-- **Relates to:** ADR-W002 (Proxmox test isolation), ADR-W003 (Wardstone
-  protocol, no `Exec(string)`), ADR-W004/W008 (resources, Plans,
-  reconcile), ADR-W005 (package format), ADR-W014 (installer bootstrap),
-  ADR-W045 (off-site backup), #129 (Proxmox LXC evaluation), #128 (IaC
-  audit), `docs/audit/findings/566-iac-architecture.md`.
-- **Keeps:** every ground rule in the README — no secrets in the repo, no
-  `Exec(string)` on the wire, one public API for Console/CLI/Butler, and
-  every intentional change is a Plan.
+- **Status:** accepted direction, amended by owner instruction on 2026-11-01; implementation is incremental and not yet complete.
+- **Original acceptance:** 2026-10-24, following #152/#153.
+- **Amendment:** owner selected a minimal experience/integration platform over established tools after an independent single-node proof. This replaces the custom application execution direction below; it does not remove working code or approve deployment.
+- **Implementation:** [migration plan](../design/w050-migration-plan.md); first integration #254.
+- **Related:** ADR-W003, W005, W007/W008, W012, W014, W045, W049 and proposed W051. Existing security/recovery contracts remain binding except where explicitly superseded here.
 
-## 1. Context
+## 1. Decision and product boundary
 
-Today every resource names its node (`metadata.node`), and Wardstone
-applies typed Docker Engine operations on that one machine. That is
-correct for a single host. It cannot:
+Wildstone is a small household platform composed of established services, configuration and capabilities. It provides guided setup, a curated application experience, authorization, approved changes, application integrations and understandable operational status. Established tools perform deployment, reconciliation, scheduling, routing, storage and backup execution.
 
-- **place** an app on a suitable node by itself;
-- **fail over** an app when its node dies;
-- **scale out** an app that supports several copies;
-- **roll** OS and app updates across machines while the house stays up.
+Do not build a second scheduler, Helm renderer, Kubernetes apply controller or distributed storage engine. Prefer maintained upstream mechanisms; each added dependency must replace a named maintenance responsibility and have a clear owner.
 
-The target household is 1 to N small machines (for example four mini PCs)
-with a few people using services like Jellyfin at the same time. The
-product goal is that this stays as easy as a single box: the household
-sees "Add a machine" and "Keep this running if a machine fails: on/off",
-never a scheduler.
+Console, CLI, automation and Butler use the same public API. Agents can propose but cannot approve/apply infrastructure Plans. No arbitrary shell operation is added to Wardstone. Packages remain data by default; typed application adapters are bounded and permission checked.
 
-Options considered:
+## 2. Layers and ownership
 
-| Option | Why not (as the core) |
-|---|---|
-| Build placement, failover and quorum in Keystone | Fencing, quorum and storage replication are where data gets corrupted. Not worth owning. |
-| Proxmox HA with one CT per app (#129) | Failover only; no copies or load balancing. Requires Proxmox, so a plain Linux box gets a different model. |
-| Podman Quadlets | Excellent single-host runtime; no multi-node at all. |
-| Docker Swarm | Little active development; small ecosystem. |
-| Nomad | Not open-source licensed. |
-| Kubernetes (k3s) | Chosen: one model from 1 to N, with placement, failover, copies, health checks and rolling updates built in. |
-
-[khuedoan/homelab](https://github.com/khuedoan/homelab) (GPL-3.0) is a
-useful reference for a k3s homelab on the same class of hardware. It is a
-blueprint for the engine, not a base to fork: it applies whatever is
-merged to Git (ArgoCD), runs Ansible over SSH as root and leaves backup as
-a TODO, which conflict with Plans, the no-shell rule and the recovery
-contract.
-
-## 2. Decision
-
-### 2.1 Wildstone targets standard Kubernetes, on every size of install
-
-- The runtime is **conformant Kubernetes**, including a single machine,
-  so adding a node is a join, not a migration.
-- The distribution is an edition detail (§2.6): **k3s** on Linux,
-  Talos's upstream Kubernetes on the appliance.
-- Households, Owners and the Butler never see Kubernetes: no `kubectl`,
-  no kubeconfig, no shell into an app.
-
-### 2.2 Layers and owners
-
-| Layer | Contents | Owner |
+| Layer | Owner | Wildstone responsibility |
 |---|---|---|
-| Machines | Bare metal, or Proxmox VMs (optional) | Household |
-| Host | `LinuxHost` (Ansible + systemd) or `TalosHost` (Talos API) | Wardstone on each node |
-| Engine | Kubernetes + add-ons (§2.4) | Wardstone leader |
-| Control | Desired state, Plans, policy, placement | Keystone |
-| Product | Packages, Caddy, Authelia/LLDAP, backups, Console, Butler | Keystone via packages |
+| Machines and host administration | Owner; optional Proxmox below Kubernetes | Guided bootstrap, inventory and narrowly scoped host operations |
+| Runtime, scheduling, restart and rollout | Standard Kubernetes; K3s on Linux initially | Configure supported policies and explain observed behavior |
+| Application packaging | Maintained upstream Helm charts | Pin tested sources; validate household values and compatibility |
+| Deployment convergence | Flux source/kustomize/helm controllers | Publish authorized configuration and observe results |
+| HTTP/HTTPS ingress | Bundled Traefik | Access-profile configuration and tested identity integration |
+| Floating addresses | kube-vip where required | Supported topology and exposure configuration |
+| Persistent app storage | Longhorn where justified; local storage in limited single-node proofs | Capacity, locality, backup and recovery contracts |
+| Large shared libraries | Optional NAS through NFS CSI; local storage otherwise | Explicit bindings and locality limits |
+| Identity | Authelia and LLDAP | Onboarding, mappings and per-app integration; gateway login is not app authorization |
+| Deployment secrets | SOPS/age with Flux, subject to custody/recovery verification | Opaque references, encryption and rotation workflow |
+| Runtime user/app credentials | Existing scoped credential boundaries until separately amended | Keep credentials out of Git plaintext, model output and logs |
+| Backups | Restic plus established application backup mechanisms | Consistency groups, policy and validated recovery |
+| K3s upgrades | Evaluate system-upgrade-controller before new custom execution | Approve pinned targets and validate compatibility |
+| OS/device/host operations | Fixed local Ansible/systemd or another explicitly selected host provider | Retain narrow typed Wardstone operations where necessary |
+| Product | Keystone, Console/CLI and application/agent capability adapters | Household intent, authorization, integrations, audit and explanation |
 
-- **Keystone is the only writer.** It turns approved resources into
-  desired state; there is no ArgoCD or Flux beside it.
-- **One Wardstone per node** does host work: disks, devices, OS and k3s
-  updates, node labels from its device inventory.
-- **One elected Wardstone leader** (a Kubernetes Lease) is the only
-  component that holds cluster-admin credentials and applies Kubernetes
-  objects. It translates typed resources into objects and reverts drift
-  on objects it owns.
-- **Keystone runs as a `failover` app** with its data on replicated
-  storage, so it restarts elsewhere when its node is lost.
-- **Proxmox is optional and below the engine.** It may host nodes as
-  VMs; it never moves or restarts Wildstone apps. One controller per
-  decision: Kubernetes places apps, Proxmox (if present) owns VMs.
+SOPS does not replace all credential custody. Certificate issuance/internal CA, DNS reconciliation, backup scheduling and OS lifecycle ownership require bounded decisions before replacing existing providers. Prefer established controllers where they reduce total integration burden. No automatic addition of cert-manager, external-dns, external-secrets, Velero or another platform is implied.
 
-### 2.3 Packages declare deployment capabilities (amended 2026-10-24, #179)
+Keystone owns product intent and approval; Flux owns application reconciliation; Kubernetes owns scheduling. Wardstone is not a competing application reconciler. Bootstrap/break-glass administration stays separate from runtime authority.
 
-The original single `availability` list (pinned / failover / replicated / offload) is replaced by the accepted [package deployment capabilities contract](../design/package-deployment-capabilities-contract.md). In short:
+Retained enforcement requirements: ordinary runtime credentials cannot change admission/RBAC or mint privileged infrastructure grants. Privileged pods, host paths and host networking require explicitly reviewed infrastructure exceptions; chart adoption cannot silently bypass them. Agent-facing interfaces never expose pod exec/attach or cluster credentials. Direct owner/break-glass administration is a separately authorized path, not an agent capability. Fixed signed host playbooks remain local, selected by name/version with closed typed parameters; no user-supplied playbook, free extra-vars or cross-node administrative credentials are introduced.
 
-- **What a package needs** is worked out by lint from what it renders. Each device is labelled `identity` (this exact device), `class` (any device of a type, such as a GPU) or `any-node` (every machine has one).
-- **What a package can safely do** is declared per Container: `copies` (one or many), `relocate` (may restart on another machine) and `role` (main or worker). The defaults are one copy, doesn't move, main: today's behaviour.
-- **What the household picks** (keep running elsewhere, number of copies, where workers run) lives in Keystone, is changed by a Plan, and can never exceed the package's declaration. A package never chooses a replica count.
-- Hardware needs become node selectors on Wardstone-applied labels (`gpu`, `coral`), not host paths in the package.
-- Nothing reads these fields until a multi-node backend slice does.
+## 3. Statefile and standard deployment output
 
-### 2.4 The engine is small
+Keep Statefile household, capability, policy and audit semantics. Do not ask Flux to interpret proprietary Wildstone resources. Extend the existing accepted-revision/publication foundation to produce a narrow deterministic deployment projection containing ordinary Flux Kustomizations, HelmReleases, validated values and approved source/encrypted-secret references.
 
-Only what must be cluster-aware, or what Wildstone does not already do:
+- Statefile is canonical product input; deployment YAML is derived, exportable output, not a second independently editable product database.
+- Review binds the source revision, integration/renderer version, output tree digest, chart artifact identity and configuration/secret-reference versions. Pin immutable artifacts or verify content digests; a version string alone does not prove unchanged bytes.
+- Flux reads only an explicitly managed deployment branch/path, never a developer working tree or an unaccepted Statefile branch. Separate privileged bootstrap configuration from ordinary application output.
+- Only publish an approved projection. Journal prepared, accepted, remotely published and observed revisions. Use expected-parent compare-and-swap, idempotent operation IDs and recovery after uncertain Git outcomes; never force-push over owner changes.
+- Track publication, Flux source revision, Kustomization/Helm generation and application readiness separately. A push or Helm Ready alone is not proof of application usability.
+- Flux and Helm reconciliation use scoped ServiceAccounts; ordinary application publication cannot modify cluster RBAC, admission, bootstrap or arbitrary namespaces. Verify chart dependencies, hooks, valuesFrom, post-rendering and decryption permissions as part of the authority boundary.
+- Destructive pruning/uninstall, persistent-volume retention and chart-generated resource-name changes must be visible in review. Validate deletionPolicy, Helm uninstall behavior and PVC ownership before publication or handoff; an ordinary upgrade must not silently authorize data deletion.
+- No chart auto-updates/image automation on the managed path may bypass review. Approved settings define ongoing runtime convergence; ordinary controller retries do not require a new approval for each attempt.
+- Keystone needs scoped Git publication and read-only operational observation, not cluster-admin or direct workload apply.
 
-| Job | Choice |
-|---|---|
-| Kubernetes | k3s (SQLite at 1 server node, embedded etcd at 3) |
-| Networking and isolation | k3s defaults: flannel + built-in NetworkPolicy controller |
-| Floating home IP | kube-vip |
-| App storage | Longhorn (1 copy on 1 node, replicated at 2+) |
-| Media libraries | NFS CSI driver to a NAS |
-| Image cache | k3s embedded registry mirror |
-| iGPU and USB devices | Intel GPU device plugin; generic device plugin |
-| Safety rules | Pod Security Admission + ValidatingAdmissionPolicy |
+Git publication and the runtime database are not a distributed atomic transaction. Explicit recovery of crash-before-push, push-before-ack, remote conflict and superseded approval is required in #254. Branch write access is deployment authority; protection and credentials enforce the normal approval route. An unrestricted administrator can bypass it and must not be described as contained.
 
-k3s's bundled Traefik and ServiceLB are disabled. Cilium is a later
-upgrade if measured needs justify it.
+## 4. Direct Flux and power-user ownership
 
-Wildstone keeps its own tools as packages, rather than the Kubernetes
-ecosystem equivalents:
+Owners may use standard Flux, Helm, Git and Kubernetes tools. Wildstone is a household interface and integration layer, not a fork of Flux or a mandatory gateway to its APIs.
 
-| Job | Keeps | Instead of |
-|---|---|---|
-| Ingress / HTTPS | Caddy | ingress-nginx (retired upstream), Traefik |
-| Certificates | Caddy + internal CA (ADR-W019) | cert-manager |
-| DNS records | Keystone `DnsRecord` provider | external-dns |
-| Login | Authelia + LLDAP | Kanidm, Dex |
-| Secrets | Wildstone store (ADR-W012) → encrypted Kubernetes Secrets | external-secrets |
-| Backups | Wildstone restic engine as Kubernetes Jobs | VolSync, Velero |
-| Node reboots | Rolling-update Plans (§2.5) | kured |
+- Wildstone-managed instances have an explicit namespace/release/path inventory. Separate owner-managed releases are supported and not overwritten.
+- Changes to managed product input enter the normal proposal/review path. A privileged direct deployment-branch push is an external administrative change, not implicit Wildstone approval: report divergence, stop automatic publication on conflict and require adoption/review or relinquishment.
+- Arbitrary deployment YAML is not automatically reverse-translated to Statefile. Unsupported external configurations remain owner-managed.
+- Adoption/relinquishment is explicit and reviewed, with data retention and Flux inventory/pruning behavior checked before handoff. Two reconcilers must never own the same object.
+- Live edits to Flux-owned objects may be reverted by Flux. Durable owner edits belong in the relevant Git source.
+- Exported output remains ordinary usable Flux/Helm configuration. Wildstone unavailability must not stop running apps or Flux reconciliation. New proposals and Wildstone capability actions may be unavailable.
+- Existing break-glass protections and auditing apply. Direct owner administration does not grant agents cluster credentials or approval rights.
 
-Admission policy must refuse privileged pods, host-path mounts and host
-networking except where a signed infrastructure package declares them,
-and must refuse pod `exec`/`attach` for every principal except
-break-glass (#127).
+## 5. Capabilities and household experience
 
-### 2.5 Updates
+A catalog entry references an upstream chart and adds tested configuration, household-facing inputs, identity integration, storage/dependency requirements, safe deployment capabilities, backup/restore procedures and optional typed application API tools.
 
-**App updates** use Kubernetes rolling updates, never Ansible:
+Reuse the accepted deployment/device capability semantics (#179/#182) where applicable; do not blindly copy the old Container renderer schema into a new Helm wrapper. Any semantic change is an explicit schema/contract amendment. Chart installability is not supported integration, and deployment support is separate from automation support.
 
-1. An approved Plan changes the image version.
-2. Kubernetes replaces one copy at a time, waiting for its health check.
-3. Workload rollout limits (`maxUnavailable`, `maxSurge`) keep the
-   package's minimum copies running. A Pod Disruption Budget does not
-   limit rolling updates; it guards evictions such as node drains.
-4. A failed health check stops the rollout; old copies keep serving and
-   the Plan offers a rollback.
+The Console is a household GUI, not a complete Flux administration dashboard. Status should aggregate upstream facts with timestamps, readiness/dependency distinctions and actionable explanations. Application adapters remain necessary for actions such as searching a library; Helm only handles deployment.
 
-A `failover` app has a short restart; the Plan states it before approval.
+## 6. Recovery and availability
 
-**Host updates** (OS, drivers, k3s, Wardstone itself) run Ansible
-**locally on each node**, ordered by the leader:
+Preserve W051/recovery requirements: management-independent recovery, off-host keys/instructions, application-consistent recovery groups, restore alongside, no destructive reset, truthful stale/unknown status and external failure observation.
 
-```
-Plan approved: "Update OS on all nodes, one at a time"
+The owner's 2026-10-29 unattended single-machine-loss requirement (#180/#240) remains. Supported HA requires surviving server quorum, available storage, eligible capacity and independent physical failure domains. Automatic writable takeover requires verified exclusion/fencing or application-native replication. Node NotReady, a Lease, RWOP or a timeout alone is insufficient. Stop safely and alert when ownership is uncertain.
 
-for each node:
-  1. leader cordons and drains the node (Pod Disruption Budgets respected)
-  2. leader → node's Wardstone: RunPlaybook("os-update", <signed version>)
-  3. node's Wardstone runs the playbook on itself, reboots if needed
-  4. node returns; Wardstone reports versions
-  5. leader waits for node Ready and storage copies rebuilt
-  6. leader uncordons → next node
-```
+Replacing the custom Wardstone leader does not remove storage fencing requirements. Multi-node acceptance must exercise actual Flux/controller recovery and Git/identity/certificate/storage dependencies; tests specifically for retired custom leader epochs become historical evidence rather than target requirements.
 
-- Any failure stops the rollout and leaves untouched nodes as they were.
-- k3s upgrades go server nodes first, then agents.
-- The leader hands its Lease to another node before its own node drains.
-- A one-node install cannot drain; the Plan states the expected downtime
-  and the Owner chooses when.
+Several VMs on one physical host do not prove host/power HA. The owner-reported single-node proof establishes only its reported tests.
 
-### 2.6 Editions
+## 7. Migration and implementation status
 
-| | **Wildstone on Linux** (first) | **Wildstone-Homelab-Talos** (much later) |
-|---|---|---|
-| Starts from | An existing Ubuntu/Debian machine | Bare metal, booted from a Wildstone image |
-| Host provider | `LinuxHost`: signed Ansible playbooks + systemd | `TalosHost`: Talos API |
-| Kubernetes | k3s | Talos (upstream Kubernetes) |
-| OS updates | Ansible playbook, per §2.5 | Talos A/B upgrade with rollback, per §2.5 |
+Merged foundations include #174–#178, #184/#188; engine bootstrap and custom leadership #189–#200; QEMU/resource evidence #207/#208; typed workload execution #217; backend reconciliation #229; signed RunPlaybook #241.
 
-- **Linux ships first.** Talos is a later supported option and, once it
-  exists, the recommended path for new households, because it is one OS
-  install instead of OS plus Wildstone.
-- **One edition per cluster.** k3s and Talos nodes cannot share a
-  cluster. Switching editions is backup → reinstall → restore, which the
-  exit drill already proves.
-- **Talos joins need pairing.** A node waiting in Talos maintenance mode
-  accepts configuration unauthenticated on the LAN, so the Console only
-  joins it after the Owner enters a code shown on that machine's screen.
+Keep existing Docker and custom k3s code operational until bounded replacement and migration tests authorize retirement. Do not delete merged work as part of this documentation amendment. Custom workload apply/leader code is a retirement candidate after Flux replacement, not a foundation to expand.
 
-### 2.7 Ansible stays inside the no-shell rule
+The owner reports an independent established-tools proof at commit 6079c5b covering K3s, Flux, SOPS, Traefik, Podinfo and Audiobookshelf reconciliation, persistence, update and isolated restore. It is not evidence of Wildstone approval integration, host rebuild, multi-node safety or production acceptance. Separate backup-durability/identity work was reported by the owner; link sanitized evidence before claiming particular gates passed. Do not publish private environment details.
 
-Ansible covers first install and later host updates on the Linux edition,
-under these limits:
+Execution order:
+1. Reconcile backlog and preserve completed foundations.
+2. #254: one approved Audiobookshelf projection -> Git -> Flux/Helm -> observed readiness.
+3. Rework ingress/identity, storage, credentials and backup integration around established owners.
+4. Prove safe migration and independent management recovery.
+5. Multi-node safety and unattended-recovery evidence before broad supported migration/HA claims.
+6. Explicit retirement after compatibility, data-preserving rollback and recovery acceptance.
 
-- **Playbooks are fixed and signed,** shipped and versioned with
-  Wildstone like packages. There are no user- or Butler-supplied
-  playbooks.
-- **Always local.** Ansible runs on the node it changes
-  (`connection: local`). Nothing SSHes between machines, and no node
-  holds credentials to another.
-- **Typed on the wire.** The Wardstone protocol carries
-  `RunPlaybook(name, version, typed params)`; there is still no
-  `Exec(string)` (ADR-W003).
-- **First install keeps ADR-W014's front door.** `install.sh` keeps its
-  roles, join tokens and CA pinning. It verifies the release, installs
-  `ansible-core` and runs the bundled playbook for its role. Keystone
-  does not exist yet at that point, so the person running the installer
-  is the approval, as today. Every later host change is a Plan.
+No production migration, new host provisioning, destructive test or merge is authorized by this ADR alone. Existing owner-directed experiments on a development VM are limited to their authorized non-disruptive scope. Fault tests require an explicitly selected safe target.
 
-### 2.8 What the household gets at each size
+## 8. Historical decision record
 
-| Nodes | Behaviour |
-|---|---|
-| 1 | Apps restart on crash; backups; no failover |
-| 2 | App failover, except when the single server node is the one lost; the Console says so |
-| 3+ | Three server nodes, replicated storage; any one node may fail |
+The 2026-10-24 decision selected Kubernetes but excluded Flux and retained a Wardstone application leader, fixed workload rendering, Caddy ingress and custom application convergence. Those execution choices are superseded by this amendment; security and recovery requirements are retained above.
 
-## 3. Migration
-
-1. **Runtime seam first.** Wardstone's Docker code moves behind one
-   runtime-backend interface, and packages gain `availability`. Both
-   land before any Kubernetes work and change no behaviour.
-2. **Single-node k3s proof** against the current Docker VM baseline
-   (#129, re-scoped), with the same lifecycle and recovery checks.
-3. **k3s backend** passes the e2e suite and the weekly exit drill.
-4. **Packages migrate one at a time.** The Docker backend stays until the
-   last one has moved.
-5. **Multi-node:** join, placement and failover on an owner-operated test
-   cluster (ADR-W002), then `replicated` and `offload`.
-6. **Talos edition** much later.
-
-## 4. Non-goals
-
-- Multiple sites, cloud nodes, live migration, load-based autoscaling.
-- Exposing Kubernetes, Helm or Ansible to households, Owners or the Butler.
-- Mixing editions in one cluster.
-
-## 5. Open questions
-
-- Leader handover timing and what Keystone shows while no leader holds
-  the Lease.
-- Longhorn copy count at 3+ nodes (2 or 3).
-- Jellyfin transcode offload (rffmpeg or another tool).
-- Caddy with more than one copy needs shared certificate storage; start
-  with one `failover` copy.
-- Backup Jobs must run where a volume is attached; to be proven in the
-  single-node proof and again on multi-node.
-- How a two-node household is warned that it is not fully highly
-  available.
-
-## 6. Consequences
-
-- Wildstone stays the product; Kubernetes becomes a replaceable engine
-  under Wardstone.
-- The Docker backend and the k3s backend coexist during migration, which
-  doubles e2e and exit-drill coverage for that period.
-- Each edition needs its own CI and exit drill once Talos exists.
-- The ground rules now also bind cluster credentials, admission policy
-  and playbooks, not only the Wardstone wire format.
-
-## Amendments
-
-### A1. Implementation proof gates and safety contracts (2026-10-24, #181)
-
-The Kubernetes direction remains accepted. This amendment changes the implementation details above for the reasons below; see the [migration plan gates](../design/w050-migration-plan.md#revised-execution-gates) for acceptance evidence and revision routes.
-
-- **Implementation state:** #177 merged as `97628db`, completing Docker-only encapsulation. G2 passed when the owner accepted #179 in merged #182. #178 merged as `c6860f4` and implements release 1 devices/deployment parser support and opt-in lint with no catalog edits or runtime behavior.
-- **Capabilities:** §2.3 and the [accepted package deployment capabilities contract](../design/package-deployment-capabilities-contract.md), including §9 owner decisions, govern implementation. Refer there instead of duplicating schema requirements in this amendment.
-- **Proof order:** #129 is a small disposable deployment with 1–3 service migrations, backup/replacement restore and rollback preserving new writes. #180 proves multi-node safety before #169 waves; #170 remains later productization. This resolves architectural uncertainty before catalog investment.
-- **Authority:** Keystone owns product desired state and approvals; Kubernetes controllers implement that intent. Separate scoped runtime reconciliation credentials from bootstrap/break-glass administration, because retained server root/admin kubeconfigs remain authority even when not loaded by the leader.
-- **Lease versus fencing:** a Lease coordinates election, not exclusive effective authority. #180 must define leadership-loss cancellation, stale/in-flight rejection, revision checks and replay-safe resumption, because an old leader may still act during a partition.
-- **Admission:** runtime credentials cannot change policies/RBAC or mint host grants. Admission constrains malformed runtime output; it does not contain an unrestricted administrator who can alter it.
-- **Secrets:** review canonical custody, cross-leader access, versions and encryption-key/off-host recovery before implementation. Missing local state must not regenerate an existing secret, because leadership can move between nodes.
-- **Storage:** prove detach/reattach, partition and returning-node single-writer behavior. RWOP and short eviction timeouts alone do not establish safe or fast recovery.
-- **Availability claims:** quorum, healthy replicas, eligible capacity and independent dependency/failure domains determine protection. Node count alone is insufficient.
-- **Rollout:** singleton Recreate updates have an outage and cannot retain the terminated old pod on failure. Image rollback requires declared data/schema compatibility or validated restore alongside.
-- **Recovery:** host diagnostics and fixed bootstrap/restore must work when Keystone cannot start, with an off-host procedure for unavailable cluster API/storage. Actual Keystone recovery must pass before household migration; a proxy to its API is insufficient.
-
-No runtime experiment is authorized by this amendment without a scheduled bounded issue and an owner-selected disposable target.
-
-### A2. Authority, fencing, storage and recovery contract (2026-10-25, #180)
-
-The owner accepted the [multi-node safety contract](../design/w050-multi-node-safety-contract.md). It turns A1's authority, Lease, admission, secret, storage and recovery bullets into rules #180's disposable test must prove:
-
-- **Authority:** Keystone holds desired state and approval. Each node's Wardstone has its own least-privilege runtime ServiceAccount. The break-glass admin kubeconfig is never loaded by Keystone or the leader.
-- **Fencing:** Keystone issues a monotonic leader epoch and names the leader's identity in an authority ConfigMap only Keystone can update. A ValidatingAdmissionPolicy checks the requester on every verb, and the epoch on creates and updates. Deletes are stamp-then-delete with a resourceVersion precondition.
-- **In-flight work:** after a leader change, re-observe and re-plan; never resume a stale step list.
-- **Secrets:** ADR-W012 A7.
-- **Storage:** one writer, using `ReadWriteOncePod` and `Recreate`. No forced delete or detach, by Wildstone or by k3s's timed force-detach (disabled at bootstrap). Stateful failover waits for the owner to confirm the machine is off; automatic failover is a later opt-in per app.
-- **Recovery:** `wild-recover` works without Keystone, and an off-host kit rebuilds the cluster (ADR-W051 A2).
-- **Power users:** per-app policy, opt-in automatic failover, read-only cluster access, break-glass changes reported as drift, and bring-your-own storage. Automatic power fencing was declined.
-
-Leader operations (`w050-leader-ops.md`) follow these rules before any is implemented.
-
+The pre-amendment text, including A1/A2, is preserved in Git history at fca3e9ca357a1d8e9598c7a36f6cdccc964308f4. Linked older leader/safety/slice documents describe the old implementation where they conflict with this ADR. The migration plan records their disposition. Talos remains deferred and requires a separate decision before implementation.
