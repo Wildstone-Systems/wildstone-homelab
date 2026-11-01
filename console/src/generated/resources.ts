@@ -72,6 +72,7 @@ export interface ContainerSpec {
   resources?: ContainerResources;
   shmSize?: string;
   runtimeIdentity?: ContainerRuntimeIdentity;
+  preflightMountAccess?: boolean;
   networkMode?: string;
 }
 

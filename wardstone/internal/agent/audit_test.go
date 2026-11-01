@@ -192,6 +192,26 @@ func TestAgentAuditLogOmitsFileContentSecret(t *testing.T) {
 	}
 }
 
+func TestEnsureContainerAuditOmitsMountAccessSources(t *testing.T) {
+	const source = "/srv/wildstone/private-library"
+	gid := int64(1000)
+	op := &wsv1.Operation{Op: &wsv1.Operation_EnsureContainer{EnsureContainer: &wsv1.EnsureContainer{
+		Name: "app", Image: testDigestImage,
+		Mounts:               []*wsv1.Mount{{Source: source, Target: "/library"}},
+		RuntimeIdentity:      &wsv1.ContainerRuntimeIdentity{Uid: 1000, Gid: &gid},
+		PreflightMountAccess: true,
+	}}}
+	arm, attrs := auditFields(op)
+	if arm != "EnsureContainer" {
+		t.Fatalf("arm = %q", arm)
+	}
+	for _, attr := range attrs {
+		if strings.Contains(attr.Value.String(), source) {
+			t.Fatalf("audit attribute exposed mount source: %+v", attr)
+		}
+	}
+}
+
 func TestAgentAuditLogOmitsSelfUpdateBinaryBytes(t *testing.T) {
 	h := startGateway(t, []string{"tok"}, "")
 	managed := t.TempDir()

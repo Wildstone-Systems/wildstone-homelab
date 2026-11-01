@@ -144,6 +144,8 @@ func TestRequiredProtocolMinor(t *testing.T) {
 		"hostNetwork":      {ContainerSpec{Image: "x", NetworkMode: NetworkModeHost}, HostNetworkProtocolMinor},
 		"host+hardening":   {ContainerSpec{Image: "x", NetworkMode: NetworkModeHost, ReadOnlyRootfs: true, CapAdd: []string{"NET_RAW"}}, HostNetworkProtocolMinor},
 		"runtimeIdentity":  {ContainerSpec{Image: "x", RuntimeIdentity: testRuntimeIdentity(1000)}, RuntimeIdentityProtocolMinor},
+		"mount preflight": {ContainerSpec{Image: "x", RuntimeIdentity: testRuntimeIdentity(1000, 1000),
+			PreflightMountAccess: true, Mounts: []Mount{{Source: "cfg", Target: "/config"}}}, MountAccessPreflightProtocolMinor},
 		"runtime+dbus": {ContainerSpec{Image: "x", RuntimeIdentity: testRuntimeIdentity(1000),
 			Mounts: []Mount{{Source: "/run/dbus", Target: "/run/dbus", ReadOnly: true}}}, RuntimeIdentityProtocolMinor},
 		"host+dbus": {ContainerSpec{Image: "x", NetworkMode: NetworkModeHost, CapAdd: []string{"NET_ADMIN", "NET_RAW"},
@@ -199,6 +201,11 @@ func TestContainerHardeningFieldsAreValidated(t *testing.T) {
 		"runtime gid negative": func(s *ContainerSpec) {
 			s.RuntimeIdentity = testRuntimeIdentity(1000, -1)
 		},
+		"preflight without identity": func(s *ContainerSpec) { s.PreflightMountAccess = true },
+		"preflight without gid": func(s *ContainerSpec) {
+			s.RuntimeIdentity = testRuntimeIdentity(1000)
+			s.PreflightMountAccess = true
+		},
 	} {
 		if err := containerWith(mutate).Validate(); err == nil {
 			t.Errorf("%s: accepted", name)
@@ -227,8 +234,14 @@ spec:
 		t.Fatalf("Validate: %v", err)
 	}
 	plain, _ := json.Marshal(&ContainerSpec{Image: "x"})
-	if strings.Contains(string(plain), "runtimeIdentity") {
+	if strings.Contains(string(plain), "runtimeIdentity") || strings.Contains(string(plain), "preflightMountAccess") {
 		t.Fatalf("omitted runtime identity changed hashed JSON: %s", plain)
+	}
+	withPreflight := *r.Container
+	withPreflight.PreflightMountAccess = true
+	preflightJSON, _ := json.Marshal(&withPreflight)
+	if !strings.Contains(string(preflightJSON), `"preflightMountAccess":true`) {
+		t.Fatalf("preflight opt-in missing from hashed JSON: %s", preflightJSON)
 	}
 	withIdentity, _ := json.Marshal(r.Container)
 	if !strings.Contains(string(withIdentity), `"runtimeIdentity":{"uid":1000,"gid":1001}`) {

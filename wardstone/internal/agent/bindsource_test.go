@@ -5,6 +5,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	wsv1 "github.com/Wildstone-Systems/wildstone-homelab/proto/gen/wardstone/v1"
 )
 
 // TestBindSourceRefusesDataDirOverlap pins the finding from the identity
@@ -75,5 +78,46 @@ func TestBindSourceResolvesSymlinks(t *testing.T) {
 	a := &Agent{cfg: Config{DataDir: data}}
 	if oe := a.checkBindSource(link); oe == nil {
 		t.Fatal("a symlink to the data directory was allowed through")
+	}
+}
+
+func TestBindSourceRefusalLeavesExistingContainerRunning(t *testing.T) {
+	root := t.TempDir()
+	data := filepath.Join(root, "wardstone")
+	if err := os.MkdirAll(data, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	fake := newFakeDocker(t)
+	h := startGateway(t, []string{"tok"}, "")
+	newTestAgent(t, h, "node-a", "tok", func(c *Config) {
+		c.DockerEndpoint = fake.URL()
+		c.DataDir = data
+		c.ManagedPrefixes = []string{root}
+	})
+	if !h.gw.WaitConnected("node-a", 10*time.Second) {
+		t.Fatal("agent never connected")
+	}
+	ensure := func(hash string, mounts ...*wsv1.Mount) *wsv1.OpResult {
+		return dispatch(t, h, "node-a", &wsv1.Operation{Op: &wsv1.Operation_EnsureContainer{
+			EnsureContainer: &wsv1.EnsureContainer{Name: "app", Image: testDigestImage,
+				Labels: map[string]string{SpecHashLabel: hash}, Mounts: mounts},
+		}})
+	}
+	if oe := ensure("v1").GetError(); oe != nil {
+		t.Fatalf("first ensure: %v", oe)
+	}
+	fake.mu.Lock()
+	firstID := fake.containers["app"].id
+	fake.mu.Unlock()
+
+	overlap := &wsv1.Mount{Source: data, Target: "/private", ReadOnly: true}
+	if oe := ensure("v2", overlap).GetError(); oe == nil || oe.GetCode() != wsv1.ErrorCode_ERROR_CODE_FORBIDDEN {
+		t.Fatalf("overlapping bind result = %v, want FORBIDDEN", oe)
+	}
+	fake.mu.Lock()
+	current := fake.containers["app"]
+	fake.mu.Unlock()
+	if current == nil || current.id != firstID || !current.running || current.labels[SpecHashLabel] != "v1" {
+		t.Fatalf("bind refusal disturbed current workload: %+v", current)
 	}
 }

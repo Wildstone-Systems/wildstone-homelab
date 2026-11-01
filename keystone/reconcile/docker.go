@@ -104,19 +104,20 @@ func (dockerTranslator) ensureContainer(name string, spec *resource.ContainerSpe
 	}
 	return &wsv1.Operation{Op: &wsv1.Operation_EnsureContainer{EnsureContainer: &wsv1.EnsureContainer{
 		Name: name, Image: spec.Image, Env: spec.Env, Ports: ports, Mounts: mounts, RestartPolicy: spec.Restart,
-		Command:         spec.Command,
-		Network:         network,
-		Devices:         devices,
-		CapAdd:          spec.CapAdd,
-		HostAliases:     aliases,
-		ReadOnlyRootfs:  spec.ReadOnlyRootfs,
-		CapDrop:         spec.CapDrop,
-		NoNewPrivileges: spec.NoNewPrivileges,
-		Resources:       resources,
-		ShmSize:         spec.ShmSize,
-		RuntimeIdentity: runtimeIdentity,
-		NetworkMode:     networkMode,
-		Labels:          map[string]string{specHashLabel: specHash(spec, network, cfgDigest, aliases)},
+		Command:              spec.Command,
+		Network:              network,
+		Devices:              devices,
+		CapAdd:               spec.CapAdd,
+		HostAliases:          aliases,
+		ReadOnlyRootfs:       spec.ReadOnlyRootfs,
+		CapDrop:              spec.CapDrop,
+		NoNewPrivileges:      spec.NoNewPrivileges,
+		Resources:            resources,
+		ShmSize:              spec.ShmSize,
+		RuntimeIdentity:      runtimeIdentity,
+		PreflightMountAccess: spec.PreflightMountAccess,
+		NetworkMode:          networkMode,
+		Labels:               map[string]string{specHashLabel: specHash(spec, network, cfgDigest, aliases)},
 	}}}
 }
 

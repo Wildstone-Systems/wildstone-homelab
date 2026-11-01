@@ -508,3 +508,29 @@ func (d *dockerClient) pruneImages(ctx context.Context) (pruneResult, error) {
 	}
 	return out, nil
 }
+
+// mountAccessIdentitySupported refuses mappings that a numeric host-identity
+// probe cannot represent. An absent security-options field is unknown, not an
+// assertion that no remapping is configured.
+func (d *dockerClient) mountAccessIdentitySupported(ctx context.Context) (bool, error) {
+	payload, err := d.call(ctx, http.MethodGet, "/info", nil, nil)
+	if err != nil {
+		return false, err
+	}
+	var info struct {
+		SecurityOptions *[]string `json:"SecurityOptions"`
+	}
+	if err := json.Unmarshal(payload, &info); err != nil {
+		return false, err
+	}
+	if info.SecurityOptions == nil {
+		return false, nil
+	}
+	for _, option := range *info.SecurityOptions {
+		name := strings.SplitN(strings.TrimPrefix(option, "name="), ",", 2)[0]
+		if name == "userns" || name == "rootless" {
+			return false, nil
+		}
+	}
+	return true, nil
+}

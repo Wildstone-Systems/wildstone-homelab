@@ -185,6 +185,9 @@ func (clusterTranslator) applyWorkload(r resource.Resource, decl pkgspec.Compone
 		return ClusterRequest{}, fmt.Errorf("cluster: %s: a write needs its accepted revision, plan step and leader epoch", r.Metadata.Name)
 	}
 	spec := r.Container
+	if spec.PreflightMountAccess {
+		return ClusterRequest{}, fmt.Errorf("cluster: %s: preflightMountAccess is not supported by the k3s backend yet", r.Metadata.Name)
+	}
 	if spec.RuntimeIdentity != nil {
 		return ClusterRequest{}, fmt.Errorf("cluster: %s: runtimeIdentity is not supported by the k3s backend yet", r.Metadata.Name)
 	}
