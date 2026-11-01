@@ -262,3 +262,21 @@ If S3c's equivalence holds, the thesis is validated and MVP proceeds. If the
 package-generated identity wiring needed per-app hand-tuning to match the
 fixture, that is the go/no-go failure the spike exists to catch — report it
 prominently rather than papering over it. Produces locked decision #4.
+
+### A7. Experimental offline Helm projection (#256, proposed)
+
+Amended W050 delegates application deployment to Helm/Flux. An optional
+`helm` Package declaration pins upstream Git source commit, chart path/version
+and application image digest. This first implementation supports only the
+Audiobookshelf mapping described in
+[the profile specification](../design/audiobookshelf-helm-profile.md).
+It is a staged parser/offline API extension, not live catalog adoption.
+
+Chart-backed packages cannot mix resource templates/lifecycle hooks and the
+ordinary capability `Expand` path refuses them. Offline `ProjectHelm` reuses
+Package metadata, parameters, policies and validation, returning standard files
+and a review digest without installing, pushing, fetching or authorizing.
+A new mapping requires code/schema review; arbitrary raw values are not inputs.
+Old binaries reject the new field. Do not put these manifests in the live
+catalog until the full publication/observation path and compatibility rollout
+are accepted. Existing Docker packages and resource schemas are unchanged.

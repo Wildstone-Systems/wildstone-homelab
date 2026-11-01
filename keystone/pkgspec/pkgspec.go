@@ -474,6 +474,9 @@ type Package struct {
 	// backend reads them.
 	Devices    []DeviceDecl    `yaml:"devices,omitempty" json:"devices,omitempty"`
 	Deployment *DeploymentSpec `yaml:"deployment,omitempty" json:"deployment,omitempty"`
+	// Helm is an offline chart-backed projection. The ordinary resource
+	// expansion/install path refuses it until approved Git publication exists.
+	Helm *HelmSpec `yaml:"helm,omitempty" json:"helm,omitempty"`
 }
 
 // ImageSet names images whose versions are not independent — refreshing
@@ -551,6 +554,9 @@ func Load(path string) (*Package, error) {
 // when the package otherwise looks like it produces resources — see
 // below).
 func (p *Package) Validate() error {
+	if err := validateHelm(p); err != nil {
+		return err
+	}
 	if p.Metadata.Name == "" {
 		return &ValidationError{Field: "metadata.name", Msg: "must not be empty"}
 	}
@@ -726,7 +732,7 @@ func (p *Package) Validate() error {
 	// A package that declares no templates, no
 	// agentTools, and no provides is producing nothing — reject it as
 	// malformed rather than silently accepting a no-op package.
-	if len(p.Templates) == 0 && len(p.AgentTools) == 0 && len(p.Provides) == 0 {
+	if len(p.Templates) == 0 && len(p.AgentTools) == 0 && len(p.Provides) == 0 && p.Helm == nil {
 		return &ValidationError{Field: "templates", Msg: "must not be empty: package declares no templates, agentTools, or provides"}
 	}
 

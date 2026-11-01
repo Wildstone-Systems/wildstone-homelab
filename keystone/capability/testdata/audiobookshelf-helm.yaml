@@ -1,0 +1,23 @@
+# Experimental offline Package extension for #256; not a live catalog entry.
+apiVersion: wildstone.dev/v1
+kind: Package
+metadata:
+  name: audiobooks-audiobookshelf
+  version: 0.1.0
+  capability: audiobooks
+  profile: audiobookshelf
+params:
+  - name: timezone
+    default: UTC
+    source: timezone
+    validate: iana_timezone
+    description: Household timezone.
+policies:
+  classifications: [family_private]
+  dataSensitivity: low
+helm:
+  sourceURL: https://github.com/bdclark/helm-charts.git
+  sourceCommit: c424d45686c631ce9840306a9d1c804e5bb4f148
+  chartPath: charts/audiobookshelf
+  chartVersion: 0.1.6
+  image: ghcr.io/advplyr/audiobookshelf:2.37.2@sha256:b897c33f05972fb1bf484f7487bc878fa91ec8691335c1db6e2929c3a7658efa

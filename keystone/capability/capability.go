@@ -144,6 +144,9 @@ func NewEngine() *Engine { return &Engine{} }
 // and validates the rendered resource, stamps owner if absent, and returns
 // the flattened, validated resource list in template order (ADR-W005 A2).
 func (e *Engine) Expand(pkg *pkgspec.Package, params map[string]string, catalog *Catalog) ([]resource.Resource, error) {
+	if pkg.Helm != nil {
+		return nil, fmt.Errorf("capability: chart-backed packages require offline ProjectHelm; deployment is not implemented")
+	}
 	merged, err := mergeParams(pkg, params)
 	if err != nil {
 		return nil, err
