@@ -1,0 +1,6 @@
+This chart is repository-validation packaging only. It does not create PVCs,
+Ingress, RBAC, credentials, or household configuration.
+
+The required runtime claim is: {{ .Values.storage.runtime.existingClaim }}
+The image is pinned as: {{ include "wildstone-management.image" . }}
+
