@@ -384,6 +384,113 @@ func (db *DB) FenceButlerTaskAttempts(taskID string) (int64, error) {
 	return epoch, nil
 }
 
+// RecoverInterruptedButlerAttempts reconciles the checkpoint-before-dispatch
+// rows left by a stopped coordinator before any resumed task can dispatch.
+//
+// A model call has no household effect, so fencing its abandoned attempt is
+// enough: the running task may retry the model at the new epoch. A tool or
+// delivery may have crossed an external boundary before Keystone stopped.
+// Its absent result is therefore not permission to repeat it; the task is
+// parked as an uncertain outcome for Owner review. This is deliberately
+// conservative because the durable step ledger does not classify arbitrary
+// tools as read-only or effectful.
+//
+// The operation is idempotent. Once the dispatched attempts are fenced they
+// are no longer selected, and an already parked task is not changed again.
+func (db *DB) RecoverInterruptedButlerAttempts() error {
+	// Recovery mutates no external system, so restore quarantine and the
+	// household stop do not block it. It still requires this process's exact
+	// coordinator epoch; reopening a database alone grants no authority.
+	lease := db.executionLease.Load()
+	if lease == nil {
+		return fmt.Errorf("%w: this process has not acquired execution authority", ErrCoordinatorFenced)
+	}
+	if err := db.CheckCoordinator(lease.Holder, lease.Epoch); err != nil {
+		return err
+	}
+	rows, err := db.sql.Query(`SELECT DISTINCT t.seq,
+	 EXISTS(SELECT 1 FROM butler_task_attempts pending
+	  JOIN butler_task_steps effect_step ON effect_step.seq=pending.step
+	  WHERE pending.task=t.seq AND pending.state=? AND effect_step.kind IN (?, ?))
+	 FROM butler_tasks t JOIN butler_task_attempts a ON a.task=t.seq
+	 WHERE t.state=? AND a.state=? ORDER BY t.seq`,
+		string(ButlerAttemptDispatched), string(ButlerStepTool), string(ButlerStepDelivery),
+		string(ButlerTaskRunning), string(ButlerAttemptDispatched))
+	if err != nil {
+		return fmt.Errorf("runtimedb: finding interrupted butler attempts: %w", err)
+	}
+	type interrupted struct {
+		id        string
+		effectful bool
+	}
+	var work []interrupted
+	for rows.Next() {
+		var seq int64
+		var effectful bool
+		if err := rows.Scan(&seq, &effectful); err != nil {
+			rows.Close()
+			return err
+		}
+		work = append(work, interrupted{id: butlerTaskID(seq), effectful: effectful})
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return err
+	}
+	for _, item := range work {
+		if err := db.recoverInterruptedButlerTask(item.id, item.effectful); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (db *DB) recoverInterruptedButlerTask(taskID string, effectful bool) error {
+	seq, err := parseButlerTaskID(taskID)
+	if err != nil {
+		return err
+	}
+	tx, err := db.sql.Begin()
+	if err != nil {
+		return fmt.Errorf("runtimedb: recovering interrupted task %s: %w", taskID, err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	var epoch, dispatched int64
+	if err := tx.QueryRow(`SELECT lease_epoch,
+	 (SELECT count(*) FROM butler_task_attempts WHERE task=? AND state=?)
+	 FROM butler_tasks WHERE seq=? AND state=?`, seq, string(ButlerAttemptDispatched), seq, string(ButlerTaskRunning)).Scan(&epoch, &dispatched); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		return fmt.Errorf("runtimedb: recovering interrupted task %s: %w", taskID, err)
+	}
+	if dispatched == 0 {
+		return nil
+	}
+	epoch++
+	stamp := now()
+	if _, err := tx.Exec(`UPDATE butler_tasks SET lease_epoch=?,updated_at=? WHERE seq=?`, epoch, stamp, seq); err != nil {
+		return fmt.Errorf("runtimedb: recovering interrupted task %s: %w", taskID, err)
+	}
+	if _, err := tx.Exec(`UPDATE butler_task_attempts SET state=?,ended_at=? WHERE task=? AND state=?`,
+		string(ButlerAttemptFenced), stamp, seq, string(ButlerAttemptDispatched)); err != nil {
+		return fmt.Errorf("runtimedb: recovering interrupted task %s: %w", taskID, err)
+	}
+	if effectful {
+		if err := openButlerTaskWaitTx(tx, seq, ButlerTaskWait{
+			Reason: ButlerWaitUncertainOutcome,
+			Detail: "coordinator restarted after dispatch; the external outcome is unknown",
+		}); err != nil {
+			return fmt.Errorf("runtimedb: parking interrupted task %s: %w", taskID, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("runtimedb: recovering interrupted task %s: %w", taskID, err)
+	}
+	return nil
+}
+
 // ListButlerTaskAttempts returns every attempt on a task, oldest first.
 func (db *DB) ListButlerTaskAttempts(taskID string) ([]ButlerTaskAttempt, error) {
 	seq, err := parseButlerTaskID(taskID)
@@ -472,6 +579,16 @@ func (db *DB) OpenButlerTaskWait(taskID string, w ButlerTaskWait) error {
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	if err := openButlerTaskWaitTx(tx, seq, w); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("runtimedb: opening butler task wait: %w", err)
+	}
+	return nil
+}
+
+func openButlerTaskWaitTx(tx *sql.Tx, seq int64, w ButlerTaskWait) error {
 	if err := transitionButlerTaskTx(tx, seq, ButlerTaskWaiting, string(w.Reason), ""); err != nil {
 		return err
 	}
@@ -492,9 +609,6 @@ func (db *DB) OpenButlerTaskWait(taskID string, w ButlerTaskWait) error {
 		 WHERE seq=(SELECT conversation_work FROM butler_tasks WHERE seq=?) AND uncertain_outcome=0`, seq, now(), seq); err != nil {
 			return err
 		}
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("runtimedb: opening butler task wait: %w", err)
 	}
 	return nil
 }
