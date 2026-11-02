@@ -6,10 +6,10 @@ require (
 	github.com/Wildstone-Systems/wildstone-homelab/proto v0.0.0
 	github.com/emersion/go-imap/v2 v2.0.0-beta.8
 	github.com/yuin/goldmark v1.8.6
-	golang.org/x/net v0.61.0
+	golang.org/x/net v0.62.0
 	golang.org/x/sys v0.49.0
 	golang.org/x/text v0.43.0
-	google.golang.org/grpc v1.84.0
+	google.golang.org/grpc v1.85.0
 	google.golang.org/protobuf v1.36.12
 	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.61.0
