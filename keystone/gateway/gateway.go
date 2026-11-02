@@ -28,7 +28,6 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/clusterauthority"
-	"github.com/Wildstone-Systems/wildstone-homelab/keystone/internal/datadir"
 	wsv1 "github.com/Wildstone-Systems/wildstone-homelab/proto/gen/wardstone/v1"
 )
 
@@ -229,8 +228,8 @@ func New(cfg Config) (*Gateway, error) {
 		if err := os.MkdirAll(cfg.DataDir, 0o700); err != nil {
 			return nil, fmt.Errorf("create data dir: %w", err)
 		}
-		if err := datadir.Secure(cfg.DataDir); err != nil {
-			return nil, err
+		if err := os.Chmod(cfg.DataDir, 0o700); err != nil { // MkdirAll's mode is subject to umask
+			return nil, fmt.Errorf("chmod data dir: %w", err)
 		}
 		var err error
 		var loaded bool

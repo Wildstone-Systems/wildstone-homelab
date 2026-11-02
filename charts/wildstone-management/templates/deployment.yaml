@@ -43,6 +43,23 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      initContainers:
+        - name: runtime-layout
+          image: {{ include "wildstone-management.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["/usr/local/bin/wildstone-runtime-volume-init"]
+          args: ["/volume"]
+          securityContext:
+            runAsUser: 65532
+            runAsGroup: 65532
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: runtime
+              mountPath: /volume
       containers:
         - name: keystone
           image: {{ include "wildstone-management.image" . | quote }}
@@ -109,6 +126,7 @@ spec:
           volumeMounts:
             - name: runtime
               mountPath: /var/lib/wildstone/keystone
+              subPath: keystone
             - name: tmp
               mountPath: /tmp
             {{- if .Values.configuration.existingConfigMap }}

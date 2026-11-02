@@ -38,11 +38,12 @@ Proposed chart resources:
 - ConfigMap/Secret references for deployment settings; scoped ServiceAccount only for the observation/publishing behavior explicitly implemented. Flux is the workload writer, not Keystone.
 - Management persistence, private workspace and optional shared-file claims/mounts with separate ownership and recovery policies. Never combine private and household data simply to reduce PVC count.
 - A fixed non-root UID/GID and Pod `fsGroup` may establish access only on a
-  storage implementation that supports Kubernetes volume ownership. Keystone
-  accepts its owner-only directory or the exact group-owned mount root produced
-  by that contract and refuses every other ownership/mode combination. Do not
-  add a root init container or silently adopt an existing claim to compensate
-  for an incompatible provisioner.
+  storage implementation that supports Kubernetes volume ownership. A bounded
+  non-root init creates a private owner-only `keystone/` child inside a fresh
+  claim; Keystone mounts that child at its unchanged data path. It refuses a
+  nonempty legacy claim rather than silently initializing beside old data. Do
+  not add a root init container or silently adopt an existing claim to
+  compensate for an incompatible provisioner.
 - Traefik routes and approved authentication integration. Forwarded identity must be accepted only across an explicitly verified trusted proxy boundary; arbitrary pod-CIDR trust is not a replacement for the current checks.
 - External identity/model/notification services remain separately deployed through their own integrations. A Helm release does not itself provision LDAP groups; preserve reviewed identity-provider operations.
 

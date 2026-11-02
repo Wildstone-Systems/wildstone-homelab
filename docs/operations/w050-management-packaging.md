@@ -69,12 +69,12 @@ rendering. A missing referenced PVC leaves the Pod Pending; it never produces
 an `emptyDir` replacement. The only `emptyDir` is a size-bounded `/tmp` for the
 read-only container filesystem.
 
-Chart 0.2.0 has no init containers. The Pod, Keystone process and primary group
-use UID/GID 65532; the Pod also sets `fsGroup: 65532` and
-`fsGroupChangePolicy: OnRootMismatch`. On a supported volume implementation,
-kubelet or the CSI driver makes the volume root group-owned and group-writable.
-This applies to the runtime, `/tmp`, upload and workspace volumes without
-giving Keystone root or `CHOWN`.
+Chart 0.2.0 has no root container. The Pod, Keystone process, and one bounded
+runtime-layout init container use UID/GID 65532; the Pod also sets
+`fsGroup: 65532` and `fsGroupChangePolicy: OnRootMismatch`. On a supported
+volume implementation, kubelet or the CSI driver makes the volume root
+group-writable. This applies to the runtime, `/tmp`, upload and workspace
+volumes without giving any workload root or `CHOWN`.
 
 These settings follow Kubernetes' [volume ownership behavior][security-context]
 and the [Restricted Pod Security standard][restricted-pss]. CSI drivers that
@@ -84,12 +84,19 @@ kubelet applies supported volume ownership itself.
 [security-context]: https://kubernetes.io/docs/tasks/configure-pod-container/security-context/
 [restricted-pss]: https://kubernetes.io/docs/concepts/security/pod-security-standards/
 
-Keystone does not treat that mechanism as proof by assertion. At startup it
-accepts either a data directory it owns (and reduces it to mode 0700), or a
-foreign-owned mount whose primary group is exactly 65532 and whose permission
-bits are exactly 0770. Wrong group, missing group write access, or any access
-for "other" is an explicit startup failure before SQLite opens. A missing or
-inaccessible claim therefore cannot fall back to an image directory or create
+Kubelet adds group permissions but does not remove pre-existing "other" bits
+from a provisioned volume root. The chart therefore does not put secret state
+directly at that root. The non-root init mounts the claim root at `/volume`,
+requires it to be empty (or already contain only a valid private `keystone/`
+child), and creates that child as 65532:65532 mode 0700. The main container
+mounts only the child through `subPath` at the unchanged
+`/var/lib/wildstone/keystone` application path. Keystone retains its existing
+owner-only chmod check before SQLite opens.
+
+An old-layout file, unrelated entry, symlink, wrong ownership, or wrong child
+mode makes the init fail with an explicit migration error. A missing claim
+leaves the Pod Pending, and an inaccessible child makes Keystone fail before
+SQLite opens. Neither condition can fall back to an image directory or create
 a replacement database. SQLite, Statefile, key, credential and recovery paths
 remain beneath `/var/lib/wildstone/keystone` unchanged.
 
@@ -100,13 +107,15 @@ NAS exports or drivers ignore it. `OnRootMismatch` can reduce repeat scans but
 does not override driver behavior. Validate the selected StorageClass with a
 fresh synthetic claim before adoption.
 
-Existing data needs a separate migration decision. On implementations that
-apply ownership recursively, first use may change group and permission bits
-throughout a root-owned volume. Quiesce Keystone, capture and independently
-verify the full management consistency group, and test a restore alongside
-before approving either that ownership change or an administrator-performed
-`chgrp`/`chmod` migration. Do not enable this chart against an unreviewed
-household claim. The chart contains no fallback permission fixer.
+Existing data needs a separate migration decision. Chart 0.1.0 placed database
+and Statefile content at the claim root; 0.2.0 expects it beneath the private
+`keystone/` child. The init deliberately refuses the old nonempty layout.
+Quiesce Keystone, capture and independently verify the full management
+consistency group, and test a restore alongside before an administrator moves
+the complete set into an owner-65532 mode-0700 child. On implementations that
+apply ownership recursively, first use can also change group and permission
+bits on the outer volume root. Do not enable this chart against an unreviewed
+household claim. The chart contains no fallback permission fixer or data mover.
 
 Keystone's real unauthenticated `/api/v1/healthz` is used for readiness. It
 means the public API handler is serving; it does not establish coordinator,
@@ -123,11 +132,11 @@ HELM=helm scripts/test-management-chart.sh
 The script runs lint, schema and deterministic-render checks plus negative
 checks for multiple replicas, mutable image references, missing claims,
 hostPath, public Services/Ingress, RBAC, cluster credentials, privileged
-containers, root/init containers, added capabilities, embedded Secrets, and
+containers, root initialization, added capabilities, embedded Secrets, and
 silent storage fallback. The image smoke test also exercises writable `/tmp`,
-startup on an fsGroup-shaped root-owned/group-writable volume, explicit refusal
-of inaccessible required storage, native-agent compatibility, restart,
-persistence and authorization continuity.
+non-root layout creation on an fsGroup-shaped 2777 volume root, refusal of a
+legacy/nonempty volume, explicit refusal of inaccessible required storage,
+native-agent compatibility, restart, persistence and authorization continuity.
 
 ## Authority and security boundaries
 
