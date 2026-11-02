@@ -76,8 +76,7 @@
     background: color-mix(in srgb, var(--color-bg) 72%, transparent);
     box-shadow: inset 0 0 0 1px var(--hair); backdrop-filter: blur(10px);
   }
-  .clockplate .t { font-size: 20px; font-weight: 500; }
-  .clockplate .d { font-size: 12px; color: var(--color-text); }
+  .clockplate .d { font-size: 14px; font-weight: 500; color: var(--color-text); }
   .avatar { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center;
             background: color-mix(in srgb, var(--color-accent) 28%, transparent);
             font-size: 11px; font-weight: 600; }
@@ -146,7 +145,6 @@
     </div>
     <div class="clockplate">
       <div style="text-align: right">
-        <div class="t tnum" id="clock"></div>
         <div class="d tnum" id="date"></div>
       </div>
       <div class="spread">
@@ -471,7 +469,6 @@
 
   function tick() {
     var now = new Date();
-    text("clock", now.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }));
     text("date", now.toLocaleDateString([], { weekday: "long", month: "long", day: "numeric" }));
   }
   tick();
@@ -1346,7 +1343,7 @@
         evs.forEach(function (e) {
           var row = make("div", "frow");
           row.appendChild(make("span", "nm", e.title));
-          if (e.calendarName) { row.appendChild(make("span", "muted", e.calendarName)); row.style.borderLeft = "3px solid " + e.color; }
+          if (e.calendarName) { row.appendChild(make("span", "muted", e.calendarName)); row.style.borderLeft = "3px solid " + e.color; row.style.paddingLeft = "var(--space-3)"; }
           row.appendChild(make("span", "muted tnum", e.allDay ? dayName(e.at) + " all day"
                                                               : dayName(e.at) + " " + when(e.at)));
           body.appendChild(row);
