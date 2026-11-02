@@ -174,8 +174,11 @@ After Owner approval, use exactly:
 - namespace `wildstone-mgmt-276`, enforcing/auditing/warning
   `restricted:v1.37`;
 - release `ws276-management`, chart `wildstone-management` 0.2.0 from the
-  approved PR commit, and a locally built/imported image from that exact commit
-  referenced by its recorded `sha256` digest (never a tag);
+  approved PR commit. The repository proof built commit `77bd5a70` as version
+  `0.0.0-issue276`, smoke-tested it, and recorded the local-only digest
+  `sha256:192aa76cc043065576c1bb74b2ee35907267dd7a7731689c5ead3721c33716c2`.
+  Rebuild the final approved PR head if it changes and record/use that exact
+  imported digest, never a tag;
 - new `local-path` PVCs `ws276-runtime`, `ws276-uploads` and
   `ws276-workspaces`, plus separate target PVCs `ws276-restored-runtime`,
   `ws276-restored-uploads` and `ws276-restored-workspaces`;
