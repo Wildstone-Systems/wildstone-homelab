@@ -25,6 +25,13 @@ No new automatic repair or destructive-reset authority is granted here.
 
 ## The whole-site contract
 
+This section's total-loss path intentionally rebuilds the CA and
+operation-signing identity and rejoins nodes. It is not the procedure for
+restoring the same Helm-managed Keystone installation. For management
+identity, local deployment Git, chart 0.1/0.2 storage layout and independent
+no-API bootstrap, use the
+[management-independent recovery contract](operations/management-independent-recovery.md).
+
 Keep these off the host, always. The reserved `BackupPlan/wildstone`
 packages the control-plane artifacts described in item 2; the recovery kit
 in item 4 contains what a fresh install needs to unlock and locate them:
