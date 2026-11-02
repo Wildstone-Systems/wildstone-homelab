@@ -79,6 +79,8 @@ Keep canonical product Statefile and derived deployment output distinct without 
 
 Privileged bootstrap, RBAC/admission and key installation are separately owned. Scope chart hooks, source references, dependencies and valuesFrom; Helm configuration can carry substantial authority. No plaintext secrets or model-visible credentials.
 
+The opt-in [Owner Plan integration](approved-local-deployment.md) implements this path through the existing Console/API for one fixed Audiobookshelf slot. It records canonical `HelmDeployment` intent and derives standard YAML into a separate local repository. [Read-only delivery](local-git-source.md) uses a promoted-only mirror; no household Statefile object database is served. Repository acceptance remains distinct from #258 live evidence.
+
 ## 5. Direct use and ownership
 
 Owners can use Flux directly. Wildstone provides a household GUI, tested integrations and optional automation over standard tools; it is not a replacement Flux API or generic Flux dashboard.

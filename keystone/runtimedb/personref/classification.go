@@ -233,6 +233,9 @@ var LegacyColumns = []Column{
 }
 
 var Columns = []Column{
+	{"deployment_plan_heads", "instance_id", NotAPerson, "0114: installation-owned application slot from DeploymentReview.Instance; never a Person selector"},
+	{"deployment_publication_attempts", "detail_code", NotAPerson, "0114: closed local publication diagnostic code, not a party"},
+	{"deployment_publication_attempts", "phase", NotAPerson, "0114: closed local publication status enum, not a party"},
 	// 0105 (ADR-W049 Phase 1): inert external-client registration
 	// configuration. The row is bound to a canonical Person and a machine
 	// runtime principal, but does not establish a new identity or credential.

@@ -1,6 +1,6 @@
 # Read-only local Git delivery for Flux
 
-Status: bounded #257 follow-up built from #264’s head; #264 has now merged, not a completed operating path or authorization to modify the development VM. Console/public-API dispatch and automatic Plan resume remain separate required #257 work. #258 owns actual controller reachability, application observation and the scheduled live proof. ADR-W050 and the migration plan govern.
+Status: bounded #257 follow-up built from #264’s head; #264 has now merged, not a completed operating path or authorization to modify the development VM. The opt-in [Owner Plan integration](approved-local-deployment.md) supplies Console/public-API dispatch and automatic Plan resume; its CI/review and the transport proof remain #257 gates. #258 owns actual controller reachability, application observation and the scheduled live proof. ADR-W050 and the migration plan govern.
 
 ## Use established services
 

@@ -204,6 +204,9 @@ type Plan struct {
 // Butler's diagnose walker. Both now go through KindOrder, and
 // TestEveryKindHasADeclaredOrder makes the omission impossible to repeat.
 var kindOrder = map[resource.Kind]int{
+	// Canonical Helm input has no host dependency; Diff excludes it from
+	// host steps. Keep its declared position explicit for all-kind callers.
+	resource.KindHelmDeployment: 0,
 	// Secret first, ahead of everything. A ConfigFile can carry a secret
 	// reference the node resolves at write time, and a Container can
 	// carry one in its env, so a secret has to exist before either. Note
@@ -297,10 +300,16 @@ type key struct {
 func Diff(desired, observed []resource.Resource) *Plan {
 	desiredByKey := make(map[key]resource.Resource, len(desired))
 	for _, r := range desired {
+		if r.Kind == resource.KindHelmDeployment {
+			continue
+		}
 		desiredByKey[key{r.Kind, r.Metadata.Name}] = r
 	}
 	observedByKey := make(map[key]resource.Resource, len(observed))
 	for _, r := range observed {
+		if r.Kind == resource.KindHelmDeployment {
+			continue
+		}
 		observedByKey[key{r.Kind, r.Metadata.Name}] = r
 	}
 

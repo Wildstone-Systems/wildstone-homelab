@@ -61,10 +61,16 @@ type (
 // Request is the plan-proposal body (ADR-W007 K3): the ONLY way any
 // principal initiates a change (ground rule 4). Resources travel as
 // canonical YAML documents (the Statefile's own schema).
+type DeploymentRequest struct {
+	Instance string `json:"instance"`
+	Timezone string `json:"timezone"`
+}
+
 type Request struct {
-	Summary string        `json:"summary"`
-	Put     []string      `json:"put,omitempty"`
-	Delete  []DeletionRef `json:"delete,omitempty"`
+	Deployment *DeploymentRequest `json:"deployment,omitempty"`
+	Summary    string             `json:"summary"`
+	Put        []string           `json:"put,omitempty"`
+	Delete     []DeletionRef      `json:"delete,omitempty"`
 }
 
 // Options carries what a caller knows that the generic propose entry
@@ -127,8 +133,11 @@ func (d Deps) event(typ, planID string, id principal.Identity, msg string) {
 // a JSON string, so this parses it once and returns the plan the way
 // every other field already reads.
 type PlanView struct {
-	Research  *research.Change `json:"research,omitempty"`
-	AuditOnly bool             `json:"auditOnly,omitempty"`
+	DeploymentPlan   bool                        `json:"deploymentPlan,omitempty"`
+	Deployment       *runtimedb.DeploymentReview `json:"deployment,omitempty"`
+	DeploymentStatus *runtimedb.DeploymentStatus `json:"deploymentStatus,omitempty"`
+	Research         *research.Change            `json:"research,omitempty"`
+	AuditOnly        bool                        `json:"auditOnly,omitempty"`
 	runtimedb.PlanRecord
 	// PlanJSON must compete for the embedded field's NAME to suppress
 	// it. `json:"-"` does not shadow — it removes this field from
@@ -157,6 +166,13 @@ type PlanView struct {
 // which is the moment it matters.
 func ViewPlan(rec runtimedb.PlanRecord) PlanView {
 	v := PlanView{PlanRecord: rec}
+	if doc, err := runtimedb.DecodeDeploymentPlan(rec.PlanJSON); err == nil && doc.Deployment.Review != nil {
+		v.DeploymentPlan = true
+		v.Deployment = doc.Deployment.Review
+		v.BasedOnHead = doc.BasedOnHead
+		return v
+	}
+
 	if rec.PlanJSON == "" {
 		return v
 	}
@@ -217,6 +233,9 @@ func ApplyChanges(current, puts []resource.Resource, deletes []DeletionRef) []re
 // held to exactly the checks a human's is — same validation, same
 // policy engine, same 422-on-violation, same audit events.
 func File(deps Deps, id principal.Identity, req Request, opts Options) (any, int, error) {
+	if req.Deployment != nil {
+		return nil, http.StatusForbidden, fmt.Errorf("deployment Plans require the Owner review route")
+	}
 	if req.Summary == "" {
 		return nil, http.StatusBadRequest, fmt.Errorf("summary required")
 	}
@@ -235,9 +254,15 @@ func File(deps Deps, id principal.Identity, req Request, opts Options) (any, int
 		if err := res.Validate(); err != nil {
 			return nil, http.StatusBadRequest, fmt.Errorf("put[%d]: %w", i, err)
 		}
+		if res.Kind == resource.KindHelmDeployment {
+			return nil, http.StatusForbidden, fmt.Errorf("Helm changes require an exact deployment Plan")
+		}
 		puts = append(puts, res)
 	}
 	for i, d := range req.Delete {
+		if resource.Kind(d.Kind) == resource.KindHelmDeployment {
+			return nil, http.StatusForbidden, fmt.Errorf("Helm uninstall/retention review is not available")
+		}
 		if !resource.KnownKind(resource.Kind(d.Kind)) {
 			return nil, http.StatusBadRequest, fmt.Errorf("delete[%d]: unknown kind %q", i, d.Kind)
 		}

@@ -79,7 +79,21 @@ export interface ResearchChange {
   };
 }
 
+export interface DeploymentReview {
+  instance: string; operationId: string; previousProductRevision: string; productRevision: string;
+  expectedDeploymentRevision: string; projectionDigest: string; profileDigest: string;
+  inventoryDigest: string; encryptedSecretRevision: string; package: string; packageVersion: string;
+  chartSource: string; chartCommit: string; chartPath: string; chartVersion: string; image: string;
+  namespace: string; release: string; timezone: string; desiredResource: string; files: Record<string,string>;
+}
+export interface DeploymentStatus {
+  phase:string; detail:string; attemptCode?:string; productRevision:string; preparedRevision?:string;
+  promotedRevision?:string; delivery:string; mirrorRevision?:string; reconciliation:string; application:string; observedAt:string;
+}
+export interface DeploymentSlot { configured:boolean; instance?:string; package?:string; version?:string; timezone?:string }
+
 export interface PlanRecord {
+ deploymentPlan?:boolean; deployment?:DeploymentReview; deploymentStatus?:DeploymentStatus;
   research?: ResearchChange;
   auditOnly?: boolean;
   seq: number;
@@ -2658,6 +2672,8 @@ export const api = {
       dryRun: true,
     }),
   plan: (id: string) => call<PlanRecord>("GET", `/api/v1/plans/${encodeURIComponent(id)}`),
+  deploymentSlot: () => call<DeploymentSlot>("GET", "/api/v1/deployments"),
+  proposeDeployment: (instance:string, timezone:string) => call<PlanRecord>("POST", "/api/v1/plans", {deployment:{instance,timezone}}),
   approvePlan: (id: string) =>
     call<unknown>("POST", `/api/v1/plans/${encodeURIComponent(id)}/approve`),
   rejectPlan: (id: string) =>

@@ -30,6 +30,7 @@ import (
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/butlerlive"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/butlerstore"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/catalog"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/deployment"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/policy"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/principal"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/publish"
@@ -186,6 +187,9 @@ type Server struct {
 	// builds one; cmd/keystone replaces it with the instance ingestion
 	// shares, so both serialize on the same lock.
 	Publisher *publish.Publisher
+	// Deployments is optional local-only Helm publication. Nil leaves mutation
+	// unavailable; no cluster credentials or direct apply capability is exposed.
+	Deployments *deployment.Manager
 
 	// ManagedPrefix is where ConfigFiles are rendered on a node, wired
 	// from -managed-prefix. Needed here because a secret can be read
@@ -435,6 +439,7 @@ func (s *Server) Handler() http.Handler {
 
 	mux.Handle("GET /api/v1/plans", s.handle(principal.VerbRead, s.listPlans))
 	mux.Handle("GET /api/v1/plans/{id}", s.handle(principal.VerbRead, s.getPlan))
+	mux.Handle("GET /api/v1/deployments", s.handle(principal.VerbRead, s.deploymentSlot))
 	mux.Handle("POST /api/v1/plans", s.handle(principal.VerbPropose, s.proposePlan))
 
 	// Capabilities (ADR-W021 A1): expansion lives here, not in the CLI,

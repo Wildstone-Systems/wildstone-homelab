@@ -163,6 +163,13 @@ func (l *Loop) Tick(ctx context.Context) (TickOutcome, error) {
 			if selfDrivenPrincipals[p.Principal] {
 				continue
 			}
+			var deployment struct {
+				Deployment json.RawMessage `json:"deployment"`
+			}
+			if json.Unmarshal([]byte(p.PlanJSON), &deployment) == nil && len(deployment.Deployment) > 0 && string(deployment.Deployment) != "null" {
+				continue
+			}
+
 			// Household tracker edits are deliberately inserted directly as
 			// applying audit records while their request commits the Statefile.
 			// They never authorize infrastructure work. Resuming arbitrary
@@ -816,6 +823,9 @@ type nodeGroup struct {
 func groupByNode(desired []resource.Resource) []nodeGroup {
 	byNode := map[string][]resource.Resource{}
 	for _, r := range desired {
+		if r.Kind == resource.KindHelmDeployment {
+			continue
+		}
 		node := r.Metadata.Node
 		if reconcile.TargetOf(r).Kind == reconcile.TargetCluster {
 			node = "@cluster"

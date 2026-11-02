@@ -27,12 +27,15 @@ type DeploymentRequest struct {
 
 // DeploymentPublisher reuses the publication package and runtime DB but keeps
 // generated deployment history separate from accepted product Statefile data.
-// No production caller is wired until the Plan/authority integration is ready.
+// The opt-in deployment Manager supplies production Plan/input validation.
 type DeploymentPublisher struct {
 	Repo *statefile.LocalDeployment
 	DB   *runtimedb.DB
 	Gate func(DeploymentRequest) error
-	mu   sync.Mutex
+	// ValidateInputs is a bounded local-file fingerprint check, run under the
+	// final authority fence. It must make no DB calls or network requests.
+	ValidateInputs func(DeploymentRequest) error
+	mu             sync.Mutex
 	// interrupt is a local test seam, not a caller-supplied execution hook.
 	interrupt func(string) error
 }
@@ -147,6 +150,11 @@ func (p *DeploymentPublisher) Promote(req DeploymentRequest) (runtimedb.Deployme
 		return row, err
 	}
 	effect := func() error {
+		if p.ValidateInputs != nil {
+			if err := p.ValidateInputs(req); err != nil {
+				return err
+			}
+		}
 		head, err := p.Repo.Head()
 		if err != nil {
 			return err
@@ -162,6 +170,13 @@ func (p *DeploymentPublisher) Promote(req DeploymentRequest) (runtimedb.Deployme
 	approval, err := p.DB.GetPlan(req.PlanID)
 	if err != nil {
 		return row, err
+	}
+	doc, parseErr := runtimedb.DecodeDeploymentPlan(approval.PlanJSON)
+	if parseErr != nil {
+		return row, parseErr
+	}
+	if doc.Deployment.Review != nil && p.ValidateInputs == nil {
+		return row, fmt.Errorf("deployment: current input verification is required")
 	}
 	err = p.DB.WithDeploymentApproval(req.PlanID, approval.PlanJSON, binding, req.AcceptedRevision, effect)
 	if err != nil {
@@ -190,4 +205,9 @@ func deploymentBinding(repositoryIdentity string, req DeploymentRequest) (string
 	}
 	sum := sha256.Sum256(material)
 	return hex.EncodeToString(sum[:]), nil
+}
+
+// DeploymentBinding computes review identity only. It is never approval.
+func DeploymentBinding(repositoryIdentity string, req DeploymentRequest) (string, error) {
+	return deploymentBinding(repositoryIdentity, req)
 }

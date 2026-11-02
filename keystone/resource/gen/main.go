@@ -47,6 +47,7 @@ var kindSpecs = []struct {
 	{resource.KindAutomation, reflect.TypeOf(resource.AutomationSpec{})},
 	{resource.KindMeter, reflect.TypeOf(resource.MeterSpec{})},
 	{resource.KindCommitment, reflect.TypeOf(resource.CommitmentSpec{})},
+	{resource.KindHelmDeployment, reflect.TypeOf(resource.HelmDeploymentSpec{})},
 	{resource.KindMatrixAppService, reflect.TypeOf(resource.MatrixAppServiceSpec{})},
 }
 

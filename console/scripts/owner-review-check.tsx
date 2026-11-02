@@ -31,6 +31,14 @@ async function main() {
  const incomplete:PlanRecord={...summary,research:{operation:"update",providerId:"sr.review-provider",expectedConfigRevision:"sr.review-revision"}};
  const incompleteHTML=renderToString(h(PendingPlan,{plan:incomplete,onResolved:()=>{}}));
  assert.match(incompleteHTML,/btn-primary[^>]*disabled/,"missing configuration must not enable approval");
+ const deployment:PlanRecord={...summary,deploymentPlan:true,deployment:{instance:"example-app",operationId:"example-operation",previousProductRevision:"example-base",productRevision:"example-product",expectedDeploymentRevision:"example-parent",projectionDigest:"example-output-digest",profileDigest:"example-profile-digest",inventoryDigest:"example-inventory-digest",encryptedSecretRevision:"example-encrypted-version",package:"audiobooks-audiobookshelf",packageVersion:"1.0.0",chartSource:"https://example.invalid/charts",chartCommit:"example-immutable-commit",chartPath:"charts/example",chartVersion:"1.0.0",image:"example-image-digest",namespace:"example-namespace",release:"example-release",timezone:"UTC",desiredResource:"example-resource",files:{"source.yaml":"example-exact-source","release.yaml":"example-exact-release","kustomization.yaml":"example-exact-kustomization"}}};
+ const reviewed=renderToString(h(PendingPlan,{plan:deployment,onResolved:()=>{}})).replace(/<!--.*?-->/g, "");
+ for(const text of ["example-app","example-immutable-commit","example-image-digest","example-output-digest","example-profile-digest","example-inventory-digest","example-encrypted-version","example-product","example-parent","example-exact-source","example-exact-release","example-exact-kustomization","does not provision or rotate","retained"])assert.ok(reviewed.includes(text),`deployment review omits ${text}`);
+ assert.ok(!/btn-primary[^>]*disabled/.test(reviewed),"complete deployment review must be approvable");
+ const missing=renderToString(h(PendingPlan,{plan:{...deployment,deployment:undefined},onResolved:()=>{}}));
+ assert.match(missing,/btn-primary[^>]*disabled/,"summary must not authorize deployment");
+ const missingFile=renderToString(h(PendingPlan,{plan:{...deployment,deployment:{...deployment.deployment!,files:{"release.yaml":"partial output"}}},onResolved:()=>{}}));
+ assert.match(missingFile,/btn-primary[^>]*disabled/,"partial output must not authorize deployment");
  console.log("Owner review loading and rendering checks passed.");
 }
 main().catch(error=>{console.error(error);process.exitCode=1});

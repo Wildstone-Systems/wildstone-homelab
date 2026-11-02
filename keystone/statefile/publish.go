@@ -38,10 +38,10 @@ const zeroID = "0000000000000000000000000000000000000000"
 // runner: unlike the injectable seam it never needs faking, because every
 // caller is exercised against a real repository.
 func (s *Store) gitWith(ctx context.Context, env []string, stdin []byte, args ...string) (string, error) {
-	args = append([]string{"-c", "gc.auto=0"}, args...)
+	args = append([]string{"-c", "gc.auto=0", "-c", "core.hooksPath=" + os.DevNull}, args...)
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = s.Root
-	cmd.Env = append(os.Environ(), env...)
+	cmd.Env = isolatedGitEnvironment(env)
 	if stdin != nil {
 		cmd.Stdin = bytes.NewReader(stdin)
 	}

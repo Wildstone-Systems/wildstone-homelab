@@ -1,6 +1,7 @@
 package ingest
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -460,4 +461,30 @@ func mustHead(t *testing.T, state *statefile.Store) string {
 		t.Fatal(err)
 	}
 	return head
+}
+
+func TestHelmInputCannotBeAdoptedThroughOutOfBandEdit(t *testing.T) {
+	for _, initial := range []bool{true, false} {
+		t.Run(fmt.Sprint(initial), func(t *testing.T) {
+			in, state := harness(t)
+			if !initial {
+				seed(t, in, state)
+			}
+			want := resource.Resource{ApiVersion: resource.ApiVersion, Kind: resource.KindHelmDeployment, Metadata: resource.Metadata{Name: "example-app", Owner: "capability/audiobooks", Package: "audiobooks-audiobookshelf"}, HelmDeployment: &resource.HelmDeploymentSpec{Package: "audiobooks-audiobookshelf", Version: "1.0.0", Timezone: "UTC", Placement: strings.Repeat("a", 64)}}
+			if err := state.Put(want); err != nil {
+				t.Fatal(err)
+			}
+			if err := state.Commit("example-owner", "external-edit", "example edit"); err != nil {
+				t.Fatal(err)
+			}
+			result, err := in.Tick()
+			if initial {
+				if err == nil {
+					t.Fatal("unreviewed initial Helm input adopted")
+				}
+			} else if err != nil || result.Outcome != OutcomeReverted {
+				t.Fatalf("unreviewed Helm input accepted: %+v %v", result, err)
+			}
+		})
+	}
 }
