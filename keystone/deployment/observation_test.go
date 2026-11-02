@@ -333,3 +333,51 @@ func TestUnreviewedHelmInputCannotProduceReadyStatus(t *testing.T) {
 		})
 	}
 }
+
+func TestCurrentFailureClassificationIsIndependentOfConditionOrder(t *testing.T) {
+	ready := kubeapi.FluxCondition{Type: "Ready", Status: "False", ObservedGeneration: 2}
+	stalled := kubeapi.FluxCondition{Type: "Stalled", Status: "True", ObservedGeneration: 2}
+	progress := kubeapi.FluxCondition{Type: "Reconciling", Status: "True", ObservedGeneration: 2}
+	conditions := []kubeapi.FluxCondition{ready, stalled, progress}
+	for a := 0; a < 3; a++ {
+		for b := 0; b < 3; b++ {
+			if a == b {
+				continue
+			}
+			c := 3 - a - b
+			for _, observed := range []int64{1, 2} {
+				o := &kubeapi.FluxObservation{Metadata: kubeapi.ObjectMeta{Generation: 2}, Spec: map[string]any{}}
+				o.Status.ObservedGeneration = observed
+				o.Status.Conditions = []kubeapi.FluxCondition{conditions[a], conditions[b], conditions[c]}
+				if got := currentState(o); got != "failed" {
+					t.Fatalf("ordered %v, top generation %d: got %s", o.Status.Conditions, observed, got)
+				}
+			}
+		}
+	}
+	o := &kubeapi.FluxObservation{Metadata: kubeapi.ObjectMeta{Generation: 3}, Spec: map[string]any{}}
+	o.Status.ObservedGeneration = 3
+	o.Status.Conditions = []kubeapi.FluxCondition{stalled, {Type: "Ready", Status: "True", ObservedGeneration: 3}}
+	if got := currentState(o); got != "ready" {
+		t.Fatalf("old failure contaminated current generation: %s", got)
+	}
+	o.Status.Conditions = []kubeapi.FluxCondition{stalled, {Type: "Reconciling", Status: "True", ObservedGeneration: 3}}
+	if got := currentState(o); got != "reconciling" {
+		t.Fatalf("old failure became current: %s", got)
+	}
+}
+func TestTerminalFailureReportedBeforeOldAppliedRevision(t *testing.T) {
+	o, f, r, status := observationFixture(t)
+	k := f.objects["Kustomization"]
+	k.Status.ObservedGeneration = 1
+	k.Status.LastAppliedRevision = "deploy@sha1:" + strings.Repeat("b", 40)
+	k.Status.Conditions = []kubeapi.FluxCondition{
+		{Type: "Reconciling", Status: "True", ObservedGeneration: 2},
+		{Type: "Stalled", Status: "True", ObservedGeneration: 2},
+		{Type: "Ready", Status: "False", ObservedGeneration: 2},
+	}
+	o.observe(r, &status)
+	if status.Reconciliation != "failed" || status.Application != "unobserved" || f.calls != 2 {
+		t.Fatalf("terminal current failure hidden behind prior revision: %+v (%d reads)", status, f.calls)
+	}
+}

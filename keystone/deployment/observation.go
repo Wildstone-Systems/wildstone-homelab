@@ -102,30 +102,31 @@ func currentState(o *kubeapi.FluxObservation) string {
 	if o.Spec["suspend"] == true || o.Metadata.DeletionTimestamp != nil {
 		return "dependency_unavailable"
 	}
-	if o.Status.ObservedGeneration != o.Metadata.Generation {
-		return "reconciling"
-	}
-	ready := "unknown"
+	// Conditions are an unordered set. Current terminal failure must win over
+	// Reconciling=True and an older top-level observedGeneration. Never borrow
+	// failure or readiness from a condition for a different generation.
+	ready, reconciling := false, false
 	for _, c := range o.Status.Conditions {
 		if c.ObservedGeneration != o.Metadata.Generation {
 			continue
 		}
-		if (c.Type == "Stalled" || c.Type == "Reconciling") && c.Status == "True" {
-			if c.Type == "Stalled" {
-				return "failed"
-			}
-			return "reconciling"
+		if c.Type == "Stalled" && c.Status == "True" || c.Type == "Ready" && c.Status == "False" {
+			return "failed"
 		}
-		if c.Type == "Ready" {
-			switch c.Status {
-			case "True":
-				ready = "ready"
-			case "False":
-				ready = "failed"
-			}
+		if c.Type == "Reconciling" && c.Status == "True" {
+			reconciling = true
+		}
+		if c.Type == "Ready" && c.Status == "True" {
+			ready = true
 		}
 	}
-	return ready
+	if o.Status.ObservedGeneration != o.Metadata.Generation || reconciling {
+		return "reconciling"
+	}
+	if ready {
+		return "ready"
+	}
+	return "unknown"
 }
 func revisionMatches(revision, sha string) bool { return sha != "" && revision == "deploy@sha1:"+sha }
 func nested(m map[string]any, keys ...string) any {

@@ -2,8 +2,16 @@ import assert from "node:assert/strict";
 import {createElement as h} from "react";
 import {renderToString} from "react-dom/server";
 import {loadReviewPlans, PendingPlan, DeploymentObservation} from "../src/views/Plans";
-import {ApiError, type PlanRecord} from "../src/api";
+import {api, ApiError, type PlanRecord} from "../src/api";
 async function main() {
+ // Mixed-version upgrades may briefly read an older server's null collection.
+ const originalFetch=globalThis.fetch;
+ try {
+  globalThis.fetch=async()=>new Response("null",{status:200,headers:{"Content-Type":"application/json"}});
+  assert.deepEqual(await api.observed(),[],"empty observation response must be iterable");
+  globalThis.fetch=async()=>new Response("[]",{status:200,headers:{"Content-Type":"application/json"}});
+  assert.deepEqual(await api.observed(),[]);
+ } finally {globalThis.fetch=originalFetch}
  const summary={id:"plan-42",state:"proposed",summary:"Morning routine",risk:"low",principal:"butler",createdAt:"2026-01-01T00:00:00Z"} as PlanRecord;
  const full={...summary,routine:{name:"morning",assignedButler:"review-agent-canary",revision:3,document:"review-document-canary",outputAudience:"aud_household",delivery:"review-delivery-canary"}};
  let queueRead=false;

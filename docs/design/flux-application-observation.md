@@ -139,6 +139,27 @@ CRD schema. No defaults are stripped inside values. Explicit reviewed fields
 remain mandatory, and unknown/null/empty additions remain a mismatch. Additional
 normalization requires a documented semantic default and regression tests.
 
+### API encoding and condition precedence
+
+Deployment Plan responses have a narrow typed serialization exception for
+server-generated Git revisions, projection/configuration digests and fixed JSON
+schema keys. Hashes must match their field's exact lowercase Git/digest/Flux
+revision shape. Review prose, YAML, dynamic map keys and other values still pass
+through ordinary secret redaction. Arbitrary JSON/tool replies do not acquire
+this exception merely by using the same field names. Detail, proposal/approval
+responses and the Owner review queue all use the same encoder.
+
+An empty public observations collection is JSON `[]`, never `null`. The Console
+also normalizes older-server null responses at its API boundary for mixed-version
+upgrades. No diagnostic response shim is required.
+
+Conditions are evaluated as an unordered set. A current-generation Stalled=True
+or Ready=False takes precedence over Reconciling=True and an older top-level
+observedGeneration. Conditions from a prior generation cannot provide either
+current failure or readiness. This applies before last-applied-revision checks,
+so a stalled current rollout is not mistaken for routine convergence simply
+because the previous healthy revision remains last applied.
+
 ## Repeat the isolated VM proof
 
 Use the current reviewed source, synthetic data, a dedicated namespace/release,
@@ -188,3 +209,29 @@ open until its complete request-to-usable-application path is accepted.
 Sources: [Flux Kustomization status](https://fluxcd.io/flux/components/kustomize/kustomizations/),
 [HelmRelease status](https://fluxcd.io/flux/components/helm/helmreleases/),
 [Helm v2 API](https://fluxcd.io/flux/components/helm/api/v2/).
+
+## Targeted repeat after the VM-discovered blockers
+
+Use the updated PR #267 head or an accepted descendant and record its exact SHA.
+Repeat the original authorized synthetic workflow without response shims:
+
+- On a fresh isolated product database, verify GET /api/v1/observed returns []
+  and the unmodified Console loads. Do not erase an existing database to create
+  this case.
+- Compare raw authenticated public Plan responses with the independent Git/Flux
+  revision and all observed-generation fields. Assert exact values and property
+  names; nonempty placeholders do not satisfy this check. Verify review hashes
+  in proposal/detail/approval/Owner queue while secrets remain absent.
+- Repeat browser freshness/refresh-loss behavior in the unmodified Console.
+- Repeat the controlled synthetic bootstrap-dependency failure during a newly
+  approved rollout. Confirm current terminal failure reports failed even when
+  Reconciling=True or last-applied still points at the prior revision. Restore
+  the prerequisite and prove subsequent authorized exact convergence and data
+  persistence.
+- Recheck the exact-Helm-input rejection and the read-only observer's permissions.
+  Keep the strict invalid-approved-configuration gate explicitly unproven unless
+  a separately reviewed fixture actually establishes it.
+
+Record API/Console evidence, actual failures/recovery and cleanup in #258. The
+prior run's OIDC, transport and persistence evidence remains useful, but it does
+not replace verification of these fixes on the updated source.

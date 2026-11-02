@@ -133,6 +133,24 @@ func TestDeploymentPublicPlanRequiresFreshOwnerAndExactReview(t *testing.T) {
 	if status["phase"] != "promoted" || status["reconciliation"] != "unobserved" || status["application"] != "unobserved" {
 		t.Fatalf("false readiness: %v", status)
 	}
+	// The real public encoder must preserve the exact local revision and the
+	// full typed review, not merely a nonempty redaction placeholder.
+	local := h.s.Deployments.Status(id)
+	if status["promotedRevision"] != local.PromotedRevision || status["productRevision"] != local.ProductRevision {
+		t.Fatalf("public revision lost: %v", status)
+	}
+	stored, err := h.s.DB.GetPlan(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := runtimedb.DecodeDeploymentPlan(stored.PlanJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publicReview := out["deployment"].(map[string]any)
+	if publicReview["encryptedSecretRevision"] != decoded.Deployment.Review.EncryptedSecretRevision || publicReview["projectionDigest"] != decoded.Deployment.Review.ProjectionDigest || publicReview["expectedDeploymentRevision"] != decoded.Deployment.Review.ExpectedDeploymentRevision {
+		t.Fatalf("public review lost metadata: %v", publicReview)
+	}
 	// Lists carry only a type flag; the full review is Owner-only.
 	var list []map[string]any
 	if res := h.do(runtimedb.RoleOperator, "GET", "/api/v1/plans", nil, &list); res.StatusCode != http.StatusOK {

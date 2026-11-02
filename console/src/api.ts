@@ -2634,7 +2634,9 @@ export const api = {
   // where the browser goes next to finish signing out.
   consoleSignout: () => call<{ signOut?: string }>("POST", "/api/v1/console/signout"),
   resources: () => call<ResourceView[]>("GET", "/api/v1/resources"),
-  observed: () => call<Observed[]>("GET", "/api/v1/observed"),
+  // Older servers emitted null before the first observation. Keep the
+  // polling boundary array-shaped during mixed-version upgrades as well.
+  observed: () => call<Observed[] | null>("GET", "/api/v1/observed").then(rows => rows ?? []),
   events: (after: number, limit = 100) =>
     call<EventRow[]>("GET", `/api/v1/events?after=${after}&limit=${limit}`),
   routineAudiences: () => call<{id:string;label?:string;kind:string}[]>("GET", "/api/v1/household/routine-audiences"),
