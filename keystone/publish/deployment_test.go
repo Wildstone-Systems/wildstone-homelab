@@ -1,6 +1,7 @@
 package publish
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
@@ -38,6 +39,36 @@ func deploymentHarness(t *testing.T) (*DeploymentPublisher, DeploymentRequest) {
 		return nil
 	}}
 	r := DeploymentRequest{OperationID: "example-op", PlanID: "plan-1", AcceptedRevision: rev, ReviewDigest: strings.Repeat("b", 64), Files: map[string][]byte{"source.yaml": []byte("example source\n"), "release.yaml": []byte("example release\n"), "kustomization.yaml": []byte("example list\n")}}
+	for _, member := range []string{"example-owner", "example-other-owner"} {
+		if err := db.RecordButlerMember(member, runtimedb.RoleOwner, "", ""); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.AdmitButlerMember(member, "example-admin"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	owner, err := db.GetButlerMember("example-owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding, err := deploymentBinding(repo.Identity(), r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(runtimedb.DeploymentPlanDocument{BasedOnHead: rev, Summary: "Example deployment", Deployment: &runtimedb.DeploymentApproval{Binding: binding, SourceRevision: rev, OwnerPersonID: owner.PersonID, OwnerGeneration: owner.Generation}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := db.InsertPlan("example-owner", "", "Example deployment", "high", string(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id != r.PlanID {
+		t.Fatal("unexpected fixture Plan ID")
+	}
+	if err := db.TransitionPlan(id, runtimedb.PlanApproved, "example-owner"); err != nil {
+		t.Fatal(err)
+	}
 	return p, r
 }
 
@@ -175,5 +206,100 @@ func TestDeploymentSourceCheckoutAndRemotesRefused(t *testing.T) {
 	}
 	if _, err := repo.Head(); err == nil {
 		t.Fatal("remote accepted")
+	}
+}
+
+// These changes occur after the publisher's preliminary authorization check.
+// Only its mandatory SQLite approval fence can prevent the prepared ref effect.
+func TestDeploymentExactPlanBoundary(t *testing.T) {
+	for _, change := range []string{"approved", "revoked-at-boundary", "superseded-at-boundary", "new-source-at-boundary", "new-coordinator-at-boundary", "other-instance", "changed-secret-output"} {
+		t.Run(change, func(t *testing.T) {
+			p, req := deploymentHarness(t)
+			p.interrupt = func(string) error { return errors.New("prepared fixture") }
+			prepared, err := p.Promote(req)
+			if err == nil {
+				t.Fatal("missing interruption")
+			}
+			p.interrupt = nil
+			calls := 0
+			p.Gate = func(DeploymentRequest) error {
+				calls++
+				if calls != 2 {
+					return nil
+				}
+				switch change {
+				case "revoked-at-boundary":
+					return p.DB.DisableButlerMember("example-owner", "example-other-owner")
+				case "superseded-at-boundary":
+					return p.DB.TransitionPlan(req.PlanID, runtimedb.PlanSuperseded, "")
+				case "new-source-at-boundary":
+					return p.DB.SetStatefileHead(strings.Repeat("c", 40))
+				case "new-coordinator-at-boundary":
+					_, err := p.DB.PromoteCoordinator("example-successor")
+					return err
+				}
+				return nil
+			}
+			switch change {
+			case "other-instance":
+				p.Repo, err = statefile.OpenLocalDeployment(filepath.Join(t.TempDir(), "other.git"))
+				if err != nil {
+					t.Fatal(err)
+				}
+			case "changed-secret-output":
+				req.Files["release.yaml"] = []byte("example changed reference version")
+			}
+			got, err := p.Promote(req)
+			head, headErr := p.Repo.Head()
+			if headErr != nil {
+				t.Fatal(headErr)
+			}
+			if change != "approved" {
+				if err == nil || head != "" {
+					t.Fatalf("unsafe promotion: head=%q err=%v", head, err)
+				}
+				return
+			}
+			if err != nil || head != prepared.CandidateRevision || got.State != "promoted" {
+				t.Fatal("approved exact output did not promote", err)
+			}
+			restarted := &DeploymentPublisher{Repo: p.Repo, DB: p.DB, Gate: p.Gate}
+			if _, err := restarted.Promote(req); err != nil {
+				t.Fatal("approved exact retry failed", err)
+			}
+		})
+	}
+}
+
+func TestDeploymentRevocationAfterRefAdvancePreservesUnknownOutcome(t *testing.T) {
+	p, req := deploymentHarness(t)
+	p.interrupt = func(phase string) error {
+		if phase != "promoted" {
+			return nil
+		}
+		if err := p.DB.DisableButlerMember("example-owner", "example-other-owner"); err != nil {
+			return err
+		}
+		return errors.New("example interruption before journal acknowledgment")
+	}
+	row, err := p.Promote(req)
+	if err == nil {
+		t.Fatal("expected interruption")
+	}
+	before, err := p.Repo.Head()
+	if err != nil || before != row.CandidateRevision {
+		t.Fatal("advanced ref lost", err)
+	}
+	restarted := &DeploymentPublisher{Repo: p.Repo, DB: p.DB, Gate: p.Gate}
+	if _, err := restarted.Promote(req); err == nil {
+		t.Fatal("revoked approval resumed an effect")
+	}
+	after, err := p.Repo.Head()
+	if err != nil || after != before {
+		t.Fatal("ref was rewound after revocation", err)
+	}
+	journal, err := p.DB.GetDeploymentPromotion(req.OperationID)
+	if err != nil || journal.State != "prepared" {
+		t.Fatal("unknown outcome falsely acknowledged", err)
 	}
 }
