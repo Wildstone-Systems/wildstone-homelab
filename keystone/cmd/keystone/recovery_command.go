@@ -15,8 +15,13 @@ import (
 )
 
 func recoverCommand(args []string) error {
-	if len(args) > 0 && args[0] == "preflight-management" {
-		return preflightManagementCommand(args[1:])
+	if len(args) > 0 {
+		switch args[0] {
+		case "preflight-management":
+			return preflightManagementCommand(args[1:])
+		case "restore-management":
+			return restoreManagementCommand(args[1:])
+		}
 	}
 	fs := flag.NewFlagSet("keystone recover", flag.ContinueOnError)
 	setDir := fs.String("set", "", "directory containing the restored wildstone recovery set")
@@ -60,6 +65,28 @@ func recoverCommand(args []string) error {
 	}
 	fmt.Printf("restored Statefile and quarantined runtime database into %s\n", *dataDir)
 	fmt.Println("start Keystone, re-join each node, import its .sealed bundle, then run wild restore reconcile --release")
+	return nil
+}
+
+func restoreManagementCommand(args []string) error {
+	fs := flag.NewFlagSet("keystone recover restore-management", flag.ContinueOnError)
+	setDir := fs.String("set", "", "directory containing the extracted private management recovery set")
+	keyDir := fs.String("keys", "", "separately held directory containing bootstrap/decryption keys")
+	dataDir := fs.String("data-dir", "", "new chart 0.2 Keystone private data directory")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *setDir == "" || *keyDir == "" || *dataDir == "" || fs.NArg() != 0 {
+		return fmt.Errorf("usage: keystone recover restore-management -set <directory> -keys <directory> -data-dir <new-directory>")
+	}
+	report, err := recovery.RestoreManagementSet(*setDir, *keyDir, *dataDir)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("restored the preserved management runtime into %s in quarantine\n", *dataDir)
+	fmt.Printf("accepted Statefile: %s\n", report.ApprovedStatefileRevision)
+	fmt.Printf("preserved coordinator: %s epoch %d (Owner release and promotion are still required)\n", report.CoordinatorHolder, report.CoordinatorEpoch)
+	fmt.Println("do not start Keystone until the original writer is fenced; never start more than one writer")
 	return nil
 }
 

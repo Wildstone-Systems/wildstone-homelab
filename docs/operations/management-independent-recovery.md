@@ -27,6 +27,24 @@ The command is local and API-independent. It writes only temporary validation
 copies. It does not contact Kubernetes, start Keystone, change a Git ref,
 release restore quarantine, promote a coordinator, or grant approval.
 
+After preflight, install the verified runtime group into a new chart 0.2
+private data path while Keystone remains stopped:
+
+```sh
+keystone recover restore-management \
+  -set /offline/restored-management-set \
+  -keys /offline/separately-held-bootstrap-keys \
+  -data-dir /mnt/new-runtime-claim/keystone
+```
+
+This command repeats the complete preflight, refuses an existing target,
+restores into a mode-0700 sibling staging directory, and places the SQLite
+database that will actually start in restore quarantine before atomically
+publishing the target directory. It preserves the CA, operation-signing keys,
+join-token records and household credential key byte-for-byte. It neither
+starts Keystone nor releases quarantine or coordinator fencing. Do not replace
+this command with a raw database copy.
+
 ## Recovery dependency and data inventory
 
 The private recovery set is an encrypted backup artifact, never public source
@@ -44,7 +62,7 @@ not authorization by itself: the Owner retains the reviewed capture record.
 | `keystone.db` | Principals/tokens, authorization and revocation, audit, Plans, publication journals, task/routine/subscription checkpoints and receipts, restore journal, coordinator holder/epoch | `runtimedb.BackupTo`; preflight restores a copy through `RestoreBackup` and proves quarantine and coordinator state |
 | `ca.crt`, `ca.key` | Existing Wardstone client identity trust | Preflight parses the CA and proves the certificate/private-key pair |
 | `op-signing.key`, `op-signing.pub` | Existing operation signature trust | Preflight proves the Ed25519 pair |
-| `tokens.json` | Minted/used node join-token continuity | Gateway persistent token store; no fresh replacement is accepted |
+| `tokens.json` | Minted/used node join-token continuity | Preflight uses the Gateway startup decoder and rejects malformed token identifiers, null records and missing/invalid expirations; no fresh replacement is accepted |
 | `household-secrets.key` | Decrypts household-scoped credentials in the runtime DB | Exact file must accompany the matching DB; missing/wrong keys remain fatal at Keystone startup |
 | `management-values.yaml` and immutable image digest | Reconstructs the reviewed chart deployment | Private installation values; no plaintext secret values |
 | `deployment-config.json`, `local-git-source.json`, `deployment.sops.yaml` | Restores private placement, local source configuration and encrypted deployment input | Private bootstrap/configuration, outside both public and deployment Git |
@@ -128,12 +146,15 @@ approval. The original Keystone API is never used.
    management GitRepository/Kustomization/HelmRelease must be isolated from the
    existing prune-enabled root until #166's Flux-owned-management gate is
    approved. Flux remains the reconciler; do not overlap it with direct Helm.
-5. Create new target claims. For chart 0.2, prepare only a UID/GID 65532,
-   mode-0700 `keystone/` child and restore the complete runtime group beneath
-   it. For chart 0.1 input, copy every root-layout entry into that child while
-   quiesced; never point chart 0.2 at the old nonempty root. Restore enabled
-   uploads/workspaces to their distinct claims. No missing claim may fall back
-   to an image directory or `emptyDir`.
+5. Create new target claims. Mount the fresh runtime claim in an offline helper
+   environment and run `keystone recover restore-management` with `-data-dir`
+   naming the not-yet-existing chart 0.2 `keystone/` child. The command accepts
+   a declared chart 0.1 `claim-root` source but always installs the normalized
+   private-child target and quarantines the actual target database. Never point
+   chart 0.2 at the old nonempty root and never copy `keystone.db` directly.
+   Set the resulting child ownership to UID/GID 65532 without changing its
+   mode-0700 protection. Restore enabled uploads/workspaces to their distinct
+   claims. No missing claim may fall back to an image directory or `emptyDir`.
 6. Before any normal Deployment exists, restore private ConfigMap/Secret
    references and SOPS decryption material through the approved bootstrap.
    Render the exact chart 0.2.0 singleton/Recreate Deployment using the bound
@@ -198,8 +219,10 @@ After Owner approval, use exactly:
 Procedure: install the synthetic source singleton, create/verify the fixture,
 quiesce and capture it, stop the original Deployment and prove no process has
 the runtime claim, then make its API unavailable by leaving the original
-scaled to zero. Run host-side preflight and restore into only the `restored`
-claims. Initiate the restored release with standard `k3s kubectl`, Helm/Flux
+scaled to zero. Run host-side preflight, then run offline `restore-management`
+with the fresh restored runtime claim mounted and its new `keystone/` child as
+`-data-dir`; restore only into the `restored` claims. Initiate the restored
+release with standard `k3s kubectl`, Helm/Flux
 and local Git tools; do not call the original API. Keep the restored runtime
 quarantined and non-coordinating until identity/data/revocation/history checks
 pass, then use an authenticated current Owner for journal release and explicit

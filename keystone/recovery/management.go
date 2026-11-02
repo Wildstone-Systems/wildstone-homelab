@@ -22,6 +22,7 @@ import (
 	"regexp"
 	"time"
 
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/gateway"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/runtimedb"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/statefile"
 )
@@ -152,9 +153,8 @@ func VerifyManagementSet(setDir, keyDir string) (ManagementPreflight, error) {
 		return report, fmt.Errorf("management recovery: operation-signing key pair does not match")
 	}
 	tokens, _ := verifiedArtifact(setDir, "tokens.json", m.Artifacts["tokens.json"], m.SHA256)
-	var tokenState map[string]json.RawMessage
-	if err := json.Unmarshal(tokens, &tokenState); err != nil || tokenState == nil {
-		return report, fmt.Errorf("management recovery: join-token state is invalid")
+	if err := gateway.ValidatePersistedTokenStore(tokens); err != nil {
+		return report, fmt.Errorf("management recovery: join-token state is invalid: %w", err)
 	}
 
 	work, err := os.MkdirTemp("", "wildstone-management-preflight-")
@@ -215,6 +215,104 @@ func VerifyManagementSet(setDir, keyDir string) (ManagementPreflight, error) {
 		CoordinatorHolder:          lease.Holder, CoordinatorEpoch: lease.Epoch}, nil
 }
 
+// RestoreManagementSet installs the verified same-installation runtime group
+// into a new, empty data directory. The database in that actual target is
+// placed in restore quarantine before the directory becomes visible at its
+// final name. The source recovery set is never modified.
+func RestoreManagementSet(setDir, keyDir, dataDir string) (ManagementPreflight, error) {
+	var report ManagementPreflight
+	setRoot, err := filepath.EvalSymlinks(setDir)
+	if err != nil {
+		return report, fmt.Errorf("management recovery: resolving set directory: %w", err)
+	}
+	manifestPath := filepath.Join(setRoot, "management-manifest.json")
+	manifestBefore, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return report, fmt.Errorf("management recovery: reading manifest for restore: %w", err)
+	}
+	report, err = VerifyManagementSet(setRoot, keyDir)
+	if err != nil {
+		return report, err
+	}
+	body, err := os.ReadFile(manifestPath)
+	if err != nil || !bytes.Equal(manifestBefore, body) {
+		return report, fmt.Errorf("management recovery: manifest changed during verification")
+	}
+	if !filepath.IsAbs(dataDir) || filepath.Clean(dataDir) == string(filepath.Separator) {
+		return report, fmt.Errorf("management recovery: target data directory must be an absolute, non-root path")
+	}
+	parent, err := filepath.EvalSymlinks(filepath.Dir(filepath.Clean(dataDir)))
+	if err != nil {
+		return report, fmt.Errorf("management recovery: resolving target parent: %w", err)
+	}
+	target := filepath.Join(parent, filepath.Base(filepath.Clean(dataDir)))
+	if _, err := os.Lstat(target); err == nil {
+		return report, fmt.Errorf("management recovery: target data directory already exists")
+	} else if !os.IsNotExist(err) {
+		return report, fmt.Errorf("management recovery: checking target data directory: %w", err)
+	}
+
+	var manifest ManagementManifest
+	if err := json.Unmarshal(body, &manifest); err != nil {
+		return report, fmt.Errorf("management recovery: decoding manifest for restore: %w", err)
+	}
+
+	stage, err := os.MkdirTemp(parent, ".wildstone-management-restore-")
+	if err != nil {
+		return report, fmt.Errorf("management recovery: creating target staging directory: %w", err)
+	}
+	removeStage := true
+	defer func() {
+		if removeStage {
+			_ = os.RemoveAll(stage)
+		}
+	}()
+	if err := os.Chmod(stage, 0o700); err != nil {
+		return report, fmt.Errorf("management recovery: securing target staging directory: %w", err)
+	}
+
+	stateBundle := filepath.Join(setRoot, filepath.FromSlash(manifest.Artifacts["statefile.bundle"]))
+	if _, err := statefile.RestoreBundle(stateBundle, filepath.Join(stage, "statefile")); err != nil {
+		return report, fmt.Errorf("management recovery: restoring Statefile: %w", err)
+	}
+	dbSource := filepath.Join(setRoot, filepath.FromSlash(manifest.Artifacts["keystone.db"]))
+	db, err := runtimedb.RestoreBackup(dbSource, filepath.Join(stage, "keystone.db"), "management-independent recovery", manifest.SnapshotAt)
+	if err != nil {
+		return report, fmt.Errorf("management recovery: restoring runtime database: %w", err)
+	}
+	restoreState, stateErr := db.GetRestoreState()
+	closeErr := db.Close()
+	if stateErr != nil || !restoreState.Quarantined {
+		return report, fmt.Errorf("management recovery: target runtime database did not enter quarantine")
+	}
+	if closeErr != nil {
+		return report, fmt.Errorf("management recovery: closing target runtime database: %w", closeErr)
+	}
+
+	runtimeFiles := []string{"ca.crt", "ca.key", "op-signing.key", "op-signing.pub", "tokens.json", "household-secrets.key"}
+	if manifest.ProviderKeysRequired {
+		runtimeFiles = append(runtimeFiles, "provider-keys.json")
+	}
+	if manifest.PolicyExemptionsRequired {
+		runtimeFiles = append(runtimeFiles, "policy-exemptions.yaml")
+	}
+	for _, logical := range runtimeFiles {
+		source := filepath.Join(setRoot, filepath.FromSlash(manifest.Artifacts[logical]))
+		if err := copyRegularFile(source, filepath.Join(stage, logical)); err != nil {
+			return report, fmt.Errorf("management recovery: restoring %s: %w", logical, err)
+		}
+	}
+	if err := os.Rename(stage, target); err != nil {
+		return report, fmt.Errorf("management recovery: publishing target data directory: %w", err)
+	}
+	removeStage = false
+	if dir, err := os.Open(parent); err == nil {
+		_ = dir.Sync()
+		_ = dir.Close()
+	}
+	return report, nil
+}
+
 func copyRegularFile(source, destination string) error {
 	in, err := os.Open(source)
 	if err != nil {
@@ -226,9 +324,13 @@ func copyRegularFile(source, destination string) error {
 		return err
 	}
 	_, copyErr := io.Copy(out, in)
+	syncErr := out.Sync()
 	closeErr := out.Close()
 	if copyErr != nil {
 		return copyErr
+	}
+	if syncErr != nil {
+		return syncErr
 	}
 	return closeErr
 }

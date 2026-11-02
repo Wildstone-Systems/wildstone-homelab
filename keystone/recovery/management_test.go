@@ -217,6 +217,11 @@ func TestManagementRecoveryPreflightRefusesMissingUnsafeOrUnauthorizedSets(t *te
 			body, _ := os.ReadFile(filepath.Join(set, "tokens.json"))
 			m.SHA256["tokens.json"] = sha256Hex(body)
 		}, "join-token state is invalid"},
+		{"invalid join-token record", func(t *testing.T, set, _ string, m *ManagementManifest) {
+			writeFixture(t, set, "tokens.json", []byte(`{"`+strings.Repeat("a", 64)+`":null}`))
+			body, _ := os.ReadFile(filepath.Join(set, "tokens.json"))
+			m.SHA256["tokens.json"] = sha256Hex(body)
+		}, "join-token state is invalid"},
 		{"missing configured provider keys", func(_ *testing.T, _ string, _ string, m *ManagementManifest) { m.ProviderKeysRequired = true }, "provider-keys.json is missing"},
 		{"missing enabled binding", func(_ *testing.T, _ string, _ string, m *ManagementManifest) { m.SharedUploadsRequired = true }, "shared-uploads is missing"},
 	}
@@ -229,6 +234,95 @@ func TestManagementRecoveryPreflightRefusesMissingUnsafeOrUnauthorizedSets(t *te
 				t.Fatalf("error = %v, want %q", err, tt.want)
 			}
 		})
+	}
+}
+
+func TestRestoreManagementSetPublishesQuarantinedPreservedRuntime(t *testing.T) {
+	setDir, keyDir, manifest := managementFixture(t)
+	target := filepath.Join(t.TempDir(), "keystone")
+	report, err := RestoreManagementSet(setDir, keyDir, target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.ApprovedStatefileRevision != manifest.ApprovedStatefileRevision {
+		t.Fatalf("restored report = %+v", report)
+	}
+	info, err := os.Stat(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o700 {
+		t.Fatalf("target mode = %o, want 0700", info.Mode().Perm())
+	}
+
+	restoredDB, err := runtimedb.Open(filepath.Join(target, "keystone.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restoredDB.Close()
+	state, err := restoredDB.GetRestoreState()
+	if err != nil || !state.Quarantined {
+		t.Fatalf("target quarantine = %+v, err = %v", state, err)
+	}
+	head, err := restoredDB.StatefileHead()
+	if err != nil || head != manifest.ApprovedStatefileRevision {
+		t.Fatalf("target Statefile head = %q, err = %v", head, err)
+	}
+	lease, err := restoredDB.GetCoordinator()
+	if err != nil || lease.Holder != "synthetic-original" || lease.Epoch < 1 {
+		t.Fatalf("target coordinator = %+v, err = %v", lease, err)
+	}
+	if _, err := restoredDB.OpenSecretVault(filepath.Join(target, "household-secrets.key")); err != nil {
+		t.Fatalf("restored household key does not open preserved credentials: %v", err)
+	}
+
+	for _, name := range []string{"ca.crt", "ca.key", "op-signing.key", "op-signing.pub", "tokens.json", "household-secrets.key"} {
+		want, err := os.ReadFile(filepath.Join(setDir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := os.ReadFile(filepath.Join(target, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(got) != string(want) {
+			t.Fatalf("%s was not preserved byte-for-byte", name)
+		}
+	}
+	restoredState, err := statefile.New(filepath.Join(target, "statefile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !restoredState.HasCommit(manifest.ApprovedStatefileRevision) {
+		t.Fatal("restored Statefile lacks accepted revision")
+	}
+
+	sourceDB, err := runtimedb.Open(filepath.Join(setDir, "keystone.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourceState, stateErr := sourceDB.GetRestoreState()
+	closeErr := sourceDB.Close()
+	if stateErr != nil || sourceState.Quarantined || closeErr != nil {
+		t.Fatalf("source recovery database was modified: state=%+v stateErr=%v closeErr=%v", sourceState, stateErr, closeErr)
+	}
+}
+
+func TestRestoreManagementSetRefusesExistingTarget(t *testing.T) {
+	setDir, keyDir, _ := managementFixture(t)
+	target := filepath.Join(t.TempDir(), "keystone")
+	if err := os.Mkdir(target, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(target, "owner-data")
+	if err := os.WriteFile(marker, []byte("preserve"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := RestoreManagementSet(setDir, keyDir, target); err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("existing target was not refused: %v", err)
+	}
+	if body, err := os.ReadFile(marker); err != nil || string(body) != "preserve" {
+		t.Fatalf("existing target was changed: body=%q err=%v", body, err)
 	}
 }
 

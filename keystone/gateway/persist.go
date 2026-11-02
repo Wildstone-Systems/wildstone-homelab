@@ -166,12 +166,43 @@ func loadTokenStore(dataDir string) (*tokenStore, error) {
 		}
 		return nil, fmt.Errorf("read tokens.json: %w", err)
 	}
-	if len(b) > 0 {
-		if err := json.Unmarshal(b, &ts.data); err != nil {
-			return nil, fmt.Errorf("parse tokens.json: %w", err)
+	data, err := decodePersistedTokenStore(b)
+	if err != nil {
+		return nil, fmt.Errorf("parse tokens.json: %w", err)
+	}
+	ts.data = data
+	return ts, nil
+}
+
+// ValidatePersistedTokenStore validates tokens.json with the same decoder
+// used at Gateway startup. Recovery preflight calls this rather than merely
+// checking that the file contains syntactically valid JSON.
+func ValidatePersistedTokenStore(body []byte) error {
+	_, err := decodePersistedTokenStore(body)
+	return err
+}
+
+func decodePersistedTokenStore(body []byte) (map[string]*tokenRecord, error) {
+	data := map[string]*tokenRecord{}
+	if len(body) == 0 {
+		return data, nil
+	}
+	if err := json.Unmarshal(body, &data); err != nil {
+		return nil, err
+	}
+	if data == nil {
+		return nil, fmt.Errorf("token store must be a JSON object")
+	}
+	for token, record := range data {
+		decoded, err := hex.DecodeString(token)
+		if err != nil || len(decoded) != 32 || hex.EncodeToString(decoded) != token {
+			return nil, fmt.Errorf("invalid persisted join-token identifier")
+		}
+		if record == nil || record.Expires.IsZero() {
+			return nil, fmt.Errorf("join token %q has no valid expiration", token)
 		}
 	}
-	return ts, nil
+	return data, nil
 }
 
 // persist must be called with mu held.
