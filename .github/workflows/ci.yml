@@ -311,3 +311,14 @@ jobs:
         run: |
           (cd keystone && go run ./resource/gen -out ../console/src/generated/resources.ts)
           git diff --exit-code console/src/generated/
+
+  standalone-images:
+    name: standalone image (${{ matrix.component }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        component: [agent-bridge, chat-adapter]
+    steps:
+      - uses: actions/checkout@v7
+      - name: build standalone image
+        run: docker build --pull -f "cli/cmd/${{ matrix.component }}/Dockerfile" -t "wildstone-${{ matrix.component }}:ci" .
