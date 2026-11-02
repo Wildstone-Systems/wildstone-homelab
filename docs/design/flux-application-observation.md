@@ -112,6 +112,33 @@ A frozen controller reporting the exact desired unchanged generation cannot be
 identified as frozen solely from an old Ready transition: this slice makes no
 controller-liveness/HA claim.
 
+### Exact Helm input comparison
+
+The live HelmRelease spec must equal the reviewed spec, including **every** key
+under values. Extra settings, valuesFrom, alternate chart references, chart
+metadata, post-renderers, remote kubeconfig, hooks and unknown future fields are
+not silently accepted. A different chart source namespace is also drift even
+when image/timezone and Ready generations match.
+
+Only these documented defaults may appear when absent from the reviewed spec:
+
+| Field | Accepted equivalent of omission |
+| --- | --- |
+| suspend | false |
+| targetNamespace | reviewed HelmRelease namespace |
+| storageNamespace | reviewed HelmRelease namespace |
+| chart.kind | HelmChart |
+| chart.spec.sourceRef.namespace | reviewed HelmRelease namespace |
+| uninstall | exactly {deletionPropagation: background} |
+
+The namespace defaults and suspend semantics are documented in the
+[Helm v2 API](https://fluxcd.io/flux/components/helm/api/v2/); chart kind and source
+namespace defaults in the [HelmRelease guide](https://fluxcd.io/flux/components/helm/helmreleases/).
+The uninstall deletionPropagation default is also defined in the HelmRelease v2
+CRD schema. No defaults are stripped inside values. Explicit reviewed fields
+remain mandatory, and unknown/null/empty additions remain a mismatch. Additional
+normalization requires a documented semantic default and regression tests.
+
 ## Repeat the isolated VM proof
 
 Use the current reviewed source, synthetic data, a dedicated namespace/release,

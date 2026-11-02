@@ -139,20 +139,71 @@ func nested(m map[string]any, keys ...string) any {
 	}
 	return v
 }
-func subset(expected, actual any) bool {
-	if m, ok := expected.(map[string]any); ok {
-		a, ok := actual.(map[string]any)
-		if !ok {
-			return false
-		}
-		for k, v := range m {
-			if !subset(v, a[k]) {
-				return false
+
+// reviewedHelmSpecMatches compares the entire spec, including values, exactly.
+// Normalize only the documented defaults below, and only when the reviewed
+// field was absent. Unknown additions (including empty/null values) are drift.
+// Never mutate the live observation or prune arbitrary empty objects.
+func reviewedHelmSpecMatches(expected, actual map[string]any, namespace string) bool {
+	if expected == nil || actual == nil {
+		return false
+	}
+	raw, err := json.Marshal(actual)
+	if err != nil {
+		return false
+	}
+	var normalized map[string]any
+	if json.Unmarshal(raw, &normalized) != nil {
+		return false
+	}
+	for _, item := range []struct {
+		path  []string
+		value any
+	}{
+		{[]string{"suspend"}, false},
+		{[]string{"targetNamespace"}, namespace},
+		{[]string{"storageNamespace"}, namespace},
+		{[]string{"chart", "kind"}, "HelmChart"},
+		{[]string{"chart", "spec", "sourceRef", "namespace"}, namespace},
+		{[]string{"uninstall"}, map[string]any{"deletionPropagation": "background"}},
+	} {
+		// A present reviewed field must match exactly, even if it equals a default.
+		reviewed := expected
+		present := true
+		for i, key := range item.path {
+			value, exists := reviewed[key]
+			if !exists {
+				present = false
+				break
+			}
+			if i < len(item.path)-1 {
+				child, ok := value.(map[string]any)
+				if !ok {
+					break
+				}
+				reviewed = child
 			}
 		}
-		return true
+		if present {
+			continue
+		}
+		parent := normalized
+		for _, key := range item.path[:len(item.path)-1] {
+			child, ok := parent[key].(map[string]any)
+			if !ok {
+				parent = nil
+				break
+			}
+			parent = child
+		}
+		if parent != nil {
+			key := item.path[len(item.path)-1]
+			if value, exists := parent[key]; exists && reflect.DeepEqual(value, item.value) {
+				delete(parent, key)
+			}
+		}
 	}
-	return reflect.DeepEqual(expected, actual)
+	return reflect.DeepEqual(expected, normalized)
 }
 func expectedRelease(r *runtimedb.DeploymentReview) map[string]any {
 	var doc map[string]any
@@ -245,7 +296,7 @@ func (o *Observer) observe(r *runtimedb.DeploymentReview, out *runtimedb.Deploym
 	out.HelmGeneration = h.Metadata.Generation
 	out.HelmObservedGeneration = h.Status.ObservedGeneration
 	expected := expectedRelease(r)
-	if expected == nil || !subset(expected, h.Spec) || h.Spec["postRenderers"] != nil || h.Spec["kubeConfig"] != nil {
+	if !reviewedHelmSpecMatches(expected, h.Spec, r.Namespace) {
 		out.Reconciliation = "unknown"
 		out.ControllerDetail = "Live Helm input differs from exact reviewed input."
 		return

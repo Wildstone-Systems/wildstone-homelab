@@ -230,3 +230,106 @@ func TestPromotedPlanStatusDoesNotBorrowPriorApplicationReadiness(t *testing.T) 
 		t.Fatal("old Plan presented as live", old)
 	}
 }
+
+func TestReviewedHelmSpecRejectsAllUnreviewedAdditions(t *testing.T) {
+	_, _, review, _ := observationFixture(t)
+	expected := expectedRelease(review)
+	cases := []struct {
+		name  string
+		path  []string
+		value any
+		match bool
+	}{
+		{"same-source-namespace-default", []string{"chart", "spec", "sourceRef", "namespace"}, review.Namespace, true},
+		{"different-source-namespace", []string{"chart", "spec", "sourceRef", "namespace"}, "unreviewed-namespace", false},
+		{"extra-values-key", []string{"values", "unreviewedSetting"}, true, false},
+		{"extra-env-value", []string{"values", "env", "UNREVIEWED"}, "extra", false},
+		{"default-shaped-value-must-not-be-stripped", []string{"values", "suspend"}, false, false},
+		{"extra-empty-values-key", []string{"values", "unreviewedSetting"}, map[string]any{}, false},
+		{"extra-null-values-key", []string{"values", "unreviewedSetting"}, nil, false},
+		{"extra-top-level-key", []string{"unreviewedSetting"}, true, false},
+		{"extra-null-top-level-key", []string{"valuesFrom"}, nil, false},
+		{"external-values", []string{"valuesFrom"}, []any{map[string]any{"kind": "Secret", "name": "unreviewed-values"}}, false},
+		{"extra-chart-setting", []string{"chart", "spec", "valuesFiles"}, []any{"unreviewed.yaml"}, false},
+		{"extra-chart-metadata", []string{"chart", "metadata"}, map[string]any{"annotations": map[string]any{"unreviewed": "extra"}}, false},
+		{"alternate-chart-ref", []string{"chartRef"}, map[string]any{"kind": "HelmChart", "name": "unreviewed"}, false},
+		{"post-renderer", []string{"postRenderers"}, []any{}, false},
+		{"remote-kubeconfig", []string{"kubeConfig"}, map[string]any{"secretRef": map[string]any{"name": "unreviewed"}}, false},
+		{"changed-install-behavior", []string{"install", "disableWait"}, true, false},
+		{"changed-upgrade-behavior", []string{"upgrade", "preserveValues"}, true, false},
+		{"target-namespace-default", []string{"targetNamespace"}, review.Namespace, true},
+		{"different-target-namespace", []string{"targetNamespace"}, "unreviewed-namespace", false},
+		{"storage-namespace-default", []string{"storageNamespace"}, review.Namespace, true},
+		{"different-storage-namespace", []string{"storageNamespace"}, "unreviewed-namespace", false},
+		{"suspend-default", []string{"suspend"}, false, true},
+		{"changed-suspend", []string{"suspend"}, true, false},
+		{"chart-kind-default", []string{"chart", "kind"}, "HelmChart", true},
+		{"changed-chart-kind", []string{"chart", "kind"}, "OCIRepository", false},
+		{"uninstall-default", []string{"uninstall"}, map[string]any{"deletionPropagation": "background"}, true},
+		{"different-uninstall", []string{"uninstall"}, map[string]any{"deletionPropagation": "orphan"}, false},
+		{"uninstall-default-plus-extra", []string{"uninstall"}, map[string]any{"deletionPropagation": "background", "disableHooks": true}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			actual := expectedRelease(review)
+			parent := actual
+			for _, key := range tc.path[:len(tc.path)-1] {
+				next, ok := parent[key].(map[string]any)
+				if !ok {
+					next = map[string]any{}
+					parent[key] = next
+				}
+				parent = next
+			}
+			parent[tc.path[len(tc.path)-1]] = tc.value
+			before, _ := json.Marshal(actual)
+			if got := reviewedHelmSpecMatches(expected, actual, review.Namespace); got != tc.match {
+				t.Fatalf("match=%v, want %v", got, tc.match)
+			}
+			after, _ := json.Marshal(actual)
+			if string(before) != string(after) {
+				t.Fatal("comparison mutated observed input")
+			}
+		})
+	}
+	t.Run("explicit-reviewed-default-still-required", func(t *testing.T) {
+		reviewed := expectedRelease(review)
+		reviewed["suspend"] = false
+		if reviewedHelmSpecMatches(reviewed, expectedRelease(review), review.Namespace) {
+			t.Fatal("missing reviewed field accepted")
+		}
+	})
+	t.Run("required-reviewed-field-missing", func(t *testing.T) {
+		actual := expectedRelease(review)
+		delete(actual, "values")
+		if reviewedHelmSpecMatches(expected, actual, review.Namespace) {
+			t.Fatal("missing reviewed values accepted")
+		}
+	})
+}
+
+func TestUnreviewedHelmInputCannotProduceReadyStatus(t *testing.T) {
+	for _, tc := range []string{"source-namespace", "values-key", "values-from", "install-behavior"} {
+		t.Run(tc, func(t *testing.T) {
+			o, f, r, status := observationFixture(t)
+			live := f.objects["HelmRelease"].Spec
+			switch tc {
+			case "source-namespace":
+				nested(live, "chart", "spec", "sourceRef").(map[string]any)["namespace"] = "unreviewed-namespace"
+			case "values-key":
+				live["values"].(map[string]any)["unreviewedSetting"] = true
+			case "values-from":
+				live["valuesFrom"] = []any{map[string]any{"kind": "Secret", "name": "unreviewed-values"}}
+			case "install-behavior":
+				live["install"].(map[string]any)["disableWait"] = true
+			}
+			o.observe(r, &status)
+			if status.Reconciliation != "unknown" || status.Application != "unobserved" {
+				t.Fatalf("unreviewed inputs reported readiness: %+v", status)
+			}
+			if f.calls != 3 {
+				t.Fatalf("observer continued beyond rejected Helm input: %d reads", f.calls)
+			}
+		})
+	}
+}
