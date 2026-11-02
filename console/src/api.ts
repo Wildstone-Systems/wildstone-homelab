@@ -89,6 +89,10 @@ export interface DeploymentReview {
 export interface DeploymentStatus {
   phase:string; detail:string; attemptCode?:string; productRevision:string; preparedRevision?:string;
   promotedRevision?:string; delivery:string; mirrorRevision?:string; reconciliation:string; application:string; observedAt:string;
+  controllerStage?:string; controllerDetail?:string; sourceRevision?:string; reconciledRevision?:string;
+  controllerObservedAt?:string; controllerExpiresAt?:string;
+  sourceGeneration?:number; sourceObservedGeneration?:number; kustomizationGeneration?:number; kustomizationObservedGeneration?:number;
+  helmGeneration?:number; helmObservedGeneration?:number; workloadGeneration?:number; workloadObservedGeneration?:number;
 }
 export interface DeploymentSlot { configured:boolean; instance?:string; package?:string; version?:string; timezone?:string }
 

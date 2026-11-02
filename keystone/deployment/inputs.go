@@ -1,6 +1,7 @@
 // Package deployment connects existing Owner Plans to local Git publication.
 // Flux/Kubernetes, not this package, reconcile workloads. It has no cluster
-// credentials, arbitrary Helm values, shell execution or external Git push.
+// mutation credentials, arbitrary Helm values, shell execution or external Git
+// push. Optional read-only observation uses a separately scoped identity.
 package deployment
 
 import (
@@ -31,6 +32,7 @@ type Config struct {
 	Repository          string                  `json:"repository"`
 	MirrorRepository    string                  `json:"mirrorRepository"`
 	Bindings            capability.HelmBindings `json:"bindings"`
+	Observation         *ObservationConfig      `json:"observation,omitempty"`
 }
 
 type inputs struct {

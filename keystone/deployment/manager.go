@@ -28,6 +28,7 @@ type Manager struct {
 	repo       *statefile.LocalDeployment
 	mu         sync.Mutex
 	wake       chan struct{}
+	observer   *Observer
 }
 
 func Open(path string, db *runtimedb.DB, state *statefile.Store, product *publish.Publisher) (*Manager, error) {
@@ -49,7 +50,11 @@ func Open(path string, db *runtimedb.DB, state *statefile.Store, product *publis
 	if err != nil {
 		return nil, fmt.Errorf("deployment: isolated local publication repository unavailable")
 	}
-	return &Manager{configPath: path, DB: db, State: state, Product: product, repo: repo, wake: make(chan struct{}, 1)}, nil
+	observer, err := newObserver(s.config.Observation)
+	if err != nil {
+		return nil, err
+	}
+	return &Manager{configPath: path, DB: db, State: state, Product: product, repo: repo, wake: make(chan struct{}, 1), observer: observer}, nil
 }
 
 func (m *Manager) Poke() {

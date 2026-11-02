@@ -8,7 +8,7 @@ import {
   WarningCircle,
   XCircle,
 } from "@phosphor-icons/react";
-import { api, ApiError, type EventRow, type Plan, type PlanRecord, type DeploymentSlot } from "../api";
+import { api, ApiError, type EventRow, type Plan, type PlanRecord, type DeploymentSlot, type DeploymentStatus } from "../api";
 import { ago, ErrorLine, useAction, useDismissals, useLoad, when } from "../lib";
 import { useConsoleState } from "../state";
 import { kindOf, KIND_COLOR, StatusPill } from "../ui/status";
@@ -640,12 +640,34 @@ export function DeploymentDetails({plan}:{plan:PlanRecord}) {
     </dl>
     <p>Existing claims and the named Secret are bootstrap prerequisites. This Plan does not provision or rotate their contents. A singleton upgrade can interrupt service; persistent claims are retained.</p>
     {Object.entries(d.files ?? {}).sort(([a],[b])=>a.localeCompare(b)).map(([name,contents])=><details key={name}><summary>Exact generated {name}</summary><pre>{contents}</pre></details>)}
-    {plan.deploymentStatus && <p>{plan.deploymentStatus.phase}: {plan.deploymentStatus.detail} Delivery: {plan.deploymentStatus.delivery}. Application: {plan.deploymentStatus.application}.</p>}
+    {plan.deploymentStatus && <DeploymentObservation status={plan.deploymentStatus} />}
   </section>;
 }
 
+export function DeploymentObservation({status, now: suppliedNow}:{status:DeploymentStatus;now?:number}) {
+ const [clock,setClock]=useState(Date.now());
+ useEffect(()=>{const timer=window.setInterval(()=>setClock(Date.now()),1000);return ()=>window.clearInterval(timer)},[]);
+ const now=suppliedNow??clock;
+ const expiry=Date.parse(status.controllerExpiresAt??"");
+ const stale=!!status.controllerObservedAt&&(!Number.isFinite(expiry)||now>=expiry);
+ return <div aria-live="polite">
+  <p>{status.phase}: {status.detail} Delivery: {status.delivery}.</p>
+  <p>Reconciliation: {stale?"stale":status.reconciliation}. Application: {stale?"unknown (stale observation)":status.application}.</p>
+  {status.controllerObservedAt && <p>Observed: {status.controllerObservedAt}. {stale?"Refresh to obtain current status.":status.controllerDetail}</p>}
+  <dl>
+   <dt>Locally promoted revision</dt><dd>{status.promotedRevision||"Not promoted"}</dd>
+   <dt>Flux source revision</dt><dd>{status.sourceRevision||"Unobserved"}</dd>
+   <dt>Applied source revision</dt><dd>{status.reconciledRevision||"Unobserved"}</dd>
+   {status.sourceGeneration!==undefined&&<><dt>Source observed / desired generation</dt><dd>{status.sourceObservedGeneration} / {status.sourceGeneration}</dd></>}
+   {status.kustomizationGeneration!==undefined&&<><dt>Kustomization observed / desired generation</dt><dd>{status.kustomizationObservedGeneration} / {status.kustomizationGeneration}</dd></>}
+   {status.helmGeneration!==undefined&&<><dt>Helm observed / desired generation</dt><dd>{status.helmObservedGeneration} / {status.helmGeneration}</dd></>}
+   {status.workloadGeneration!==undefined&&<><dt>Workload observed / desired generation</dt><dd>{status.workloadObservedGeneration} / {status.workloadGeneration}</dd></>}
+  </dl>
+ </div>;
+}
+
 // Existing Plan detail/status, including a safe withdrawal while local
-// promotion is pending. This does not observe or operate the cluster.
+// promotion is pending. Observation grants no cluster mutation authority.
 function DeploymentOperation({id,onResolved}:{id:string;onResolved:()=>void}) {
   const record=useLoad(()=>api.plan(id),[id]);
   const action=useAction();

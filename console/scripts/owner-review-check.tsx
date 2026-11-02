@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import {createElement as h} from "react";
 import {renderToString} from "react-dom/server";
-import {loadReviewPlans, PendingPlan} from "../src/views/Plans";
+import {loadReviewPlans, PendingPlan, DeploymentObservation} from "../src/views/Plans";
 import {ApiError, type PlanRecord} from "../src/api";
 async function main() {
  const summary={id:"plan-42",state:"proposed",summary:"Morning routine",risk:"low",principal:"butler",createdAt:"2026-01-01T00:00:00Z"} as PlanRecord;
@@ -31,6 +31,11 @@ async function main() {
  const incomplete:PlanRecord={...summary,research:{operation:"update",providerId:"sr.review-provider",expectedConfigRevision:"sr.review-revision"}};
  const incompleteHTML=renderToString(h(PendingPlan,{plan:incomplete,onResolved:()=>{}}));
  assert.match(incompleteHTML,/btn-primary[^>]*disabled/,"missing configuration must not enable approval");
+ const observation={phase:"promoted",detail:"Local ref observed",productRevision:"example-product",promotedRevision:"example-promoted",delivery:"mirrored",reconciliation:"ready",application:"ready",observedAt:"2026-01-01T00:00:00Z",controllerObservedAt:"2026-01-01T00:00:00Z",controllerExpiresAt:"2026-01-01T00:00:30Z",sourceRevision:"example-source-revision",reconciledRevision:"example-applied-revision",helmGeneration:2,helmObservedGeneration:2};
+ const live=renderToString(h(DeploymentObservation,{status:observation,now:Date.parse("2026-01-01T00:00:10Z")})).replace(/<!--.*?-->/g, "");
+ for(const text of ["Reconciliation: ready","Application: ready","example-source-revision","example-applied-revision","2 / 2"])assert.ok(live.includes(text),`missing observed fact ${text}`);
+ const staleObservation=renderToString(h(DeploymentObservation,{status:observation,now:Date.parse("2026-01-01T00:00:31Z")})).replace(/<!--.*?-->/g, "");
+ assert.ok(staleObservation.includes("Reconciliation: stale"));assert.ok(staleObservation.includes("Application: unknown (stale observation)"));assert.ok(!staleObservation.includes("Application: ready"));
  const deployment:PlanRecord={...summary,deploymentPlan:true,deployment:{instance:"example-app",operationId:"example-operation",previousProductRevision:"example-base",productRevision:"example-product",expectedDeploymentRevision:"example-parent",projectionDigest:"example-output-digest",profileDigest:"example-profile-digest",inventoryDigest:"example-inventory-digest",encryptedSecretRevision:"example-encrypted-version",package:"audiobooks-audiobookshelf",packageVersion:"1.0.0",chartSource:"https://example.invalid/charts",chartCommit:"example-immutable-commit",chartPath:"charts/example",chartVersion:"1.0.0",image:"example-image-digest",namespace:"example-namespace",release:"example-release",timezone:"UTC",desiredResource:"example-resource",files:{"source.yaml":"example-exact-source","release.yaml":"example-exact-release","kustomization.yaml":"example-exact-kustomization"}}};
  const reviewed=renderToString(h(PendingPlan,{plan:deployment,onResolved:()=>{}})).replace(/<!--.*?-->/g, "");
  for(const text of ["example-app","example-immutable-commit","example-image-digest","example-output-digest","example-profile-digest","example-inventory-digest","example-encrypted-version","example-product","example-parent","example-exact-source","example-exact-release","example-exact-kustomization","does not provision or rotate","retained"])assert.ok(reviewed.includes(text),`deployment review omits ${text}`);
