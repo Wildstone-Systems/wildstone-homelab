@@ -56,7 +56,6 @@ Important values:
 |---|---|
 | `image.repository`, `image.digest` | Explicit immutable image reference |
 | `storage.runtime.existingClaim` | Required existing claim for Statefile, runtime DB, CA, signing/provider keys, and coordinator/task records |
-| `storage.runtime.preparePermissions` | Off by default; opt-in init changes only the runtime claim root to UID/GID 65532 |
 | `storage.sharedUploads` | Optional, separately named existing claim and mount; no fallback directory |
 | `storage.privateWorkspaces` | Optional, separately named existing claim and mount; no fallback directory |
 | `configuration.existingConfigMap` | Optional read-only reference mounted under `/etc/wildstone/config` |
@@ -68,11 +67,55 @@ Important values:
 Enabling either optional data mount without an existing claim name fails Helm
 rendering. A missing referenced PVC leaves the Pod Pending; it never produces
 an `emptyDir` replacement. The only `emptyDir` is a size-bounded `/tmp` for the
-read-only container filesystem. A bounded init container gives that temporary
-directory to UID 65532. The optional runtime-permission init runs as UID 0 with
-only `CHOWN`, no privilege escalation, and a read-only root filesystem; it is
-not enabled for adopted storage by default. Upload and workspace permissions
-are never changed by the chart.
+read-only container filesystem.
+
+Chart 0.2.0 has no root container. The Pod, Keystone process, and one bounded
+runtime-layout init container use UID/GID 65532; the Pod also sets
+`fsGroup: 65532` and `fsGroupChangePolicy: OnRootMismatch`. On a supported
+volume implementation, kubelet or the CSI driver makes the volume root
+group-writable. This applies to the runtime, `/tmp`, upload and workspace
+volumes without giving any workload root or `CHOWN`.
+
+These settings follow Kubernetes' [volume ownership behavior][security-context]
+and the [Restricted Pod Security standard][restricted-pss]. CSI drivers that
+implement `VOLUME_MOUNT_GROUP` establish the group at mount time; otherwise
+kubelet applies supported volume ownership itself.
+
+[security-context]: https://kubernetes.io/docs/tasks/configure-pod-container/security-context/
+[restricted-pss]: https://kubernetes.io/docs/concepts/security/pod-security-standards/
+
+Kubelet adds group permissions but does not remove pre-existing "other" bits
+from a provisioned volume root. The chart therefore does not put secret state
+directly at that root. The non-root init mounts the claim root at `/volume`,
+requires it to be empty (or already contain only a valid private `keystone/`
+child), and creates that child as 65532:65532 mode 0700. The main container
+mounts only the child through `subPath` at the unchanged
+`/var/lib/wildstone/keystone` application path. Keystone retains its existing
+owner-only chmod check before SQLite opens.
+
+An old-layout file, unrelated entry, symlink, wrong ownership, or wrong child
+mode makes the init fail with an explicit migration error. A missing claim
+leaves the Pod Pending, and an inaccessible child makes Keystone fail before
+SQLite opens. Neither condition can fall back to an image directory or create
+a replacement database. SQLite, Statefile, key, credential and recovery paths
+remain beneath `/var/lib/wildstone/keystone` unchanged.
+
+`fsGroup` support is a storage compatibility requirement, not a universal CSI
+property. Some CSI drivers delegate group mounting through
+`VOLUME_MOUNT_GROUP`; other volume plugins apply ownership recursively; some
+NAS exports or drivers ignore it. `OnRootMismatch` can reduce repeat scans but
+does not override driver behavior. Validate the selected StorageClass with a
+fresh synthetic claim before adoption.
+
+Existing data needs a separate migration decision. Chart 0.1.0 placed database
+and Statefile content at the claim root; 0.2.0 expects it beneath the private
+`keystone/` child. The init deliberately refuses the old nonempty layout.
+Quiesce Keystone, capture and independently verify the full management
+consistency group, and test a restore alongside before an administrator moves
+the complete set into an owner-65532 mode-0700 child. On implementations that
+apply ownership recursively, first use can also change group and permission
+bits on the outer volume root. Do not enable this chart against an unreviewed
+household claim. The chart contains no fallback permission fixer or data mover.
 
 Keystone's real unauthenticated `/api/v1/healthz` is used for readiness. It
 means the public API handler is serving; it does not establish coordinator,
@@ -89,7 +132,11 @@ HELM=helm scripts/test-management-chart.sh
 The script runs lint, schema and deterministic-render checks plus negative
 checks for multiple replicas, mutable image references, missing claims,
 hostPath, public Services/Ingress, RBAC, cluster credentials, privileged
-containers, embedded Secrets, and silent storage fallback.
+containers, root initialization, added capabilities, embedded Secrets, and
+silent storage fallback. The image smoke test also exercises writable `/tmp`,
+non-root layout creation on an fsGroup-shaped 2777 volume root, refusal of a
+legacy/nonempty volume, explicit refusal of inaccessible required storage,
+native-agent compatibility, restart, persistence and authorization continuity.
 
 ## Authority and security boundaries
 
@@ -135,6 +182,7 @@ Repository validation does not verify:
 
 - a real Kubernetes install, CSI ownership behavior, Service routing, probe
   behavior under kubelet, or measured resource sizing;
+- admission under a namespace enforcing the Restricted Pod Security standard;
 - Flux install/upgrade/rollback and management-independent operation;
 - migration of an existing root-owned runtime claim or real household data;
 - SOPS/age custody and rotation (#162), backup/restore execution (#163),
@@ -144,4 +192,12 @@ Repository validation does not verify:
 
 Those gates require separate bounded work. Do not retire the existing
 deployment path on the strength of this packaging proof.
+
+The accepted #270 proof used chart 0.1.0 and its root ownership init
+containers. Its retained namespace and claims are evidence for that version,
+not validation of chart 0.2.0, and must not be reused or changed without fresh
+Owner approval. A new isolated proof must enforce Restricted admission, use
+new synthetic PVCs, confirm the selected provisioner's actual mount ownership,
+exercise SQLite/Statefile/identity persistence across restart, and verify that
+an inaccessible required claim prevents startup.
 

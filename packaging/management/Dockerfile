@@ -83,6 +83,7 @@ RUN printf '%s\n' \
 COPY --from=keystone-build /out/keystone /usr/local/bin/keystone
 COPY --from=web-and-native-build /src/console/dist/ /usr/share/wildstone/console/
 COPY --from=web-and-native-build /out/native-agent/ /usr/lib/wildstone/native-agent/
+COPY --chmod=0555 packaging/management/runtime-volume-init.sh /usr/local/bin/wildstone-runtime-volume-init
 COPY packages/ /usr/share/wildstone/packages/
 COPY wallpapers/ /usr/share/wildstone/wallpapers/
 

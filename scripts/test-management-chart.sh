@@ -28,13 +28,29 @@ grep -q 'image: ".*@sha256:[a-f0-9]\{64\}"' "$rendered" || fail "image is not di
 [ "$(grep -c 'automountServiceAccountToken: false' "$rendered")" -eq 2 ] || fail "ServiceAccount token mounting is not disabled on both objects"
 grep -A2 'name: runtime$' "$rendered" | grep -q 'persistentVolumeClaim:' || fail "runtime is not a PVC"
 grep -q 'claimName: wildstone-management-runtime' "$rendered" || fail "required runtime claim reference is absent"
+grep -q '^        runAsUser: 65532$' "$rendered" || fail "Pod does not use the fixed unprivileged uid"
+grep -q '^        runAsGroup: 65532$' "$rendered" || fail "Pod does not use the fixed unprivileged primary gid"
+grep -q '^        runAsNonRoot: true$' "$rendered" || fail "Pod does not require a non-root process"
+grep -q '^        fsGroup: 65532$' "$rendered" || fail "Pod does not assign the storage group"
+grep -q '^        fsGroupChangePolicy: OnRootMismatch$' "$rendered" || fail "Pod does not use bounded fsGroup ownership reconciliation"
+grep -A1 'seccompProfile:' "$rendered" | grep -q 'type: RuntimeDefault' || fail "RuntimeDefault seccomp is absent"
+grep -q '^            readOnlyRootFilesystem: true$' "$rendered" || fail "container root filesystem is writable"
+grep -q '^              drop: \["ALL"\]$' "$rendered" || fail "container does not drop every capability"
+grep -q '^        - name: runtime-layout$' "$rendered" || fail "non-root runtime layout initializer is absent"
+grep -q 'command: \["/usr/local/bin/wildstone-runtime-volume-init"\]' "$rendered" || fail "runtime initializer does not use the packaged bounded command"
+grep -q '^              subPath: keystone$' "$rendered" || fail "Keystone does not mount the private runtime child"
+grep -A3 '^        - name: tmp$' "$rendered" | grep -q 'emptyDir:' || fail "/tmp is not backed by emptyDir"
+grep -q 'sizeLimit: 128Mi' "$rendered" || fail "/tmp emptyDir is not bounded"
 
 refute '^kind: (Ingress|ClusterRole|ClusterRoleBinding|Role|RoleBinding|PersistentVolumeClaim)$' "$rendered" "forbidden/public/claim-owning resource rendered"
+refute 'runAsUser: *0' "$rendered" "root user rendered"
+refute 'runAsNonRoot: *false' "$rendered" "non-root enforcement disabled"
 refute 'hostPath:' "$rendered" "hostPath rendered"
 refute 'hostNetwork: *true' "$rendered" "host networking rendered"
 refute 'privileged: *true' "$rendered" "privileged container rendered"
 refute 'allowPrivilegeEscalation: *true' "$rendered" "privilege escalation rendered"
 refute 'automountServiceAccountToken: *true' "$rendered" "Kubernetes credentials rendered"
+refute 'add: *\[' "$rendered" "added Linux capability rendered"
 refute 'type: (NodePort|LoadBalancer)' "$rendered" "public Service rendered"
 
 if "$helm_bin" template synthetic "$chart" --set replicaCount=2 > /dev/null 2>&1; then
@@ -51,6 +67,9 @@ if "$helm_bin" template synthetic "$chart" --set storage.privateWorkspaces.enabl
 fi
 if "$helm_bin" template synthetic "$chart" --set image.digest=latest > /dev/null 2>&1; then
   fail "a mutable/non-digest image reference passed schema validation"
+fi
+if "$helm_bin" template synthetic "$chart" --set storage.runtime.preparePermissions=true > /dev/null 2>&1; then
+  fail "removed root permission-initialization option still passed schema validation"
 fi
 
 "$helm_bin" template synthetic "$chart" \
@@ -70,10 +89,5 @@ done
 refute '^kind: Secret$' "$work/references.yaml" "chart embedded a Secret"
 refute 'stringData:|^data:' "$work/references.yaml" "chart embedded secret values"
 
-"$helm_bin" template synthetic "$chart" --set storage.runtime.preparePermissions=true > "$work/permissions.yaml"
-grep -q 'name: runtime-volume-owner' "$work/permissions.yaml" || fail "opt-in volume ownership init did not render"
-grep -q 'add: \["CHOWN"\]' "$work/permissions.yaml" || fail "volume ownership init lacks bounded CHOWN capability"
-refute 'privileged: *true' "$work/permissions.yaml" "permission init is privileged"
-
-echo "PASS: management chart lint, schema, deterministic render, references, storage and security checks"
+echo "PASS: management chart lint, schema, deterministic render, references, storage and Restricted security checks"
 

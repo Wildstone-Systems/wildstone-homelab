@@ -4,3 +4,8 @@ Ingress, RBAC, credentials, or household configuration.
 The required runtime claim is: {{ .Values.storage.runtime.existingClaim }}
 The image is pinned as: {{ include "wildstone-management.image" . }}
 
+The runtime, temporary, upload, and workspace volumes must support Pod
+fsGroup 65532. The runtime claim must be empty or already contain only the
+private keystone/ layout. Adopt existing data only through the documented
+migration.
+

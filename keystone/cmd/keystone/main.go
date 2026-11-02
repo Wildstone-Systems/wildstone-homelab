@@ -707,7 +707,7 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 		return err
 	}
 	if err := os.Chmod(dataDir, 0o700); err != nil {
-		return err
+		return fmt.Errorf("secure data directory: %w", err)
 	}
 	db, err := runtimedb.Open(filepath.Join(dataDir, "keystone.db"))
 	if err != nil {

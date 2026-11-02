@@ -45,11 +45,11 @@ secretEnv: []
 storage:
   runtime:
     # Required. The chart references but never creates or deletes this claim.
+    # The storage driver must make the claim root writable by Pod fsGroup
+    # 65532. A non-root init creates a private keystone/ child. Existing claims
+    # need a reviewed layout/ownership migration before adoption; the chart has
+    # no root permission fixer or unsafe empty-directory fallback.
     existingClaim: wildstone-management-runtime
-    # Fresh Kubernetes volumes are commonly root-owned. Leave this false for
-    # pre-provisioned/adopted claims; enable only after reviewing the bounded
-    # root-directory ownership change performed by the init container.
-    preparePermissions: false
   sharedUploads:
     enabled: false
     existingClaim: ""
