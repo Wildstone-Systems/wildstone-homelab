@@ -75,6 +75,10 @@ The implementation must explicitly bridge ConfigFile/Route/identity declarations
 - Chart uninstall/pruning must preserve data by explicit tested retention policy. Configuration removal is not permission to delete PVCs or external files.
 - Coordinator/task leases, scheduled checkpoints and effect receipts must prevent stale or duplicate execution after restart. This requires tests of actual management recovery under #166 and multi-node safety under #180.
 
+The code-backed native-task and deterministic-automation lifecycle, synthetic
+fixture boundaries, restart behavior, and restore-alongside limits are recorded
+in [the #272 recovery contract](native-task-automation-recovery-contract.md).
+
 ## Remaining implementation gates
 
 1. Review #268's image inputs, chart schema, storage identity and repository-only evidence; no runner or registry credential is added.

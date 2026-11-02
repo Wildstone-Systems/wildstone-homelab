@@ -807,6 +807,18 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 		coordinating = recovered
 	}
 
+	// Reconcile attempts checkpointed before an interrupted dispatch before
+	// any resumed Agent task can call a provider or capability. Model calls
+	// are safe to retry at the fenced epoch; tool and delivery outcomes are
+	// parked for Owner review because they may already have crossed an
+	// external boundary. This local reconciliation is safe under restore
+	// quarantine; quarantine continues to block every actual dispatch.
+	if coordinating {
+		if err := db.RecoverInterruptedButlerAttempts(); err != nil {
+			return fmt.Errorf("recovering interrupted Agent work: %w", err)
+		}
+	}
+
 	// Heartbeats inform the human takeover decision; they never auto-promote.
 	if coordinating {
 		go func() {
