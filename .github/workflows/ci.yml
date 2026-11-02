@@ -322,3 +322,40 @@ jobs:
       - uses: actions/checkout@v7
       - name: build standalone image
         run: docker build --pull -f "cli/cmd/${{ matrix.component }}/Dockerfile" -t "wildstone-${{ matrix.component }}:ci" .
+
+  management-packaging:
+    name: management package (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v7
+      # Both images are built and exercised on GitHub's native architecture,
+      # not merely cross-compiled. No third-party action or emulation setup is
+      # introduced, and the existing standalone-image job stays unchanged.
+      - name: build management image
+        run: |
+          docker build -f packaging/management/Dockerfile \
+            --build-arg VERSION=0.0.0-ci \
+            --build-arg VCS_REF="${GITHUB_SHA}" \
+            -t wildstone-management:ci .
+      - name: exercise management image
+        run: scripts/test-management-image.sh wildstone-management:ci
+      - name: install pinned Helm
+        if: matrix.arch == 'amd64'
+        run: |
+          set -euo pipefail
+          version=v4.3.1
+          archive="helm-${version}-linux-amd64.tar.gz"
+          curl -fsSLO "https://get.helm.sh/${archive}"
+          echo "0403a88ae20913d11b10a2467b50087721fea7581736da6b9d3992f5357fe54b  ${archive}" | sha256sum -c -
+          tar -xzf "${archive}" -C "${RUNNER_TEMP}"
+          echo "${RUNNER_TEMP}/linux-amd64" >> "${GITHUB_PATH}"
+      - name: validate management chart
+        if: matrix.arch == 'amd64'
+        run: scripts/test-management-chart.sh

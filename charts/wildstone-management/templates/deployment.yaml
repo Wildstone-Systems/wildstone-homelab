@@ -1,0 +1,203 @@
+{{- if and .Values.storage.sharedUploads.enabled (not .Values.storage.sharedUploads.existingClaim) }}
+{{- fail "storage.sharedUploads.existingClaim is required when sharedUploads is enabled" }}
+{{- end }}
+{{- if and .Values.storage.privateWorkspaces.enabled (not .Values.storage.privateWorkspaces.existingClaim) }}
+{{- fail "storage.privateWorkspaces.existingClaim is required when privateWorkspaces is enabled" }}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "wildstone-management.fullname" . }}
+  labels:
+    {{- include "wildstone-management.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "wildstone-management.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "wildstone-management.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "wildstone-management.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      initContainers:
+        - name: temporary-volume-owner
+          image: {{ include "wildstone-management.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["/bin/chown"]
+          args: ["65532:65532", "/tmp"]
+          securityContext:
+            runAsUser: 0
+            runAsNonRoot: false
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+              add: ["CHOWN"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+        {{- if .Values.storage.runtime.preparePermissions }}
+        - name: runtime-volume-owner
+          image: {{ include "wildstone-management.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["/bin/chown"]
+          args: ["65532:65532", "/var/lib/wildstone/keystone"]
+          securityContext:
+            runAsUser: 0
+            runAsNonRoot: false
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+              add: ["CHOWN"]
+          volumeMounts:
+            - name: runtime
+              mountPath: /var/lib/wildstone/keystone
+        {{- end }}
+      containers:
+        - name: keystone
+          image: {{ include "wildstone-management.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - -listen=:9440
+            - -api-listen=:9441
+            - -data-dir=/var/lib/wildstone/keystone
+            - -console-dir=/usr/share/wildstone/console
+            - -catalog-dir=/usr/share/wildstone/packages
+            - -wallpaper-dir=/usr/share/wildstone/wallpapers
+            - -native-agent-dir=/usr/lib/wildstone/native-agent
+            {{- range .Values.startup.extraArgs }}
+            - {{ . | quote }}
+            {{- end }}
+          ports:
+            - name: http
+              containerPort: 9441
+              protocol: TCP
+            - name: agent-gateway
+              containerPort: 9440
+              protocol: TCP
+          {{- with .Values.secretEnv }}
+          env:
+            {{- range . }}
+            - name: {{ .name }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .secretName }}
+                  key: {{ .key }}
+            {{- end }}
+          {{- end }}
+          securityContext:
+            runAsUser: 65532
+            runAsGroup: 65532
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          startupProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: {{ .Values.probes.startup.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.startup.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.startup.failureThreshold }}
+          livenessProbe:
+            tcpSocket:
+              port: http
+            initialDelaySeconds: {{ .Values.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.liveness.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
+          readinessProbe:
+            httpGet:
+              path: /api/v1/healthz
+              port: http
+            initialDelaySeconds: {{ .Values.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.readiness.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: runtime
+              mountPath: /var/lib/wildstone/keystone
+            - name: tmp
+              mountPath: /tmp
+            {{- if .Values.configuration.existingConfigMap }}
+            - name: configuration
+              mountPath: {{ .Values.configuration.configMountPath }}
+              readOnly: true
+            {{- end }}
+            {{- if .Values.configuration.existingSecret }}
+            - name: secrets
+              mountPath: {{ .Values.configuration.secretMountPath }}
+              readOnly: true
+            {{- end }}
+            {{- if .Values.storage.sharedUploads.enabled }}
+            - name: shared-uploads
+              mountPath: {{ .Values.storage.sharedUploads.mountPath }}
+              readOnly: {{ .Values.storage.sharedUploads.readOnly }}
+            {{- end }}
+            {{- if .Values.storage.privateWorkspaces.enabled }}
+            - name: private-workspaces
+              mountPath: {{ .Values.storage.privateWorkspaces.mountPath }}
+              readOnly: {{ .Values.storage.privateWorkspaces.readOnly }}
+            {{- end }}
+      volumes:
+        - name: runtime
+          persistentVolumeClaim:
+            claimName: {{ required "storage.runtime.existingClaim is required" .Values.storage.runtime.existingClaim }}
+        - name: tmp
+          emptyDir:
+            sizeLimit: 128Mi
+        {{- if .Values.configuration.existingConfigMap }}
+        - name: configuration
+          configMap:
+            name: {{ .Values.configuration.existingConfigMap }}
+        {{- end }}
+        {{- if .Values.configuration.existingSecret }}
+        - name: secrets
+          secret:
+            secretName: {{ .Values.configuration.existingSecret }}
+        {{- end }}
+        {{- if .Values.storage.sharedUploads.enabled }}
+        - name: shared-uploads
+          persistentVolumeClaim:
+            claimName: {{ .Values.storage.sharedUploads.existingClaim }}
+        {{- end }}
+        {{- if .Values.storage.privateWorkspaces.enabled }}
+        - name: private-workspaces
+          persistentVolumeClaim:
+            claimName: {{ .Values.storage.privateWorkspaces.existingClaim }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+

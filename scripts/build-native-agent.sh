@@ -77,6 +77,9 @@ sdk_version="$(sed -n 's/.*"@openai\/agents-core": *"\([^"]*\)".*/\1/p' "$repo/r
 } > "$stage/VERSION"
 
 artifact="$out/native-agent_linux_${arch}.tar.gz"
-# Owner and mtime normalised so the archive does not carry whoever built it.
-tar --owner=0 --group=0 --numeric-owner -czf "$artifact" -C "$stage" .
+# Owner, ordering and mtime are normalised so the archive does not carry who
+# built it or when. SOURCE_DATE_EPOCH may bind a release to its source commit;
+# zero keeps local/OCI builds deterministic when no release timestamp exists.
+tar --sort=name --mtime="@${SOURCE_DATE_EPOCH:-0}" \
+  --owner=0 --group=0 --numeric-owner -czf "$artifact" -C "$stage" .
 echo "built $artifact"

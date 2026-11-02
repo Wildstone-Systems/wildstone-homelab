@@ -1,0 +1,93 @@
+replicaCount: 1
+
+image:
+  repository: ghcr.io/wildstone-systems/wildstone-management
+  # No management image is published by this repository-only slice. Replace
+  # this fail-closed sentinel with the digest of a reviewed local build.
+  digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  annotations: {}
+  name: ""
+
+service:
+  type: ClusterIP
+  apiPort: 9441
+  gatewayPort: 9440
+  annotations: {}
+
+startup:
+  # Non-secret, reviewed Keystone flags only. Credentials belong in
+  # secretEnv or the read-only Secret mount below, never in arguments.
+  extraArgs: []
+
+configuration:
+  # Existing objects only: this chart never synthesizes household config or
+  # credentials. Their keys are mounted read-only beneath the given paths.
+  existingConfigMap: ""
+  configMountPath: /etc/wildstone/config
+  existingSecret: ""
+  secretMountPath: /etc/wildstone/secrets
+
+# Individual references avoid envFrom accidentally handing every key in a
+# Secret to Keystone. The native subprocess still receives only its adapter's
+# explicit environment allowlist.
+secretEnv: []
+# - name: OPENAI_API_KEY
+#   secretName: wildstone-provider-credentials
+#   key: openai-api-key
+
+storage:
+  runtime:
+    # Required. The chart references but never creates or deletes this claim.
+    existingClaim: wildstone-management-runtime
+    # Fresh Kubernetes volumes are commonly root-owned. Leave this false for
+    # pre-provisioned/adopted claims; enable only after reviewing the bounded
+    # root-directory ownership change performed by the init container.
+    preparePermissions: false
+  sharedUploads:
+    enabled: false
+    existingClaim: ""
+    mountPath: /srv/wildstone/media
+    readOnly: false
+  privateWorkspaces:
+    enabled: false
+    existingClaim: ""
+    mountPath: /srv/wildstone/agent-workspaces
+    readOnly: false
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: "1"
+    memory: 1Gi
+
+probes:
+  readiness:
+    initialDelaySeconds: 2
+    periodSeconds: 10
+    timeoutSeconds: 2
+    failureThreshold: 3
+  liveness:
+    initialDelaySeconds: 10
+    periodSeconds: 20
+    timeoutSeconds: 2
+    failureThreshold: 3
+  startup:
+    periodSeconds: 2
+    timeoutSeconds: 1
+    failureThreshold: 30
+
+podAnnotations: {}
+podLabels: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+

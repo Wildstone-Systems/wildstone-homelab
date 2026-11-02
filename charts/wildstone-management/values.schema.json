@@ -1,0 +1,125 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["replicaCount", "image", "service", "serviceAccount", "startup", "configuration", "secretEnv", "storage", "resources", "probes"],
+  "properties": {
+    "replicaCount": {"type": "integer", "const": 1},
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "digest", "pullPolicy"],
+      "properties": {
+        "repository": {"type": "string", "minLength": 1},
+        "digest": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
+        "pullPolicy": {"type": "string", "enum": ["Always", "IfNotPresent", "Never"]}
+      }
+    },
+    "imagePullSecrets": {"type": "array", "items": {"type": "object", "required": ["name"], "properties": {"name": {"type": "string", "minLength": 1}}}},
+    "nameOverride": {"type": "string"},
+    "fullnameOverride": {"type": "string"},
+    "serviceAccount": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["annotations", "name"],
+      "properties": {"annotations": {"type": "object"}, "name": {"type": "string"}}
+    },
+    "service": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "apiPort", "gatewayPort", "annotations"],
+      "properties": {
+        "type": {"type": "string", "const": "ClusterIP"},
+        "apiPort": {"type": "integer", "minimum": 1, "maximum": 65535},
+        "gatewayPort": {"type": "integer", "minimum": 1, "maximum": 65535},
+        "annotations": {"type": "object"}
+      }
+    },
+    "startup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["extraArgs"],
+      "properties": {"extraArgs": {"type": "array", "items": {"type": "string", "minLength": 1}}}
+    },
+    "configuration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["existingConfigMap", "configMountPath", "existingSecret", "secretMountPath"],
+      "properties": {
+        "existingConfigMap": {"type": "string"},
+        "configMountPath": {"type": "string", "pattern": "^/.+$"},
+        "existingSecret": {"type": "string"},
+        "secretMountPath": {"type": "string", "pattern": "^/.+$"}
+      }
+    },
+    "secretEnv": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "secretName", "key"],
+        "properties": {
+          "name": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"},
+          "secretName": {"type": "string", "minLength": 1},
+          "key": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "storage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["runtime", "sharedUploads", "privateWorkspaces"],
+      "properties": {
+        "runtime": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["existingClaim", "preparePermissions"],
+          "properties": {"existingClaim": {"type": "string", "minLength": 1}, "preparePermissions": {"type": "boolean"}}
+        },
+        "sharedUploads": {"$ref": "#/definitions/optionalClaim"},
+        "privateWorkspaces": {"$ref": "#/definitions/optionalClaim"}
+      }
+    },
+    "resources": {"type": "object"},
+    "probes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["readiness", "liveness", "startup"],
+      "properties": {
+        "readiness": {"$ref": "#/definitions/probe"},
+        "liveness": {"$ref": "#/definitions/probe"},
+        "startup": {"$ref": "#/definitions/probe"}
+      }
+    },
+    "podAnnotations": {"type": "object"},
+    "podLabels": {"type": "object"},
+    "nodeSelector": {"type": "object"},
+    "tolerations": {"type": "array"},
+    "affinity": {"type": "object"}
+  },
+  "definitions": {
+    "optionalClaim": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "existingClaim", "mountPath", "readOnly"],
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "existingClaim": {"type": "string"},
+        "mountPath": {"type": "string", "pattern": "^/.+$"},
+        "readOnly": {"type": "boolean"}
+      }
+    },
+    "probe": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["periodSeconds", "timeoutSeconds", "failureThreshold"],
+      "properties": {
+        "initialDelaySeconds": {"type": "integer", "minimum": 0},
+        "periodSeconds": {"type": "integer", "minimum": 1},
+        "timeoutSeconds": {"type": "integer", "minimum": 1},
+        "failureThreshold": {"type": "integer", "minimum": 1}
+      }
+    }
+  }
+}
+

@@ -1,12 +1,12 @@
 # Native Wildstone capabilities on Helm and Flux
 
-Status: proposed packaging specification, 2026-11-01. Implements the documentation/inventory portion of #259 under #166 and amended [ADR-W050](../decisions/ADR-W050-multi-node-runtime-kubernetes-engine-host-providers-editions.md). No chart, image release, migration or runtime change is implemented here. Audiobookshelf integration #256–#258 proceeds independently.
+Status: code-backed inventory, 2026-11-01; repository-only image/chart implementation added under #268. See the [management packaging runbook](../operations/w050-management-packaging.md). No image publication, live deployment, migration, recovery acceptance, or runtime topology change is established here.
 
 ## Deployment unit versus capability
 
 Deploy processes through Helm; enable product features through the existing capability and authorization model. A capability does not need its own chart, Pod or database. Flux manages declarative deployment configuration, never household runtime records.
 
-The initial first-party chart should deploy one Keystone instance, serve the built Console from that instance, and include the existing native runtime executable where enabled. Do not invent microservices or independent feature flags for modules that currently have no such switch. Container images and a Helm chart for this layout still need implementation and release verification.
+The initial first-party chart deploys one Keystone instance, serves the built Console from that instance, and includes the existing native runtime executable. It does not invent microservices or independent feature flags for modules that currently have no such switch. Release publication and live deployment verification remain separate work.
 
 ## Code-backed inventory
 
@@ -65,9 +65,8 @@ The implementation must explicitly bridge ConfigFile/Route/identity declarations
 
 ## Remaining implementation gates
 
-1. Choose image build/release paths and verified management chart values based on the inventory above. Workflow changes need their own bounded issue; #259 supplies the packaging parent, not blanket permission for new runner credentials.
-2. Define a small chart schema for deployment settings and reference existing product capability data; preserve singleton DB safety, native subprocess isolation and user permissions.
-3. Verify enable/disable, startup/restart, backup/restore and identity integration with synthetic data. No feature relocation is implied by this document.
-4. Prove actual management adoption/migration and independent restore under #166; retain Docker/systemd compatibility until then.
+1. Review #268's image inputs, chart schema, storage identity and repository-only evidence; no runner or registry credential is added.
+2. Verify actual Kubernetes/CSI startup, resource sizing, enable/disable behavior, backup/restore and identity integration with synthetic data. No feature relocation is implied by this document.
+3. Prove actual management adoption/migration and independent restore under #166; retain Docker/systemd compatibility until then.
 
-Documentation inventory is complete only when paths and claims are reviewed. Image publication, chart implementation, migration and recovery acceptance remain open in #259.
+Image publication, live chart deployment, migration and recovery acceptance remain open in #259/#166 even after repository packaging is reviewed.
