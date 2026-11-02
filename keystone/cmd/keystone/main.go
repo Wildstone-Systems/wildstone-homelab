@@ -41,6 +41,7 @@ import (
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/catalog"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/clusterauthority"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/consoleauth"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/deployment"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/domestic"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/gateway"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/householdtz"
@@ -105,6 +106,7 @@ func main() {
 	joinTokens := flag.String("join-tokens", "", "comma-separated one-time join tokens (dev/test; MintJoinToken is the production path)")
 	hosts := flag.String("hosts", "localhost,127.0.0.1", "comma-separated SANs for the gateway certificate")
 	dataDir := flag.String("data-dir", "/var/lib/wildstone/keystone", "directory persisting the CA, op-signing key, join tokens, Statefile, and runtime DB across restarts")
+	deploymentConfig := flag.String("deployment-config", "", "private local Helm slot bootstrap inventory; empty disables publication")
 	engineAPI := flag.String("engine-api", "", "local Kubernetes API URL for leader epoch issuance; empty disables cluster authority")
 	engineCA := flag.String("engine-ca", "", "Kubernetes API CA PEM, required with -engine-api")
 	engineToken := flag.String("engine-token", "", "path to the root-owned scoped Keystone token, required with -engine-api")
@@ -193,7 +195,7 @@ func main() {
 		Speech:            speechRtr,
 		NodeID:            strings.TrimSpace(*nodeID),
 	}
-	if err := run(*listen, *apiListen, *joinTokens, *hosts, *dataDir, *ingestEvery, *reconcileEvery, *managedPrefix, *backupEvery, *resticImage, *consoleDir, *catalogDir, *wallpaperDir, butlerCfg, householdCfg, engineConfig{API: *engineAPI, CA: *engineCA, Token: *engineToken}, log); err != nil {
+	if err := run(*listen, *apiListen, *joinTokens, *hosts, *dataDir, *ingestEvery, *reconcileEvery, *managedPrefix, *backupEvery, *resticImage, *consoleDir, *catalogDir, *wallpaperDir, butlerCfg, householdCfg, engineConfig{API: *engineAPI, CA: *engineCA, Token: *engineToken, DeploymentConfig: *deploymentConfig}, log); err != nil {
 		fmt.Fprintln(os.Stderr, "keystone:", err)
 		os.Exit(1)
 	}
@@ -295,7 +297,7 @@ func coordinatorHolder(dataDir string) string {
 	return host + ":" + abs
 }
 
-type engineConfig struct{ API, CA, Token string }
+type engineConfig struct{ API, CA, Token, DeploymentConfig string }
 
 type coordinatorEpochIssuer struct {
 	issuer gateway.EpochIssuer
@@ -1305,6 +1307,17 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	// new household event pokes the automation engine.
 	apiSrv := api.New(principals, db, state, log)
 	apiSrv.Publisher = publisher
+	if engineCfg.DeploymentConfig != "" {
+		deployments, err := deployment.Open(engineCfg.DeploymentConfig, db, state, publisher)
+		if err != nil {
+			return fmt.Errorf("local Helm publication configuration refused: %w", err)
+		}
+		apiSrv.Deployments = deployments
+		deploymentCtx, stopDeployment := context.WithCancel(context.Background())
+		defer stopDeployment()
+		go deployments.Run(deploymentCtx, reconcileEvery)
+	}
+
 	apiSrv.SecretVault = secretVault
 	if calendarActions != nil {
 		calendarActions.SecretUse = calendarSecretUse(db, secretVault)

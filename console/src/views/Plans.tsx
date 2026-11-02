@@ -8,7 +8,7 @@ import {
   WarningCircle,
   XCircle,
 } from "@phosphor-icons/react";
-import { api, ApiError, type EventRow, type Plan, type PlanRecord } from "../api";
+import { api, ApiError, type EventRow, type Plan, type PlanRecord, type DeploymentSlot } from "../api";
 import { ago, ErrorLine, useAction, useDismissals, useLoad, when } from "../lib";
 import { useConsoleState } from "../state";
 import { kindOf, KIND_COLOR, StatusPill } from "../ui/status";
@@ -35,6 +35,7 @@ export function Plans({ onNavigate }: { onNavigate?: (view: "activity") => void 
   const plans = list.data ?? [];
   return (<>
     <ReviewNotificationPreference />
+    <DeploymentProposal onProposed={list.reload} />
     <PlansView
       plans={plans}
       events={snap?.events ?? []}
@@ -169,6 +170,7 @@ export function PlansView({
         <PendingBand plans={pending} onResolved={onResolved} />
       )}
 
+      {resolved.filter(p => p.deploymentPlan).slice(0, PAGE).map(p => <DeploymentOperation key={p.id} id={p.id} onResolved={onResolved} />)}
       {resolved.length > 0 && <ResolvedHistory plans={resolved} />}
     </>
   );
@@ -259,7 +261,7 @@ export function ResolvedHistory({ plans }: { plans: PlanRecord[] }) {
             <tr key={p.id}>
               <td className="tnum">{p.id}</td>
               <td>
-                <StatusPill kind={kindOf(p.state)}>{p.state}</StatusPill>
+                <StatusPill kind={kindOf(p.state)}>{p.deploymentPlan && p.state === "applied" ? "locally promoted" : p.state}</StatusPill>
               </td>
               <td>
                 <StatusPill kind={kindOf(p.risk)}>{p.risk}</StatusPill>
@@ -280,7 +282,7 @@ export function ResolvedHistory({ plans }: { plans: PlanRecord[] }) {
           <div className="plan-row" key={p.id}>
             <div className="plan-row-head">
               <span>{p.summary}</span>
-              <StatusPill kind={kindOf(p.state)}>{p.state}</StatusPill>
+              <StatusPill kind={kindOf(p.state)}>{p.deploymentPlan && p.state === "applied" ? "locally promoted" : p.state}</StatusPill>
             </div>
             <div className="plan-row-meta">
               <span>{p.id}</span>
@@ -345,7 +347,7 @@ export function PendingPlan({
       () =>
         (verb === "approve" ? api.approvePlan(plan.id) : api.rejectPlan(plan.id)).then(onResolved),
       verb === "approve"
-        ? (plan.research ? "provider configuration applied" : plan.routine ? "version approved; automatic execution is not available yet" : "approved — handed to the reconciler")
+        ? (plan.research ? "provider configuration applied" : plan.routine ? "version approved; automatic execution is not available yet" : plan.deployment ? "approved; local promotion queued — application readiness is unobserved" : "approved — handed to the reconciler")
         : "rejected — the Butler is told why on its next session",
     );
 
@@ -362,6 +364,7 @@ export function PendingPlan({
           .every(value => Number.isInteger(value) && value > 0) &&
         Array.isArray(research.config.backends) && Array.isArray(research.config.fallbackOrder))),
   );
+  const reviewableDeployment = !plan.deploymentPlan || Boolean(plan.deployment?.productRevision && plan.deployment?.projectionDigest && plan.deployment?.image && ["source.yaml","release.yaml","kustomization.yaml"].every(name=>plan.deployment?.files?.[name]));
   const risky = kindOf(plan.risk) === "bad";
   const restores = (plan.plan?.steps ?? []).some((s) => (s.action ?? "").toLowerCase().includes("restore"));
 
@@ -426,7 +429,7 @@ export function PendingPlan({
         <>
           {!done && (
             <>
-              <button className="btn btn-primary" disabled={busy || !reviewableResearch} onClick={resolve("approve")}>
+              <button className="btn btn-primary" disabled={busy || !reviewableResearch || !reviewableDeployment} onClick={resolve("approve")}>
                 <SealCheck size={14} />
                 {busy ? "Working…" : "Approve"}
               </button>
@@ -491,7 +494,9 @@ export function PendingPlan({
           </>}
         </>}
       </section>}
-      {!research && <PlanSteps plan={plan.plan} />}
+      {!reviewableDeployment && <ErrorLine error="The deployment review is incomplete. Reload before approving." />}
+      {plan.deployment && <DeploymentDetails plan={plan} />}
+      {!research && !plan.deployment && <PlanSteps plan={plan.plan} />}
     </ProblemCard>
   );
 }
@@ -590,4 +595,67 @@ function ReviewNotificationPreference() {
    {action.state.phase==="error" && <ErrorLine error={action.state.message}/>}
    {action.state.phase==="done" && <p>{action.state.message}</p>}
  </details>
+}
+
+
+function DeploymentProposal({onProposed}:{onProposed:()=>void}) {
+  const slot=useLoad(()=>api.deploymentSlot().catch((error):DeploymentSlot=>{if(error instanceof ApiError&&error.status===403)return {configured:false};throw error;}),[]);
+  const [timezone,setTimezone]=useState("");
+  const action=useAction();
+  useEffect(()=>{if(slot.data?.timezone)setTimezone(slot.data.timezone)},[slot.data?.timezone]);
+  if(slot.error) return <ErrorLine error={slot.error} />;
+  if(!slot.data?.configured||!slot.data.instance)return null;
+  const instance=slot.data.instance;
+  return <section className="work-section">
+    <h3>Audiobookshelf deployment</h3>
+    <p>{instance} · package {slot.data.version}. Uses the installation's fixed private namespace and existing storage.</p>
+    <form onSubmit={event=>{event.preventDefault();action.run(()=>api.proposeDeployment(instance,timezone).then(()=>onProposed()),"Plan created; review before approving")}}>
+      <label>Application timezone <input value={timezone} onChange={event=>setTimezone(event.target.value)} required placeholder="UTC" /></label>{" "}
+      <button type="submit" disabled={action.state.phase==="busy"}>Prepare Plan</button>
+    </form>
+    {action.state.phase==="error" && <ErrorLine error={action.state.message} />}
+    {action.state.phase==="done" && <p>{action.state.message}</p>}
+    <p>Approval permits local configuration promotion. Flux and application readiness are observed separately.</p>
+  </section>;
+}
+
+export function DeploymentDetails({plan}:{plan:PlanRecord}) {
+  const d=plan.deployment;if(!d)return null;
+  return <section className="work-section">
+    <h3>Local deployment review: {d.instance}</h3>
+    <p>Requires a fresh sign-in from the proposing Owner. No release adoption, uninstall or data deletion is included.</p>
+    <dl>
+      <dt>Application timezone</dt><dd>{d.timezone}</dd>
+      <dt>Package</dt><dd>{d.package} · {d.packageVersion}</dd>
+      <dt>Target</dt><dd>{d.namespace} / {d.release}</dd>
+      <dt>Chart</dt><dd>{d.chartSource} · {d.chartPath} · {d.chartVersion}</dd>
+      <dt>Immutable chart revision</dt><dd className="tnum">{d.chartCommit}</dd>
+      <dt>Application image</dt><dd>{d.image}</dd>
+      <dt>Accepted input before this Plan</dt><dd>{d.previousProductRevision||"Initial configuration"}</dd>
+      <dt>Product candidate</dt><dd>{d.productRevision}</dd>
+      <dt>Expected local deployment parent</dt><dd>{d.expectedDeploymentRevision||"First promotion"}</dd>
+      <dt>Projection digest</dt><dd>{d.projectionDigest}</dd>
+      <dt>Profile / inventory versions</dt><dd>{d.profileDigest} / {d.inventoryDigest}</dd>
+      <dt>Encrypted configuration version</dt><dd>{d.encryptedSecretRevision}</dd>
+    </dl>
+    <p>Existing claims and the named Secret are bootstrap prerequisites. This Plan does not provision or rotate their contents. A singleton upgrade can interrupt service; persistent claims are retained.</p>
+    {Object.entries(d.files ?? {}).sort(([a],[b])=>a.localeCompare(b)).map(([name,contents])=><details key={name}><summary>Exact generated {name}</summary><pre>{contents}</pre></details>)}
+    {plan.deploymentStatus && <p>{plan.deploymentStatus.phase}: {plan.deploymentStatus.detail} Delivery: {plan.deploymentStatus.delivery}. Application: {plan.deploymentStatus.application}.</p>}
+  </section>;
+}
+
+// Existing Plan detail/status, including a safe withdrawal while local
+// promotion is pending. This does not observe or operate the cluster.
+function DeploymentOperation({id,onResolved}:{id:string;onResolved:()=>void}) {
+  const record=useLoad(()=>api.plan(id),[id]);
+  const action=useAction();
+  useEffect(()=>{const timer=window.setInterval(record.reload,15000);return ()=>window.clearInterval(timer)},[record.reload]);
+  return <details className="work-section"><summary>{id} · Local deployment status</summary>
+    {record.error && <ErrorLine error={record.error} />}
+    {record.data && <DeploymentDetails plan={record.data} />}
+    <button className="btn btn-secondary" disabled={record.loading} onClick={record.reload}>Refresh status</button>{" "}
+    {record.data && ["approved","applying"].includes(record.data.state) && <button className="btn btn-secondary" disabled={action.state.phase==="busy"} onClick={()=>action.run(()=>api.rejectPlan(id).then(()=>{record.reload();onResolved()}),"Future promotion authority revoked. Completed effects are retained.")}>Revoke pending promotion</button>}
+    {action.state.phase==="error" && <ErrorLine error={action.state.message} />}
+    {action.state.phase==="done" && <p>{action.state.message}</p>}
+  </details>;
 }

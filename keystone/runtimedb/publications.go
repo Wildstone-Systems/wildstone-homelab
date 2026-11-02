@@ -128,6 +128,10 @@ func (db *DB) AcceptPublication(id string, planTo PlanState, resolvedBy string) 
 		return ErrRevisionMoved
 	}
 
+	if err := db.checkDeploymentPublicationTx(tx, p, planTo, resolvedBy); err != nil {
+		return err
+	}
+
 	if _, err := tx.Exec(`INSERT INTO statefile_head (id, head, tree_digest, publication_id) VALUES (1, ?, ?, ?)
 		ON CONFLICT (id) DO UPDATE SET head = excluded.head, tree_digest = excluded.tree_digest,
 		publication_id = excluded.publication_id`, p.CandidateRevision, p.TreeDigest, id); err != nil {

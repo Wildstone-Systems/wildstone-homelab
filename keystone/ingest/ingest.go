@@ -238,6 +238,26 @@ func (in *Ingestor) Tick() (Result, error) {
 // checkPolicy validates a candidate tree against the standing invariants
 // (ADR-W009 A1). Exemption uses are surfaced as events.
 func (in *Ingestor) checkPolicy(log *slog.Logger, head string, proposed, current []resource.Resource) error {
+	helm := func(rs []resource.Resource) map[string]string {
+		out := map[string]string{}
+		for _, r := range rs {
+			if r.Kind == resource.KindHelmDeployment {
+				raw, _ := resource.Marshal(r)
+				out[r.Metadata.Name] = string(raw)
+			}
+		}
+		return out
+	}
+	before, after := helm(current), helm(proposed)
+	if len(before) != len(after) {
+		return fmt.Errorf("Helm input changes require an exact deployment Plan")
+	}
+	for name, value := range before {
+		if after[name] != value {
+			return fmt.Errorf("Helm input changes require an exact deployment Plan")
+		}
+	}
+
 	if in.Policy == nil {
 		return nil
 	}

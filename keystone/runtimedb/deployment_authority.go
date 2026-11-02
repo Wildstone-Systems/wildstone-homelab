@@ -1,26 +1,24 @@
 package runtimedb
 
 import (
-	"bytes"
-	"encoding/json"
 	"fmt"
-	"io"
 )
 
 // DeploymentApproval is exact dispatcher authority inside a standalone Plan.
 // Binding fingerprints repository, operation, instance-specific output, accepted
 // revision, artifacts and encrypted-secret references. A digest is not approval.
 type DeploymentApproval struct {
-	Binding           string `json:"binding"`
-	SourceRevision    string `json:"sourceRevision"`
-	OwnerPersonID     string `json:"ownerPersonId"`
-	OwnerGeneration   int64  `json:"ownerGeneration"`
-	OwnerRoleRevision int64  `json:"ownerRoleRevision"`
+	Binding           string            `json:"binding"`
+	SourceRevision    string            `json:"sourceRevision"`
+	OwnerPersonID     string            `json:"ownerPersonId"`
+	OwnerGeneration   int64             `json:"ownerGeneration"`
+	OwnerRoleRevision int64             `json:"ownerRoleRevision"`
+	Review            *DeploymentReview `json:"review,omitempty"`
 }
 
 // DeploymentPlanDocument is deliberately standalone: it cannot also approve
-// resource, routine, setting, subscription or audit-only work. Production Plan
-// creation/approval and dispatcher integration remain separate work under #257.
+// resource, routine, setting, subscription or audit-only work. Production
+// creation, approval and restart dispatch use this same immutable document.
 type DeploymentPlanDocument struct {
 	BasedOnHead string              `json:"basedOnHead"`
 	Summary     string              `json:"summary"`
@@ -67,18 +65,29 @@ func (db *DB) WithDeploymentApproval(planID, expectedPlanJSON, binding, source s
 	if document != expectedPlanJSON || (PlanState(state) != PlanApproved && PlanState(state) != PlanApplying) {
 		return fmt.Errorf("deployment: Plan is not the exact approved version")
 	}
-	var envelope DeploymentPlanDocument
-	decoder := json.NewDecoder(bytes.NewBufferString(document))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&envelope); err != nil {
-		return fmt.Errorf("deployment: standalone deployment Plan required")
-	}
-	if err := decoder.Decode(new(any)); err != io.EOF {
-		return fmt.Errorf("deployment: invalid Plan document")
+	envelope, err := DecodeDeploymentPlan(document)
+	if err != nil {
+		return err
 	}
 	a := envelope.Deployment
-	if a == nil || a.Binding != binding || a.SourceRevision != source || envelope.BasedOnHead != source || a.OwnerPersonID == "" || a.OwnerGeneration <= 0 || a.OwnerRoleRevision < 0 {
+	if a.Binding != binding || a.SourceRevision != source || a.OwnerPersonID == "" || a.OwnerGeneration <= 0 || a.OwnerRoleRevision < 0 {
 		return fmt.Errorf("deployment: approval binding mismatch")
+	}
+	if a.Review == nil {
+		if envelope.BasedOnHead != source {
+			return fmt.Errorf("deployment: approval source mismatch")
+		}
+	} else {
+		if a.Review.ProductRevision != source || a.Review.PreviousProductRevision != envelope.BasedOnHead {
+			return fmt.Errorf("deployment: product review mismatch")
+		}
+		var currentPlan int64
+		if err := tx.QueryRow(`SELECT plan_seq FROM deployment_plan_heads WHERE instance_id=?`, a.Review.Instance).Scan(&currentPlan); err != nil {
+			return err
+		}
+		if currentPlan != seq {
+			return fmt.Errorf("deployment: approval was superseded")
+		}
 	}
 	var accepted string
 	if err := tx.QueryRow(`SELECT head FROM statefile_head WHERE id=1`).Scan(&accepted); err != nil {
@@ -87,19 +96,8 @@ func (db *DB) WithDeploymentApproval(planID, expectedPlanJSON, binding, source s
 	if accepted != source {
 		return ErrRevisionMoved
 	}
-	var member, role, disabled, offboarded string
-	var admitted int
-	var generation, roleRevision int64
-	if err := tx.QueryRow(`SELECT member,role,admitted,generation,disabled_at,offboarded_at FROM butler_members WHERE person_id=?`, a.OwnerPersonID).Scan(&member, &role, &admitted, &generation, &disabled, &offboarded); err != nil {
+	if err := checkDeploymentOwnerTx(tx, a, approvedBy); err != nil {
 		return err
-	}
-	// Role changes do not advance admission generation. Bind their audit sequence
-	// too, so demotion followed by re-promotion cannot revive an old approval.
-	if err := tx.QueryRow(`SELECT COALESCE(MAX(seq),0) FROM butler_role_changes WHERE person_id=?`, a.OwnerPersonID).Scan(&roleRevision); err != nil {
-		return err
-	}
-	if role != RoleOwner || admitted != 1 || generation != a.OwnerGeneration || roleRevision != a.OwnerRoleRevision || disabled != "" || offboarded != "" || approvedBy != member {
-		return fmt.Errorf("deployment: approving Owner authority changed")
 	}
 	if err := effect(); err != nil {
 		return err

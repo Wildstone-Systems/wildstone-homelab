@@ -626,3 +626,42 @@ func TestPlanTickWithAutomationOnlyResolves(t *testing.T) {
 		t.Fatalf("observed = %+v, %v", obs, err)
 	}
 }
+
+func TestDockerLoopDoesNotConsumeDeploymentPlanOrResource(t *testing.T) {
+	l, state, db, app := harness(t)
+	want := resource.Resource{ApiVersion: resource.ApiVersion, Kind: resource.KindHelmDeployment, Metadata: resource.Metadata{Name: "example-app", Owner: "capability/audiobooks", Package: "audiobooks-audiobookshelf"}, HelmDeployment: &resource.HelmDeploymentSpec{Package: "audiobooks-audiobookshelf", Version: "1.0.0", Timezone: "UTC", Placement: strings.Repeat("a", 64)}}
+	if err := state.Put(want); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Commit("example-owner", "example-approved", "example input"); err != nil {
+		t.Fatal(err)
+	}
+	head, err := state.Head()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SetStatefileHead(head); err != nil {
+		t.Fatal(err)
+	}
+	// A deployment envelope belongs to its own dispatcher even during restart.
+	id, err := db.InsertPlan("example-owner", "", "example local promotion", "high", `{"deployment":{"review":{"instance":"example-app"}}}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.TransitionPlan(id, runtimedb.PlanApproved, "example-owner"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.TransitionPlan(id, runtimedb.PlanApplying, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := l.Tick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	current, err := db.GetPlan(id)
+	if err != nil || current.State != runtimedb.PlanApplying {
+		t.Fatal("legacy loop consumed deployment", err, current.State)
+	}
+	if app.ops != 0 {
+		t.Fatal("Helm resource reached host executor")
+	}
+}

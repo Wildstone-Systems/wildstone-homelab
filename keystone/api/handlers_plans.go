@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -64,6 +65,18 @@ func (s *Server) listPlans(r *http.Request, id principal.Identity) (any, int, er
 		visible = append(visible, p)
 	}
 	views := viewPlans(visible)
+	ids := make([]string, len(visible))
+	for i, p := range visible {
+		ids[i] = p.ID
+	}
+	deploymentIDs, err := s.DB.DeploymentPlanIDs(ids)
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	for i := range views {
+		views[i].DeploymentPlan = deploymentIDs[views[i].ID]
+	}
+
 	// Lists currently omit proposal JSON. Keep Owner-only research details
 	// protected even if the storage projection later includes full proposals.
 	if s.researchOwner(id) != nil {
@@ -91,6 +104,15 @@ func (s *Server) getPlan(r *http.Request, id principal.Identity) (any, int, erro
 			return nil, http.StatusForbidden, err
 		}
 	}
+	if view.DeploymentPlan {
+		if err := s.deploymentReader(id); err != nil {
+			return nil, http.StatusForbidden, err
+		}
+		if s.Deployments != nil {
+			status := s.Deployments.Status(rec.ID)
+			view.DeploymentStatus = &status
+		}
+	}
 	return view, http.StatusOK, nil
 }
 
@@ -105,6 +127,15 @@ func (s *Server) proposePlan(r *http.Request, id principal.Identity) (any, int, 
 	var req proposalRequest
 	if err := json.Unmarshal(body, &req); err != nil {
 		return nil, http.StatusBadRequest, fmt.Errorf("parsing proposal: %w", err)
+	}
+	if req.Deployment != nil {
+		d := json.NewDecoder(bytes.NewReader(body))
+		d.DisallowUnknownFields()
+		var strict proposalRequest
+		if err := d.Decode(&strict); err != nil {
+			return nil, http.StatusBadRequest, fmt.Errorf("deployment proposals accept only instance and timezone")
+		}
+		return s.proposeDeployment(r, id, strict)
 	}
 	return s.submitProposal(id, req)
 }
@@ -167,6 +198,9 @@ func (s *Server) approvePlan(r *http.Request, id principal.Identity) (any, int, 
 	}
 	if rec.State != runtimedb.PlanProposed {
 		return nil, http.StatusConflict, fmt.Errorf("plan is %s, not proposed", rec.State)
+	}
+	if isDeployment(rec.PlanJSON) {
+		return s.approveDeployment(r, id, rec)
 	}
 	var stored storedProposal
 	if err := json.Unmarshal([]byte(rec.PlanJSON), &stored); err != nil {
@@ -380,6 +414,21 @@ func (s *Server) rejectPlan(r *http.Request, id principal.Identity) (any, int, e
 		return nil, code, err
 	}
 	planID := r.PathValue("id")
+	if rec, err := s.DB.GetPlan(planID); err == nil && isDeployment(rec.PlanJSON) {
+		if body, code, err := s.freshOwnerReview(r, id); err != nil {
+			return body, code, err
+		}
+		if s.Deployments == nil {
+			return nil, http.StatusServiceUnavailable, fmt.Errorf("local Helm publication is not configured")
+		}
+		if err := s.Deployments.Revoke(planID, actingMember(id)); err != nil {
+			return nil, http.StatusConflict, err
+		}
+		s.event("plan.revoked", planID, id, "Future local promotion authority revoked; completed effects are not rolled back.")
+		latest, err := s.DB.GetPlan(planID)
+		return viewPlan(latest), http.StatusOK, err
+	}
+
 	rec, err := s.DB.GetPlan(planID)
 	if errors.Is(err, runtimedb.ErrNotFound) {
 		return nil, http.StatusNotFound, fmt.Errorf("plan not found")

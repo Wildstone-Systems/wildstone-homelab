@@ -73,6 +73,8 @@ func (r *Resource) specOf() any {
 		return r.Automation
 	case KindMeter:
 		return r.Meter
+	case KindHelmDeployment:
+		return r.HelmDeployment
 	case KindCommitment:
 		return r.Commitment
 	default:
@@ -157,6 +159,8 @@ func (r *Resource) UnmarshalYAML(value *yaml.Node) error {
 		r.Automation = spec.(*AutomationSpec)
 	case KindMeter:
 		r.Meter = spec.(*MeterSpec)
+	case KindHelmDeployment:
+		r.HelmDeployment = spec.(*HelmDeploymentSpec)
 	case KindCommitment:
 		r.Commitment = spec.(*CommitmentSpec)
 	}

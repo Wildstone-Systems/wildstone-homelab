@@ -1,6 +1,6 @@
 # Local deployment promotion: journal, Git and approval fence
 
-Status: local journal/ref foundation plus mandatory final approval fence under #257; not a completed deployment feature. Governing direction: amended [W050](../decisions/ADR-W050-multi-node-runtime-kubernetes-engine-host-providers-editions.md), #262. No production caller, public mutation endpoint, Git listener or live deployment is enabled here.
+Status: local journal/ref foundation and mandatory final approval fence under #257, now used by the opt-in [existing Owner Plan integration](approved-local-deployment.md). Governing direction: amended [W050](../decisions/ADR-W050-multi-node-runtime-kubernetes-engine-host-providers-editions.md), #262. No live deployment or development VM activation is implied.
 
 ## Why a separate repository
 
@@ -12,7 +12,7 @@ This initial mapping accepts only `source.yaml`, `release.yaml` and `kustomizati
 
 ## Promotion and interruption
 
-The low-level publisher extends `keystone/publish` and `runtimedb`, not the external API. It uses the existing coordinator/execution check and accepted-Statefile revision, plus a mandatory projection-gate seam and a final exact-Plan authority fence. With the gate absent, it refuses work. Production proposal/approval/dispatch integration is still absent; a callback cannot substitute for the final DB fence.
+The low-level publisher extends `keystone/publish` and `runtimedb`, not the external API. It uses the existing coordinator/execution check and accepted-Statefile revision, plus a mandatory projection-gate seam and a final exact-Plan authority fence. With the gate absent, it refuses work. The opt-in deployment manager derives production review material; a callback cannot substitute for the final DB fence.
 
 1. Freeze files and bind repository identity, operation ID, Plan ID, accepted revision, reviewed digest, expected deployment revision and exact output bytes.
 2. Recheck execution authority/accepted revision and the required gate.
@@ -24,7 +24,7 @@ The low-level publisher extends `keystone/publish` and `runtimedb`, not the exte
 
 A crash before step 6 leaves the old served ref. Replaying the same reviewed operation resumes the recorded candidate. A crash after step 6 but before journal acknowledgment recognizes that exact candidate at the served ref and completes acknowledgment. A different owner ref update is a conflict, not permission to rewind/overwrite it. Lost candidate objects fail closed rather than reconstructing history from mutable files. Retained candidates need a separately reviewed retention policy before pruning is introduced.
 
-The journal never changes `statefile_head` or marks an application healthy. The caller must supply the same operation after restart; automatic enumeration/dispatch of pending approved operations remains part of the public Plan wiring follow-up.
+The journal never changes `statefile_head` or marks an application healthy. The opt-in manager enumerates pending exact Plans and unacknowledged journals after restart. It observes already advanced refs before considering another effect.
 
 ## Final approval fence
 
@@ -32,9 +32,9 @@ The journal never changes `statefile_head` or marks an application healthy. The 
 
 The existing immediate SQLite writer transaction spans the final authority reads and bounded local Git head/CAS operations. Other DB handles attempting revocation, product publication, Plan transition, stop or coordinator takeover serialize with it. If their write commits first, promotion is refused; if the Git effect enters first, they wait for that bounded effect. This is an ordering guarantee, not a promise to undo an already-started Git update. The effect performs no DB calls, network access, rendering or application work.
 
-Git and SQLite still are not one transaction. After a ref update, DB acknowledgment can fail or the process can stop. Exact approved retry recognizes the journal candidate; it never rewinds an owner change. If authority was revoked after the ref advanced, another effect is refused and the journal may remain prepared. The future status/resume integration must report that observed ref honestly without treating acknowledgment as permission for new work or automatically rolling it back.
+Git and SQLite still are not one transaction. After a ref update, DB acknowledgment can fail or the process can stop. Exact approved retry recognizes the journal candidate; it never rewinds an owner change. If authority was revoked after the ref advanced, another effect is refused. The manager may acknowledge the exact observed candidate as bookkeeping without treating it as permission for new work or automatically rolling it back.
 
-This fence does not implement Plan creation, fresh interactive Owner approval, instance inventory, encrypted-secret version revalidation or automatic dispatch. Those remain required before enabling a production caller. It checks a stored exact binding; the dispatcher must derive and revalidate that binding from installation-owned inputs, rather than trusting API-supplied digests or files.
+This low-level fence checks a stored exact binding. The [production manager](approved-local-deployment.md) derives and revalidates it from installation-owned inputs, with fresh interactive Owner approval, fixed instance inventory and a local encrypted-configuration version. It does not trust API-supplied digests or files. The final fenced callback also verifies bounded current input-file fingerprints without DB/network/rendering work.
 
 ## Source visibility and transport
 
@@ -44,19 +44,16 @@ The [local Git delivery slice](local-git-source.md) renders established OpenSSH/
 
 Repository permissions and endpoint identity must be designed together. This foundation uses private owner-only storage; granting a serving identity access requires explicit deployment design, not relaxing permissions or exposing the repository generally. No host account, authorized_keys, SSH daemon, firewall or existing service configuration is changed here.
 
-## Remaining #257 boundaries
+## Remaining acceptance and live proof
 
-- Wire exact review material to the existing Owner Plan proposal/approval/publication path; reject audit-only records, unrelated Plans, cross-instance changes and agent apply. Verify current encrypted-secret configuration revision and artifact identity, not just a caller-provided digest.
-- Integrate the mandatory final fence with production proposal/review/dispatch; add API authorization, secret-redaction and full lifecycle/resume tests. The bounded DB/ref interleavings are covered here.
-- Resume approved pending operations automatically with truthful status; do not treat journal presence as approval.
-- Implement and test the local read-only Flux source endpoint and its bootstrap configuration. Do not bootstrap the endpoint through a configuration source it needs in order to start.
-- #258 observes exact served/source/controller revisions and application readiness on the existing development VM after explicit non-disruptive scheduling.
+The [Owner Plan integration](approved-local-deployment.md) documents proposal/review/dispatch, immutable review material, API authorization, encrypted-reference semantics, automatic resume and local status. The [delivery slice](local-git-source.md) supplies established OpenSSH/Git/systemd configuration. Repository CI/review and supported-environment SSH execution remain required before closing #257; skipped tests are not transport proof.
+
+#258 observes exact served/source/controller revisions and application readiness on the existing development VM after separate scheduling. Systemd/runtime-account boundaries, pod reachability and the actual bootstrap Secret remain live gates. No existing release is adopted, and no Docker/custom path is retired.
 
 S3/Hetzner backup integration remains deferred until local operation works. Neither endpoint is the active deployment source. Only synthetic configuration is used in repository tests; public GitHub receives code/docs/fixtures, never installation state.
 
 ## Verification
 
-Real temporary bare repositories test prepared/ref-advanced interruption, exact retry, conflicting edits, altered review/files, missing gate, stale source revision, lost authority, concurrent publishers, source-checkout/remote refusal and inherited Git environment redirection. No system Git remote or host service is changed. Existing Statefile/publication suites must stay green; migration 0113 adds a separate journal, not a new approval table.
+Real temporary bare repositories test prepared/ref-advanced interruption, exact retry, conflicting edits, altered review/files, missing gate, stale source revision, lost authority, concurrent publishers, source-checkout/remote refusal and inherited Git environment redirection. Existing Statefile/publication suites remain required. Migration 0113 adds the journal; 0114 adds a current exact-Plan pointer and safe attempt diagnostics, with approval/audit remaining in the existing Plans.
 
-
-Authority tests use separate DB handles to race revocation, accepted-revision changes, superseding Plans, household stop and coordinator takeover against the effect. Publisher tests now use real approved Plan records and verify final-check refusal after a permissive callback, cross-repository/output conflicts, and exact approved crash/retry. No API mutation route, serving endpoint, development VM service or runtime activation is introduced.
+Authority tests use separate DB handles to race revocation, accepted-revision changes, superseding Plans, household stop and coordinator takeover against the effect. Production manager/API tests extend that evidence through the existing public Plan lifecycle. No serving endpoint, development VM service or workload is activated by these repository changes.

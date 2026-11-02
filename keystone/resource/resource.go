@@ -66,6 +66,9 @@ const (
 	// comes due and whose answer it is; where each cycle stands is
 	// runtime state, because it changes without anybody declaring it.
 	KindCommitment Kind = "Commitment"
+	// KindHelmDeployment is canonical product intent; only the approved local
+	// projection dispatcher consumes it. Wardstone never applies it.
+	KindHelmDeployment Kind = "HelmDeployment"
 )
 
 // WholeSiteRecoveryPath is the stable host path Wardstone may bind into the
@@ -1146,14 +1149,15 @@ type Resource struct {
 	// BackupTarget is the spec for KindBackupTarget (ADR-W045 A2).
 	BackupTarget *BackupTargetSpec `yaml:"-"`
 	// NetworkMount is the spec for KindNetworkMount (ADR-W045 A3.2).
-	NetworkMount *NetworkMountSpec `yaml:"-"`
-	ConfigFile   *ConfigFileSpec   `yaml:"-"`
-	SeedFile     *SeedFileSpec     `yaml:"-"`
-	Job          *JobSpec          `yaml:"-"`
-	Secret       *SecretSpec       `yaml:"-"`
-	Automation   *AutomationSpec   `yaml:"-"`
-	Meter        *MeterSpec        `yaml:"-"`
-	Commitment   *CommitmentSpec   `yaml:"-"`
+	NetworkMount   *NetworkMountSpec   `yaml:"-"`
+	ConfigFile     *ConfigFileSpec     `yaml:"-"`
+	SeedFile       *SeedFileSpec       `yaml:"-"`
+	Job            *JobSpec            `yaml:"-"`
+	Secret         *SecretSpec         `yaml:"-"`
+	Automation     *AutomationSpec     `yaml:"-"`
+	Meter          *MeterSpec          `yaml:"-"`
+	Commitment     *CommitmentSpec     `yaml:"-"`
+	HelmDeployment *HelmDeploymentSpec `yaml:"-"`
 
 	MatrixAppService *MatrixAppServiceSpec `yaml:"-"`
 }
@@ -1306,6 +1310,7 @@ var registry = map[Kind]kindEntry{
 		newSpec:  func() any { return &MeterSpec{} },
 		validate: validateMeter,
 	},
+	KindHelmDeployment: {newSpec: func() any { return &HelmDeploymentSpec{} }, validate: validateHelmDeployment},
 	KindCommitment: {
 		// Keystone-owned, beside the meter it reads (ADR-W035 A1).
 		newSpec:  func() any { return &CommitmentSpec{} },
@@ -1386,20 +1391,21 @@ func (r *Resource) Validate() error {
 // per-kind validator, which reports it with a more specific message.
 func (r *Resource) validateSpecExclusivity() error {
 	populated := map[Kind]bool{
-		KindContainer:    r.Container != nil,
-		KindVolume:       r.Volume != nil,
-		KindRoute:        r.Route != nil,
-		KindDnsRecord:    r.DnsRecord != nil,
-		KindOidcClient:   r.OidcClient != nil,
-		KindLdapGroup:    r.LdapGroup != nil,
-		KindBackupPlan:   r.BackupPlan != nil,
-		KindBackupTarget: r.BackupTarget != nil,
-		KindNetworkMount: r.NetworkMount != nil,
-		KindConfigFile:   r.ConfigFile != nil,
-		KindSeedFile:     r.SeedFile != nil,
-		KindAutomation:   r.Automation != nil,
-		KindMeter:        r.Meter != nil,
-		KindCommitment:   r.Commitment != nil,
+		KindContainer:      r.Container != nil,
+		KindVolume:         r.Volume != nil,
+		KindRoute:          r.Route != nil,
+		KindDnsRecord:      r.DnsRecord != nil,
+		KindOidcClient:     r.OidcClient != nil,
+		KindLdapGroup:      r.LdapGroup != nil,
+		KindBackupPlan:     r.BackupPlan != nil,
+		KindBackupTarget:   r.BackupTarget != nil,
+		KindNetworkMount:   r.NetworkMount != nil,
+		KindConfigFile:     r.ConfigFile != nil,
+		KindSeedFile:       r.SeedFile != nil,
+		KindAutomation:     r.Automation != nil,
+		KindMeter:          r.Meter != nil,
+		KindCommitment:     r.Commitment != nil,
+		KindHelmDeployment: r.HelmDeployment != nil,
 
 		KindMatrixAppService: r.MatrixAppService != nil,
 	}

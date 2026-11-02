@@ -53,7 +53,7 @@ func TestNodeScopeIsEnforcedBothWays(t *testing.T) {
 // closed registry does. Adding a kind without deciding this fails here
 // rather than at runtime on the operator's node.
 func TestNodeScopedMatchesDispatch(t *testing.T) {
-	notAtANode := map[Kind]bool{KindDnsRecord: true, KindAutomation: true, KindMeter: true, KindCommitment: true}
+	notAtANode := map[Kind]bool{KindDnsRecord: true, KindAutomation: true, KindMeter: true, KindCommitment: true, KindHelmDeployment: true}
 	for _, k := range Kinds() {
 		if NodeScoped(k) == notAtANode[k] {
 			t.Errorf("%s: NodeScoped=%v but dispatched-off-node=%v — they must be opposites",
@@ -134,6 +134,9 @@ func validResourceOfKind(t *testing.T, k Kind) Resource {
 		// reason a rule does (ADR-W035 A1).
 		r.Metadata.Owner = "household"
 		r.Meter = &MeterSpec{Description: "odometer", Unit: "miles"}
+	case KindHelmDeployment:
+		r.Metadata.Owner = "capability/audiobooks"
+		r.HelmDeployment = &HelmDeploymentSpec{Package: "audiobooks-audiobookshelf", Version: "0.1.0", Timezone: "UTC", Placement: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
 	case KindCommitment:
 		r.Metadata.Owner = "household"
 		r.Commitment = &CommitmentSpec{Description: "oil", Rollover: RolloverFromCompletion,

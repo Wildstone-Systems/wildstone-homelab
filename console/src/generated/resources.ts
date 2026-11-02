@@ -21,6 +21,7 @@ export type Kind =
   "Automation" |
   "Meter" |
   "Commitment" |
+  "HelmDeployment" |
   "MatrixAppService";
 
 export const API_VERSION = "wildstone.dev/v1";
@@ -289,6 +290,13 @@ export interface CommitmentSpec {
   partOfDay?: string;
 }
 
+export interface HelmDeploymentSpec {
+  package: string;
+  version: string;
+  timezone: string;
+  placement: string;
+}
+
 export interface MatrixAppServiceSpec {
   botLocalpart: string;
   asTokenRef: string;
@@ -314,6 +322,7 @@ export type Spec =
   AutomationSpec |
   MeterSpec |
   CommitmentSpec |
+  HelmDeploymentSpec |
   MatrixAppServiceSpec;
 
 export interface Resource {
@@ -342,5 +351,6 @@ export interface SpecByKind {
   Automation: AutomationSpec;
   Meter: MeterSpec;
   Commitment: CommitmentSpec;
+  HelmDeployment: HelmDeploymentSpec;
   MatrixAppService: MatrixAppServiceSpec;
 }

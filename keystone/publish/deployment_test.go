@@ -303,3 +303,21 @@ func TestDeploymentRevocationAfterRefAdvancePreservesUnknownOutcome(t *testing.T
 		t.Fatal("unknown outcome falsely acknowledged", err)
 	}
 }
+
+func TestDeploymentFinalInputFenceRefusesChangedMaterial(t *testing.T) {
+	p, r := deploymentHarness(t)
+	checked := false
+	p.ValidateInputs = func(DeploymentRequest) error { checked = true; return errors.New("example input version changed") }
+	if _, err := p.Promote(r); err == nil || !checked {
+		t.Fatal("final input check was bypassed", err)
+	}
+	if head, err := p.Repo.Head(); err != nil || head != "" {
+		t.Fatal("input refusal changed served ref", err)
+	}
+	// Retrying after a refused check cannot infer that the earlier candidate
+	// was applied. It must enter the final fence again.
+	p.ValidateInputs = func(DeploymentRequest) error { return errors.New("still changed") }
+	if _, err := p.Promote(r); err == nil {
+		t.Fatal("retry bypassed current input check")
+	}
+}
