@@ -73,8 +73,8 @@
         "runtime": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["existingClaim", "preparePermissions"],
-          "properties": {"existingClaim": {"type": "string", "minLength": 1}, "preparePermissions": {"type": "boolean"}}
+          "required": ["existingClaim"],
+          "properties": {"existingClaim": {"type": "string", "minLength": 1}}
         },
         "sharedUploads": {"$ref": "#/definitions/optionalClaim"},
         "privateWorkspaces": {"$ref": "#/definitions/optionalClaim"}

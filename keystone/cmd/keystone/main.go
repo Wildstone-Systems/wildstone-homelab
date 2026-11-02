@@ -46,6 +46,7 @@ import (
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/gateway"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/householdtz"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/ingest"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/internal/datadir"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/kubeapi"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/policy"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/principal"
@@ -700,13 +701,14 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	if engineCfg.API == "" && (engineCfg.CA != "" || engineCfg.Token != "") || engineCfg.API != "" && (engineCfg.CA == "" || engineCfg.Token == "") {
 		return fmt.Errorf("-engine-api, -engine-ca and -engine-token must be set together")
 	}
-	// Gateway.New used to create this root-owned directory before the DB
-	// opened. Keep first boot working when cluster authority moves the DB
-	// open ahead of gateway creation.
+	// Gateway.New used to create this directory before the DB opened. Keep
+	// first boot working when cluster authority moves the DB open ahead of
+	// gateway creation, then enforce either the owner-only host contract or
+	// the exact group-owned mount contract used by Kubernetes fsGroup.
 	if err := os.MkdirAll(dataDir, 0o700); err != nil {
 		return err
 	}
-	if err := os.Chmod(dataDir, 0o700); err != nil {
+	if err := datadir.Secure(dataDir); err != nil {
 		return err
 	}
 	db, err := runtimedb.Open(filepath.Join(dataDir, "keystone.db"))

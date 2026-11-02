@@ -45,11 +45,10 @@ secretEnv: []
 storage:
   runtime:
     # Required. The chart references but never creates or deletes this claim.
+    # The storage driver must honor Pod fsGroup 65532. Existing claims need a
+    # reviewed ownership migration before adoption; the chart has no root
+    # permission-fixing container or unsafe empty-directory fallback.
     existingClaim: wildstone-management-runtime
-    # Fresh Kubernetes volumes are commonly root-owned. Leave this false for
-    # pre-provisioned/adopted claims; enable only after reviewing the bounded
-    # root-directory ownership change performed by the init container.
-    preparePermissions: false
   sharedUploads:
     enabled: false
     existingClaim: ""

@@ -1,6 +1,6 @@
 # Native Wildstone capabilities on Helm and Flux
 
-Status: code-backed inventory, 2026-11-01; repository-only image/chart implementation added under #268. See the [management packaging runbook](../operations/w050-management-packaging.md). No image publication, live deployment, migration, recovery acceptance, or runtime topology change is established here.
+Status: code-backed inventory, 2026-11-02; repository-only image/chart implementation added under #268 and Restricted Pod Security compatibility under #271. See the [management packaging runbook](../operations/w050-management-packaging.md). No image publication, household migration, recovery acceptance, or runtime topology change is established here.
 
 ## Deployment unit versus capability
 
@@ -37,6 +37,12 @@ Proposed chart resources:
 - Console files and native subprocess runtime packaged with the image. No Docker socket, host namespace or Kubernetes/Git administrative credentials available to the native subprocess. Preserve the adapter's explicit child environment rather than inheriting all Keystone secrets.
 - ConfigMap/Secret references for deployment settings; scoped ServiceAccount only for the observation/publishing behavior explicitly implemented. Flux is the workload writer, not Keystone.
 - Management persistence, private workspace and optional shared-file claims/mounts with separate ownership and recovery policies. Never combine private and household data simply to reduce PVC count.
+- A fixed non-root UID/GID and Pod `fsGroup` may establish access only on a
+  storage implementation that supports Kubernetes volume ownership. Keystone
+  accepts its owner-only directory or the exact group-owned mount root produced
+  by that contract and refuses every other ownership/mode combination. Do not
+  add a root init container or silently adopt an existing claim to compensate
+  for an incompatible provisioner.
 - Traefik routes and approved authentication integration. Forwarded identity must be accepted only across an explicitly verified trusted proxy boundary; arbitrary pod-CIDR trust is not a replacement for the current checks.
 - External identity/model/notification services remain separately deployed through their own integrations. A Helm release does not itself provision LDAP groups; preserve reviewed identity-provider operations.
 
@@ -59,6 +65,11 @@ The implementation must explicitly bridge ConfigFile/Route/identity declarations
 - Disabling lists, assistant, homepage or filedrop revokes the relevant UI/API/tool access; it does not delete data, Agents, or other features. Current native-runtime fallback behavior remains until separately amended.
 - Disabling workspace access leaves workspace bytes and metadata intact. Missing required mounts cannot fall back to empty local directories.
 - Quiesce writers and capture the runtime DB consistently, accepted Statefile and required secret/revocation recovery material. Treat upload and workspace data as explicit additional recovery sets; a management PVC snapshot alone is insufficient.
+- Treat a change from owner-owned storage to `fsGroup` storage as a migration.
+  Confirm provisioner behavior on synthetic data, quiesce and back up the full
+  consistency group, then perform an explicitly reviewed ownership migration
+  or restore alongside. A chart upgrade is not authorization to recursively
+  alter an unreviewed household claim.
 - Restore alongside and verify permissions, per-person isolation, deletion/revocation continuity and application data before cutover. Schema migration may require restoring the complete pre-upgrade set rather than downgrading an image.
 - Chart uninstall/pruning must preserve data by explicit tested retention policy. Configuration removal is not permission to delete PVCs or external files.
 - Coordinator/task leases, scheduled checkpoints and effect receipts must prevent stale or duplicate execution after restart. This requires tests of actual management recovery under #166 and multi-node safety under #180.

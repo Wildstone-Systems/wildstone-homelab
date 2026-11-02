@@ -2,7 +2,7 @@ apiVersion: v2
 name: wildstone-management
 description: Singleton Wildstone Keystone management service, Console, and native runtime
 type: application
-version: 0.1.0
+version: 0.2.0
 appVersion: "0.0.0-dev"
 kubeVersion: ">=1.30.0-0"
 home: https://github.com/Wildstone-Systems/wildstone-homelab

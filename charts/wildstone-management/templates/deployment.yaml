@@ -32,47 +32,17 @@ spec:
       serviceAccountName: {{ include "wildstone-management.serviceAccountName" . }}
       automountServiceAccountToken: false
       securityContext:
+        runAsUser: 65532
+        runAsGroup: 65532
+        runAsNonRoot: true
+        fsGroup: 65532
+        fsGroupChangePolicy: OnRootMismatch
         seccompProfile:
           type: RuntimeDefault
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      initContainers:
-        - name: temporary-volume-owner
-          image: {{ include "wildstone-management.image" . | quote }}
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
-          command: ["/bin/chown"]
-          args: ["65532:65532", "/tmp"]
-          securityContext:
-            runAsUser: 0
-            runAsNonRoot: false
-            allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
-            capabilities:
-              drop: ["ALL"]
-              add: ["CHOWN"]
-          volumeMounts:
-            - name: tmp
-              mountPath: /tmp
-        {{- if .Values.storage.runtime.preparePermissions }}
-        - name: runtime-volume-owner
-          image: {{ include "wildstone-management.image" . | quote }}
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
-          command: ["/bin/chown"]
-          args: ["65532:65532", "/var/lib/wildstone/keystone"]
-          securityContext:
-            runAsUser: 0
-            runAsNonRoot: false
-            allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
-            capabilities:
-              drop: ["ALL"]
-              add: ["CHOWN"]
-          volumeMounts:
-            - name: runtime
-              mountPath: /var/lib/wildstone/keystone
-        {{- end }}
       containers:
         - name: keystone
           image: {{ include "wildstone-management.image" . | quote }}
