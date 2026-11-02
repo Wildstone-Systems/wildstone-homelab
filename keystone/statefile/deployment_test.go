@@ -85,3 +85,29 @@ func TestLocalDeploymentRejectsForeignReposAndEnvironmentRedirection(t *testing.
 		t.Fatal("foreign repository accepted")
 	}
 }
+
+func TestInspectLocalDeploymentDoesNotInitializeOrAcceptForeignRepository(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "not-created.git")
+	if _, err := InspectLocalDeployment(missing); err == nil {
+		t.Fatal("uninitialized repository accepted")
+	}
+	if _, err := os.Stat(missing); !os.IsNotExist(err) {
+		t.Fatal("inspection created a repository")
+	}
+	root := filepath.Join(t.TempDir(), "deployment.git")
+	if _, err := OpenLocalDeployment(root); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := InspectLocalDeployment(root); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(root, deploymentMarker)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := InspectLocalDeployment(root); err == nil {
+		t.Fatal("foreign repository accepted")
+	}
+	if _, err := os.Stat(filepath.Join(root, deploymentMarker)); !os.IsNotExist(err) {
+		t.Fatal("inspection repaired missing marker")
+	}
+}

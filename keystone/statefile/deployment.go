@@ -32,35 +32,11 @@ var deploymentFiles = map[string]bool{"source.yaml": true, "release.yaml": true,
 // one previously created here. It refuses source checkouts and foreign repos.
 // It does not install Git or start any network listener.
 func OpenLocalDeployment(root string) (*LocalDeployment, error) {
-	if !filepath.IsAbs(root) {
-		return nil, fmt.Errorf("deployment: repository path must be absolute")
-	}
-	root = filepath.Clean(root)
-	for dir := root; ; dir = filepath.Dir(dir) {
-		if _, err := os.Lstat(filepath.Join(dir, ".git")); err == nil {
-			return nil, fmt.Errorf("deployment: repository cannot be inside a source checkout")
-		} else if !os.IsNotExist(err) {
-			return nil, err
-		}
-		if dir == filepath.Dir(dir) {
-			break
-		}
-	}
-	if err := os.MkdirAll(root, 0700); err != nil {
-		return nil, err
-	}
-	real, err := filepath.EvalSymlinks(root)
-	if err != nil || real != root {
-		return nil, fmt.Errorf("deployment: symlinked repository paths refused")
-	}
-	info, err := os.Stat(root)
+	d, err := localDeploymentPath(root, true)
 	if err != nil {
 		return nil, err
 	}
-	if info.Mode().Perm()&0077 != 0 {
-		return nil, fmt.Errorf("deployment: repository must be private (0700)")
-	}
-	d := &LocalDeployment{root: root}
+	root = d.root
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		return nil, err
@@ -82,6 +58,53 @@ func OpenLocalDeployment(root string) (*LocalDeployment, error) {
 		return nil, err
 	}
 	return d, nil
+}
+
+// InspectLocalDeployment validates an already initialized private deployment
+// repository without creating directories, objects, refs, remotes or a listener.
+func InspectLocalDeployment(root string) (*LocalDeployment, error) {
+	d, err := localDeploymentPath(root, false)
+	if err != nil {
+		return nil, err
+	}
+	if err := d.check(); err != nil {
+		return nil, err
+	}
+	return d, nil
+}
+
+func localDeploymentPath(root string, create bool) (*LocalDeployment, error) {
+	if !filepath.IsAbs(root) {
+		return nil, fmt.Errorf("deployment: repository path must be absolute")
+	}
+	root = filepath.Clean(root)
+	for dir := root; ; dir = filepath.Dir(dir) {
+		if _, err := os.Lstat(filepath.Join(dir, ".git")); err == nil {
+			return nil, fmt.Errorf("deployment: repository cannot be inside a source checkout")
+		} else if !os.IsNotExist(err) {
+			return nil, err
+		}
+		if dir == filepath.Dir(dir) {
+			break
+		}
+	}
+	if create {
+		if err := os.MkdirAll(root, 0700); err != nil {
+			return nil, err
+		}
+	}
+	real, err := filepath.EvalSymlinks(root)
+	if err != nil || real != root {
+		return nil, fmt.Errorf("deployment: symlinked repository paths refused")
+	}
+	info, err := os.Stat(root)
+	if err != nil {
+		return nil, err
+	}
+	if info.Mode().Perm()&0077 != 0 {
+		return nil, fmt.Errorf("deployment: repository must be private (0700)")
+	}
+	return &LocalDeployment{root: root}, nil
 }
 
 func (d *LocalDeployment) git(stdin []byte, args ...string) (string, error) {
