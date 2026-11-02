@@ -325,22 +325,22 @@ jobs:
 
   management-packaging:
     name: management package (${{ matrix.arch }})
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     strategy:
       matrix:
-        arch: [amd64, arm64]
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v7
-      # The arm64 image is built and exercised, not merely cross-compiled. The
-      # setup is scoped to this new job and does not alter standalone images.
-      - uses: docker/setup-qemu-action@v4
-        if: matrix.arch == 'arm64'
-        with:
-          platforms: arm64
+      # Both images are built and exercised on GitHub's native architecture,
+      # not merely cross-compiled. No third-party action or emulation setup is
+      # introduced, and the existing standalone-image job stays unchanged.
       - name: build management image
         run: |
-          docker buildx build --platform "linux/${{ matrix.arch }}" --load \
-            -f packaging/management/Dockerfile \
+          docker build -f packaging/management/Dockerfile \
             --build-arg VERSION=0.0.0-ci \
             --build-arg VCS_REF="${GITHUB_SHA}" \
             -t wildstone-management:ci .
