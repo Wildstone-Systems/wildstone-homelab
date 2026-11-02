@@ -74,14 +74,15 @@ func (c *Client) Server() string { return c.base }
 
 // ObjectMeta is the part of metadata this package reads and writes.
 type ObjectMeta struct {
-	Name            string            `json:"name,omitempty"`
-	GenerateName    string            `json:"generateName,omitempty"`
-	Namespace       string            `json:"namespace,omitempty"`
-	UID             string            `json:"uid,omitempty"`
-	ResourceVersion string            `json:"resourceVersion,omitempty"`
-	Generation      int64             `json:"generation,omitempty"`
-	Labels          map[string]string `json:"labels,omitempty"`
-	Annotations     map[string]string `json:"annotations,omitempty"`
+	Name              string            `json:"name,omitempty"`
+	GenerateName      string            `json:"generateName,omitempty"`
+	Namespace         string            `json:"namespace,omitempty"`
+	UID               string            `json:"uid,omitempty"`
+	ResourceVersion   string            `json:"resourceVersion,omitempty"`
+	DeletionTimestamp *string           `json:"deletionTimestamp,omitempty"`
+	Generation        int64             `json:"generation,omitempty"`
+	Labels            map[string]string `json:"labels,omitempty"`
+	Annotations       map[string]string `json:"annotations,omitempty"`
 }
 
 // MicroTime is a Lease timestamp, which the API carries with microseconds.

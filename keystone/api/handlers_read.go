@@ -88,6 +88,10 @@ func (s *Server) listObserved(_ *http.Request, _ principal.Identity) (any, int, 
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
+	// Collection endpoints return [] on fresh installs, never JSON null.
+	if obs == nil {
+		obs = []runtimedb.Observed{}
+	}
 	return obs, http.StatusOK, nil
 }
 

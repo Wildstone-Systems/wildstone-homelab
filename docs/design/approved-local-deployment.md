@@ -1,6 +1,6 @@
 # Exact Owner Plans for local Helm publication
 
-Status: opt-in repository implementation under #257, stacked on #265. Not authorization to enable it on the development VM. CI/review and supported OpenSSH transport evidence remain acceptance gates. #258 owns actual controller observation, runtime account/systemd lifecycle, pod reachability and the owner-operated application proof.
+Status: #257 implementation and supported-environment transport evidence accepted. #258 adds the opt-in [read-only controller observer](flux-application-observation.md); live authenticated Owner/API and runtime failure/recovery acceptance remain separate. No release adoption or retirement is implied.
 
 ## One product input, ordinary output
 
@@ -56,10 +56,10 @@ The manager enumerates approved/applying Plans and unacknowledged journals after
 
 If Git already advanced and acknowledgment was lost, the exact recorded candidate/tree/binding can be acknowledged as historical fact even after Owner/Plan authority changes. This does not grant a new effect or roll back output. An owner ref conflict is preserved. Failed/unknown attempts store only safe diagnostic codes, not raw local errors or paths.
 
-`GET /api/v1/plans/{id}` separates canonical product revision, prepared candidate, observed promoted ref and delivery mirror revision. Mirror availability is a local Git observation, not a network probe. `mirrored` means matching local object delivery; SSH/source-controller availability is not inferred. Flux reconciliation and application readiness are always `unobserved` in this slice. Plan state `applied` means this local promotion completed; Console labels it “locally promoted”. An old operation's current ref may later diverge, so consult its observed status rather than treating Plan history as live health.
+`GET /api/v1/plans/{id}` separates canonical product revision, prepared candidate, observed promoted ref and delivery mirror revision. Mirror availability is a local Git observation, not a network probe. `mirrored` means matching local object delivery; SSH/source-controller availability is not inferred. Flux reconciliation and application readiness remain `unobserved` unless the separate opt-in [controller observer](flux-application-observation.md) is configured. Its exact revision, generation and health checks do not alter local publication status. Plan state `applied` means this local promotion completed; Console labels it “locally promoted”. An old operation's current ref may later diverge, so consult its observed status rather than treating Plan history as live health.
 
 ## Evidence and deferred work
 
 Synthetic real-Git integration tests cover the public Owner flow, exact review/redaction, generic/agent bypass refusal, stale and cross-instance input, Owner revocation/role change, superseding no-op approval, pending stop/quarantine/coordinator loss, ref conflict, restart before promotion and after ref advance, and independent mirror observation. The existing final-fence concurrency tests remain required. UI checks verify full review is loaded and incomplete output disables approval.
 
-#257 remains open until repository CI/review and the supported-environment SSH retrieval/refusal test pass. A skipped SSH test is not transport evidence. #258 then proves controller revision/readiness on the existing development VM under its own schedule. No current release adoption, deletion/pruning, backup/Hetzner work, public exposure, reboot or path retirement is included.
+#257 is accepted with merged repository evidence and executed supported-environment SSH retrieval/refusal tests. #258 must repeat the flow through a real authenticated Owner session and verify the product observer, runtime failure/recovery and data persistence on the existing development VM. No current release adoption, deletion/pruning, backup/Hetzner work, public exposure, reboot or path retirement is included.

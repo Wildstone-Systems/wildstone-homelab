@@ -2,10 +2,14 @@ package api
 
 import (
 	"encoding/json"
+	"encoding/pem"
+	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -17,7 +21,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-func deploymentHarness(t *testing.T) (*harness, deployment.Config) {
+func deploymentHarness(t *testing.T, observation ...*deployment.ObservationConfig) (*harness, deployment.Config) {
 	t.Helper()
 	h := newHarness(t)
 	h.s.SetTrustedIngress([]string{"127.0.0.1", "::1"})
@@ -42,6 +46,9 @@ func deploymentHarness(t *testing.T) (*harness, deployment.Config) {
 	}
 	if err := os.WriteFile(cfg.EncryptedSecretFile, secret, 0600); err != nil {
 		t.Fatal(err)
+	}
+	if len(observation) > 0 {
+		cfg.Observation = observation[0]
 	}
 	raw, err := json.Marshal(cfg)
 	if err != nil {
@@ -126,6 +133,24 @@ func TestDeploymentPublicPlanRequiresFreshOwnerAndExactReview(t *testing.T) {
 	if status["phase"] != "promoted" || status["reconciliation"] != "unobserved" || status["application"] != "unobserved" {
 		t.Fatalf("false readiness: %v", status)
 	}
+	// The real public encoder must preserve the exact local revision and the
+	// full typed review, not merely a nonempty redaction placeholder.
+	local := h.s.Deployments.Status(id)
+	if status["promotedRevision"] != local.PromotedRevision || status["productRevision"] != local.ProductRevision {
+		t.Fatalf("public revision lost: %v", status)
+	}
+	stored, err := h.s.DB.GetPlan(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := runtimedb.DecodeDeploymentPlan(stored.PlanJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publicReview := out["deployment"].(map[string]any)
+	if publicReview["encryptedSecretRevision"] != decoded.Deployment.Review.EncryptedSecretRevision || publicReview["projectionDigest"] != decoded.Deployment.Review.ProjectionDigest || publicReview["expectedDeploymentRevision"] != decoded.Deployment.Review.ExpectedDeploymentRevision {
+		t.Fatalf("public review lost metadata: %v", publicReview)
+	}
 	// Lists carry only a type flag; the full review is Owner-only.
 	var list []map[string]any
 	if res := h.do(runtimedb.RoleOperator, "GET", "/api/v1/plans", nil, &list); res.StatusCode != http.StatusOK {
@@ -190,6 +215,67 @@ func TestGenericPlanCannotEditOrDeleteHelmDesiredInput(t *testing.T) {
 			if res.StatusCode < 400 {
 				t.Fatalf("generic %s mutation accepted: %d", role, res.StatusCode)
 			}
+		}
+	}
+}
+
+func TestDeploymentObservationUsesAuthorizedAPIAndRedactsDependencyErrors(t *testing.T) {
+	var requests atomic.Int64
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		if r.Method != "GET" || r.URL.Path != "/apis/source.toolkit.fluxcd.io/v1/namespaces/example-flux/gitrepositories/example-source" {
+			t.Errorf("unscoped request: %s %s", r.Method, r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "Bearer example-test-observer" {
+			t.Error("missing separate observer identity")
+		}
+		w.WriteHeader(http.StatusForbidden)
+		fmt.Fprint(w, `{"message":"private diagnostic must not escape"}`)
+	}))
+	defer server.Close()
+	root := t.TempDir()
+	ca := filepath.Join(root, "ca.pem")
+	token := filepath.Join(root, "token")
+	if err := os.WriteFile(ca, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.TLS.Certificates[0].Certificate[0]}), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(token, []byte("example-test-observer"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	h, _ := deploymentHarness(t, &deployment.ObservationConfig{Server: server.URL, CAFile: ca, TokenFile: token, SourceNamespace: "example-flux", SourceName: "example-source", KustomizationNamespace: "example-flux", KustomizationName: "example-app"})
+	fresh := sessionCookie(h.s.StartConsoleSession("example-owner", time.Now()))
+	code, out := h.sessionRequest("POST", "/api/v1/plans", deploymentProposal, "example-owner", fresh)
+	if code != http.StatusCreated {
+		t.Fatal(code, out)
+	}
+	id := out["id"].(string)
+	if code, out := h.sessionRequest("POST", "/api/v1/plans/"+id+"/approve", "", "example-owner", fresh); code != http.StatusOK {
+		t.Fatal(code, out)
+	}
+	h.s.Deployments.Resume()
+	if requests.Load() != 0 {
+		t.Fatal("cluster queried before explicit authorized status read")
+	}
+	for _, role := range []runtimedb.Role{runtimedb.RoleOperator, runtimedb.RoleButler} {
+		if res := h.do(role, "GET", "/api/v1/plans/"+id, nil, nil); res.StatusCode != http.StatusForbidden {
+			t.Fatal(res.StatusCode)
+		}
+	}
+	if requests.Load() != 0 {
+		t.Fatal("denied reader triggered cluster access")
+	}
+	code, out = h.sessionRequest("GET", "/api/v1/plans/"+id, "", "example-owner", fresh)
+	if code != http.StatusOK {
+		t.Fatal(code, out)
+	}
+	status := out["deploymentStatus"].(map[string]any)
+	if status["reconciliation"] != "dependency_unavailable" || status["application"] != "unobserved" || requests.Load() != 1 {
+		t.Fatal(status, requests.Load())
+	}
+	raw, _ := json.Marshal(out)
+	for _, private := range []string{"private diagnostic", server.URL, token, "example-test-observer"} {
+		if strings.Contains(string(raw), private) {
+			t.Fatalf("private dependency detail leaked")
 		}
 	}
 }

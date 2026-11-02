@@ -10,8 +10,8 @@ import (
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/runtimedb"
 )
 
-func (m *Manager) Status(id string) runtimedb.DeploymentStatus {
-	out := runtimedb.DeploymentStatus{Phase: "unknown", Detail: "Local publication cannot be observed.", Delivery: "unobserved", Reconciliation: "unobserved", Application: "unobserved", ObservedAt: time.Now().UTC()}
+func (m *Manager) Status(id string) (out runtimedb.DeploymentStatus) {
+	out = runtimedb.DeploymentStatus{Phase: "unknown", Detail: "Local publication cannot be observed.", Delivery: "unobserved", Reconciliation: "unobserved", Application: "unobserved", ObservedAt: time.Now().UTC()}
 	rec, err := m.DB.GetPlan(id)
 	if err != nil {
 		return out
@@ -21,6 +21,15 @@ func (m *Manager) Status(id string) runtimedb.DeploymentStatus {
 		return out
 	}
 	r := doc.Deployment.Review
+	defer func() {
+		if m.observer != nil {
+			if out.Phase == "promoted" {
+				m.observer.observe(r, &out)
+			} else if out.Phase == "awaiting_approval" || out.Phase == "accepted" || out.Phase == "promoting" || out.Phase == "prepared" {
+				out.Reconciliation = "pending_publication"
+			}
+		}
+	}()
 	out.ProductRevision = r.ProductRevision
 	attemptPhase, attemptCode, _ := m.DB.DeploymentAttempt(id)
 	out.AttemptCode = attemptCode
@@ -74,7 +83,7 @@ func (m *Manager) Status(id string) runtimedb.DeploymentStatus {
 	if head == row.CandidateRevision {
 		out.Phase = "promoted"
 		out.PromotedRevision = head
-		out.Detail = "Local ref promotion observed; controller/application outcomes remain unobserved."
+		out.Detail = "Local ref promotion observed; controller/application outcomes are reported separately."
 		if row.State != "promoted" {
 			out.Detail = "Local ref advanced; durable acknowledgment is pending."
 		}
