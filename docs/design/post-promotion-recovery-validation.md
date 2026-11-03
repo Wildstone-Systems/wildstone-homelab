@@ -82,11 +82,20 @@ leaves the claim unchanged for a later safe retry.
 
 Repository tests exercise real close/reopen semantics, SQLite process locks,
 the durable promoted epoch, and the exact startup recovery method. They do not
-prove Kubernetes Deployment termination, PVC attachment, image/chart
-packaging, or that a particular cluster manifest supplies the same stable
-holder after Pod replacement. An isolated K3s proof is therefore useful for
-operational acceptance, but is a separate Owner approval gate rather than a
-prerequisite for the repository safety contract.
+prove Kubernetes Deployment termination, PVC attachment, or image/chart
+packaging. Read-only cluster preflight additionally found that Kubernetes Pod
+replacement changes the default Pod hostname, while Keystone includes that
+hostname in its coordinator holder. Chart 0.2.1 therefore binds the singleton
+Pod hostname to the chart's Kubernetes fullname. The hostname is not an
+independent value: it is the same DNS-label-safe identity used by the
+Deployment and Service, so Kubernetes ownership also prevents two releases in
+one namespace from silently selecting the same identity. Chart tests prove
+that replacement renders preserve the restored identity and that source and
+restored releases have distinct identities.
+
+An isolated K3s proof remains useful for operational acceptance, but is a
+separate Owner approval gate rather than a prerequisite for the repository
+safety contract.
 
 The proposed live target must use a new namespace and synthetic claims; it
 must not reuse or mutate retained `wildstone-mgmt-270`,
@@ -107,8 +116,11 @@ After separate Owner approval, use only:
 
 - namespace `wildstone-mgmt-287`, labeled to enforce, audit, and warn
   `restricted:v1.37`;
-- Helm release `ws287-management`, chart `charts/wildstone-management` version
-  `0.2.0`, rendered from the approved #287 PR head;
+- direct Helm releases `ws287-source` and `ws287-restored`, chart
+  `charts/wildstone-management` version `0.2.1`, rendered from the approved
+  #287 PR head. Set `fullnameOverride` to the respective release name; this
+  produces distinct stable Pod hostnames `ws287-source` and
+  `ws287-restored`. The releases must never have active Pods concurrently;
 - a locally built `wildstone-management:issue287` image imported into K3s and
   pinned in values as
   `wildstone-management@sha256:66a4234beadb2596e88dced9743bde2c95304d5528a6807933c4675b6abdb124`.
@@ -116,18 +128,23 @@ After separate Owner approval, use only:
   as version `0.0.0-issue287` and passed `scripts/test-management-image.sh`.
   Rebuild and replace this digest if executable inputs change before approval;
   a tag or the chart's zero-digest sentinel is never accepted;
-- source PVCs `ws287-runtime`, `ws287-uploads`, and `ws287-workspaces`, and
+- source PVCs `ws287-source-runtime`, `ws287-source-uploads`, and
+  `ws287-source-workspaces`, and
   restore-target PVCs `ws287-restored-runtime`, `ws287-restored-uploads`, and
-  `ws287-restored-workspaces`. Request `2Gi` for each runtime claim and `1Gi`
-  for each uploads/workspaces claim. Set every PVC retention annotation before
-  installation and patch the dynamically created PV reclaim policy to
-  `Retain` before the first recovery step, because `local-path` defaults to
-  `Delete`;
+  `ws287-restored-workspaces`, plus evidence PVC `ws287-recovery-set`. Request
+  `2Gi` for each runtime claim and `1Gi` for every other claim (9Gi total).
+  Set every new test PVC retention annotation before installation. After
+  binding, resolve each claim's exact `spec.volumeName`, verify that every
+  resolved PV is bound to a `wildstone-mgmt-287/ws287-*` claim, and patch only
+  those resolved PVs to `Retain` before loading data. Never select or patch PVs
+  by StorageClass, provisioner, or an unbounded label query;
 - the chart defaults of one replica, `Recreate`, request `100m` CPU/`256Mi`
   memory, limit `1` CPU/`1Gi` memory, and `128Mi` bounded `/tmp`; no LoadBalancer,
   ingress, provider secret, service-account token, or external endpoint;
-- ConfigMap `ws287-config`, Secret `ws287-recovery-credentials`, journal trust
-  Secret `ws287-journal-public`, and offline host directories
+- ConfigMaps `ws287-source-config` and `ws287-restored-config`, Secrets
+  `ws287-source-secrets`, `ws287-restored-secrets`, and
+  `ws287-owner-credentials`, journal trust ConfigMap
+  `ws287-journal-public`, and offline host directories
   `ws287-recovery-set` and `ws287-bootstrap-keys` with mode 0700. All identities,
   keys and Statefile content are generated for this exercise; the journal
   private key remains only in the separate bootstrap directory;
@@ -138,21 +155,25 @@ After separate Owner approval, use only:
 
 Sequence:
 
-1. Install the source singleton on `ws287-runtime`; record Pod UID, image ID,
-   chart digest, PVC/PV bindings, holder/epoch, fixture receipt counts, and
-   synthetic credential hashes.
+1. Install `ws287-source` on `ws287-source-runtime`; record Pod UID, stable
+   hostname, image ID, chart digest, PVC/PV bindings, holder/epoch, fixture
+   receipt counts, and synthetic credential hashes.
 2. Scale the source Deployment to zero, wait for Pod deletion and volume
-   detachment, and record the terminal journal source fence. A Lease timeout or
-   NotReady condition is insufficient.
+   detachment, then delete that Deployment by exact name and record the
+   terminal journal source fence. Direct Helm ownership has no reconciler that
+   recreates the deleted Deployment. A Lease timeout or NotReady condition is
+   insufficient, and no later source Helm action is permitted.
 3. Build the signed terminal journal evidence in the offline directory, run
    management preflight, and restore the snapshot into
    `ws287-restored-runtime` while no replacement Deployment exists.
-4. Start one restored Pod. Prove restart before reconciliation, release, and
+4. Install `ws287-restored` with hostname `ws287-restored` and start one Pod.
+   Prove restart before reconciliation, release, and
    promotion remains execution-fenced. Submit evidence and release through
    fresh Owner sessions, then promote to the stable replacement holder.
 5. Without restarting, attempt a synthetic queued task/routine tick and prove
    the promoting Pod stays fenced. Delete only that replacement Pod and let the
-   same singleton Deployment create one new Pod over the restored PVC.
+   same singleton Deployment create one new Pod over the restored PVC; verify
+   that its Pod UID changes while its hostname remains `ws287-restored`.
 6. Prove the new process acquires exactly the promoted epoch and startup
    reconciliation completes before readiness. Attempt stale old-holder/epoch
    task completion, routine completion, outbound mailbox/delivery read/write,

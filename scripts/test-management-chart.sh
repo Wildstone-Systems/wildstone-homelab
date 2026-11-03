@@ -24,6 +24,7 @@ rendered="$work/default-a.yaml"
 [ "$(grep -c '^kind: ServiceAccount$' "$rendered")" -eq 1 ] || fail "expected one ServiceAccount"
 grep -Eq '^  replicas: 1$' "$rendered" || fail "singleton replica count is absent"
 grep -A1 -E '^  strategy:$' "$rendered" | grep -q 'type: Recreate' || fail "Recreate strategy is absent"
+grep -q '^      hostname: synthetic-wildstone-management$' "$rendered" || fail "stable release-derived Pod hostname is absent"
 grep -q 'image: ".*@sha256:[a-f0-9]\{64\}"' "$rendered" || fail "image is not digest-pinned"
 [ "$(grep -c 'automountServiceAccountToken: false' "$rendered")" -eq 2 ] || fail "ServiceAccount token mounting is not disabled on both objects"
 grep -A2 'name: runtime$' "$rendered" | grep -q 'persistentVolumeClaim:' || fail "runtime is not a PVC"
@@ -71,6 +72,21 @@ fi
 if "$helm_bin" template synthetic "$chart" --set storage.runtime.preparePermissions=true > /dev/null 2>&1; then
   fail "removed root permission-initialization option still passed schema validation"
 fi
+if "$helm_bin" template synthetic "$chart" --set-string fullnameOverride=Unsafe_Name > /dev/null 2>&1; then
+  fail "an unsafe coordinator identity passed schema validation"
+fi
+
+# Pod replacement renders the same hostname for one release, while the source
+# and restored releases render different coordinator identities. A fullname
+# override is not a separate hostname control: it names the Kubernetes objects
+# too, so Kubernetes ownership prevents two releases from sharing it.
+"$helm_bin" template ws287-source "$chart" --set-string fullnameOverride=ws287-source > "$work/source.yaml"
+"$helm_bin" template ws287-restored "$chart" --set-string fullnameOverride=ws287-restored > "$work/restored-a.yaml"
+"$helm_bin" template ws287-restored "$chart" --set-string fullnameOverride=ws287-restored > "$work/restored-b.yaml"
+cmp "$work/restored-a.yaml" "$work/restored-b.yaml"
+grep -q '^      hostname: ws287-source$' "$work/source.yaml" || fail "source release hostname is not its Kubernetes fullname"
+grep -q '^      hostname: ws287-restored$' "$work/restored-a.yaml" || fail "restored release hostname is not stable across replacement renders"
+refute '^      hostname: ws287-restored$' "$work/source.yaml" "source and restored releases share a coordinator hostname"
 
 "$helm_bin" template synthetic "$chart" \
   --set-string configuration.existingConfigMap=synthetic-config \

@@ -9,6 +9,9 @@ image:
 
 imagePullSecrets: []
 nameOverride: ""
+# The singleton Pod hostname is derived from the same Kubernetes-safe fullname
+# used for its Deployment and Service. There is deliberately no separate
+# coordinator-hostname override.
 fullnameOverride: ""
 
 serviceAccount:
