@@ -144,7 +144,7 @@ func managementFixture(t *testing.T) (string, string, ManagementManifest) {
 	}
 
 	m := ManagementManifest{Format: ManagementRecoveryFormat, SnapshotAt: time.Date(2026, 11, 2, 22, 0, 0, 0, time.UTC),
-		SourceChartVersion: "0.2.0", TargetChartVersion: "0.2.0", RuntimeLayout: "private-keystone-child",
+		SourceChartVersion: "0.2.1", TargetChartVersion: "0.2.1", RuntimeLayout: "private-keystone-child",
 		ImageDigest: "sha256:" + strings.Repeat("1", 64), ApprovedStatefileRevision: head,
 		PromotedDeploymentRevision: revision, Quiesced: true, OriginalWriterFenced: true, OwnerApproved: true,
 		Artifacts: map[string]string{}, Keys: map[string]string{}, SHA256: map[string]string{}}
@@ -179,13 +179,34 @@ func TestManagementRecoveryPreflightAcceptsCompleteIndependentSet(t *testing.T) 
 	}
 }
 
-func TestManagementRecoveryPreflightAcceptsDeclaredChart01SourceLayout(t *testing.T) {
-	setDir, keyDir, manifest := managementFixture(t)
-	manifest.SourceChartVersion = "0.1.0"
-	manifest.RuntimeLayout = "claim-root"
-	writeManifest(t, setDir, manifest)
-	if _, err := VerifyManagementSet(setDir, keyDir); err != nil {
-		t.Fatal(err)
+func TestManagementRecoveryPreflightUsesExplicitChartCompatibility(t *testing.T) {
+	tests := []struct {
+		name, source, target, layout string
+		want                         bool
+	}{
+		{"legacy layout migration", "0.1.0", "0.2.0", "claim-root", true},
+		{"existing 0.2 restore", "0.2.0", "0.2.0", "private-keystone-child", true},
+		{"hostname chart upgrade", "0.2.0", "0.2.1", "private-keystone-child", true},
+		{"hostname chart same-version restore", "0.2.1", "0.2.1", "private-keystone-child", true},
+		{"unknown source", "0.2.2", "0.2.2", "private-keystone-child", false},
+		{"unknown target", "0.2.1", "0.2.2", "private-keystone-child", false},
+		{"unreviewed downgrade", "0.2.1", "0.2.0", "private-keystone-child", false},
+		{"0.2.1 mislabeled as claim root", "0.2.1", "0.2.1", "claim-root", false},
+		{"0.1 mislabeled as private child", "0.1.0", "0.2.0", "private-keystone-child", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			setDir, keyDir, manifest := managementFixture(t)
+			manifest.SourceChartVersion, manifest.TargetChartVersion, manifest.RuntimeLayout = tt.source, tt.target, tt.layout
+			writeManifest(t, setDir, manifest)
+			_, err := VerifyManagementSet(setDir, keyDir)
+			if tt.want && err != nil {
+				t.Fatal(err)
+			}
+			if !tt.want && (err == nil || !strings.Contains(err.Error(), "chart/layout")) {
+				t.Fatalf("error = %v, want explicit chart/layout refusal", err)
+			}
+		})
 	}
 }
 
@@ -212,7 +233,6 @@ func TestManagementRecoveryPreflightRefusesMissingUnsafeOrUnauthorizedSets(t *te
 		}, "recovery-journal.pub is missing"},
 		{"not quiesced", func(_ *testing.T, _ string, _ string, m *ManagementManifest) { m.Quiesced = false }, "quiesce"},
 		{"not Owner approved", func(_ *testing.T, _ string, _ string, m *ManagementManifest) { m.OwnerApproved = false }, "Owner approval"},
-		{"chart 0.1 mislabeled", func(_ *testing.T, _ string, _ string, m *ManagementManifest) { m.SourceChartVersion = "0.1.0" }, "chart/layout"},
 		{"tampered signing identity", func(t *testing.T, set, _ string, m *ManagementManifest) {
 			writeFixture(t, set, "op-signing.pub", make([]byte, ed25519.PublicKeySize))
 			body, _ := os.ReadFile(filepath.Join(set, "op-signing.pub"))
