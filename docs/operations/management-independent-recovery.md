@@ -190,8 +190,13 @@ approval. The original Keystone API is never used.
     execution fencing. See the
     [#285 release contract](../design/restore-quarantine-release.md).
 11. While the replacement is serving reads but dispatch is fenced, the Owner
-    calls `POST /api/v1/coordinator/promote`. Operators and revoked Owners must
-    be refused. Restart the singleton so it acquires the new epoch and performs
+    calls `POST /api/v1/coordinator/promote`. The endpoint revalidates the
+    released generation-bound signed evidence and source fence, records the
+    immutable old/new holder and epoch, and leaves the current process fenced.
+    Operators, administrator bearers, Agents and revoked/disabled Owners must
+    be refused. See the
+    [#286 promotion contract](../design/restored-coordinator-promotion.md).
+    Restart the singleton under #287 so it acquires the new epoch and performs
     interrupted-attempt/routine recovery. Verify the old epoch cannot commit.
 12. Verify preserved login/API credential behavior, revoked credential denial,
     Statefile head/resources, local deploy ref and Flux-observed revision,

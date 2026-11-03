@@ -74,6 +74,11 @@ type RestoreReleaseResult struct {
 	AlreadyReleased   bool      `json:"alreadyReleased"`
 }
 
+type validatedRestoreEvidence struct {
+	state      RestoreState
+	evidenceID string
+}
+
 func journalSigningPayload(e RecoveryJournalEvidence) ([]byte, error) {
 	e.Signature = ""
 	return json.Marshal(e)
@@ -275,6 +280,80 @@ func loadRecoveryJournalAudit(q queryRower, evidenceID string) (recoveryJournalA
 			&a.headSequence, &a.headSHA256, &a.coverageThrough, &a.signerFingerprint,
 			&a.verifiedAt, &a.verifiedBy, &a.appliedCount, &a.evidenceJSON)
 	return a, err
+}
+
+// validateRestoreEvidence rechecks the complete durable recovery proof inside
+// the caller's write transaction. Release and coordinator promotion are
+// separate Owner decisions, but neither may rely on a proof that became stale,
+// mismatched, or untrusted after the earlier decision.
+func validateRestoreEvidence(tx *sql.Tx, trustedKey ed25519.PublicKey, action string) (validatedRestoreEvidence, error) {
+	var result validatedRestoreEvidence
+	if len(trustedKey) != ed25519.PublicKeySize {
+		return result, fmt.Errorf("runtimedb: %s requires the preserved journal custodian trust root", action)
+	}
+	state, err := getRestoreState(tx)
+	if err != nil {
+		return result, err
+	}
+	if state.RestoreGeneration == "" || state.SnapshotSHA256 == "" || state.JournalEvidenceID == "" {
+		return result, fmt.Errorf("runtimedb: %s requires a uniquely identified restore and verified journal evidence", action)
+	}
+	if !state.JournalCurrent || state.ReplayedAt.IsZero() || state.JournalVerifiedAt.IsZero() {
+		return result, fmt.Errorf("runtimedb: %s requires completed journal verification and replay", action)
+	}
+	audit, err := loadRecoveryJournalAudit(tx, state.JournalEvidenceID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return result, fmt.Errorf("runtimedb: %s evidence audit is missing", action)
+	}
+	if err != nil {
+		return result, err
+	}
+	evidence, payload, evidenceID, err := decodeRecoveryJournalEvidence([]byte(audit.evidenceJSON))
+	if err != nil {
+		return result, fmt.Errorf("runtimedb: %s evidence audit is invalid: %w", action, err)
+	}
+	signature, err := base64.StdEncoding.DecodeString(evidence.Signature)
+	if err != nil || !ed25519.Verify(trustedKey, payload, signature) {
+		return result, fmt.Errorf("runtimedb: %s journal signature does not verify under the current trust root", action)
+	}
+	if evidenceID != state.JournalEvidenceID || evidence.SignerFingerprint != signingFingerprint(trustedKey) ||
+		audit.signerFingerprint != signingFingerprint(trustedKey) {
+		return result, fmt.Errorf("runtimedb: %s journal signer does not match the current trust root", action)
+	}
+	if evidence.Format != RecoveryJournalEvidenceFormat || !evidence.Final || evidence.JournalSource == "" || evidence.Custody == "" ||
+		evidence.SourceFencedAt.IsZero() || evidence.SourceFencedAt.Before(evidence.SnapshotAt) ||
+		evidence.CoverageThrough.Before(evidence.SourceFencedAt) || evidence.GeneratedAt.Before(evidence.CoverageThrough) {
+		return result, fmt.Errorf("runtimedb: %s requires terminal evidence from an independently fenced source", action)
+	}
+	if evidence.HeadSequence != int64(len(evidence.Entries)) || evidence.BaseSequence < 0 || evidence.BaseSequence > evidence.HeadSequence {
+		return result, fmt.Errorf("runtimedb: %s evidence sequence bounds are incomplete", action)
+	}
+	headHash, err := chainJournal(evidence.Entries)
+	if err != nil || headHash != evidence.HeadSHA256 {
+		return result, fmt.Errorf("runtimedb: %s evidence head integrity check failed", action)
+	}
+	baseHash, err := chainJournal(evidence.Entries[:evidence.BaseSequence])
+	if err != nil || baseHash != evidence.BaseSHA256 {
+		return result, fmt.Errorf("runtimedb: %s evidence snapshot prefix check failed", action)
+	}
+	canonical, _ := json.Marshal(evidence)
+	projectionMatches := state.SnapshotSHA256 == evidence.SnapshotSHA256 && state.SnapshotAt.Equal(evidence.SnapshotAt) &&
+		state.JournalSource == evidence.JournalSource && state.JournalHeadSeq == evidence.HeadSequence &&
+		state.JournalHeadSHA256 == evidence.HeadSHA256 && state.JournalCoverageThrough.Equal(evidence.CoverageThrough) &&
+		state.JournalVerifiedBy == audit.verifiedBy && state.JournalAssertedBy == audit.verifiedBy &&
+		state.ReplayedCount == audit.appliedCount
+	auditMatches := audit.restoreGeneration == state.RestoreGeneration && audit.snapshotSHA256 == evidence.SnapshotSHA256 &&
+		audit.snapshotAt == timeText(evidence.SnapshotAt) && audit.journalSource == evidence.JournalSource &&
+		audit.headSequence == evidence.HeadSequence && audit.headSHA256 == evidence.HeadSHA256 &&
+		audit.coverageThrough == timeText(evidence.CoverageThrough) && audit.evidenceJSON == string(canonical) &&
+		audit.verifiedAt == timeText(state.JournalVerifiedAt)
+	if !projectionMatches || !auditMatches {
+		return result, fmt.Errorf("runtimedb: %s evidence does not match the current restore generation", action)
+	}
+	if err := recoveryJournalSuffixMatches(tx, evidence.HeadSequence, evidenceID); err != nil {
+		return result, err
+	}
+	return validatedRestoreEvidence{state: state, evidenceID: evidenceID}, nil
 }
 
 // replayRecoveryJournalToStableHead accounts for rows created by replay-time
@@ -496,77 +575,17 @@ func (db *DB) ReleaseRestoreQuarantine(by string, trustedKey ed25519.PublicKey) 
 	if by == "" {
 		return result, fmt.Errorf("runtimedb: releasing quarantine needs the current Owner who requested it")
 	}
-	if len(trustedKey) != ed25519.PublicKeySize {
-		return result, fmt.Errorf("runtimedb: releasing quarantine requires the preserved journal custodian trust root")
-	}
 	tx, err := db.sql.Begin()
 	if err != nil {
 		return result, fmt.Errorf("runtimedb: beginning quarantine release: %w", err)
 	}
 	defer tx.Rollback()
 
-	state, err := getRestoreState(tx)
+	validated, err := validateRestoreEvidence(tx, trustedKey, "quarantine release")
 	if err != nil {
 		return result, err
 	}
-	if state.RestoreGeneration == "" || state.SnapshotSHA256 == "" || state.JournalEvidenceID == "" {
-		return result, fmt.Errorf("runtimedb: quarantine release requires a uniquely identified restore and verified journal evidence")
-	}
-	if !state.JournalCurrent || state.ReplayedAt.IsZero() || state.JournalVerifiedAt.IsZero() {
-		return result, fmt.Errorf("runtimedb: quarantine release requires completed journal verification and replay")
-	}
-	audit, err := loadRecoveryJournalAudit(tx, state.JournalEvidenceID)
-	if errors.Is(err, sql.ErrNoRows) {
-		return result, fmt.Errorf("runtimedb: quarantine release evidence audit is missing")
-	}
-	if err != nil {
-		return result, err
-	}
-	evidence, payload, evidenceID, err := decodeRecoveryJournalEvidence([]byte(audit.evidenceJSON))
-	if err != nil {
-		return result, fmt.Errorf("runtimedb: quarantine release evidence audit is invalid: %w", err)
-	}
-	signature, err := base64.StdEncoding.DecodeString(evidence.Signature)
-	if err != nil || !ed25519.Verify(trustedKey, payload, signature) {
-		return result, fmt.Errorf("runtimedb: quarantine release journal signature does not verify under the current trust root")
-	}
-	if evidenceID != state.JournalEvidenceID || evidence.SignerFingerprint != signingFingerprint(trustedKey) ||
-		audit.signerFingerprint != signingFingerprint(trustedKey) {
-		return result, fmt.Errorf("runtimedb: quarantine release journal signer does not match the current trust root")
-	}
-	if evidence.Format != RecoveryJournalEvidenceFormat || !evidence.Final || evidence.JournalSource == "" || evidence.Custody == "" ||
-		evidence.SourceFencedAt.IsZero() || evidence.SourceFencedAt.Before(evidence.SnapshotAt) ||
-		evidence.CoverageThrough.Before(evidence.SourceFencedAt) || evidence.GeneratedAt.Before(evidence.CoverageThrough) {
-		return result, fmt.Errorf("runtimedb: quarantine release requires terminal evidence from an independently fenced source")
-	}
-	if evidence.HeadSequence != int64(len(evidence.Entries)) || evidence.BaseSequence < 0 || evidence.BaseSequence > evidence.HeadSequence {
-		return result, fmt.Errorf("runtimedb: quarantine release evidence sequence bounds are incomplete")
-	}
-	headHash, err := chainJournal(evidence.Entries)
-	if err != nil || headHash != evidence.HeadSHA256 {
-		return result, fmt.Errorf("runtimedb: quarantine release evidence head integrity check failed")
-	}
-	baseHash, err := chainJournal(evidence.Entries[:evidence.BaseSequence])
-	if err != nil || baseHash != evidence.BaseSHA256 {
-		return result, fmt.Errorf("runtimedb: quarantine release evidence snapshot prefix check failed")
-	}
-	canonical, _ := json.Marshal(evidence)
-	projectionMatches := state.SnapshotSHA256 == evidence.SnapshotSHA256 && state.SnapshotAt.Equal(evidence.SnapshotAt) &&
-		state.JournalSource == evidence.JournalSource && state.JournalHeadSeq == evidence.HeadSequence &&
-		state.JournalHeadSHA256 == evidence.HeadSHA256 && state.JournalCoverageThrough.Equal(evidence.CoverageThrough) &&
-		state.JournalVerifiedBy == audit.verifiedBy && state.JournalAssertedBy == audit.verifiedBy &&
-		state.ReplayedCount == audit.appliedCount
-	auditMatches := audit.restoreGeneration == state.RestoreGeneration && audit.snapshotSHA256 == evidence.SnapshotSHA256 &&
-		audit.snapshotAt == timeText(evidence.SnapshotAt) && audit.journalSource == evidence.JournalSource &&
-		audit.headSequence == evidence.HeadSequence && audit.headSHA256 == evidence.HeadSHA256 &&
-		audit.coverageThrough == timeText(evidence.CoverageThrough) && audit.evidenceJSON == string(canonical) &&
-		audit.verifiedAt == timeText(state.JournalVerifiedAt)
-	if !projectionMatches || !auditMatches {
-		return result, fmt.Errorf("runtimedb: quarantine release evidence does not match the current restore generation")
-	}
-	if err := recoveryJournalSuffixMatches(tx, evidence.HeadSequence, evidenceID); err != nil {
-		return result, err
-	}
+	state, evidenceID := validated.state, validated.evidenceID
 
 	result = RestoreReleaseResult{RestoreGeneration: state.RestoreGeneration, EvidenceID: evidenceID}
 	if !state.Quarantined {

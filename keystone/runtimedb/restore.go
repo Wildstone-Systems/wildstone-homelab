@@ -56,6 +56,10 @@ type RestoreState struct {
 	JournalCoverageThrough time.Time `json:"journalCoverageThrough,omitzero"`
 	JournalVerifiedAt      time.Time `json:"journalVerifiedAt,omitzero"`
 	JournalVerifiedBy      string    `json:"journalVerifiedBy,omitempty"`
+	CoordinatorPromotedAt  time.Time `json:"coordinatorPromotedAt,omitzero"`
+	CoordinatorPromotedBy  string    `json:"coordinatorPromotedBy,omitempty"`
+	CoordinatorHolder      string    `json:"coordinatorPromotedHolder,omitempty"`
+	CoordinatorEpoch       int64     `json:"coordinatorPromotedEpoch,omitempty"`
 	RestoreGeneration      string    `json:"-"`
 }
 
@@ -83,7 +87,8 @@ func (db *DB) enterRestoreQuarantine(reason string, snapshotAt time.Time, snapsh
 		   journal_current = 0, journal_asserted_by = '', replayed_at = '', replayed_count = 0,
 		   released_at = '', released_by = '', journal_evidence_id = '', journal_source = '',
 		   journal_head_seq = 0, journal_head_sha256 = '', journal_coverage_through = '',
-		   journal_verified_at = '', journal_verified_by = ''`,
+		   journal_verified_at = '', journal_verified_by = '', coordinator_promoted_at = '',
+		   coordinator_promoted_by = '', coordinator_promoted_holder = '', coordinator_promoted_epoch = 0`,
 		now(), reason, timeText(snapshotAt), snapshotSHA256, restoreGeneration)
 	if err != nil {
 		return fmt.Errorf("runtimedb: entering restore quarantine: %w", err)
@@ -92,6 +97,7 @@ func (db *DB) enterRestoreQuarantine(reason string, snapshotAt time.Time, snapsh
 	// Releasing quarantine never restores it: post-restore coordinator
 	// authority is a separate, durable promotion decision (#286).
 	db.executionLease.Store(nil)
+	db.restoreCoordinatorAcquisitionAllowed.Store(false)
 	return nil
 }
 
@@ -102,18 +108,21 @@ type queryRower interface {
 func getRestoreState(q queryRower) (RestoreState, error) {
 	var s RestoreState
 	var quarantined, journalCurrent int
-	var entered, snapshot, replayed, released, coverage, verified string
+	var entered, snapshot, replayed, released, coverage, verified, promoted string
 	err := q.QueryRow(
 		`SELECT quarantined, entered_at, reason, snapshot_at, journal_current,
 		        journal_asserted_by, replayed_at, replayed_count, released_at, released_by,
 		        snapshot_sha256, journal_evidence_id, journal_source, journal_head_seq,
 		        journal_head_sha256, journal_coverage_through, journal_verified_at, journal_verified_by,
+		        coordinator_promoted_at, coordinator_promoted_by, coordinator_promoted_holder,
+		        coordinator_promoted_epoch,
 		        restore_generation
 		 FROM restore_state WHERE id = 1`).
 		Scan(&quarantined, &entered, &s.Reason, &snapshot, &journalCurrent,
 			&s.JournalAssertedBy, &replayed, &s.ReplayedCount, &released, &s.ReleasedBy,
 			&s.SnapshotSHA256, &s.JournalEvidenceID, &s.JournalSource, &s.JournalHeadSeq,
 			&s.JournalHeadSHA256, &coverage, &verified, &s.JournalVerifiedBy,
+			&promoted, &s.CoordinatorPromotedBy, &s.CoordinatorHolder, &s.CoordinatorEpoch,
 			&s.RestoreGeneration)
 	if errors.Is(err, sql.ErrNoRows) {
 		// A database that was never restored is not quarantined. This is
@@ -128,7 +137,7 @@ func getRestoreState(q queryRower) (RestoreState, error) {
 		text string
 		into *time.Time
 	}{{entered, &s.EnteredAt}, {snapshot, &s.SnapshotAt}, {replayed, &s.ReplayedAt}, {released, &s.ReleasedAt},
-		{coverage, &s.JournalCoverageThrough}, {verified, &s.JournalVerifiedAt}} {
+		{coverage, &s.JournalCoverageThrough}, {verified, &s.JournalVerifiedAt}, {promoted, &s.CoordinatorPromotedAt}} {
 		if f.text == "" {
 			continue
 		}

@@ -76,7 +76,25 @@ func (s *Server) promoteCoordinator(_ *http.Request, id principal.Identity) (any
 		return nil, http.StatusServiceUnavailable,
 			fmt.Errorf("this process does not know its own coordinator identity")
 	}
-	lease, err := s.DB.PromoteCoordinator(s.CoordinatorHolder)
+	actor, err := s.activeOwnerConsoleActor(id)
+	if err != nil {
+		return nil, http.StatusForbidden, err
+	}
+	restore, err := s.DB.GetRestoreState()
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	var lease runtimedb.CoordinatorLease
+	var recovery *runtimedb.RestoredCoordinatorPromotion
+	if restore.RestoreGeneration != "" {
+		promotion, promoteErr := s.DB.PromoteRestoredCoordinator(s.CoordinatorHolder, actor, s.RecoveryJournalPublicKey)
+		if promoteErr != nil {
+			return nil, http.StatusConflict, promoteErr
+		}
+		lease, recovery = promotion.Promoted, &promotion
+	} else {
+		lease, err = s.DB.PromoteCoordinator(s.CoordinatorHolder)
+	}
 	if err != nil {
 		// Already holding it is not an error worth a 500: the operator
 		// asked for a state the deployment is already in.
@@ -86,19 +104,27 @@ func (s *Server) promoteCoordinator(_ *http.Request, id principal.Identity) (any
 	// every other administrative act lands in. A promotion fences work
 	// that another process may still believe it owns, so "who did this
 	// and when" is the first question afterwards.
-	s.event("coordinator.promoted", "", id,
-		fmt.Sprintf("coordinator lease promoted to %s at epoch %d (fencing %s)",
-			lease.Holder, lease.Epoch, lease.PromotedFrom))
+	message := fmt.Sprintf("coordinator lease promoted to %s at epoch %d (fencing %s)",
+		lease.Holder, lease.Epoch, lease.PromotedFrom)
+	if recovery != nil {
+		message = fmt.Sprintf("restore generation %s promoted coordinator to %s at epoch %d (fencing %s) with journal evidence %s",
+			recovery.RestoreGeneration, lease.Holder, lease.Epoch, lease.PromotedFrom, recovery.EvidenceID)
+	}
+	s.event("coordinator.promoted", "", id, message)
 	// The promotion took effect in the DATABASE. This process still has
 	// to be restarted to pick it up, because the lease a running
 	// Keystone dispatches under was captured at startup — saying so is
 	// the difference between a working recovery and an operator
 	// watching a promoted deployment stay silent.
-	return map[string]any{
+	response := map[string]any{
 		"lease": leaseView(lease, s.CoordinatorHolder),
 		"note": "the lease is now held by this deployment; restart keystone so the running process " +
 			"picks it up and wires durable Butler work",
-	}, http.StatusOK, nil
+	}
+	if recovery != nil {
+		response["recoveryPromotion"] = recovery
+	}
+	return response, http.StatusOK, nil
 }
 
 func leaseView(l runtimedb.CoordinatorLease, me string) coordinatorView {

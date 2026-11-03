@@ -1,7 +1,8 @@
 # Restore quarantine release contract
 
 Status: implemented repository contract for #285. Journal reconciliation is
-#284; coordinator promotion and post-promotion restart remain #286 and #287.
+#284; coordinator promotion is implemented separately by #286, while
+post-promotion restart remains #287.
 Release is a data-access decision, not execution authority.
 
 ## Required release state
@@ -51,15 +52,17 @@ survives process restart.
 ## Execution remains fenced
 
 Entering restore quarantine revokes the process-local coordinator handle.
-`AcquireCoordinator` refuses every database with a restore generation, before
-and after quarantine release. Therefore release does not change the preserved
-coordinator holder or epoch, wire a scheduler, resume a mailbox reconciler, or
-make queued Agent/tool/automation work dispatchable.
+`AcquireCoordinator` refuses every database with a restore generation before
+promotion, and the process that records promotion remains unable to acquire
+it. Therefore release does not change the preserved coordinator holder or
+epoch, wire a scheduler, resume a mailbox reconciler, or make queued
+Agent/tool/automation work dispatchable.
 
-The post-restore promotion marker and authenticated promotion transition are
-owned by #286. Until that separately reviewed transition and the documented
-restart, `CheckHouseholdExecution` fails closed. #287 then validates singleton
-restart, stale-epoch refusal, completed receipt continuity and uncertain-effect
+The [post-restore promotion contract](restored-coordinator-promotion.md) records
+the separate authenticated #286 transition and advances the durable epoch,
+but still leaves the serving process fenced. Until the documented restart,
+`CheckHouseholdExecution` fails closed. #287 validates singleton restart,
+stale-epoch refusal, completed receipt continuity and uncertain-effect
 handling. #285 neither promotes nor executes work.
 
 ## API sequence
@@ -70,7 +73,7 @@ POST /api/v1/restore/reconcile  {"evidence": <signed terminal evidence>}
 POST /api/v1/restore/release    {"release": true}
                                 -> data quarantine released; execution fenced
 POST /api/v1/coordinator/promote
-                                -> separate #286 operation, not implemented here
+                                -> Owner-authorized durable epoch; still fenced
 restart singleton              -> separate #287 validation
 ```
 
