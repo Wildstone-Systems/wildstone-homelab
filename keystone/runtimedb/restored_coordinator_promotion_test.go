@@ -138,6 +138,12 @@ func TestRestoredCoordinatorPromotionIsDurableAtomicAndRestartGated(t *testing.T
 	if err != nil || acquired.Epoch != promotion.Promoted.Epoch {
 		t.Fatalf("controlled acquisition = %+v, %v", acquired, err)
 	}
+	if err := reopened.CheckHouseholdExecution(); err != nil {
+		t.Fatalf("promoted epoch remained fenced after controlled acquisition: %v", err)
+	}
+	if recovered, err := reopened.RecoverWorkspaceWrites(); err != nil || recovered != 0 {
+		t.Fatalf("startup workspace recovery after controlled acquisition = %d, %v", recovered, err)
+	}
 	if after := tableCounts(t, reopened, tables...); !equalCounts(before, after) {
 		t.Fatalf("acquisition dispatched work: before=%v after=%v", before, after)
 	}

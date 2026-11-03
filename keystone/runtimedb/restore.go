@@ -196,16 +196,16 @@ const (
 // cached answer is exactly how a quarantined database ends up
 // dispatching anyway.
 func (db *DB) gate(what string) error {
-	return gateQuery(db.sql, what)
+	return db.gateQuery(db.sql, what)
 }
 
 // gateTx gives operations whose authority and effect are one transaction the
 // same fail-closed restore and household-stop checks inside that transaction.
-func gateTx(tx *sql.Tx, what string) error {
-	return gateQuery(tx, what)
+func (db *DB) gateTx(tx *sql.Tx, what string) error {
+	return db.gateQuery(tx, what)
 }
 
-func gateQuery(q queryRower, what string) error {
+func (db *DB) gateQuery(q queryRower, what string) error {
 	s, err := getRestoreState(q)
 	if err != nil {
 		// A store that cannot say whether it is quarantined has not said
@@ -219,7 +219,18 @@ func gateQuery(q queryRower, what string) error {
 			// Every dispatch/delivery chokepoint remains durably closed for a
 			// restore generation until #286 records a separate promotion.
 			if s.RestoreGeneration != "" {
-				return ErrCoordinatorRestoreFenced
+				// Promotion opens the durable restore fence, but never grants this
+				// process authority. Only a restarted process that acquired the
+				// exact promoted holder/epoch may pass a dispatch or delivery gate.
+				lease := db.executionLease.Load()
+				if s.CoordinatorPromotedAt.IsZero() || lease == nil ||
+					s.CoordinatorHolder != lease.Holder || s.CoordinatorEpoch != lease.Epoch {
+					return ErrCoordinatorRestoreFenced
+				}
+				current, err := readCoordinator(q)
+				if err != nil || current.Holder != lease.Holder || current.Epoch != lease.Epoch {
+					return ErrCoordinatorRestoreFenced
+				}
 			}
 			return checkHouseholdStop(q, what)
 		}

@@ -56,7 +56,7 @@ func (db *DB) deploymentExecutionTx(tx *sql.Tx) error {
 	if lease == nil {
 		return ErrCoordinatorFenced
 	}
-	if err := gateTx(tx, GateDispatch); err != nil {
+	if err := db.gateTx(tx, GateDispatch); err != nil {
 		return err
 	}
 	current, err := readCoordinator(tx)

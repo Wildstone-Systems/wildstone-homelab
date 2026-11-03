@@ -183,7 +183,7 @@ func (db *DB) CreatePendingExternalRegistration(in CreatePendingExternalRegistra
 		return ExternalClientRegistration{}, fmt.Errorf("runtimedb: creating pending external registration: %w", err)
 	}
 	defer tx.Rollback()
-	if err := gateTx(tx, GateDispatch); err != nil {
+	if err := db.gateTx(tx, GateDispatch); err != nil {
 		return ExternalClientRegistration{}, err
 	}
 
@@ -268,7 +268,7 @@ func (db *DB) ResolveExternalClientRegistration(issuer, subject, clientID string
 		return ExternalClientRegistration{}, err
 	}
 	defer tx.Rollback()
-	if err := gateTx(tx, GateDispatch); err != nil {
+	if err := db.gateTx(tx, GateDispatch); err != nil {
 		return ExternalClientRegistration{}, err
 	}
 	r, err := scanExternalRegistration(tx.QueryRow(externalRegistrationColumns+
@@ -295,7 +295,7 @@ func (db *DB) ExternalRegistrationConfirmation(id, personID string) (ExternalReg
 		return ExternalRegistrationConfirmation{}, err
 	}
 	defer tx.Rollback()
-	if err := gateTx(tx, GateDispatch); err != nil {
+	if err := db.gateTx(tx, GateDispatch); err != nil {
 		return ExternalRegistrationConfirmation{}, err
 	}
 	r, err := externalRegistrationForChallenge(tx, strings.TrimSpace(id), strings.TrimSpace(personID))
@@ -347,7 +347,7 @@ func (db *DB) ActivateExternalClientRegistration(in ActivateExternalRegistration
 		return ExternalClientRegistration{}, err
 	}
 	defer tx.Rollback()
-	if err := gateTx(tx, GateDispatch); err != nil {
+	if err := db.gateTx(tx, GateDispatch); err != nil {
 		return ExternalClientRegistration{}, err
 	}
 	r, err := externalRegistrationForChallenge(tx, in.RegistrationID, in.PersonID)

@@ -353,7 +353,7 @@ func (db *DB) PollRuntimeDeliveries(cred RuntimeDeliveryCredential, after int64,
 		return nil, fmt.Errorf("runtimedb: beginning runtime delivery poll: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	if err := gateTx(tx, GateDelivery); err != nil {
+	if err := db.gateTx(tx, GateDelivery); err != nil {
 		return nil, err
 	}
 	// Sample only after Begin has acquired the immediate transaction lock.
@@ -413,7 +413,7 @@ func (db *DB) PollExternalDeliveries(id ExternalDeliveryIdentity, after int64, l
 		return nil, err
 	}
 	defer tx.Rollback()
-	if err := gateTx(tx, GateDelivery); err != nil {
+	if err := db.gateTx(tx, GateDelivery); err != nil {
 		return nil, err
 	}
 	reg, err := externalDeliveryRegistration(tx, id)
@@ -496,7 +496,7 @@ func (db *DB) AckRuntimeDelivery(cred RuntimeDeliveryCredential, id int64, clock
 		return fmt.Errorf("runtimedb: beginning runtime delivery acknowledgment: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	if err := gateTx(tx, GateDelivery); err != nil {
+	if err := db.gateTx(tx, GateDelivery); err != nil {
 		return err
 	}
 	// Sample only after Begin has acquired the immediate transaction lock.
@@ -534,7 +534,7 @@ func (db *DB) AckExternalDelivery(identity ExternalDeliveryIdentity, deliveryID 
 		return err
 	}
 	defer tx.Rollback()
-	if err := gateTx(tx, GateDelivery); err != nil {
+	if err := db.gateTx(tx, GateDelivery); err != nil {
 		return err
 	}
 	reg, err := externalDeliveryRegistration(tx, identity)

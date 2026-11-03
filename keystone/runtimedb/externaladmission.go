@@ -168,7 +168,7 @@ func (v *SecretVault) AdmitExternalTask(in ExternalTaskAdmissionInput) (External
 		return ExternalTaskAdmission{}, err
 	}
 	defer tx.Rollback()
-	if err := gateTx(tx, GateDispatch); err != nil {
+	if err := v.db.gateTx(tx, GateDispatch); err != nil {
 		return ExternalTaskAdmission{}, err
 	}
 
