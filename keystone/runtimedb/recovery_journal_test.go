@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -225,5 +226,236 @@ func TestRecoveryJournalReconciliationIsIdempotentAndPersistsAcrossRestart(t *te
 	state := assertStillQuarantined(t, reopened)
 	if state.JournalEvidenceID != first.EvidenceID || !state.JournalVerifiedAt.Equal(journalVerifiedAt) {
 		t.Fatalf("restart lost reconciliation: %+v", state)
+	}
+}
+
+func TestRecoveryJournalRetryAfterReplayCheckpointInterruption(t *testing.T) {
+	f := newRecoveryJournalFixture(t)
+	for _, member := range []struct{ name, role string }{{"mika", RoleOwner}, {"sam", RoleMember}} {
+		if err := f.live.RecordButlerMember(member.name, member.role, "", ""); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.live.AdmitButlerMember(member.name, "mika"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	vault, err := f.live.OpenSecretVault(filepath.Join(t.TempDir(), "household.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	secret, err := vault.Create("sam", SecretInput{Scope: "personal", Label: "Recovery fixture", Value: "not-production-secret"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.snapshot(t)
+	if err := f.live.Journal("member", "sam", "offboarded", "mika", "post-snapshot removal"); err != nil {
+		t.Fatal(err)
+	}
+	body := f.evidence(t)
+	_, _, evidenceID, err := decodeRecoveryJournalEvidence(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restored := f.restore(t)
+	interrupted := errors.New("synthetic process interruption after replay")
+	restored.recoveryJournalTestHook = func() error { return interrupted }
+	if _, err := restored.ReconcileRestoreEvidence(body, f.publicKey, "mika", journalVerifiedAt); !errors.Is(err, interrupted) {
+		t.Fatalf("interrupted reconciliation error = %v", err)
+	}
+	state := assertStillQuarantined(t, restored)
+	if state.JournalCurrent || state.JournalEvidenceID != "" || state.ReplayedAt.IsZero() {
+		t.Fatalf("interrupted verification was partially accepted: %+v", state)
+	}
+	var auditCount, generatedCount int
+	if err := restored.sql.QueryRow(`SELECT COUNT(*) FROM recovery_journal_reconciliations WHERE evidence_id=?`, evidenceID).Scan(&auditCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := restored.sql.QueryRow(`SELECT COUNT(*) FROM deletion_journal WHERE recovery_evidence_id=?`, evidenceID).Scan(&generatedCount); err != nil {
+		t.Fatal(err)
+	}
+	if auditCount != 0 || generatedCount != 1 {
+		t.Fatalf("after interruption audit=%d generated suffix=%d, want 0 and 1", auditCount, generatedCount)
+	}
+	member, err := restored.GetButlerMember("sam")
+	if err != nil || member.Active() {
+		t.Fatalf("authority withdrawal did not commit before interruption: %+v, %v", member, err)
+	}
+	generation := member.Generation
+	var secretState string
+	if err := restored.sql.QueryRow(`SELECT state FROM household_secrets WHERE id=?`, secret.ID).Scan(&secretState); err != nil || secretState != "quarantine" {
+		t.Fatalf("personal secret state = %q, %v", secretState, err)
+	}
+	if err := restored.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(f.restoredPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	result, err := reopened.ReconcileRestoreEvidence(body, f.publicKey, "mika", journalVerifiedAt.Add(time.Minute))
+	if err != nil || result.AlreadyVerified {
+		t.Fatalf("retry result = %+v, %v", result, err)
+	}
+	state = assertStillQuarantined(t, reopened)
+	if !state.JournalCurrent || state.JournalEvidenceID != evidenceID {
+		t.Fatalf("retry did not complete verification: %+v", state)
+	}
+	member, err = reopened.GetButlerMember("sam")
+	if err != nil || member.Active() || member.Generation != generation {
+		t.Fatalf("retry duplicated or restored authority effects: %+v, %v", member, err)
+	}
+	if err := reopened.sql.QueryRow(`SELECT COUNT(*) FROM deletion_journal WHERE recovery_evidence_id=?`, evidenceID).Scan(&generatedCount); err != nil || generatedCount != 1 {
+		t.Fatalf("retry duplicated replay journal effects: count=%d, %v", generatedCount, err)
+	}
+}
+
+func TestRecoveryJournalRejectsAuditCachedInNewRestore(t *testing.T) {
+	f := newRecoveryJournalFixture(t)
+	if err := f.live.CreatePrincipal("restored-cli", RoleOperator, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.live.InsertToken("restored-token", "restored-cli", "", time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	f.snapshot(t)
+	body := f.evidence(t)
+	first := f.restore(t)
+	if _, err := first.ReconcileRestoreEvidence(body, f.publicKey, "mika", journalVerifiedAt); err != nil {
+		t.Fatal(err)
+	}
+	firstState := assertStillQuarantined(t, first)
+	verifiedBackup := filepath.Join(t.TempDir(), "verified-backup.db")
+	if err := first.BackupTo(verifiedBackup); err != nil {
+		t.Fatal(err)
+	}
+	second, err := RestoreBackup(verifiedBackup, filepath.Join(t.TempDir(), "new-restore.db"), "new recovery generation", journalSnapshotAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+	before := assertStillQuarantined(t, second)
+	if before.RestoreGeneration == firstState.RestoreGeneration || before.JournalCurrent || before.JournalEvidenceID != "" {
+		t.Fatalf("new restore inherited verification projection: first=%+v second=%+v", firstState, before)
+	}
+	var audits int
+	if err := second.sql.QueryRow(`SELECT COUNT(*) FROM recovery_journal_reconciliations`).Scan(&audits); err != nil || audits != 1 {
+		t.Fatalf("precondition: copied audit count=%d, %v", audits, err)
+	}
+	beforeTokens, err := second.LiveTokensFor("restored-cli")
+	if err != nil || beforeTokens != 1 {
+		t.Fatalf("precondition: live tokens=%d, %v", beforeTokens, err)
+	}
+	if _, err := second.ReconcileRestoreEvidence(body, f.publicKey, "mika", journalVerifiedAt.Add(time.Minute)); err == nil || !strings.Contains(err.Error(), "does not bind") {
+		t.Fatalf("old evidence error = %v", err)
+	}
+	after := assertStillQuarantined(t, second)
+	if after != before {
+		t.Fatalf("stale evidence changed current recovery state: before=%+v after=%+v", before, after)
+	}
+	afterTokens, err := second.LiveTokensFor("restored-cli")
+	if err != nil || afterTokens != beforeTokens {
+		t.Fatalf("stale evidence changed authorization: before=%d after=%d err=%v", beforeTokens, afterTokens, err)
+	}
+}
+
+func TestRecoveryJournalCachedAuditRequiresCurrentRestoreProjection(t *testing.T) {
+	f := newRecoveryJournalFixture(t)
+	f.snapshot(t)
+	body := f.evidence(t)
+	restored := f.restore(t)
+	if _, err := restored.ReconcileRestoreEvidence(body, f.publicKey, "mika", journalVerifiedAt); err != nil {
+		t.Fatal(err)
+	}
+	verified := assertStillQuarantined(t, restored)
+	// Entering a new generation with the same snapshot identity isolates the
+	// cache check from digest/timestamp rejection. The immutable old audit is
+	// still present, but its projection was correctly cleared.
+	if err := restored.enterRestoreQuarantine("same artifact restored again", verified.SnapshotAt, verified.SnapshotSHA256); err != nil {
+		t.Fatal(err)
+	}
+	before := assertStillQuarantined(t, restored)
+	if before.RestoreGeneration == verified.RestoreGeneration {
+		t.Fatal("new restore reused the previous generation")
+	}
+	if _, err := restored.ReconcileRestoreEvidence(body, f.publicKey, "mika", journalVerifiedAt.Add(time.Minute)); err == nil || !strings.Contains(err.Error(), "cached verification") {
+		t.Fatalf("stale cached audit error = %v", err)
+	}
+	after := assertStillQuarantined(t, restored)
+	if after != before || after.JournalCurrent || after.JournalEvidenceID != "" || !after.ReplayedAt.IsZero() {
+		t.Fatalf("stale cached audit changed current restore: before=%+v after=%+v", before, after)
+	}
+}
+
+func TestRecoveryJournalRejectsUntrustedCustodian(t *testing.T) {
+	f := newRecoveryJournalFixture(t)
+	f.snapshot(t)
+	restored := f.restore(t)
+	untrusted, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := restored.ReconcileRestoreEvidence(f.evidence(t), untrusted, "mika", journalVerifiedAt); err == nil || !strings.Contains(err.Error(), "signature") {
+		t.Fatalf("untrusted custodian error = %v", err)
+	}
+	state := assertStillQuarantined(t, restored)
+	if state.JournalCurrent || state.JournalEvidenceID != "" {
+		t.Fatalf("untrusted evidence changed verification state: %+v", state)
+	}
+}
+
+func TestRecoveryJournalRejectsUnprovenLocalSuffix(t *testing.T) {
+	f := newRecoveryJournalFixture(t)
+	f.snapshot(t)
+	restored := f.restore(t)
+	if _, err := restored.sql.Exec(`INSERT INTO deletion_journal(subject_kind,subject_id,action,at,actor,detail)
+		VALUES('member','divergent-member','offboarded',?,'mika','not produced by recovery replay')`, timeText(journalSnapshotAt)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := restored.ReconcileRestoreEvidence(f.evidence(t), f.publicKey, "mika", journalVerifiedAt); err == nil || !strings.Contains(err.Error(), "provenance") {
+		t.Fatalf("unproven local suffix error = %v", err)
+	}
+	state := assertStillQuarantined(t, restored)
+	if state.JournalCurrent || state.JournalEvidenceID != "" || !state.ReplayedAt.IsZero() {
+		t.Fatalf("divergent suffix changed recovery state: %+v", state)
+	}
+}
+
+func TestRecoveryJournalResumeMigrationPreservesPriorEvidence(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "pre-resume.db")
+	db, err := openThrough(t, path, "migrations/0115_recovery_journal_evidence.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.sql.Exec(`INSERT INTO restore_state(id,quarantined,entered_at,reason,snapshot_at,snapshot_sha256)
+		VALUES(1,1,'t','migration fixture','t','snapshot')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.sql.Exec(`INSERT INTO deletion_journal(subject_kind,subject_id,action,at,actor)
+		VALUES('member','sam','offboarded','t','mika')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.sql.Exec(`INSERT INTO recovery_journal_reconciliations
+		(evidence_id,snapshot_sha256,snapshot_at,journal_source,custody,base_seq,head_seq,head_sha256,
+		 coverage_through,source_fenced_at,signer_fingerprint,verified_at,verified_by,applied_count,evidence_json)
+		VALUES('evidence','snapshot','t','source','custody',0,1,'head','t','t','signer','t','mika',1,'{}')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.migrate(); err != nil {
+		t.Fatal(err)
+	}
+	var journalEvidence, stateGeneration, auditGeneration string
+	if err := db.sql.QueryRow(`SELECT recovery_evidence_id FROM deletion_journal WHERE seq=1`).Scan(&journalEvidence); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.sql.QueryRow(`SELECT restore_generation FROM restore_state WHERE id=1`).Scan(&stateGeneration); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.sql.QueryRow(`SELECT restore_generation FROM recovery_journal_reconciliations WHERE evidence_id='evidence'`).Scan(&auditGeneration); err != nil {
+		t.Fatal(err)
+	}
+	if journalEvidence != "" || stateGeneration != "" || auditGeneration != "" {
+		t.Fatalf("migration invented provenance: journal=%q state=%q audit=%q", journalEvidence, stateGeneration, auditGeneration)
 	}
 }

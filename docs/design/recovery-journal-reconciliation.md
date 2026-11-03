@@ -56,12 +56,21 @@ Reconciliation succeeds only when all of these checks pass:
    conflicting, reordered, stale, future, mismatched, or tampered evidence is
    refused.
 5. Post-snapshot entries are imported with their original sequence and replayed
-   through the existing conservative deletion/revocation logic. Any replay
-   error leaves quarantine active and no successful verification record.
+   through the existing conservative deletion/revocation logic. If replay-time
+   member fencing fires a deletion-journal trigger, the generated suffix is
+   bound to this evidence ID in the same SQLite transaction as the authority
+   withdrawal. After an interruption, retry accepts only that exact
+   provenance-tagged suffix; an untagged or differently tagged extension is
+   still source divergence and fails closed. Any replay error leaves
+   quarantine active and no successful verification record.
 6. A successful result is recorded in the append-only
    `recovery_journal_reconciliations` audit table and projected into
    `restore_state` with evidence ID, source, head, coverage, verifier and time.
-   Repeating the same evidence is idempotent. Restart preserves the result.
+   Both records bind a random generation created for this particular restore.
+   Repeating the same evidence is idempotent only when the current generation,
+   snapshot, trust root, completed replay, audit and verification projection
+   all agree. An audit copied into a later backup cannot verify a new restore.
+   Restart preserves a completed result and can resume an interrupted replay.
 7. Reconciliation requires a fresh Console session for one currently admitted
    Owner. Administrator bearer credentials, Operators, Members and Agents are
    refused. The human authorization is necessary but is not journal freshness

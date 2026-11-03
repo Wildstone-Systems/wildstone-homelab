@@ -207,6 +207,92 @@ func decodeRecoveryJournalEvidence(body []byte) (RecoveryJournalEvidence, []byte
 	return evidence, payload, hex.EncodeToString(id[:]), err
 }
 
+func recoveryJournalHead(tx *sql.Tx, evidenceID string) (int64, error) {
+	if evidenceID == "" {
+		return 0, nil
+	}
+	var head int64
+	if err := tx.QueryRow(`SELECT COALESCE(MAX(seq),0) FROM deletion_journal`).Scan(&head); err != nil {
+		return 0, fmt.Errorf("recovery journal: reading replay journal head: %w", err)
+	}
+	return head, nil
+}
+
+// tagRecoveryJournalSuffix runs in the same transaction as the member
+// generation change that fired household_secret_person_revoked. A crash can
+// therefore commit both the authority withdrawal and this provenance, or
+// neither. Ordinary journal writers never set this internal field.
+func tagRecoveryJournalSuffix(tx *sql.Tx, after int64, evidenceID string) error {
+	if evidenceID == "" {
+		return nil
+	}
+	if _, err := tx.Exec(`UPDATE deletion_journal SET recovery_evidence_id=?
+		WHERE seq>? AND recovery_evidence_id=''`, evidenceID, after); err != nil {
+		return fmt.Errorf("recovery journal: binding replay-generated entries: %w", err)
+	}
+	return nil
+}
+
+func recoveryJournalSuffixMatches(q queryRower, signedHead int64, evidenceID string) error {
+	var total, matching int
+	if err := q.QueryRow(`SELECT COUNT(*), COALESCE(SUM(recovery_evidence_id=?),0)
+		FROM deletion_journal WHERE seq>?`, evidenceID, signedHead).Scan(&total, &matching); err != nil {
+		return err
+	}
+	if total != matching {
+		return fmt.Errorf("recovery journal: local journal extends beyond signed evidence without matching replay provenance")
+	}
+	return nil
+}
+
+type recoveryJournalAudit struct {
+	restoreGeneration, snapshotSHA256, snapshotAt, journalSource string
+	headSequence                                                 int64
+	headSHA256, coverageThrough, signerFingerprint               string
+	verifiedAt, verifiedBy                                       string
+	appliedCount                                                 int
+	evidenceJSON                                                 string
+}
+
+func loadRecoveryJournalAudit(q queryRower, evidenceID string) (recoveryJournalAudit, error) {
+	var a recoveryJournalAudit
+	err := q.QueryRow(`SELECT restore_generation,snapshot_sha256,snapshot_at,journal_source,
+		head_seq,head_sha256,coverage_through,signer_fingerprint,verified_at,verified_by,
+		applied_count,evidence_json FROM recovery_journal_reconciliations WHERE evidence_id=?`, evidenceID).
+		Scan(&a.restoreGeneration, &a.snapshotSHA256, &a.snapshotAt, &a.journalSource,
+			&a.headSequence, &a.headSHA256, &a.coverageThrough, &a.signerFingerprint,
+			&a.verifiedAt, &a.verifiedBy, &a.appliedCount, &a.evidenceJSON)
+	return a, err
+}
+
+// replayRecoveryJournalToStableHead accounts for rows created by replay-time
+// triggers before the verification checkpoint. The first pass performs the
+// authority withdrawal and atomically tags any generated suffix; the next
+// pass applies that suffix. A process interruption between passes is safe for
+// the same reason as one before the checkpoint: retry recognizes only rows
+// carrying this evidence id.
+func (db *DB) replayRecoveryJournalToStableHead(evidenceID string) (int, error) {
+	for {
+		var before, after int64
+		if err := db.sql.QueryRow(`SELECT COUNT(*) FROM deletion_journal`).Scan(&before); err != nil {
+			return 0, err
+		}
+		applied, err := db.reconcileRestore(evidenceID)
+		if err != nil {
+			return applied, err
+		}
+		if err := db.sql.QueryRow(`SELECT COUNT(*) FROM deletion_journal`).Scan(&after); err != nil {
+			return applied, err
+		}
+		if after < before {
+			return applied, fmt.Errorf("recovery journal: replay removed authority history")
+		}
+		if after == before {
+			return applied, nil
+		}
+	}
+}
+
 // ReconcileRestoreEvidence verifies independent, signed evidence, imports any
 // post-snapshot entries, replays the journal, and retains immutable audit
 // evidence.  It never releases restore quarantine.
@@ -220,15 +306,6 @@ func (db *DB) ReconcileRestoreEvidence(body []byte, trustedKey ed25519.PublicKey
 		return result, err
 	}
 	result = RecoveryJournalResult{EvidenceID: evidenceID, HeadSequence: evidence.HeadSequence, HeadSHA256: evidence.HeadSHA256}
-	var priorApplied int
-	err = db.sql.QueryRow(`SELECT applied_count FROM recovery_journal_reconciliations WHERE evidence_id=?`, evidenceID).Scan(&priorApplied)
-	if err == nil {
-		result.Applied, result.AlreadyVerified = priorApplied, true
-		return result, nil
-	}
-	if !errors.Is(err, sql.ErrNoRows) {
-		return result, err
-	}
 	signature, err := base64.StdEncoding.DecodeString(evidence.Signature)
 	if err != nil || !ed25519.Verify(trustedKey, payload, signature) {
 		return result, fmt.Errorf("recovery journal: signature verification failed")
@@ -242,6 +319,9 @@ func (db *DB) ReconcileRestoreEvidence(body []byte, trustedKey ed25519.PublicKey
 	state, err := db.GetRestoreState()
 	if err != nil || !state.Quarantined {
 		return result, fmt.Errorf("recovery journal: database is not in restore quarantine")
+	}
+	if state.RestoreGeneration == "" {
+		return result, fmt.Errorf("recovery journal: current restore has no generation identity")
 	}
 	if state.SnapshotSHA256 == "" || evidence.SnapshotSHA256 != state.SnapshotSHA256 || !evidence.SnapshotAt.Equal(state.SnapshotAt) {
 		return result, fmt.Errorf("recovery journal: evidence does not bind to this restored snapshot")
@@ -276,13 +356,67 @@ func (db *DB) ReconcileRestoreEvidence(body []byte, trustedKey ed25519.PublicKey
 	if int64(len(local)) < evidence.BaseSequence {
 		return result, fmt.Errorf("recovery journal: restored snapshot is missing its declared journal prefix")
 	}
-	if int64(len(local)) > evidence.HeadSequence {
-		return result, fmt.Errorf("recovery journal: local journal extends beyond unrecorded evidence")
+	signedLocal := int64(len(local))
+	if signedLocal > evidence.HeadSequence {
+		signedLocal = evidence.HeadSequence
 	}
-	for i := int64(0); i < int64(len(local)); i++ {
+	for i := int64(0); i < signedLocal; i++ {
 		if local[i] != evidence.Entries[i] {
 			return result, fmt.Errorf("recovery journal: local journal conflicts at sequence %d", i+1)
 		}
+	}
+	if int64(len(local)) > evidence.HeadSequence {
+		if err := recoveryJournalSuffixMatches(db.sql, evidence.HeadSequence, evidenceID); err != nil {
+			return result, err
+		}
+	}
+	canonical, _ := json.Marshal(evidence)
+	audit, auditErr := loadRecoveryJournalAudit(db.sql, evidenceID)
+	if auditErr == nil {
+		// Re-read the audit and projection under one immediate transaction.
+		// Otherwise a concurrent new restore could clear the projection after
+		// the checks above but before this idempotent success is returned.
+		tx, err := db.sql.Begin()
+		if err != nil {
+			return result, err
+		}
+		defer tx.Rollback()
+		state, err = getRestoreState(tx)
+		if err != nil {
+			return result, err
+		}
+		audit, err = loadRecoveryJournalAudit(tx, evidenceID)
+		if err != nil {
+			return result, fmt.Errorf("recovery journal: cached verification changed during validation: %w", err)
+		}
+		if err := recoveryJournalSuffixMatches(tx, evidence.HeadSequence, evidenceID); err != nil {
+			return result, err
+		}
+		projectionMatches := state.JournalCurrent && state.JournalEvidenceID == evidenceID &&
+			state.Quarantined && state.SnapshotSHA256 == evidence.SnapshotSHA256 &&
+			state.SnapshotAt.Equal(evidence.SnapshotAt) && state.RestoreGeneration != "" &&
+			state.JournalSource == evidence.JournalSource && state.JournalHeadSeq == evidence.HeadSequence &&
+			state.JournalHeadSHA256 == evidence.HeadSHA256 &&
+			state.JournalCoverageThrough.Equal(evidence.CoverageThrough) && !state.JournalVerifiedAt.IsZero() &&
+			state.JournalVerifiedBy == audit.verifiedBy && state.JournalAssertedBy == audit.verifiedBy &&
+			!state.ReplayedAt.IsZero() && state.ReplayedCount == audit.appliedCount
+		auditMatches := audit.restoreGeneration == state.RestoreGeneration &&
+			audit.snapshotSHA256 == evidence.SnapshotSHA256 && audit.snapshotAt == timeText(evidence.SnapshotAt) &&
+			audit.journalSource == evidence.JournalSource && audit.headSequence == evidence.HeadSequence &&
+			audit.headSHA256 == evidence.HeadSHA256 && audit.coverageThrough == timeText(evidence.CoverageThrough) &&
+			audit.signerFingerprint == signingFingerprint(trustedKey) && audit.evidenceJSON == string(canonical) &&
+			audit.verifiedAt == timeText(state.JournalVerifiedAt)
+		if !projectionMatches || !auditMatches {
+			return result, fmt.Errorf("recovery journal: cached verification does not belong to the current restore")
+		}
+		result.Applied, result.AlreadyVerified = audit.appliedCount, true
+		return result, nil
+	}
+	if !errors.Is(auditErr, sql.ErrNoRows) {
+		return result, auditErr
+	}
+	if state.JournalCurrent || state.JournalEvidenceID != "" || !state.JournalVerifiedAt.IsZero() {
+		return result, fmt.Errorf("recovery journal: current verification projection conflicts with the supplied evidence")
 	}
 	for i := int64(len(local)); i < evidence.HeadSequence; i++ {
 		e := evidence.Entries[i]
@@ -291,27 +425,44 @@ func (db *DB) ReconcileRestoreEvidence(body []byte, trustedKey ed25519.PublicKey
 			return result, fmt.Errorf("recovery journal: importing sequence %d: %w", e.Sequence, err)
 		}
 	}
-	applied, err := db.ReconcileRestore()
+	applied, err := db.replayRecoveryJournalToStableHead(evidenceID)
 	if err != nil {
 		return result, err
 	}
-	canonical, _ := json.Marshal(evidence)
+	if err := recoveryJournalSuffixMatches(db.sql, evidence.HeadSequence, evidenceID); err != nil {
+		return result, err
+	}
+	if db.recoveryJournalTestHook != nil {
+		if err := db.recoveryJournalTestHook(); err != nil {
+			return result, err
+		}
+	}
 	tx, err := db.sql.Begin()
 	if err != nil {
 		return result, err
 	}
 	defer tx.Rollback()
+	if err := recoveryJournalSuffixMatches(tx, evidence.HeadSequence, evidenceID); err != nil {
+		return result, err
+	}
 	_, err = tx.Exec(`INSERT INTO recovery_journal_reconciliations
-		(evidence_id,snapshot_sha256,snapshot_at,journal_source,custody,base_seq,head_seq,head_sha256,coverage_through,source_fenced_at,signer_fingerprint,verified_at,verified_by,applied_count,evidence_json)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, evidenceID, evidence.SnapshotSHA256, timeText(evidence.SnapshotAt),
+		(evidence_id,snapshot_sha256,snapshot_at,journal_source,custody,base_seq,head_seq,head_sha256,coverage_through,source_fenced_at,signer_fingerprint,verified_at,verified_by,applied_count,evidence_json,restore_generation)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, evidenceID, evidence.SnapshotSHA256, timeText(evidence.SnapshotAt),
 		evidence.JournalSource, evidence.Custody, evidence.BaseSequence, evidence.HeadSequence, evidence.HeadSHA256,
 		timeText(evidence.CoverageThrough), timeText(evidence.SourceFencedAt), evidence.SignerFingerprint,
-		timeText(verifiedAt), verifiedBy, applied, string(canonical))
+		timeText(verifiedAt), verifiedBy, applied, string(canonical), state.RestoreGeneration)
 	if err == nil {
-		_, err = tx.Exec(`UPDATE restore_state SET journal_current=1,journal_asserted_by=?,journal_evidence_id=?,
-			journal_source=?,journal_head_seq=?,journal_head_sha256=?,journal_coverage_through=?,journal_verified_at=?,journal_verified_by=? WHERE id=1 AND quarantined=1`,
+		var update sql.Result
+		update, err = tx.Exec(`UPDATE restore_state SET journal_current=1,journal_asserted_by=?,journal_evidence_id=?,
+			journal_source=?,journal_head_seq=?,journal_head_sha256=?,journal_coverage_through=?,journal_verified_at=?,journal_verified_by=?
+			WHERE id=1 AND quarantined=1 AND restore_generation=? AND journal_current=0 AND journal_evidence_id=''`,
 			verifiedBy, evidenceID, evidence.JournalSource, evidence.HeadSequence, evidence.HeadSHA256,
-			timeText(evidence.CoverageThrough), timeText(verifiedAt), verifiedBy)
+			timeText(evidence.CoverageThrough), timeText(verifiedAt), verifiedBy, state.RestoreGeneration)
+		if err == nil {
+			if n, rowsErr := update.RowsAffected(); rowsErr != nil || n != 1 {
+				err = fmt.Errorf("current restore changed before verification checkpoint")
+			}
+		}
 	}
 	if err != nil {
 		return result, fmt.Errorf("recovery journal: recording verification: %w", err)
