@@ -1,7 +1,10 @@
 # Management-independent Keystone recovery
 
 Status: repository contract for #276 plus the repository-only signed journal
-reconciliation and quarantine-release contracts from #284/#285. The isolated
+reconciliation, quarantine-release, promotion, and post-promotion restart
+contracts from #284–#287. See the
+[post-promotion validation](../design/post-promotion-recovery-validation.md).
+The isolated
 Kubernetes exercise below requires separate Owner approval. This is not
 household migration, off-host acceptance, live quarantine-release acceptance,
 Flux-owned management acceptance, or HA.

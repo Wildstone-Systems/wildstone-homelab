@@ -1,6 +1,7 @@
 package runtimedb
 
 import (
+	"errors"
 	"testing"
 	"time"
 )
@@ -111,6 +112,42 @@ func TestRoutineEffectClaimDoesNotRepeatAfterAStop(t *testing.T) {
 	got, err := db.GetRoutineRun(run.ID)
 	if err != nil || got.EffectState != "confirmed" || got.EffectSummary != "sent before stop" {
 		t.Fatalf("committed effect lost after stop: %+v %v", got, err)
+	}
+}
+
+func TestFailedCoordinatorStartupRecoveryRevokesProcessExecutionAuthority(t *testing.T) {
+	db, _, _ := secretFixture(t)
+	plan, _ := approvedResourceRoutine(t, db, RoutineResources{}, AudienceHousehold)
+	if _, err := db.AcquireCoordinator("failed-startup-test"); err != nil {
+		t.Fatal(err)
+	}
+	event, _, err := db.AppendHouseholdEvent(HouseholdEvent{EventID: "failed-startup-trigger", Source: "test-publisher",
+		Type: "person.left_home", OccurredAt: time.Now().UTC(), Subject: "sam"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, _, err := db.ClaimRoutineRun(plan, event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claimed, err := db.ClaimRoutineEffect(run.ID); err != nil || !claimed {
+		t.Fatalf("effect claim = %v, %v", claimed, err)
+	}
+	if _, err := db.sql.Exec(`CREATE TRIGGER fail_startup_recovery
+		BEFORE UPDATE OF effect_state ON routine_runs
+		WHEN OLD.effect_state='claimed'
+		BEGIN SELECT RAISE(ABORT,'injected startup recovery failure'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.RecoverCoordinatorStartup(); err == nil {
+		t.Fatal("injected startup recovery failure was ignored")
+	}
+	if err := db.CheckHouseholdExecution(); !errors.Is(err, ErrCoordinatorFenced) {
+		t.Fatalf("failed startup retained process execution authority: %v", err)
+	}
+	got, err := db.GetRoutineRun(run.ID)
+	if err != nil || got.State != "running" || got.EffectState != "claimed" {
+		t.Fatalf("failed recovery changed uncertain effect: %+v, %v", got, err)
 	}
 }
 

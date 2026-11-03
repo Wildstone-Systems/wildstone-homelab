@@ -145,6 +145,28 @@ func (db *DB) AcquireCoordinator(holder string) (CoordinatorLease, error) {
 	return lease, nil
 }
 
+// RecoverCoordinatorStartup reconciles every durable execution checkpoint
+// that must be settled before a newly acquired coordinator is allowed to wire
+// task, delivery, or reviewed-routine dispatch.
+//
+// Acquisition and recovery are deliberately separate operations. The caller
+// must first acquire the exact durable holder and epoch (including the epoch
+// authorized by a restored-coordinator promotion), then call this method
+// before exposing any execution surface. Each recovery operation is
+// idempotent, so a crash during this sequence is safe to retry. Any error must
+// fail startup; possession of the lease alone is not execution readiness.
+func (db *DB) RecoverCoordinatorStartup() error {
+	if err := db.RecoverInterruptedButlerAttempts(); err != nil {
+		db.executionLease.Store(nil)
+		return fmt.Errorf("recovering interrupted Agent work: %w", err)
+	}
+	if err := db.RecoverClaimedRoutineEffects(); err != nil {
+		db.executionLease.Store(nil)
+		return fmt.Errorf("recovering interrupted reviewed routine effects: %w", err)
+	}
+	return nil
+}
+
 // PromoteCoordinator is the explicit, fenced takeover an operator runs
 // after establishing that the previous Keystone is gone (ADR-W030 A11).
 //
