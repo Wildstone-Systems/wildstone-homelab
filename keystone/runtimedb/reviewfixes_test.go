@@ -292,8 +292,8 @@ func TestReconciliationRevokesACredentialARestoredPlacementStillHolds(t *testing
 	if len(pending) != 1 || pending[0] != "node-a" {
 		t.Fatalf("unproven removals = %v, want node-a fenced and unproven", pending)
 	}
-	installSyntheticRecoveryEvidence(t, db)
-	if err := db.ReleaseRestoreQuarantine("root-admin"); err != nil {
+	journalTrust := installSyntheticRecoveryEvidence(t, db)
+	if _, err := db.ReleaseRestoreQuarantine("root-admin", journalTrust); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -346,20 +346,20 @@ func TestQuarantineHoldsPushesThatCameBackWithTheRestore(t *testing.T) {
 		t.Fatalf("stopped dispatch emitted restored messages: %v %v", got, err)
 	}
 
-	// And the push is not lost — it is waiting, and arrives once the
-	// restore is reconciled.
+	// And the push is not lost. Release alone still cannot hand it to an
+	// adapter; it waits for the separately promoted coordinator (#286).
 	if err := db.AssertJournalCurrent("root-admin"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.ReconcileRestore(); err != nil {
 		t.Fatal(err)
 	}
-	installSyntheticRecoveryEvidence(t, db)
-	if err := db.ReleaseRestoreQuarantine("root-admin"); err != nil {
+	journalTrust := installSyntheticRecoveryEvidence(t, db)
+	if _, err := db.ReleaseRestoreQuarantine("root-admin", journalTrust); err != nil {
 		t.Fatal(err)
 	}
-	after, _ := db.ChatOutboundAfter(conn, 0, 10)
-	if len(after) != 2 {
-		t.Fatalf("after release the adapter saw %d messages, want the push back: %+v", len(after), after)
+	after, err := db.ChatOutboundAfter(conn, 0, 10)
+	if !errors.Is(err, ErrCoordinatorFenced) || len(after) != 0 {
+		t.Fatalf("release alone exposed queued messages: %d %+v err=%v", len(after), after, err)
 	}
 }

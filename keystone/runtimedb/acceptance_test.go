@@ -194,13 +194,13 @@ func TestPartCAcceptance(t *testing.T) {
 
 		// Release requires BOTH the assertion and the replay. An
 		// administrator's word alone is not evidence.
-		if err := db.ReleaseRestoreQuarantine("root-admin"); err == nil {
+		if _, err := db.ReleaseRestoreQuarantine("root-admin", nil); err == nil {
 			t.Fatal("quarantine was released with neither assertion nor replay")
 		}
 		if err := db.AssertJournalCurrent("root-admin"); err != nil {
 			t.Fatal(err)
 		}
-		if err := db.ReleaseRestoreQuarantine("root-admin"); err == nil {
+		if _, err := db.ReleaseRestoreQuarantine("root-admin", nil); err == nil {
 			t.Fatal("quarantine was released on an administrator's word alone")
 		}
 
@@ -211,8 +211,8 @@ func TestPartCAcceptance(t *testing.T) {
 		if applied == 0 {
 			t.Fatal("reconciliation applied nothing, so it proved nothing")
 		}
-		installSyntheticRecoveryEvidence(t, db)
-		if err := db.ReleaseRestoreQuarantine("root-admin"); err != nil {
+		journalTrust := installSyntheticRecoveryEvidence(t, db)
+		if _, err := db.ReleaseRestoreQuarantine("root-admin", journalTrust); err != nil {
 			t.Fatalf("releasing after a full reconciliation: %v", err)
 		}
 
@@ -241,11 +241,18 @@ func TestPartCAcceptance(t *testing.T) {
 
 	// ---- 3. Uncertain work stays paused across a restore.
 	t.Run("uncertain work is not resumed by a restore", func(t *testing.T) {
-		uncertain := newAcceptanceTask(t, db, admin, ButlerAudiencePrivate, "did that send?")
-		if err := db.TransitionButlerTask(uncertain, ButlerTaskRunning, "", ""); err != nil {
+		recoveryDB := openWith(t, admin)
+		if err := recoveryDB.AdmitButlerMember(admin, "root-admin"); err != nil {
 			t.Fatal(err)
 		}
-		step, err := db.AppendButlerTaskStep(uncertain, ButlerTaskStep{
+		if _, err := recoveryDB.AcquireCoordinator("uncertain-fixture"); err != nil {
+			t.Fatal(err)
+		}
+		uncertain := newAcceptanceTask(t, recoveryDB, admin, ButlerAudiencePrivate, "did that send?")
+		if err := recoveryDB.TransitionButlerTask(uncertain, ButlerTaskRunning, "", ""); err != nil {
+			t.Fatal(err)
+		}
+		step, err := recoveryDB.AppendButlerTaskStep(uncertain, ButlerTaskStep{
 			Kind: ButlerStepTool, Name: "send_message",
 		})
 		if err != nil {
@@ -253,56 +260,67 @@ func TestPartCAcceptance(t *testing.T) {
 		}
 		// The attempt went out and never came back: the outcome is
 		// unknown, which is exactly what must not be retried.
-		if _, err := db.StartButlerAttempt(step); err != nil {
+		if _, err := recoveryDB.StartButlerAttempt(step); err != nil {
 			t.Fatal(err)
 		}
 
-		if err := db.EnterRestoreQuarantine("restored again", time.Now().Add(-time.Hour)); err != nil {
+		if err := recoveryDB.EnterRestoreQuarantine("restored again", time.Now().Add(-time.Hour)); err != nil {
 			t.Fatal(err)
 		}
-		if err := db.AssertJournalCurrent("root-admin"); err != nil {
+		if err := recoveryDB.AssertJournalCurrent("root-admin"); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := db.ReconcileRestore(); err != nil {
+		if _, err := recoveryDB.ReconcileRestore(); err != nil {
 			t.Fatal(err)
 		}
-		installSyntheticRecoveryEvidence(t, db)
-		if err := db.ReleaseRestoreQuarantine("root-admin"); err != nil {
+		journalTrust := installSyntheticRecoveryEvidence(t, recoveryDB)
+		if _, err := recoveryDB.ReleaseRestoreQuarantine("root-admin", journalTrust); err != nil {
 			t.Fatal(err)
 		}
 
-		task, err := db.GetButlerTask(uncertain)
+		task, err := recoveryDB.GetButlerTask(uncertain)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if task.State == ButlerTaskRunning {
 			t.Fatal("a restore resumed work whose outcome was unknown")
 		}
+		if err := recoveryDB.CheckHouseholdExecution(); !errors.Is(err, ErrCoordinatorFenced) {
+			t.Fatalf("release made uncertain work dispatchable: %v", err)
+		}
 	})
 
 	// ---- 4. The previous coordinator cannot dispatch after promotion.
 	t.Run("promotion fences the previous coordinator", func(t *testing.T) {
-		if _, err := db.AcquireCoordinator("keystone-a"); err != nil {
+		// Coordinator promotion itself is covered on an ordinary database.
+		// A restored generation deliberately cannot acquire either holder
+		// merely because #285 released data quarantine; #286 owns that bridge.
+		coordinatorDB := open(t)
+		if _, err := coordinatorDB.AcquireCoordinator("keystone-a"); err != nil {
 			t.Fatal(err)
 		}
-		if err := db.CheckCoordinator("keystone-a", 1); err != nil {
+		if err := coordinatorDB.CheckCoordinator("keystone-a", 1); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := db.PromoteCoordinator("keystone-b"); err != nil {
+		if _, err := coordinatorDB.PromoteCoordinator("keystone-b"); err != nil {
 			t.Fatal(err)
 		}
-		if err := db.CheckCoordinator("keystone-a", 1); !errors.Is(err, ErrCoordinatorFenced) {
+		if err := coordinatorDB.CheckCoordinator("keystone-a", 1); !errors.Is(err, ErrCoordinatorFenced) {
 			t.Fatalf("the previous coordinator can still dispatch: %v", err)
 		}
 	})
 
 	// ---- 5. The standing refusals still hold, end to end.
 	t.Run("the standing refusals hold", func(t *testing.T) {
-		// A household tool ceiling cannot be widened by a control.
-		if err := db.SetToolControl(AgentClassMember, "propose_change", ToolEnabled, "root-admin", ""); err != nil {
+		policyDB := openWith(t, admin)
+		if err := policyDB.AdmitButlerMember(admin, "root-admin"); err != nil {
 			t.Fatal(err)
 		}
-		d, err := db.ResolveToolAuthority(ToolQuery{
+		// A household tool ceiling cannot be widened by a control.
+		if err := policyDB.SetToolControl(AgentClassMember, "propose_change", ToolEnabled, "root-admin", ""); err != nil {
+			t.Fatal(err)
+		}
+		d, err := policyDB.ResolveToolAuthority(ToolQuery{
 			AgentClass: AgentClassMember, Tool: "propose_change", Structural: false,
 		})
 		if err != nil {
@@ -319,20 +337,20 @@ func TestPartCAcceptance(t *testing.T) {
 			{Name: "kitchen-box", Kind: ModelLocal, Provider: "ollama", Readiness: ModelReady, Enabled: true},
 			{Name: "cloud", Kind: ModelCloud, Provider: "anthropic", Readiness: ModelReady, Enabled: true},
 		} {
-			if err := db.UpsertModel(r, "root-admin"); err != nil {
+			if err := policyDB.UpsertModel(r, "root-admin"); err != nil {
 				t.Fatal(err)
 			}
 		}
 		for _, b := range []struct{ name, route string }{
 			{"in-house", "kitchen-box"}, {"outside", "cloud"},
 		} {
-			if _, err := db.CreateButler(Butler{
+			if _, err := policyDB.CreateButler(Butler{
 				Name: b.name, Surface: ButlerSurfaceFamily, AgentClass: AgentClassMember, Model: b.route,
 			}, admin); err != nil {
 				t.Fatal(err)
 			}
 		}
-		held, err := db.RecordButlerMemory("in-house", MemoryRecord{
+		held, err := policyDB.RecordButlerMemory("in-house", MemoryRecord{
 			Kind: MemoryFact, Subject: admin, Content: "material that must not leave",
 			Audience: ButlerAudienceShared, PermissionLabel: "household", Owner: "household",
 			Author: admin, SourceKind: "conversation", SourceID: "acc-local",
@@ -340,7 +358,7 @@ func TestPartCAcceptance(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		reached, err := db.RetrieveMemory(MemoryQuery{Reader: admin, Butler: "outside"})
+		reached, err := policyDB.RetrieveMemory(MemoryQuery{Reader: admin, Butler: "outside"})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -349,26 +367,26 @@ func TestPartCAcceptance(t *testing.T) {
 				t.Fatal("local-only material reached a cloud-model butler")
 			}
 		}
-		if own, _ := db.RetrieveMemory(MemoryQuery{Reader: admin, Butler: "in-house"}); len(own) == 0 {
+		if own, _ := policyDB.RetrieveMemory(MemoryQuery{Reader: admin, Butler: "in-house"}); len(own) == 0 {
 			t.Fatal("the butler holding the material could not read it, so the check above proves nothing")
 		}
 		// A task cannot complete without evidence.
-		bare := newAcceptanceTask(t, db, admin, ButlerAudiencePrivate, "nothing")
-		if err := db.TransitionButlerTask(bare, ButlerTaskCompleted, "", ""); err == nil {
+		bare := newAcceptanceTask(t, policyDB, admin, ButlerAudiencePrivate, "nothing")
+		if err := policyDB.TransitionButlerTask(bare, ButlerTaskCompleted, "", ""); err == nil {
 			t.Fatal("a task completed with no evidence")
 		}
 		// Silence is not approval.
-		raised, err := db.RaiseNotice(NoticeRequest{
+		raised, err := policyDB.RaiseNotice(NoticeRequest{
 			Kind: "approval", Recipient: admin, DedupeKey: "acc-1", Asks: true,
 			TTL: time.Millisecond,
 		}, DefaultButlerSettings(), time.Now().Add(-time.Hour))
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := db.ExpireNotices(time.Now()); err != nil {
+		if _, err := policyDB.ExpireNotices(time.Now()); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := db.AnswerNotice(raised.Seq, "yes", admin); !errors.Is(err, ErrNoticeNotAnswerable) {
+		if _, err := policyDB.AnswerNotice(raised.Seq, "yes", admin); !errors.Is(err, ErrNoticeNotAnswerable) {
 			t.Fatal("an expired question was answered")
 		}
 	})

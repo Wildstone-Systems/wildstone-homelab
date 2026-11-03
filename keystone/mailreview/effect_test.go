@@ -7,6 +7,12 @@ package mailreview
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -228,15 +234,37 @@ func TestACorrectionIsAnExactUpdateProposalNeverASilentEdit(t *testing.T) {
 	}
 }
 
-// Epic #326 S08: a restored database is quarantined, and the reconciler
-// neither looks at a calendar nor re-offers a review on a Person's behalf
-// until the journal has been replayed and the quarantine released.
-func TestTheReconcilerWaitsForTheQuarantineToLift(t *testing.T) {
+// Epic #326 S08 and #285: release removes the data quarantine only. The
+// reconciler still cannot look at a calendar or re-offer a review until the
+// replacement coordinator is separately promoted.
+func TestTheReconcilerWaitsForCoordinatorPromotionAfterQuarantineRelease(t *testing.T) {
 	e := newEnv(t)
 	c := e.record(t, "mfp1_a", draft(schoolNight()))
 	_, tokens := e.tokens(t, c.ID)
 	claimOnly(t, e, c.ID, tokens["add"])
+	snapshot := filepath.Join(t.TempDir(), "snapshot.db")
+	if err := e.db.BackupTo(snapshot); err != nil {
+		t.Fatal(err)
+	}
+	pub, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fencedAt := time.Now().UTC().Add(time.Hour)
+	evidence, err := e.db.BuildRecoveryJournalEvidence(snapshot, "mail-test-source", "test independent custody",
+		now, fencedAt, fencedAt.Add(time.Minute), privateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(data)
 	if err := e.db.EnterRestoreQuarantine("restored from last night", now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.db.ExecForTest(`UPDATE restore_state SET snapshot_sha256=? WHERE id=1`, hex.EncodeToString(digest[:])); err != nil {
 		t.Fatal(err)
 	}
 	e.clock.advance(3 * time.Minute)
@@ -250,34 +278,17 @@ func TestTheReconcilerWaitsForTheQuarantineToLift(t *testing.T) {
 	if after, _ := e.db.ListNotices(10, runtimedb.NoticeFilter{Recipient: "sam"}); len(after) != len(notices) {
 		t.Fatal("the reconciler re-offered a review under quarantine")
 	}
-	if err := e.db.AssertJournalCurrent("mika"); err != nil {
+	if _, err := e.db.ReconcileRestoreEvidence(evidence, pub, "mika", fencedAt.Add(2*time.Minute)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.db.ReconcileRestore(); err != nil {
-		t.Fatal(err)
-	}
-	// This test is about mail effect recovery, not #284 signature
-	// verification. Install explicit test-only evidence before crossing the
-	// production schema's stricter release trigger.
-	stamp := now.UTC().Format(time.RFC3339Nano)
-	if _, err := e.db.ExecForTest(`INSERT INTO recovery_journal_reconciliations
-		(evidence_id,snapshot_sha256,snapshot_at,journal_source,custody,base_seq,head_seq,head_sha256,
-		 coverage_through,source_fenced_at,signer_fingerprint,verified_at,verified_by,applied_count,evidence_json)
-		VALUES('mail-test-evidence','test-snapshot',?,'test-source','test-only fixture',0,0,'test-head',?,?,
-		'test-signer',?,'mika',0,'{}')`, stamp, stamp, stamp, stamp); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := e.db.ExecForTest(`UPDATE restore_state SET journal_evidence_id='mail-test-evidence',journal_verified_at=? WHERE id=1`, stamp); err != nil {
-		t.Fatal(err)
-	}
-	if err := e.db.ReleaseRestoreQuarantine("mika"); err != nil {
+	if _, err := e.db.ReleaseRestoreQuarantine("mika", pub); err != nil {
 		t.Fatal(err)
 	}
 	if err := e.eng.Reconcile(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if effects, _ := e.db.ListMailEffects("sam", c.ID); len(effects) != 1 || effects[0].State != runtimedb.MailEffectReturned {
-		t.Fatalf("after release the interrupted write was not returned to review: %+v", effects)
+	if effects, _ := e.db.ListMailEffects("sam", c.ID); len(effects) != 1 || effects[0].State != runtimedb.MailEffectDispatching {
+		t.Fatalf("release alone settled an interrupted write without coordinator promotion: %+v", effects)
 	}
 	noEvent(t, e)
 }

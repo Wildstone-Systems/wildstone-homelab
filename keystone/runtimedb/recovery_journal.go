@@ -62,6 +62,18 @@ type RecoveryJournalResult struct {
 	AlreadyVerified bool   `json:"alreadyVerified"`
 }
 
+// RestoreReleaseResult is the durable decision returned by a journal-gated
+// quarantine release. AlreadyReleased is true only when the same current
+// restore generation and evidence still validate; it never turns an unrelated
+// unquarantined database into an idempotent success.
+type RestoreReleaseResult struct {
+	RestoreGeneration string    `json:"restoreGeneration"`
+	EvidenceID        string    `json:"evidenceId"`
+	ReleasedAt        time.Time `json:"releasedAt"`
+	ReleasedBy        string    `json:"releasedBy"`
+	AlreadyReleased   bool      `json:"alreadyReleased"`
+}
+
 func journalSigningPayload(e RecoveryJournalEvidence) ([]byte, error) {
 	e.Signature = ""
 	return json.Marshal(e)
@@ -471,5 +483,119 @@ func (db *DB) ReconcileRestoreEvidence(body []byte, trustedKey ed25519.PublicKey
 		return result, err
 	}
 	result.Applied = applied
+	return result, nil
+}
+
+// ReleaseRestoreQuarantine revalidates the durable #284 evidence under the
+// currently installed custodian trust root and atomically records an explicit
+// Owner release. It does not acquire, promote, or restore coordinator
+// authority. A later restart remains execution-fenced until #286's distinct
+// promotion transition has occurred.
+func (db *DB) ReleaseRestoreQuarantine(by string, trustedKey ed25519.PublicKey) (RestoreReleaseResult, error) {
+	var result RestoreReleaseResult
+	if by == "" {
+		return result, fmt.Errorf("runtimedb: releasing quarantine needs the current Owner who requested it")
+	}
+	if len(trustedKey) != ed25519.PublicKeySize {
+		return result, fmt.Errorf("runtimedb: releasing quarantine requires the preserved journal custodian trust root")
+	}
+	tx, err := db.sql.Begin()
+	if err != nil {
+		return result, fmt.Errorf("runtimedb: beginning quarantine release: %w", err)
+	}
+	defer tx.Rollback()
+
+	state, err := getRestoreState(tx)
+	if err != nil {
+		return result, err
+	}
+	if state.RestoreGeneration == "" || state.SnapshotSHA256 == "" || state.JournalEvidenceID == "" {
+		return result, fmt.Errorf("runtimedb: quarantine release requires a uniquely identified restore and verified journal evidence")
+	}
+	if !state.JournalCurrent || state.ReplayedAt.IsZero() || state.JournalVerifiedAt.IsZero() {
+		return result, fmt.Errorf("runtimedb: quarantine release requires completed journal verification and replay")
+	}
+	audit, err := loadRecoveryJournalAudit(tx, state.JournalEvidenceID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return result, fmt.Errorf("runtimedb: quarantine release evidence audit is missing")
+	}
+	if err != nil {
+		return result, err
+	}
+	evidence, payload, evidenceID, err := decodeRecoveryJournalEvidence([]byte(audit.evidenceJSON))
+	if err != nil {
+		return result, fmt.Errorf("runtimedb: quarantine release evidence audit is invalid: %w", err)
+	}
+	signature, err := base64.StdEncoding.DecodeString(evidence.Signature)
+	if err != nil || !ed25519.Verify(trustedKey, payload, signature) {
+		return result, fmt.Errorf("runtimedb: quarantine release journal signature does not verify under the current trust root")
+	}
+	if evidenceID != state.JournalEvidenceID || evidence.SignerFingerprint != signingFingerprint(trustedKey) ||
+		audit.signerFingerprint != signingFingerprint(trustedKey) {
+		return result, fmt.Errorf("runtimedb: quarantine release journal signer does not match the current trust root")
+	}
+	if evidence.Format != RecoveryJournalEvidenceFormat || !evidence.Final || evidence.JournalSource == "" || evidence.Custody == "" ||
+		evidence.SourceFencedAt.IsZero() || evidence.SourceFencedAt.Before(evidence.SnapshotAt) ||
+		evidence.CoverageThrough.Before(evidence.SourceFencedAt) || evidence.GeneratedAt.Before(evidence.CoverageThrough) {
+		return result, fmt.Errorf("runtimedb: quarantine release requires terminal evidence from an independently fenced source")
+	}
+	if evidence.HeadSequence != int64(len(evidence.Entries)) || evidence.BaseSequence < 0 || evidence.BaseSequence > evidence.HeadSequence {
+		return result, fmt.Errorf("runtimedb: quarantine release evidence sequence bounds are incomplete")
+	}
+	headHash, err := chainJournal(evidence.Entries)
+	if err != nil || headHash != evidence.HeadSHA256 {
+		return result, fmt.Errorf("runtimedb: quarantine release evidence head integrity check failed")
+	}
+	baseHash, err := chainJournal(evidence.Entries[:evidence.BaseSequence])
+	if err != nil || baseHash != evidence.BaseSHA256 {
+		return result, fmt.Errorf("runtimedb: quarantine release evidence snapshot prefix check failed")
+	}
+	canonical, _ := json.Marshal(evidence)
+	projectionMatches := state.SnapshotSHA256 == evidence.SnapshotSHA256 && state.SnapshotAt.Equal(evidence.SnapshotAt) &&
+		state.JournalSource == evidence.JournalSource && state.JournalHeadSeq == evidence.HeadSequence &&
+		state.JournalHeadSHA256 == evidence.HeadSHA256 && state.JournalCoverageThrough.Equal(evidence.CoverageThrough) &&
+		state.JournalVerifiedBy == audit.verifiedBy && state.JournalAssertedBy == audit.verifiedBy &&
+		state.ReplayedCount == audit.appliedCount
+	auditMatches := audit.restoreGeneration == state.RestoreGeneration && audit.snapshotSHA256 == evidence.SnapshotSHA256 &&
+		audit.snapshotAt == timeText(evidence.SnapshotAt) && audit.journalSource == evidence.JournalSource &&
+		audit.headSequence == evidence.HeadSequence && audit.headSHA256 == evidence.HeadSHA256 &&
+		audit.coverageThrough == timeText(evidence.CoverageThrough) && audit.evidenceJSON == string(canonical) &&
+		audit.verifiedAt == timeText(state.JournalVerifiedAt)
+	if !projectionMatches || !auditMatches {
+		return result, fmt.Errorf("runtimedb: quarantine release evidence does not match the current restore generation")
+	}
+	if err := recoveryJournalSuffixMatches(tx, evidence.HeadSequence, evidenceID); err != nil {
+		return result, err
+	}
+
+	result = RestoreReleaseResult{RestoreGeneration: state.RestoreGeneration, EvidenceID: evidenceID}
+	if !state.Quarantined {
+		if state.ReleasedAt.IsZero() || state.ReleasedBy == "" {
+			return RestoreReleaseResult{}, fmt.Errorf("runtimedb: database is not quarantined and has no matching release decision")
+		}
+		result.ReleasedAt, result.ReleasedBy, result.AlreadyReleased = state.ReleasedAt, state.ReleasedBy, true
+		return result, nil
+	}
+	if !state.ReleasedAt.IsZero() || state.ReleasedBy != "" {
+		return RestoreReleaseResult{}, fmt.Errorf("runtimedb: current restore has a conflicting release projection")
+	}
+	releasedAt := now()
+	update, err := tx.Exec(`UPDATE restore_state SET quarantined=0,released_at=?,released_by=?
+		WHERE id=1 AND quarantined=1 AND restore_generation=? AND journal_evidence_id=? AND released_at=''`,
+		releasedAt, by, state.RestoreGeneration, evidenceID)
+	if err != nil {
+		return RestoreReleaseResult{}, fmt.Errorf("runtimedb: releasing restore quarantine: %w", err)
+	}
+	if n, rowsErr := update.RowsAffected(); rowsErr != nil || n != 1 {
+		return RestoreReleaseResult{}, fmt.Errorf("runtimedb: current restore changed before quarantine release")
+	}
+	if err := tx.Commit(); err != nil {
+		return RestoreReleaseResult{}, fmt.Errorf("runtimedb: committing quarantine release: %w", err)
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, releasedAt)
+	if err != nil {
+		return RestoreReleaseResult{}, err
+	}
+	result.ReleasedAt, result.ReleasedBy = parsed, by
 	return result, nil
 }

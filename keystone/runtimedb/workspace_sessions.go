@@ -427,17 +427,6 @@ func (db *DB) RecoverWorkspaceWrites() (int64, error) {
 // Compare the acquired process epoch under the same SQLite write lock as the
 // transition. Promotion cannot slip between this check and metadata commit.
 func (db *DB) checkWorkspaceExecutionTx(tx *sql.Tx) error {
-	lease := db.executionLease.Load()
-	if lease == nil {
-		return ErrCoordinatorFenced
-	}
-	current, err := readCoordinator(tx)
-	if err != nil {
-		return err
-	}
-	if current.Holder != lease.Holder || current.Epoch != lease.Epoch {
-		return ErrCoordinatorFenced
-	}
 	var quarantined, stopped int
 	if err := tx.QueryRow(`SELECT COALESCE((SELECT quarantined FROM restore_state WHERE id=1),0)`).Scan(&quarantined); err != nil {
 		return err
@@ -450,6 +439,17 @@ func (db *DB) checkWorkspaceExecutionTx(tx *sql.Tx) error {
 	}
 	if stopped != 0 {
 		return ErrHouseholdStopped
+	}
+	lease := db.executionLease.Load()
+	if lease == nil {
+		return ErrCoordinatorFenced
+	}
+	current, err := readCoordinator(tx)
+	if err != nil {
+		return err
+	}
+	if current.Holder != lease.Holder || current.Epoch != lease.Epoch {
+		return ErrCoordinatorFenced
 	}
 	return nil
 }

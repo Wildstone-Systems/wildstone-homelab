@@ -139,14 +139,14 @@ func actionVerb(kind, action string) string {
 // only a new approval sends it again — still under If-None-Match on the
 // same UID, so it can never make a second event.
 //
-// It does nothing while a restored database is quarantined (epic #326
-// S08): an effect the snapshot recorded as dispatching is settled only
-// after the deletion journal has been replayed and the quarantine
-// released, so a restore cannot re-offer a review — or look at a
-// calendar on a Person's behalf — before their authority is known.
+// It does nothing without this process's current coordinator authority. A
+// restore revokes that authority before quarantine is released, so release
+// alone cannot re-offer a review or look at a calendar on a Person's behalf.
+// Post-restore execution waits for the separate promoted-epoch restart.
 func (e *Engine) Reconcile(ctx context.Context) error {
-	if err := e.DB.CheckQuarantine(); err != nil {
-		if errors.Is(err, runtimedb.ErrQuarantined) {
+	if err := e.DB.CheckHouseholdExecution(); err != nil {
+		if errors.Is(err, runtimedb.ErrQuarantined) || errors.Is(err, runtimedb.ErrCoordinatorFenced) ||
+			errors.Is(err, runtimedb.ErrCoordinatorRestoreFenced) {
 			return nil
 		}
 		return err

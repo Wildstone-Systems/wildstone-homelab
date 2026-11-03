@@ -190,7 +190,7 @@ func TestReviewedRoutineRecoveryContract(t *testing.T) {
 	if err != nil || !initialized || cursor == 0 {
 		t.Fatalf("restored cursor = %d initialized=%v err=%v", cursor, initialized, err)
 	}
-	if err := restored.CheckHouseholdExecution(); !errors.Is(err, runtimedb.ErrCoordinatorFenced) {
-		t.Fatalf("restore-alongside execution = %v, want coordinator fence", err)
+	if err := restored.CheckHouseholdExecution(); !errors.Is(err, runtimedb.ErrQuarantined) {
+		t.Fatalf("restore-alongside execution = %v, want quarantine before release", err)
 	}
 }

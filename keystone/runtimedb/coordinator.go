@@ -31,6 +31,12 @@ var ErrCoordinatorHeld = errors.New("runtimedb: another coordinator holds the le
 // next checkpoint rather than finish into state it no longer owns.
 var ErrCoordinatorFenced = errors.New("runtimedb: coordinator fenced by a newer lease epoch")
 
+// ErrCoordinatorRestoreFenced is returned while a database has a restore
+// generation. Quarantine release removes the data-access hold only; it never
+// restores execution authority. #286 owns the explicit post-restore promotion
+// record that will permit a later restart to acquire the promoted epoch.
+var ErrCoordinatorRestoreFenced = fmt.Errorf("%w: restored database pending explicit coordinator promotion", ErrCoordinatorFenced)
+
 // CoordinatorLease is the current holder of the runtime database.
 type CoordinatorLease struct {
 	Holder       string    `json:"holder"`
@@ -72,6 +78,13 @@ func (db *DB) AcquireCoordinator(holder string) (CoordinatorLease, error) {
 		return CoordinatorLease{}, fmt.Errorf("runtimedb: acquiring coordinator lease: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	restore, err := getRestoreState(tx)
+	if err != nil {
+		return CoordinatorLease{}, fmt.Errorf("runtimedb: checking restore fence before coordinator acquisition: %w", err)
+	}
+	if restore.RestoreGeneration != "" {
+		return CoordinatorLease{}, ErrCoordinatorRestoreFenced
+	}
 
 	stamp := now()
 	var cur string

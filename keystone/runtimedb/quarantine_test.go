@@ -200,45 +200,46 @@ func TestQuarantineHoldsEveryButlerFacingPath(t *testing.T) {
 	if _, err := db.ReconcileRestore(); err != nil {
 		t.Fatalf("ReconcileRestore under quarantine: %v", err)
 	}
-	installSyntheticRecoveryEvidence(t, db)
-	if err := db.ReleaseRestoreQuarantine("root-admin"); err != nil {
+	journalTrust := installSyntheticRecoveryEvidence(t, db)
+	if _, err := db.ReleaseRestoreQuarantine("root-admin", journalTrust); err != nil {
 		t.Fatal(err)
 	}
 
 	for _, c := range []struct {
-		what string
-		call func() error
+		what      string
+		execution bool
+		call      func() error
 	}{
-		{"RetrieveMemory", func() error {
+		{"RetrieveMemory", false, func() error {
 			_, err := db.RetrieveMemory(MemoryQuery{Reader: admin})
 			return err
 		}},
-		{"SearchIndex", func() error {
+		{"SearchIndex", false, func() error {
 			_, err := db.SearchIndex(IndexQuery{Reader: admin, Text: "bins"})
 			return err
 		}},
-		{"StartButlerAttempt", func() error {
+		{"StartButlerAttempt", true, func() error {
 			_, err := db.StartButlerAttempt(step)
 			return err
 		}},
-		{"ClaimIntegrationWork", func() error {
+		{"ClaimIntegrationWork", true, func() error {
 			_, _, err := db.ClaimIntegrationWork("adapter-1")
 			return err
 		}},
-		{"AppendHouseholdEvent", func() error {
+		{"AppendHouseholdEvent", false, func() error {
 			_, _, err := db.AppendHouseholdEvent(HouseholdEvent{
 				EventID: "q-ev-2", Source: "publisher-home", Type: "person.left_home",
 				OccurredAt: time.Now(), Subject: admin, Payload: json.RawMessage(`{}`),
 			})
 			return err
 		}},
-		{"RaiseNotice", func() error {
+		{"RaiseNotice", true, func() error {
 			_, err := db.RaiseNotice(NoticeRequest{
 				Kind: "task-stalled", Recipient: admin, DedupeKey: "q-n-2",
 			}, household(), midday())
 			return err
 		}},
-		{"EnqueueChatOutbound(push)", func() error {
+		{"EnqueueChatOutbound(push)", true, func() error {
 			_, err := db.EnqueueChatOutbound(ChatOutbound{
 				Connection: conn.Seq, Target: admin,
 				Body: "the bins are due", Kind: "push", DedupeKey: "q-o-3",
@@ -248,6 +249,10 @@ func TestQuarantineHoldsEveryButlerFacingPath(t *testing.T) {
 	} {
 		if err := c.call(); errors.Is(err, ErrQuarantined) {
 			t.Fatalf("%s is still held after the quarantine was released: %v", c.what, err)
+		} else if c.execution && !errors.Is(err, ErrCoordinatorFenced) {
+			t.Fatalf("%s was not held for separate coordinator promotion: %v", c.what, err)
+		} else if c.execution {
+			continue
 		} else if err != nil {
 			t.Fatalf("%s after release: %v", c.what, err)
 		}

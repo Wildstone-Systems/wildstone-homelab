@@ -199,3 +199,34 @@ func (s *Server) reconcileRestore(r *http.Request, id principal.Identity) (any, 
 	out["note"] = "verified and replayed; restore quarantine remains active pending a separate authorized release"
 	return out, http.StatusOK, nil
 }
+
+// releaseRestoreQuarantine records the current Owner's explicit release only
+// after the store has revalidated the durable #284 audit under the trust root
+// installed for this process. It deliberately does not touch the coordinator
+// lease; restored execution remains fenced pending the separate #286 action.
+func (s *Server) releaseRestoreQuarantine(r *http.Request, id principal.Identity) (any, int, error) {
+	actor, err := s.activeOwnerConsoleActor(id)
+	if err != nil {
+		return nil, http.StatusForbidden, err
+	}
+	var req struct {
+		Release bool `json:"release"`
+	}
+	if code, err := decodeStrict(r, &req); err != nil {
+		return nil, code, err
+	}
+	if !req.Release {
+		return nil, http.StatusBadRequest, fmt.Errorf("restore quarantine release must be explicitly requested")
+	}
+	result, err := s.DB.ReleaseRestoreQuarantine(actor, s.RecoveryJournalPublicKey)
+	if err != nil {
+		return nil, http.StatusConflict, err
+	}
+	s.event("restore.quarantine.released", "", id,
+		fmt.Sprintf("restore generation %s released with journal evidence %s; coordinator remains fenced",
+			result.RestoreGeneration, result.EvidenceID))
+	return map[string]any{
+		"release": result,
+		"note":    "restore quarantine is released; coordinator execution remains fenced until separately promoted and restarted",
+	}, http.StatusOK, nil
+}

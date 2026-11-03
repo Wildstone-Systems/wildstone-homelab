@@ -749,6 +749,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/restore", s.handle(principal.VerbRead, s.getRestoreState))
 	mux.Handle("POST /api/v1/restore/quarantine", s.handle(principal.VerbManage, s.consequential(s.enterRestoreQuarantine)))
 	mux.Handle("POST /api/v1/restore/reconcile", s.handle(principal.VerbManage, s.consequential(s.reconcileRestore)))
+	mux.Handle("POST /api/v1/restore/release", s.handle(principal.VerbManage, s.consequential(s.releaseRestoreQuarantine)))
 	mux.Handle("GET /api/v1/notices", s.handle(principal.VerbRead, s.listNotices))
 	mux.Handle("POST /api/v1/notices/acknowledge", s.handle(principal.VerbRead, s.acknowledgeNotice))
 	mux.Handle("POST /api/v1/notices/answer", s.handle(principal.VerbRead, s.answerNotice))

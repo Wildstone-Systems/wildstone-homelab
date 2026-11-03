@@ -1,6 +1,8 @@
 package runtimedb
 
 import (
+	"crypto/ed25519"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -77,9 +79,6 @@ func TestInterruptedButlerAttemptsRecoverByExecutionBoundary(t *testing.T) {
 			t.Fatal(err)
 		}
 		if _, err := db.AcquireCoordinator("keystone-a"); err != nil {
-			t.Fatal(err)
-		}
-		if err := db.EnterRestoreQuarantine("synthetic restore", time.Date(2026, 11, 2, 12, 0, 0, 0, time.UTC)); err != nil {
 			t.Fatal(err)
 		}
 		if err := db.RecoverInterruptedButlerAttempts(); err != nil {
@@ -171,6 +170,17 @@ func TestNativeTaskHistoryAndReceiptsSurviveRestoreAlongside(t *testing.T) {
 	if err := live.BackupTo(snapshot); err != nil {
 		t.Fatal(err)
 	}
+	pub, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshotAt := time.Date(2026, 11, 2, 12, 0, 0, 0, time.UTC)
+	fencedAt := time.Date(2099, 11, 2, 13, 0, 0, 0, time.UTC)
+	journalEvidence, err := live.BuildRecoveryJournalEvidence(snapshot, "keystone-live", "independent test custody",
+		snapshotAt, fencedAt, fencedAt.Add(time.Minute), privateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
 	restored, err := RestoreBackup(snapshot, filepath.Join(t.TempDir(), "restored.db"), "synthetic restore alongside", time.Date(2026, 11, 2, 12, 0, 0, 0, time.UTC))
 	if err != nil {
 		t.Fatal(err)
@@ -189,8 +199,26 @@ func TestNativeTaskHistoryAndReceiptsSurviveRestoreAlongside(t *testing.T) {
 	}
 	// Restore quarantine and the absent in-memory lease independently prevent
 	// this alongside copy from dispatching against the live fixture.
+	if err := restored.CheckHouseholdExecution(); !errors.Is(err, ErrQuarantined) {
+		t.Fatalf("restored copy execution = %v, want quarantine", err)
+	}
+	if _, err := restored.ReconcileRestoreEvidence(journalEvidence, pub, "mika", fencedAt.Add(2*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := restored.ReleaseRestoreQuarantine("mika", pub); err != nil {
+		t.Fatal(err)
+	}
+	after, err := restored.GetButlerTask(id)
+	if err != nil || after.State != ButlerTaskCompleted || after.ResultSummary != "done" {
+		t.Fatalf("release changed completed task = %+v, %v", after, err)
+	}
+	afterAttempts, _ := restored.ListButlerTaskAttempts(id)
+	afterEvidence, _ := restored.ListButlerTaskEvidence(id)
+	if len(afterAttempts) != 1 || afterAttempts[0].State != ButlerAttemptSucceeded || len(afterEvidence) != 1 || afterEvidence[0].ReceiptID != receipt {
+		t.Fatalf("release repeated completed effects: attempts=%+v evidence=%+v", afterAttempts, afterEvidence)
+	}
 	if err := restored.CheckHouseholdExecution(); !errors.Is(err, ErrCoordinatorFenced) {
-		t.Fatalf("restored copy execution = %v, want coordinator fence", err)
+		t.Fatalf("release made completed work dispatchable = %v", err)
 	}
 }
 

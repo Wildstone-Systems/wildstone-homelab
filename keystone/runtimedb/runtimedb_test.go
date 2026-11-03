@@ -1,6 +1,12 @@
 package runtimedb
 
 import (
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -121,20 +127,65 @@ func record(t *testing.T, db *DB, handles ...string) {
 // having evidence so that tests of unrelated post-release behavior can cross
 // the stricter schema trigger. Recovery-journal correctness tests never use
 // this helper; they exercise signed evidence end to end.
-func installSyntheticRecoveryEvidence(t *testing.T, db *DB) {
+func installSyntheticRecoveryEvidence(t *testing.T, db *DB) ed25519.PublicKey {
 	t.Helper()
-	id := fmt.Sprintf("synthetic-test-evidence-%d", time.Now().UnixNano())
+	state, err := db.GetRestoreState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.SnapshotSHA256 == "" {
+		state.SnapshotSHA256 = fmt.Sprintf("synthetic-test-snapshot-%d", time.Now().UnixNano())
+		if _, err := db.sql.Exec(`UPDATE restore_state SET snapshot_sha256=? WHERE id=1`, state.SnapshotSHA256); err != nil {
+			t.Fatal(err)
+		}
+	}
+	entries, err := readRecoveryJournal(db.sql)
+	if err != nil {
+		t.Fatal(err)
+	}
+	head, err := chainJournal(entries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fenced := time.Now().UTC().Add(time.Hour)
+	evidence := RecoveryJournalEvidence{
+		Format: RecoveryJournalEvidenceFormat, SnapshotSHA256: state.SnapshotSHA256, SnapshotAt: state.SnapshotAt,
+		JournalSource: "test-source", Custody: "test-only independent fixture", BaseSequence: 0,
+		BaseSHA256: hex.EncodeToString(journalGenesis[:]), HeadSequence: int64(len(entries)), HeadSHA256: head,
+		CoverageThrough: fenced, SourceFencedAt: fenced, GeneratedAt: fenced.Add(time.Minute), Final: true,
+		SignerFingerprint: signingFingerprint(pub), Entries: entries,
+	}
+	payload, err := journalSigningPayload(evidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence.Signature = base64.StdEncoding.EncodeToString(ed25519.Sign(privateKey, payload))
+	canonical, err := json.Marshal(evidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	idSum := sha256.Sum256(canonical)
+	id := hex.EncodeToString(idSum[:])
 	stamp := timeText(time.Now().UTC())
 	if _, err := db.sql.Exec(`INSERT INTO recovery_journal_reconciliations
 		(evidence_id,snapshot_sha256,snapshot_at,journal_source,custody,base_seq,head_seq,head_sha256,
-		 coverage_through,source_fenced_at,signer_fingerprint,verified_at,verified_by,applied_count,evidence_json)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, id, "test-snapshot", stamp, "test-source", "test-only fixture",
-		0, 0, "test-head", stamp, stamp, "test-signer", stamp, "test-owner", 0, `{}`); err != nil {
+		 coverage_through,source_fenced_at,signer_fingerprint,verified_at,verified_by,applied_count,evidence_json,restore_generation)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, id, state.SnapshotSHA256, timeText(state.SnapshotAt), evidence.JournalSource,
+		evidence.Custody, evidence.BaseSequence, evidence.HeadSequence, evidence.HeadSHA256, timeText(evidence.CoverageThrough),
+		timeText(evidence.SourceFencedAt), evidence.SignerFingerprint, stamp, "test-owner", state.ReplayedCount,
+		string(canonical), state.RestoreGeneration); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.sql.Exec(`UPDATE restore_state SET journal_evidence_id=?,journal_verified_at=? WHERE id=1`, id, stamp); err != nil {
+	if _, err := db.sql.Exec(`UPDATE restore_state SET journal_current=1,journal_asserted_by='test-owner',journal_evidence_id=?,
+		journal_source=?,journal_head_seq=?,journal_head_sha256=?,journal_coverage_through=?,journal_verified_at=?,journal_verified_by='test-owner'
+		WHERE id=1`, id, evidence.JournalSource, evidence.HeadSequence, evidence.HeadSHA256, timeText(evidence.CoverageThrough), stamp); err != nil {
 		t.Fatal(err)
 	}
+	return pub
 }
 
 func TestMigrationsApplyOnceAndAreIdempotent(t *testing.T) {

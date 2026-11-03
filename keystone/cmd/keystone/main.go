@@ -793,6 +793,10 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 		log.Error("another coordinator holds this runtime database; no durable Butler work is wired in this process. "+
 			"Stop the other process and restart, or POST /api/v1/coordinator/promote to take it over deliberately",
 			"err", leaseErr)
+	case errors.Is(leaseErr, runtimedb.ErrCoordinatorRestoreFenced):
+		log.Warn("restored runtime database is execution-fenced; no durable Butler work is wired in this process. "+
+			"Journal reconciliation and quarantine release do not promote coordinator authority",
+			"err", leaseErr)
 	default:
 		return fmt.Errorf("taking the coordinator lease: %w", leaseErr)
 	}
