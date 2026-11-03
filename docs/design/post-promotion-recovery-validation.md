@@ -121,11 +121,13 @@ After separate Owner approval, use only:
   #287 PR head. Set `fullnameOverride` to the respective release name; this
   produces distinct stable Pod hostnames `ws287-source` and
   `ws287-restored`. The releases must never have active Pods concurrently;
-- a locally built `wildstone-management:issue287` image imported into K3s and
+- a locally built `wildstone-management:issue287-f13813cb` image imported into K3s and
   pinned in values as
-  `wildstone-management@sha256:66a4234beadb2596e88dced9743bde2c95304d5528a6807933c4675b6abdb124`.
-  This `linux/amd64` image was built from the validated #287 executable tree
-  as version `0.0.0-issue287` and passed `scripts/test-management-image.sh`.
+  `wildstone-management@sha256:dfda9128fe36ae2b314dda51fe24163fbcc4bf9961ccfaa9eaa6acf29c75a5d2`.
+  This `linux/amd64` image was built from executable revision `f13813cb`, after
+  adding the explicit chart 0.2.1 recovery compatibility rule, as version
+  `0.0.0-issue287-f13813cb`. It passed `scripts/test-management-image.sh` and
+  the signed management recovery preflight for a 0.2.1-to-0.2.1 restore.
   Rebuild and replace this digest if executable inputs change before approval;
   a tag or the chart's zero-digest sentinel is never accepted;
 - source PVCs `ws287-source-runtime`, `ws287-source-uploads`, and
