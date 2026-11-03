@@ -36,6 +36,7 @@ var consequentialRoutes = []struct{ method, path, body string }{
 	{http.MethodPost, "/api/v1/butler/members/giulia/offboarding", `{}`},
 	{http.MethodPost, "/api/v1/restore/quarantine", `{}`},
 	{http.MethodPost, "/api/v1/restore/reconcile", `{}`},
+	{http.MethodPost, "/api/v1/restore/release", `{}`},
 	{http.MethodDelete, "/api/v1/butlers/joan", ``},
 	{http.MethodDelete, "/api/v1/butlers/joan?transferMemoryTo=sandy", ``},
 	{http.MethodPut, "/api/v1/butlers/joan/memory-restrictions", `{"scope":"household","restricted":true}`},

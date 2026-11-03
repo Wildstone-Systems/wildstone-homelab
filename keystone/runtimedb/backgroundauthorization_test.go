@@ -590,8 +590,8 @@ func TestRestoreCannotReviveCredentialUse(t *testing.T) {
 	if _, err := restored.ReconcileRestore(); err != nil {
 		t.Fatal(err)
 	}
-	installSyntheticRecoveryEvidence(t, restored)
-	if err := restored.ReleaseRestoreQuarantine("mika"); err != nil {
+	journalTrust := installSyntheticRecoveryEvidence(t, restored)
+	if _, err := restored.ReleaseRestoreQuarantine("mika", journalTrust); err != nil {
 		t.Fatal(err)
 	}
 	mustDeny(t, r, sub, "after replay")

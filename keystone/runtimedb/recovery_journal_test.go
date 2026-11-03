@@ -229,6 +229,146 @@ func TestRecoveryJournalReconciliationIsIdempotentAndPersistsAcrossRestart(t *te
 	}
 }
 
+func TestJournalGatedQuarantineReleasePersistsAndRemainsCoordinatorFenced(t *testing.T) {
+	f := newRecoveryJournalFixture(t)
+	old, err := f.live.AcquireCoordinator("keystone-original")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.snapshot(t)
+	restored := f.restore(t)
+	verification, err := restored.ReconcileRestoreEvidence(f.evidence(t), f.publicKey, "mika", journalVerifiedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	released, err := restored.ReleaseRestoreQuarantine("mika", f.publicKey)
+	if err != nil || released.AlreadyReleased || released.EvidenceID != verification.EvidenceID || released.ReleasedBy != "mika" {
+		t.Fatalf("release = %+v, %v; verification=%+v", released, err, verification)
+	}
+	state, err := restored.GetRestoreState()
+	if err != nil || state.Quarantined || state.ReleasedAt.IsZero() || state.ReleasedBy != "mika" {
+		t.Fatalf("released state = %+v, %v", state, err)
+	}
+	lease, err := restored.GetCoordinator()
+	if err != nil || lease.Holder != old.Holder || lease.Epoch != old.Epoch {
+		t.Fatalf("release changed coordinator lease: before=%+v after=%+v err=%v", old, lease, err)
+	}
+	if err := restored.CheckHouseholdExecution(); !errors.Is(err, ErrCoordinatorFenced) {
+		t.Fatalf("release granted execution = %v", err)
+	}
+	if _, err := restored.AcquireCoordinator(old.Holder); !errors.Is(err, ErrCoordinatorRestoreFenced) {
+		t.Fatalf("released restore reacquired coordinator = %v, want restore fence", err)
+	}
+
+	repeated, err := restored.ReleaseRestoreQuarantine("mika", f.publicKey)
+	if err != nil || !repeated.AlreadyReleased || repeated.RestoreGeneration != released.RestoreGeneration ||
+		!repeated.ReleasedAt.Equal(released.ReleasedAt) || repeated.ReleasedBy != released.ReleasedBy {
+		t.Fatalf("repeated release = %+v, %v; first=%+v", repeated, err, released)
+	}
+	if err := restored.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(f.restoredPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	afterRestart, err := reopened.ReleaseRestoreQuarantine("mika", f.publicKey)
+	if err != nil || !afterRestart.AlreadyReleased || afterRestart.EvidenceID != released.EvidenceID {
+		t.Fatalf("release after restart = %+v, %v", afterRestart, err)
+	}
+	if err := reopened.CheckHouseholdExecution(); !errors.Is(err, ErrCoordinatorFenced) {
+		t.Fatalf("restart after release granted execution = %v", err)
+	}
+}
+
+func TestJournalGatedQuarantineReleaseRefusesMissingStaleOrIncompleteEvidence(t *testing.T) {
+	t.Run("missing verification", func(t *testing.T) {
+		f := newRecoveryJournalFixture(t)
+		f.snapshot(t)
+		restored := f.restore(t)
+		if _, err := restored.ReleaseRestoreQuarantine("mika", f.publicKey); err == nil || !strings.Contains(err.Error(), "verified journal evidence") {
+			t.Fatalf("missing evidence release = %v", err)
+		}
+		assertStillQuarantined(t, restored)
+	})
+
+	for _, tc := range []struct {
+		name string
+		edit func(*DB, RestoreState)
+		want string
+	}{
+		{"different snapshot", func(db *DB, _ RestoreState) {
+			if _, err := db.sql.Exec(`UPDATE restore_state SET snapshot_sha256=? WHERE id=1`, strings.Repeat("0", 64)); err != nil {
+				t.Fatal(err)
+			}
+		}, "current restore generation"},
+		{"earlier restore generation", func(db *DB, _ RestoreState) {
+			if _, err := db.sql.Exec(`UPDATE restore_state SET restore_generation='different-generation' WHERE id=1`); err != nil {
+				t.Fatal(err)
+			}
+		}, "current restore generation"},
+		{"incomplete replay", func(db *DB, _ RestoreState) {
+			if _, err := db.sql.Exec(`UPDATE restore_state SET replayed_at='' WHERE id=1`); err != nil {
+				t.Fatal(err)
+			}
+		}, "completed journal verification and replay"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newRecoveryJournalFixture(t)
+			f.snapshot(t)
+			restored := f.restore(t)
+			if _, err := restored.ReconcileRestoreEvidence(f.evidence(t), f.publicKey, "mika", journalVerifiedAt); err != nil {
+				t.Fatal(err)
+			}
+			before := assertStillQuarantined(t, restored)
+			tc.edit(restored, before)
+			if _, err := restored.ReleaseRestoreQuarantine("mika", f.publicKey); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("release error = %v, want %q", err, tc.want)
+			}
+			assertStillQuarantined(t, restored)
+			if err := restored.CheckHouseholdExecution(); !errors.Is(err, ErrQuarantined) {
+				t.Fatalf("rejected release granted execution = %v", err)
+			}
+		})
+	}
+}
+
+func TestJournalGatedQuarantineReleaseRefusesChangedSignerAndUnfencedSource(t *testing.T) {
+	t.Run("changed signer", func(t *testing.T) {
+		f := newRecoveryJournalFixture(t)
+		f.snapshot(t)
+		restored := f.restore(t)
+		if _, err := restored.ReconcileRestoreEvidence(f.evidence(t), f.publicKey, "mika", journalVerifiedAt); err != nil {
+			t.Fatal(err)
+		}
+		changed, _, err := ed25519.GenerateKey(rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := restored.ReleaseRestoreQuarantine("mika", changed); err == nil || !strings.Contains(err.Error(), "current trust root") {
+			t.Fatalf("changed signer release = %v", err)
+		}
+		assertStillQuarantined(t, restored)
+	})
+
+	t.Run("original writer not demonstrably fenced", func(t *testing.T) {
+		f := newRecoveryJournalFixture(t)
+		f.snapshot(t)
+		body := resignEvidence(t, f.evidence(t), f.privateKey, func(e *RecoveryJournalEvidence) {
+			e.SourceFencedAt = e.SnapshotAt.Add(-time.Second)
+		})
+		restored := f.restore(t)
+		if _, err := restored.ReconcileRestoreEvidence(body, f.publicKey, "mika", journalVerifiedAt); err == nil || !strings.Contains(err.Error(), "stale or inconsistent coverage") {
+			t.Fatalf("unfenced reconciliation = %v", err)
+		}
+		if _, err := restored.ReleaseRestoreQuarantine("mika", f.publicKey); err == nil {
+			t.Fatal("unfenced source released quarantine")
+		}
+		assertStillQuarantined(t, restored)
+	})
+}
+
 func TestRecoveryJournalRetryAfterReplayCheckpointInterruption(t *testing.T) {
 	f := newRecoveryJournalFixture(t)
 	for _, member := range []struct{ name, role string }{{"mika", RoleOwner}, {"sam", RoleMember}} {

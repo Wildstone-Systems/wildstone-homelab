@@ -223,18 +223,29 @@ release decision remains separate.
    forgotten memory stays forgotten, an offboarded member stays denied, a
    revoked link stays revoked, a de-indexed source stays unsearchable. This is
    the evidence.
+3. **Explicitly release the data quarantine.** A fresh, currently active Owner
+   sends `{"release":true}` to `POST /api/v1/restore/release`. Keystone
+   revalidates the immutable #284 audit, current restore generation, snapshot,
+   signer trust root, terminal source fence and completed replay in the release
+   transaction. Bearer administrators, Agents and disabled Owners are refused.
+4. **Keep execution fenced.** Release does not acquire or promote the
+   coordinator and does not resume task, tool, routine, monitor or automation
+   dispatch. The separate Owner promotion and restart remain #286/#287.
 
 An administrative acknowledgement alone is not evidence that missing deletions
 were recovered, and the schema refuses release without a signed evidence ID
 and completed replay. See the
-[reconciliation contract](design/recovery-journal-reconciliation.md).
+[reconciliation contract](design/recovery-journal-reconciliation.md) and
+[release contract](design/restore-quarantine-release.md).
 Work whose outcome was unknown when the snapshot was taken stays paused: a
 restored coordinator that resumes it would be retrying an action that may
 already have happened.
 
     wild restore status                 # is this database quarantined
     # fresh Owner Console: POST signed evidence to /api/v1/restore/reconcile
-    # result remains quarantined; #285 owns release
+    # result remains quarantined
+    # fresh active Owner: POST {"release":true} to /api/v1/restore/release
+    # quarantine is released; coordinator execution remains fenced
 
 #### Mailbox monitors after a restore
 

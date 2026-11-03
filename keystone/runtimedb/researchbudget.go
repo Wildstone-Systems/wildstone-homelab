@@ -53,10 +53,6 @@ func researchBudgetTx(tx *sql.Tx, task int64) (b ResearchBudget, err error) {
 // can commit while admission is waiting for that lock. All three facts must
 // describe the same snapshot as the reservation/checkpoint/continuation.
 func (db *DB) researchFenceTx(tx *sql.Tx) error {
-	lease := db.executionLease.Load()
-	if lease == nil {
-		return ErrCoordinatorFenced
-	}
 	var holder string
 	var epoch int64
 	var quarantine, stopped bool
@@ -66,14 +62,15 @@ func (db *DB) researchFenceTx(tx *sql.Tx) error {
 	if err != nil {
 		return err
 	}
-	if holder != lease.Holder || epoch != lease.Epoch {
-		return ErrCoordinatorFenced
-	}
 	if quarantine {
 		return ErrQuarantined
 	}
 	if stopped {
 		return ErrHouseholdStopped
+	}
+	lease := db.executionLease.Load()
+	if lease == nil || holder != lease.Holder || epoch != lease.Epoch {
+		return ErrCoordinatorFenced
 	}
 	return nil
 }

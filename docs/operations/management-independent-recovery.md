@@ -1,10 +1,10 @@
 # Management-independent Keystone recovery
 
 Status: repository contract for #276 plus the repository-only signed journal
-reconciliation contract from #284. The isolated Kubernetes exercise below
-requires separate Owner approval. This is not household migration, off-host
-acceptance, quarantine-release acceptance, Flux-owned management acceptance,
-or HA.
+reconciliation and quarantine-release contracts from #284/#285. The isolated
+Kubernetes exercise below requires separate Owner approval. This is not
+household migration, off-host acceptance, live quarantine-release acceptance,
+Flux-owned management acceptance, or HA.
 
 ## Why this is a separate recovery path
 
@@ -180,13 +180,20 @@ approval. The original Keystone API is never used.
    journal prefix/sequence/hash continuity, terminal coverage, preserved-key
    signature and custody metadata must verify. The result remains quarantined.
    If no independent post-snapshot evidence exists, stop: the snapshot and an
-   Owner acknowledgement cannot prove their own freshness. #285 separately
-   owns authorized quarantine release; do not combine it with this step.
-10. While the replacement is serving reads but dispatch is fenced, the Owner
+   Owner acknowledgement cannot prove their own freshness. Do not combine
+   reconciliation with release.
+10. From a fresh current Owner Console session, explicitly send
+    `{"release":true}` to `POST /api/v1/restore/release`. Keystone revalidates
+    the generation-bound immutable audit, exact snapshot, preserved journal
+    trust root, terminal source fence and completed replay. The result releases
+    data quarantine but retains the old coordinator holder/epoch and all
+    execution fencing. See the
+    [#285 release contract](../design/restore-quarantine-release.md).
+11. While the replacement is serving reads but dispatch is fenced, the Owner
     calls `POST /api/v1/coordinator/promote`. Operators and revoked Owners must
     be refused. Restart the singleton so it acquires the new epoch and performs
     interrupted-attempt/routine recovery. Verify the old epoch cannot commit.
-11. Verify preserved login/API credential behavior, revoked credential denial,
+12. Verify preserved login/API credential behavior, revoked credential denial,
     Statefile head/resources, local deploy ref and Flux-observed revision,
     completed/uncertain execution history, receipt idempotency, uploads and
     private workspace markers. Only then approve relinquishment of the old

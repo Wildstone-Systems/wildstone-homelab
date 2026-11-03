@@ -88,6 +88,10 @@ func (db *DB) enterRestoreQuarantine(reason string, snapshotAt time.Time, snapsh
 	if err != nil {
 		return fmt.Errorf("runtimedb: entering restore quarantine: %w", err)
 	}
+	// Entering quarantine revokes this process's in-memory execution handle.
+	// Releasing quarantine never restores it: post-restore coordinator
+	// authority is a separate, durable promotion decision (#286).
+	db.executionLease.Store(nil)
 	return nil
 }
 
@@ -202,6 +206,12 @@ func gateQuery(q queryRower, what string) error {
 	}
 	if !s.Quarantined {
 		if what == GateDispatch || what == GateDelivery {
+			// A release opens reconciled data but does not grant execution.
+			// Every dispatch/delivery chokepoint remains durably closed for a
+			// restore generation until #286 records a separate promotion.
+			if s.RestoreGeneration != "" {
+				return ErrCoordinatorRestoreFenced
+			}
 			return checkHouseholdStop(q, what)
 		}
 		return nil
@@ -494,26 +504,4 @@ func (db *DB) reconcileRestore(recoveryEvidenceID string) (applied int, err erro
 		return applied, fmt.Errorf("runtimedb: recording the replay: %w", err)
 	}
 	return applied, nil
-}
-
-// ReleaseRestoreQuarantine lets the Butler run again.
-//
-// It succeeds only after independently signed journal evidence was verified
-// and replayed. The schema enforces the same thing, so a writer that goes
-// around this function still cannot release on an assertion alone. #285 owns
-// the separate authorization path; #284 never calls this method.
-func (db *DB) ReleaseRestoreQuarantine(by string) error {
-	if by == "" {
-		return fmt.Errorf("runtimedb: releasing quarantine needs who released it")
-	}
-	res, err := db.sql.Exec(
-		`UPDATE restore_state SET quarantined = 0, released_at = ?, released_by = ? WHERE id = 1`,
-		now(), by)
-	if err != nil {
-		return fmt.Errorf("runtimedb: releasing restore quarantine: %w", err)
-	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return ErrNotFound
-	}
-	return nil
 }
