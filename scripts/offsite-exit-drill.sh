@@ -276,5 +276,7 @@ wait_for "restore volume" 120 docker volume inspect drill-restore
 RESTORED="$(docker run --rm -v drill-restore:/r --entrypoint /bin/sh busybox:stable -c 'cat "$(find /r -name canary.txt | head -1)"')"
 [ "$RESTORED" = "$CANARY" ] || fail "canary mismatch: wrote '$CANARY', restored '$RESTORED'"
 
-WILD_TOKEN="$ADMIN" "$BIN/wild" restore reconcile --release
-log "PASS: Statefile, quarantined runtime DB, sealed node secrets and '$CANARY' all returned from S3"
+RESTORE_STATUS="$(curl_api "$ADMIN" GET /api/v1/restore)"
+printf '%s' "$RESTORE_STATUS" | jq -e '.state.quarantined == true and .state.journalCurrent == false and ((.state.journalEvidenceId // "") == "")' >/dev/null || \
+  fail "restored control plane did not remain quarantined without independent journal evidence"
+log "PASS: Statefile, quarantined runtime DB, sealed node secrets and '$CANARY' all returned from S3; journal reconciliation/release correctly remains a separate evidence-gated exercise"

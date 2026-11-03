@@ -173,9 +173,11 @@ wild restore status
 The executable proof is `scripts/offsite-exit-drill.sh`. CI creates a real
 S3-compatible Versity gateway, writes a canary, backs up both the application
 and the reserved whole-site set, deletes all local state and repositories,
-and performs precisely the sequence above. The final comparison is on the
-canary bytes restored from S3; retaining a local repository cannot make that
-drill pass.
+and restores them from the off-site survivor. The final comparison is on the
+canary bytes restored from S3, and the drill asserts Keystone remains
+quarantined with no journal evidence. Retaining a local repository cannot make
+that drill pass. Signed reconciliation and authorized release are separate
+proofs; the exit drill does not manufacture evidence or release quarantine.
 
 ### Durable Agent state and restore quarantine
 
