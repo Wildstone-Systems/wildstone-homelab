@@ -44,7 +44,7 @@ func (db *DB) WithDeploymentApproval(planID, expectedPlanJSON, binding, source s
 		return err
 	}
 	defer tx.Rollback()
-	if err := gateTx(tx, GateDispatch); err != nil {
+	if err := db.gateTx(tx, GateDispatch); err != nil {
 		return err
 	}
 	currentLease, err := readCoordinator(tx)

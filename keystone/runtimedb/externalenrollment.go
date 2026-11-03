@@ -104,7 +104,7 @@ func (db *DB) IssueExternalEnrollmentChallenge(in IssueExternalEnrollmentChallen
 		return IssuedExternalEnrollmentChallenge{}, err
 	}
 	defer tx.Rollback()
-	if err := gateTx(tx, GateDispatch); err != nil {
+	if err := db.gateTx(tx, GateDispatch); err != nil {
 		return IssuedExternalEnrollmentChallenge{}, err
 	}
 	r, err := externalRegistrationForChallenge(tx, in.RegistrationID, in.PersonID)
@@ -190,7 +190,7 @@ func (db *DB) verifyExternalEnrollmentChallengeTx(tx *sql.Tx, in ConsumeExternal
 	if in.RegistrationID == "" || in.PersonID == "" || in.Secret == "" {
 		return ExternalEnrollmentChallenge{}, ErrNotFound
 	}
-	if err := gateTx(tx, GateDispatch); err != nil {
+	if err := db.gateTx(tx, GateDispatch); err != nil {
 		return ExternalEnrollmentChallenge{}, err
 	}
 	r, err := externalRegistrationForChallenge(tx, in.RegistrationID, in.PersonID)

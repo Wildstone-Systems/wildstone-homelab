@@ -16,6 +16,7 @@ package runtimedb
 
 import (
 	"context"
+	"crypto/ed25519"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -44,6 +45,19 @@ type CoordinatorLease struct {
 	AcquiredAt   time.Time `json:"acquiredAt"`
 	HeartbeatAt  time.Time `json:"heartbeatAt"`
 	PromotedFrom string    `json:"promotedFrom,omitempty"`
+}
+
+// RestoredCoordinatorPromotion is the immutable authorization decision that
+// advanced a restored database's preserved lease. It records both sides of
+// the fence; the returned lease alone cannot explain who authorized recovery
+// or which restore evidence it relied on.
+type RestoredCoordinatorPromotion struct {
+	RestoreGeneration string           `json:"restoreGeneration"`
+	EvidenceID        string           `json:"evidenceId"`
+	Previous          CoordinatorLease `json:"previous"`
+	Promoted          CoordinatorLease `json:"promoted"`
+	PromotedAt        time.Time        `json:"promotedAt"`
+	PromotedBy        string           `json:"promotedBy"`
 }
 
 // AcquireCoordinator claims the lease for holder and returns it.
@@ -82,15 +96,20 @@ func (db *DB) AcquireCoordinator(holder string) (CoordinatorLease, error) {
 	if err != nil {
 		return CoordinatorLease{}, fmt.Errorf("runtimedb: checking restore fence before coordinator acquisition: %w", err)
 	}
-	if restore.RestoreGeneration != "" {
+	if restore.RestoreGeneration != "" && (!db.restoreCoordinatorAcquisitionAllowed.Load() || restore.CoordinatorPromotedAt.IsZero() ||
+		restore.CoordinatorHolder != holder || restore.CoordinatorEpoch <= 0) {
 		return CoordinatorLease{}, ErrCoordinatorRestoreFenced
 	}
 
 	stamp := now()
 	var cur string
-	err = tx.QueryRow(`SELECT holder FROM coordinator_lease WHERE id = 1`).Scan(&cur)
+	var epoch int64
+	err = tx.QueryRow(`SELECT holder, epoch FROM coordinator_lease WHERE id = 1`).Scan(&cur, &epoch)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
+		if restore.RestoreGeneration != "" {
+			return CoordinatorLease{}, ErrCoordinatorRestoreFenced
+		}
 		if _, err := tx.Exec(
 			`INSERT INTO coordinator_lease (id, holder, epoch, acquired_at, heartbeat_at)
 			 VALUES (1, ?, 1, ?, ?)`, holder, stamp, stamp); err != nil {
@@ -101,6 +120,9 @@ func (db *DB) AcquireCoordinator(holder string) (CoordinatorLease, error) {
 	case cur != holder:
 		return CoordinatorLease{}, fmt.Errorf("%w: held by %q", ErrCoordinatorHeld, cur)
 	default:
+		if restore.RestoreGeneration != "" && epoch != restore.CoordinatorEpoch {
+			return CoordinatorLease{}, ErrCoordinatorRestoreFenced
+		}
 		if _, err := tx.Exec(
 			`UPDATE coordinator_lease SET acquired_at = ?, heartbeat_at = ? WHERE id = 1`,
 			stamp, stamp); err != nil {
@@ -142,25 +164,7 @@ func (db *DB) PromoteCoordinator(holder string) (CoordinatorLease, error) {
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	var cur string
-	var epoch int64
-	err = tx.QueryRow(`SELECT holder, epoch FROM coordinator_lease WHERE id = 1`).Scan(&cur, &epoch)
-	if errors.Is(err, sql.ErrNoRows) {
-		return CoordinatorLease{}, fmt.Errorf("runtimedb: no coordinator lease exists to promote from")
-	}
-	if err != nil {
-		return CoordinatorLease{}, fmt.Errorf("runtimedb: promoting coordinator: %w", err)
-	}
-	if cur == holder {
-		return CoordinatorLease{}, fmt.Errorf("runtimedb: %q already holds the coordinator lease", holder)
-	}
-	stamp := now()
-	if _, err := tx.Exec(
-		`UPDATE coordinator_lease SET holder = ?, epoch = ?, acquired_at = ?, heartbeat_at = ?, promoted_from = ?
-		 WHERE id = 1`, holder, epoch+1, stamp, stamp, cur); err != nil {
-		return CoordinatorLease{}, fmt.Errorf("runtimedb: promoting coordinator: %w", err)
-	}
-	lease, err := readCoordinator(tx)
+	_, lease, err := promoteCoordinatorInTx(tx, holder, now())
 	if err != nil {
 		return CoordinatorLease{}, err
 	}
@@ -168,6 +172,112 @@ func (db *DB) PromoteCoordinator(holder string) (CoordinatorLease, error) {
 		return CoordinatorLease{}, fmt.Errorf("runtimedb: promoting coordinator: %w", err)
 	}
 	return lease, nil
+}
+
+func promoteCoordinatorInTx(tx *sql.Tx, holder, stamp string) (CoordinatorLease, CoordinatorLease, error) {
+	previous, err := readCoordinator(tx)
+	if errors.Is(err, sql.ErrNoRows) {
+		return CoordinatorLease{}, CoordinatorLease{}, fmt.Errorf("runtimedb: no coordinator lease exists to promote from")
+	}
+	if err != nil {
+		return CoordinatorLease{}, CoordinatorLease{}, fmt.Errorf("runtimedb: promoting coordinator: %w", err)
+	}
+	if previous.Holder == holder {
+		return CoordinatorLease{}, CoordinatorLease{}, fmt.Errorf("runtimedb: %q already holds the coordinator lease", holder)
+	}
+	update, err := tx.Exec(
+		`UPDATE coordinator_lease SET holder = ?, epoch = ?, acquired_at = ?, heartbeat_at = ?, promoted_from = ?
+		 WHERE id = 1 AND holder = ? AND epoch = ?`, holder, previous.Epoch+1, stamp, stamp, previous.Holder,
+		previous.Holder, previous.Epoch)
+	if err != nil {
+		return CoordinatorLease{}, CoordinatorLease{}, fmt.Errorf("runtimedb: promoting coordinator: %w", err)
+	}
+	if n, rowsErr := update.RowsAffected(); rowsErr != nil || n != 1 {
+		return CoordinatorLease{}, CoordinatorLease{}, fmt.Errorf("runtimedb: coordinator lease changed before promotion")
+	}
+	lease, err := readCoordinator(tx)
+	if err != nil {
+		return CoordinatorLease{}, CoordinatorLease{}, err
+	}
+	return previous, lease, nil
+}
+
+// PromoteRestoredCoordinator is the one transition that may advance a lease
+// carried by a restored database. It revalidates the exact signed recovery
+// proof, released quarantine, and independent source fence in the same write
+// transaction that records the Owner decision and increments the epoch.
+//
+// It deliberately does not populate executionLease. The process that served
+// this request remains fenced; a controlled restart must use
+// AcquireCoordinator to pick up the already-authorized epoch.
+func (db *DB) PromoteRestoredCoordinator(holder, by string, trustedKey ed25519.PublicKey) (RestoredCoordinatorPromotion, error) {
+	var result RestoredCoordinatorPromotion
+	if holder == "" {
+		return result, fmt.Errorf("runtimedb: coordinator promotion requires a holder id")
+	}
+	if by == "" {
+		return result, fmt.Errorf("runtimedb: restored coordinator promotion requires the current Owner")
+	}
+	tx, err := db.sql.Begin()
+	if err != nil {
+		return result, fmt.Errorf("runtimedb: beginning restored coordinator promotion: %w", err)
+	}
+	defer tx.Rollback()
+
+	validated, err := validateRestoreEvidence(tx, trustedKey, "restored coordinator promotion")
+	if err != nil {
+		return result, err
+	}
+	state := validated.state
+	if state.Quarantined || state.ReleasedAt.IsZero() || state.ReleasedBy == "" {
+		return result, fmt.Errorf("runtimedb: restored coordinator promotion requires explicit quarantine release")
+	}
+	if !state.CoordinatorPromotedAt.IsZero() || state.CoordinatorPromotedBy != "" ||
+		state.CoordinatorHolder != "" || state.CoordinatorEpoch != 0 {
+		return result, fmt.Errorf("runtimedb: restore generation already has a coordinator promotion")
+	}
+	previous, err := readCoordinator(tx)
+	if errors.Is(err, sql.ErrNoRows) {
+		return result, fmt.Errorf("runtimedb: no coordinator lease exists to promote from")
+	}
+	if err != nil {
+		return result, err
+	}
+	if previous.Holder == holder {
+		return result, fmt.Errorf("runtimedb: %q already holds the coordinator lease", holder)
+	}
+	stamp := now()
+	if _, err := tx.Exec(`INSERT INTO recovery_coordinator_promotions
+		(restore_generation,journal_evidence_id,previous_holder,previous_epoch,promoted_holder,promoted_epoch,promoted_at,promoted_by)
+		VALUES(?,?,?,?,?,?,?,?)`, state.RestoreGeneration, validated.evidenceID, previous.Holder, previous.Epoch,
+		holder, previous.Epoch+1, stamp, by); err != nil {
+		return result, fmt.Errorf("runtimedb: recording restored coordinator promotion: %w", err)
+	}
+	previous, promoted, err := promoteCoordinatorInTx(tx, holder, stamp)
+	if err != nil {
+		return result, err
+	}
+	update, err := tx.Exec(`UPDATE restore_state SET coordinator_promoted_at=?,coordinator_promoted_by=?,
+		coordinator_promoted_holder=?,coordinator_promoted_epoch=?
+		WHERE id=1 AND restore_generation=? AND journal_evidence_id=? AND coordinator_promoted_at=''`,
+		stamp, by, promoted.Holder, promoted.Epoch, state.RestoreGeneration, validated.evidenceID)
+	if err != nil {
+		return result, fmt.Errorf("runtimedb: recording restored coordinator projection: %w", err)
+	}
+	if n, rowsErr := update.RowsAffected(); rowsErr != nil || n != 1 {
+		return result, fmt.Errorf("runtimedb: current restore changed before coordinator promotion")
+	}
+	if err := tx.Commit(); err != nil {
+		return result, fmt.Errorf("runtimedb: committing restored coordinator promotion: %w", err)
+	}
+	promotedAt, err := time.Parse(time.RFC3339Nano, stamp)
+	if err != nil {
+		return result, err
+	}
+	return RestoredCoordinatorPromotion{
+		RestoreGeneration: state.RestoreGeneration, EvidenceID: validated.evidenceID,
+		Previous: previous, Promoted: promoted, PromotedAt: promotedAt, PromotedBy: by,
+	}, nil
 }
 
 // CheckCoordinator is the pre-dispatch fence. A coordinator calls it

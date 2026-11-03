@@ -868,7 +868,7 @@ func (s *Server) Handler() http.Handler {
 	// because it decides that ownership, and it fences whatever the
 	// previous holder still believed it was doing.
 	mux.Handle("GET /api/v1/coordinator", s.handle(principal.VerbRead, s.getCoordinator))
-	mux.Handle("POST /api/v1/coordinator/promote", s.handle(principal.VerbManage, s.promoteCoordinator))
+	mux.Handle("POST /api/v1/coordinator/promote", s.handle(principal.VerbManage, s.consequential(s.promoteCoordinator)))
 
 	mux.Handle("GET /api/v1/butler/sessions/{id}", s.handle(principal.VerbRead, s.getButlerSession))
 	// A follow-up carries the read verb like the first question does:

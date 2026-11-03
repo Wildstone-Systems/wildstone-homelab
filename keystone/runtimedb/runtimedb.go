@@ -29,8 +29,12 @@ type DB struct {
 	coordinatorMu         sync.Mutex
 	coordinatorLock       *os.File
 	coordinatorLockHolder string
-	sql                   *sql.DB
-	executionLease        atomic.Pointer[CoordinatorLease]
+	// restoreCoordinatorAcquisitionAllowed is true only when this DB handle
+	// opened after a durable restored-coordinator promotion. The handle that
+	// records promotion stays false, enforcing the controlled-restart boundary.
+	restoreCoordinatorAcquisitionAllowed atomic.Bool
+	sql                                  *sql.DB
+	executionLease                       atomic.Pointer[CoordinatorLease]
 	// path is kept so a table rebuild can reopen the same file on its
 	// own handle with foreign keys off. See applyRebuildMigration.
 	path string
@@ -80,6 +84,13 @@ func Open(path string) (*DB, error) {
 		sqlDB.Close()
 		return nil, err
 	}
+	restore, err := db.GetRestoreState()
+	if err != nil {
+		sqlDB.Close()
+		return nil, fmt.Errorf("runtimedb: reading restore state at open: %w", err)
+	}
+	db.restoreCoordinatorAcquisitionAllowed.Store(restore.RestoreGeneration != "" &&
+		!restore.CoordinatorPromotedAt.IsZero() && restore.CoordinatorHolder != "" && restore.CoordinatorEpoch > 0)
 	return db, nil
 }
 
