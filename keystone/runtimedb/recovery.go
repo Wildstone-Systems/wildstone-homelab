@@ -105,6 +105,10 @@ func RestoreBackup(source, destination, reason string, snapshotAt time.Time) (*D
 	if err := os.MkdirAll(filepath.Dir(destination), 0o700); err != nil {
 		return nil, fmt.Errorf("runtimedb: creating restore directory: %w", err)
 	}
+	snapshotSHA256, err := sha256File(source)
+	if err != nil {
+		return nil, fmt.Errorf("runtimedb: identifying recovery snapshot: %w", err)
+	}
 	in, err := os.Open(source)
 	if err != nil {
 		return nil, fmt.Errorf("runtimedb: opening recovery snapshot: %w", err)
@@ -135,7 +139,7 @@ func RestoreBackup(source, destination, reason string, snapshotAt time.Time) (*D
 	// that a crash left half-prepared must still hold every Butler-facing
 	// path, including scheduled mail reads and review delivery (epic #326
 	// S08). Nothing below revives access; it only removes.
-	if err := restored.EnterRestoreQuarantine(reason, snapshotAt); err != nil {
+	if err := restored.enterRestoreQuarantine(reason, snapshotAt, snapshotSHA256); err != nil {
 		restored.Close()
 		_ = os.Remove(destination)
 		return nil, err

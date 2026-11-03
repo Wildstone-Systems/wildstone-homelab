@@ -159,21 +159,25 @@ wild recovery import-node <node-id> \
 For a separately restored set, `-private-key <file>` may be used instead of
 `-kit`. The two options are mutually exclusive.
 
-Restore each application plan from off-site, confirm the deletion journal is
-current, then replay and release quarantine:
+Restore each application plan from off-site, then verify independently held,
+signed terminal journal evidence against the exact SQLite snapshot. Reconcile
+while quarantine remains active; release is a later separate Owner action:
 
 ```sh
 wild backup restore <plan> -from offsite
 wild restore status
-wild restore reconcile --release
+# POST the recovery-journal.json object as `evidence` from a fresh Owner Console session
+# to /api/v1/restore/reconcile; do not request release in the same operation
 ```
 
 The executable proof is `scripts/offsite-exit-drill.sh`. CI creates a real
 S3-compatible Versity gateway, writes a canary, backs up both the application
 and the reserved whole-site set, deletes all local state and repositories,
-and performs precisely the sequence above. The final comparison is on the
-canary bytes restored from S3; retaining a local repository cannot make that
-drill pass.
+and restores them from the off-site survivor. The final comparison is on the
+canary bytes restored from S3, and the drill asserts Keystone remains
+quarantined with no journal evidence. Retaining a local repository cannot make
+that drill pass. Signed reconciliation and authorized release are separate
+proofs; the exit drill does not manufacture evidence or release quarantine.
 
 ### Durable Agent state and restore quarantine
 
@@ -206,26 +210,31 @@ is the default, not something an operator switches on: nothing Butler-facing
 runs — no retrieval, no task dispatch, no ingestion, no proactive delivery —
 until reconciliation has happened.
 
-Releasing it takes two things, and the order is the point.
+Releasing it takes independently verifiable evidence and replay first; the
+release decision remains separate.
 
-1. **Assert the deletion journal is current.** Deletions and revocations are
-   journalled separately from the data they concern, so they can be replayed
-   over restored state. A journal restored from the same old snapshot is
-   itself incomplete, so somebody has to state that it has been brought up to
-   date from a source newer than the snapshot. This is a precondition.
+1. **Verify terminal journal evidence.** Deletions and revocations are
+   journalled separately from the data they concern. A journal restored from
+   the same old snapshot is itself incomplete, so a signed terminal journal
+   retained outside the snapshot must bind its exact hash/timestamp, continuous
+   sequence and source-fenced coverage. A snapshot or Owner assertion cannot
+   prove its own freshness.
 2. **Replay it.** Every journalled deletion and revocation is re-applied: a
    forgotten memory stays forgotten, an offboarded member stays denied, a
    revoked link stays revoked, a de-indexed source stays unsearchable. This is
    the evidence.
 
 An administrative acknowledgement alone is not evidence that missing deletions
-were recovered, and the schema refuses a release that has only the assertion.
+were recovered, and the schema refuses release without a signed evidence ID
+and completed replay. See the
+[reconciliation contract](design/recovery-journal-reconciliation.md).
 Work whose outcome was unknown when the snapshot was taken stays paused: a
 restored coordinator that resumes it would be retrying an action that may
 already have happened.
 
     wild restore status                 # is this database quarantined
-    wild restore reconcile --release    # assert, replay, and release
+    # fresh Owner Console: POST signed evidence to /api/v1/restore/reconcile
+    # result remains quarantined; #285 owns release
 
 #### Mailbox monitors after a restore
 

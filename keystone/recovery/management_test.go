@@ -1,6 +1,7 @@
 package recovery
 
 import (
+	"bytes"
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/elliptic"
@@ -113,6 +114,11 @@ func managementFixture(t *testing.T) (string, string, ManagementManifest) {
 	for name := range map[string]bool{"sops-age.key": true, "git-host.key": true, "git-source-client.key": true} {
 		writeFixture(t, keyDir, name, []byte("synthetic-private-material-for-"+name))
 	}
+	journalPub, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFixture(t, keyDir, "recovery-journal.pub", journalPub)
 
 	promotion := filepath.Join(root, "promotion.git")
 	deployment, err := statefile.OpenLocalDeployment(promotion)
@@ -199,6 +205,11 @@ func TestManagementRecoveryPreflightRefusesMissingUnsafeOrUnauthorizedSets(t *te
 				t.Fatal(err)
 			}
 		}, "sops-age.key is missing"},
+		{"missing journal trust root", func(t *testing.T, _, keys string, _ *ManagementManifest) {
+			if err := os.Remove(filepath.Join(keys, "recovery-journal.pub")); err != nil {
+				t.Fatal(err)
+			}
+		}, "recovery-journal.pub is missing"},
 		{"not quiesced", func(_ *testing.T, _ string, _ string, m *ManagementManifest) { m.Quiesced = false }, "quiesce"},
 		{"not Owner approved", func(_ *testing.T, _ string, _ string, m *ManagementManifest) { m.OwnerApproved = false }, "Owner approval"},
 		{"chart 0.1 mislabeled", func(_ *testing.T, _ string, _ string, m *ManagementManifest) { m.SourceChartVersion = "0.1.0" }, "chart/layout"},
@@ -274,6 +285,13 @@ func TestRestoreManagementSetPublishesQuarantinedPreservedRuntime(t *testing.T) 
 	}
 	if _, err := restoredDB.OpenSecretVault(filepath.Join(target, "household-secrets.key")); err != nil {
 		t.Fatalf("restored household key does not open preserved credentials: %v", err)
+	}
+	wantJournalPub, err := os.ReadFile(filepath.Join(keyDir, "recovery-journal.pub"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(filepath.Join(target, "recovery-journal.pub")); err != nil || !bytes.Equal(got, wantJournalPub) {
+		t.Fatalf("independently held recovery journal trust root was not restored: %v", err)
 	}
 
 	for _, name := range []string{"ca.crt", "ca.key", "op-signing.key", "op-signing.pub", "tokens.json", "household-secrets.key"} {

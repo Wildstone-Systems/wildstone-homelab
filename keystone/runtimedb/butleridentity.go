@@ -460,7 +460,7 @@ func addToDefaultGroupTx(tx *sql.Tx, member, actor, stamp string) error {
 // bumps the generation, so every link and derived grant goes stale at
 // the next check.
 func (db *DB) DisableButlerMember(member, disabledBy string) error {
-	return db.denyMember(member, disabledBy, "disabled_at", "disabled_by")
+	return db.denyMember(member, disabledBy, "disabled_at", "disabled_by", "")
 }
 
 // OffboardButlerMember is the runtime denial half of offboarding
@@ -472,10 +472,14 @@ func (db *DB) DisableButlerMember(member, disabledBy string) error {
 // cleanup never restores access, so the denial is recorded here first
 // and separately.
 func (db *DB) OffboardButlerMember(member, offboardedBy string) error {
-	return db.denyMember(member, offboardedBy, "offboarded_at", "offboarded_by")
+	return db.denyMember(member, offboardedBy, "offboarded_at", "offboarded_by", "")
 }
 
-func (db *DB) denyMember(member, by, atColumn, byColumn string) error {
+func (db *DB) offboardButlerMemberForRecovery(member, offboardedBy, evidenceID string) error {
+	return db.denyMember(member, offboardedBy, "offboarded_at", "offboarded_by", evidenceID)
+}
+
+func (db *DB) denyMember(member, by, atColumn, byColumn, recoveryEvidenceID string) error {
 	if by == "" {
 		return fmt.Errorf("runtimedb: withdrawing butler access requires the administrator who did it (ADR-W030 A2.1)")
 	}
@@ -516,6 +520,10 @@ func (db *DB) denyMember(member, by, atColumn, byColumn string) error {
 		}
 	}
 	stamp := now()
+	journalHead, err := recoveryJournalHead(tx, recoveryEvidenceID)
+	if err != nil {
+		return err
+	}
 	// admitted goes to 0 in the same statement as the timestamp: a
 	// member whose denial and admission flag disagree is a race nobody
 	// should have to reason about.
@@ -533,6 +541,9 @@ func (db *DB) denyMember(member, by, atColumn, byColumn string) error {
 		 WHERE person_id = (SELECT person_id FROM butler_members WHERE member = ?)
 		   AND revoked_at = ''`, stamp, by, member); err != nil {
 		return fmt.Errorf("runtimedb: revoking identity links: %w", err)
+	}
+	if err := tagRecoveryJournalSuffix(tx, journalHead, recoveryEvidenceID); err != nil {
+		return err
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("runtimedb: withdrawing butler access: %w", err)
@@ -655,6 +666,14 @@ func (db *DB) LinkSurfaceIdentity(linkType, externalID, member, createdBy string
 // generation, so anything derived from that link goes stale immediately
 // rather than at the end of a session.
 func (db *DB) RevokeSurfaceLink(linkType, externalID, revokedBy string) error {
+	return db.revokeSurfaceLink(linkType, externalID, revokedBy, "")
+}
+
+func (db *DB) revokeSurfaceLinkForRecovery(linkType, externalID, revokedBy, evidenceID string) error {
+	return db.revokeSurfaceLink(linkType, externalID, revokedBy, evidenceID)
+}
+
+func (db *DB) revokeSurfaceLink(linkType, externalID, revokedBy, recoveryEvidenceID string) error {
 	if revokedBy == "" {
 		return fmt.Errorf("runtimedb: revoking a link requires who did it")
 	}
@@ -675,6 +694,10 @@ func (db *DB) RevokeSurfaceLink(linkType, externalID, revokedBy string) error {
 		return fmt.Errorf("runtimedb: revoking surface link: %w", err)
 	}
 	stamp := now()
+	journalHead, err := recoveryJournalHead(tx, recoveryEvidenceID)
+	if err != nil {
+		return err
+	}
 	if _, err := tx.Exec(
 		`UPDATE butler_identity_links SET revoked_at = ?, revoked_by = ?
 		 WHERE link_type = ? AND external_id = ? AND revoked_at = ''`,
@@ -684,6 +707,9 @@ func (db *DB) RevokeSurfaceLink(linkType, externalID, revokedBy string) error {
 	if _, err := tx.Exec(
 		`UPDATE butler_members SET generation = generation + 1 WHERE person_id = ?`, person); err != nil {
 		return fmt.Errorf("runtimedb: revoking surface link: %w", err)
+	}
+	if err := tagRecoveryJournalSuffix(tx, journalHead, recoveryEvidenceID); err != nil {
+		return err
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("runtimedb: revoking surface link: %w", err)

@@ -256,6 +256,20 @@ func TestTheReconcilerWaitsForTheQuarantineToLift(t *testing.T) {
 	if _, err := e.db.ReconcileRestore(); err != nil {
 		t.Fatal(err)
 	}
+	// This test is about mail effect recovery, not #284 signature
+	// verification. Install explicit test-only evidence before crossing the
+	// production schema's stricter release trigger.
+	stamp := now.UTC().Format(time.RFC3339Nano)
+	if _, err := e.db.ExecForTest(`INSERT INTO recovery_journal_reconciliations
+		(evidence_id,snapshot_sha256,snapshot_at,journal_source,custody,base_seq,head_seq,head_sha256,
+		 coverage_through,source_fenced_at,signer_fingerprint,verified_at,verified_by,applied_count,evidence_json)
+		VALUES('mail-test-evidence','test-snapshot',?,'test-source','test-only fixture',0,0,'test-head',?,?,
+		'test-signer',?,'mika',0,'{}')`, stamp, stamp, stamp, stamp); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.db.ExecForTest(`UPDATE restore_state SET journal_evidence_id='mail-test-evidence',journal_verified_at=? WHERE id=1`, stamp); err != nil {
+		t.Fatal(err)
+	}
 	if err := e.db.ReleaseRestoreQuarantine("mika"); err != nil {
 		t.Fatal(err)
 	}

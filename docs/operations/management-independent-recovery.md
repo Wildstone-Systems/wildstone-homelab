@@ -1,9 +1,10 @@
 # Management-independent Keystone recovery
 
-Status: repository contract for #276. The preflight and synthetic tests are
-implemented; the isolated Kubernetes exercise below requires separate Owner
-approval. This is not household migration, off-host acceptance, Flux-owned
-management acceptance, or HA.
+Status: repository contract for #276 plus the repository-only signed journal
+reconciliation contract from #284. The isolated Kubernetes exercise below
+requires separate Owner approval. This is not household migration, off-host
+acceptance, quarantine-release acceptance, Flux-owned management acceptance,
+or HA.
 
 ## Why this is a separate recovery path
 
@@ -68,6 +69,7 @@ not authorization by itself: the Owner retains the reviewed capture record.
 | `deployment-config.json`, `local-git-source.json`, `deployment.sops.yaml` | Restores private placement, local source configuration and encrypted deployment input | Private bootstrap/configuration, outside both public and deployment Git |
 | `promotion.bundle`, `delivery.bundle` | Approved local deployment history and the exact ref Flux read | Preflight clones both independently and requires `refs/heads/deploy` at the recorded promoted commit |
 | SOPS/age private key, local Git SSH host key, Flux source-client private key | Decryption and continuity of the independent Git endpoint | Required from a **separate key directory**, not from the encrypted data repository alone |
+| `recovery-journal.pub` plus separately retained custodian private key | Pins the independent authority that signs terminal deletion/revocation coverage | Public key is required from the separate key directory and copied into the restored private runtime; private key never enters the runtime claim or snapshot |
 | Shared-upload and private-workspace captures when enabled | Preserves configured bindings and bytes that are not in the runtime claim | Manifest makes each conditional artifact mandatory; claim name alone is not data |
 
 The recovery set must also retain the reviewed namespace/release names,
@@ -118,6 +120,9 @@ remain governed by #162, #165 and #163 respectively.
    recovery repository credentials and SOPS/Git bootstrap private keys in the
    separate offline/password-manager custody path. Test access from the
    proposed recovery target.
+   Separately retain terminal signed deletion/revocation evidence as specified
+   by the [#284 reconciliation contract](../design/recovery-journal-reconciliation.md).
+   The SQLite snapshot cannot prove that its own embedded journal is current.
 6. Run the preflight from an installed binary built from the reviewed source.
    Any missing file, changed hash, mismatched key pair, absent Git revision,
    Statefile/DB disagreement, missing coordinator state, incomplete binding,
@@ -168,10 +173,15 @@ approval. The original Keystone API is never used.
    no preserved Owner credential is usable. It mints a short-lived recovery
    credential in the preserved DB and is audited; remove the output file after
    use. `keystone owner` remains the root-equivalent identity lockout path.
-9. Authenticate as a current Owner. Reconcile a deletion/revocation journal
-   newer than the snapshot and release quarantine through the existing API.
-   An administrative acknowledgement without current journal evidence is not
-   sufficient.
+9. With the original writer independently fenced, create or retrieve the
+   terminal signed deletion/revocation evidence held outside the snapshot.
+   Authenticate through a fresh current Owner Console session and submit the
+   evidence to `POST /api/v1/restore/reconcile`. Exact snapshot identity,
+   journal prefix/sequence/hash continuity, terminal coverage, preserved-key
+   signature and custody metadata must verify. The result remains quarantined.
+   If no independent post-snapshot evidence exists, stop: the snapshot and an
+   Owner acknowledgement cannot prove their own freshness. #285 separately
+   owns authorized quarantine release; do not combine it with this step.
 10. While the replacement is serving reads but dispatch is fenced, the Owner
     calls `POST /api/v1/coordinator/promote`. Operators and revoked Owners must
     be refused. Restart the singleton so it acquires the new epoch and performs

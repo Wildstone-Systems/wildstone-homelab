@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -132,13 +133,12 @@ func TestPurgeRequiresAFreshOwnerSession(t *testing.T) {
 	}
 }
 
-// Quarantine cannot be released on an assertion alone, and the refusal
-// explains why.
-func TestRestoreReconciliationNeedsAReplay(t *testing.T) {
-	h := newHarness(t)
-	if res := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/restore/quarantine",
-		map[string]any{"reason": "restored from the nightly backup"}, nil); res.StatusCode != http.StatusOK {
-		t.Fatalf("entering quarantine = %d", res.StatusCode)
+// Reconciliation is an active Owner action, needs signed evidence rather than
+// a boolean assertion, and cannot release quarantine in the same request.
+func TestRestoreReconciliationIsOwnerOnlyAndEvidenceBound(t *testing.T) {
+	h := freshnessHarness(t)
+	if err := h.s.DB.EnterRestoreQuarantine("restored from the nightly backup", time.Now()); err != nil {
+		t.Fatal(err)
 	}
 	var state struct {
 		State runtimedb.RestoreState `json:"state"`
@@ -156,24 +156,26 @@ func TestRestoreReconciliationNeedsAReplay(t *testing.T) {
 		Error string `json:"error"`
 	}
 	res := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/restore/reconcile",
-		map[string]any{"journalCurrent": false, "release": true}, &refusal)
-	if res.StatusCode != http.StatusBadRequest {
-		t.Fatalf("reconciling without asserting the journal = %d", res.StatusCode)
+		map[string]any{"evidence": map[string]any{}}, &refusal)
+	if res.StatusCode != http.StatusForbidden {
+		t.Fatalf("bearer administrator reconciliation = %d, want 403", res.StatusCode)
 	}
-	if !strings.Contains(refusal.Error, "proves nothing") {
-		t.Fatalf("the refusal does not say why: %q", refusal.Error)
+	if !strings.Contains(refusal.Error, "Owner Console") {
+		t.Fatalf("bearer refusal = %q", refusal.Error)
 	}
 
-	var done struct {
-		Replayed int  `json:"replayed"`
-		Released bool `json:"released"`
+	fresh := sessionCookie(h.s.StartConsoleSession("mika", h.s.now()))
+	if code, out := h.sessionRequest(http.MethodPost, "/api/v1/restore/reconcile",
+		`{"evidence":{}}`, "mika", fresh); code != http.StatusBadRequest || !strings.Contains(fmt.Sprint(out["error"]), "signed recovery journal evidence") {
+		t.Fatalf("Owner without evidence = %d: %+v", code, out)
 	}
-	if res := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/restore/reconcile",
-		map[string]any{"journalCurrent": true, "release": true}, &done); res.StatusCode != http.StatusOK {
-		t.Fatalf("reconciling = %d", res.StatusCode)
+	if code, out := h.sessionRequest(http.MethodPost, "/api/v1/restore/reconcile",
+		`{"evidence":{},"release":true}`, "mika", fresh); code != http.StatusBadRequest || !strings.Contains(fmt.Sprint(out["error"]), "never releases") {
+		t.Fatalf("combined release = %d: %+v", code, out)
 	}
-	if !done.Released {
-		t.Fatal("a full reconciliation did not release quarantine")
+	state.State, _ = h.s.DB.GetRestoreState()
+	if !state.State.Quarantined || !state.State.ReleasedAt.IsZero() {
+		t.Fatalf("refused reconciliation released quarantine: %+v", state.State)
 	}
 }
 

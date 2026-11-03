@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/ed25519"
+	"crypto/rand"
 	"flag"
 	"fmt"
 	"os"
@@ -12,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/recovery"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/runtimedb"
 )
 
 func recoverCommand(args []string) error {
@@ -21,6 +24,10 @@ func recoverCommand(args []string) error {
 			return preflightManagementCommand(args[1:])
 		case "restore-management":
 			return restoreManagementCommand(args[1:])
+		case "journal-evidence":
+			return journalEvidenceCommand(args[1:])
+		case "journal-keygen":
+			return journalKeygenCommand(args[1:])
 		}
 	}
 	fs := flag.NewFlagSet("keystone recover", flag.ContinueOnError)
@@ -64,7 +71,103 @@ func recoverCommand(args []string) error {
 		return err
 	}
 	fmt.Printf("restored Statefile and quarantined runtime database into %s\n", *dataDir)
-	fmt.Println("start Keystone, re-join each node, import its .sealed bundle, then run wild restore reconcile --release")
+	fmt.Println("start Keystone, re-join each node, import its .sealed bundle, then present signed journal evidence from a fresh active Owner Console session; quarantine release is separate")
+	return nil
+}
+
+func journalKeygenCommand(args []string) error {
+	fs := flag.NewFlagSet("keystone recover journal-keygen", flag.ContinueOnError)
+	privatePath := fs.String("private", "", "new independently held recovery-journal private-key file")
+	publicPath := fs.String("public", "", "new recovery-journal public-key file")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *privatePath == "" || *publicPath == "" || fs.NArg() != 0 {
+		return fmt.Errorf("usage: keystone recover journal-keygen -private <new-file> -public <new-file>")
+	}
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return err
+	}
+	defer clear(priv)
+	if err := writeExclusiveRecoveryFile(*privatePath, priv, 0o600); err != nil {
+		return fmt.Errorf("writing recovery journal private key: %w", err)
+	}
+	if err := writeExclusiveRecoveryFile(*publicPath, pub, 0o644); err != nil {
+		_ = os.Remove(*privatePath)
+		return fmt.Errorf("writing recovery journal public key: %w", err)
+	}
+	fmt.Printf("created journal custodian key pair; keep %s outside every runtime claim and snapshot, and place %s in the separately held management key directory\n", *privatePath, *publicPath)
+	return nil
+}
+
+func writeExclusiveRecoveryFile(path string, body []byte, mode os.FileMode) error {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(body); err != nil {
+		_ = f.Close()
+		_ = os.Remove(path)
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		_ = os.Remove(path)
+		return err
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(path)
+		return err
+	}
+	return nil
+}
+
+func journalEvidenceCommand(args []string) error {
+	fs := flag.NewFlagSet("keystone recover journal-evidence", flag.ContinueOnError)
+	sourceDB := fs.String("source-db", "", "offline final source Keystone database")
+	snapshot := fs.String("snapshot", "", "exact SQLite snapshot artifact being restored")
+	snapshotAtText := fs.String("snapshot-at", "", "snapshot capture time (RFC3339)")
+	fencedAtText := fs.String("source-fenced-at", "", "time the original writer was fenced (RFC3339)")
+	source := fs.String("source", "", "stable journal source identifier")
+	custody := fs.String("custody", "", "independent evidence custody description")
+	signingKey := fs.String("signing-key", "", "independently held recovery-journal custodian private key")
+	outPath := fs.String("out", "", "new evidence JSON file")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *sourceDB == "" || *snapshot == "" || *snapshotAtText == "" || *fencedAtText == "" || *source == "" || *custody == "" || *signingKey == "" || *outPath == "" || fs.NArg() != 0 {
+		return fmt.Errorf("usage: keystone recover journal-evidence -source-db <offline-db> -snapshot <snapshot-db> -snapshot-at <RFC3339> -source-fenced-at <RFC3339> -source <id> -custody <description> -signing-key <recovery-journal.key> -out <new-file>")
+	}
+	snapshotAt, err := time.Parse(time.RFC3339, *snapshotAtText)
+	if err != nil {
+		return fmt.Errorf("snapshot-at: %w", err)
+	}
+	fencedAt, err := time.Parse(time.RFC3339, *fencedAtText)
+	if err != nil {
+		return fmt.Errorf("source-fenced-at: %w", err)
+	}
+	key, err := os.ReadFile(*signingKey)
+	if err != nil {
+		return fmt.Errorf("reading signing key: %w", err)
+	}
+	defer clear(key)
+	if len(key) != ed25519.PrivateKeySize {
+		return fmt.Errorf("signing key has invalid length")
+	}
+	db, err := runtimedb.Open(*sourceDB)
+	if err != nil {
+		return fmt.Errorf("opening offline source database: %w", err)
+	}
+	defer db.Close()
+	evidence, err := db.BuildRecoveryJournalEvidence(*snapshot, *source, *custody, snapshotAt, fencedAt, time.Now().UTC(), ed25519.PrivateKey(key))
+	if err != nil {
+		return err
+	}
+	if err := writeExclusiveRecoveryFile(*outPath, evidence, 0o600); err != nil {
+		return fmt.Errorf("creating evidence file: %w", err)
+	}
+	fmt.Printf("wrote signed terminal recovery journal evidence to %s; retain it independently from the snapshot\n", *outPath)
 	return nil
 }
 

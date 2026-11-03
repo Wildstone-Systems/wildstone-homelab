@@ -211,6 +211,7 @@ func TestPartCAcceptance(t *testing.T) {
 		if applied == 0 {
 			t.Fatal("reconciliation applied nothing, so it proved nothing")
 		}
+		installSyntheticRecoveryEvidence(t, db)
 		if err := db.ReleaseRestoreQuarantine("root-admin"); err != nil {
 			t.Fatalf("releasing after a full reconciliation: %v", err)
 		}
@@ -265,6 +266,7 @@ func TestPartCAcceptance(t *testing.T) {
 		if _, err := db.ReconcileRestore(); err != nil {
 			t.Fatal(err)
 		}
+		installSyntheticRecoveryEvidence(t, db)
 		if err := db.ReleaseRestoreQuarantine("root-admin"); err != nil {
 			t.Fatal(err)
 		}

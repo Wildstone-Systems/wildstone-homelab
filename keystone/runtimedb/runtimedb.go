@@ -42,6 +42,10 @@ type DB struct {
 	// challengeClock is nil in production. Challenge tests use it to prove
 	// expiry after transaction admission without changing the process clock.
 	challengeClock func() time.Time
+	// recoveryJournalTestHook is nil in production. Tests use it to stop
+	// reconciliation after durable replay and before the verification
+	// checkpoint, exactly where a process crash used to strand recovery.
+	recoveryJournalTestHook func() error
 }
 
 // Open opens (creating if needed) the runtime database at path and applies

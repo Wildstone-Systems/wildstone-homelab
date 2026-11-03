@@ -590,6 +590,7 @@ func TestRestoreCannotReviveCredentialUse(t *testing.T) {
 	if _, err := restored.ReconcileRestore(); err != nil {
 		t.Fatal(err)
 	}
+	installSyntheticRecoveryEvidence(t, restored)
 	if err := restored.ReleaseRestoreQuarantine("mika"); err != nil {
 		t.Fatal(err)
 	}

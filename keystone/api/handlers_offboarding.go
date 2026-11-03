@@ -10,6 +10,7 @@ package api
 // a household with last week's idea of who is allowed to.
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -119,8 +120,8 @@ func (s *Server) getRestoreState(_ *http.Request, _ principal.Identity) (any, in
 	return map[string]any{
 		"state": state,
 		"note": "quarantine holds retrieval, dispatch, ingestion and proactive delivery. " +
-			"Releasing it takes an assertion that the deletion journal is current AND a replay of " +
-			"it — an acknowledgement alone is not evidence that missing deletions were recovered",
+			"Reconciliation requires signed terminal journal evidence independently retained from the snapshot, " +
+			"exact snapshot-prefix continuity and replay. An Owner acknowledgement alone is not freshness evidence",
 	}, http.StatusOK, nil
 }
 
@@ -146,35 +147,32 @@ func (s *Server) enterRestoreQuarantine(r *http.Request, _ principal.Identity) (
 	return map[string]any{"quarantined": true}, http.StatusOK, nil
 }
 
-// reconcileRestore asserts the journal is current and replays it.
-//
-// The two happen in one call because doing them separately invites
-// doing only the first, which is precisely the failure A10 names.
+// reconcileRestore verifies independently retained, signed terminal journal
+// evidence and replays it. It deliberately cannot release quarantine; #285
+// owns that separate authorized decision after this evidence is inspectable.
 func (s *Server) reconcileRestore(r *http.Request, id principal.Identity) (any, int, error) {
+	actor, err := s.activeOwnerConsoleActor(id)
+	if err != nil {
+		return nil, http.StatusForbidden, err
+	}
 	var req struct {
-		JournalCurrent bool `json:"journalCurrent"`
-		Release        bool `json:"release"`
+		Evidence json.RawMessage `json:"evidence"`
+		Release  bool            `json:"release"`
 	}
 	if code, err := decodeStrict(r, &req); err != nil {
 		return nil, code, err
 	}
-	if !req.JournalCurrent {
-		return nil, http.StatusBadRequest, fmt.Errorf(
-			"reconciliation needs journalCurrent: somebody has to state that the deletion journal " +
-				"has been brought up to date from a source newer than the snapshot. Replaying an " +
-				"equally old journal proves nothing")
+	if req.Release {
+		return nil, http.StatusBadRequest, fmt.Errorf("journal reconciliation never releases restore quarantine; release is a separate Owner operation")
 	}
-	if err := s.DB.AssertJournalCurrent(actingMember(id)); err != nil {
-		if errors.Is(err, runtimedb.ErrNotFound) {
-			return nil, http.StatusBadRequest, fmt.Errorf("this database is not in restore quarantine")
-		}
-		return nil, http.StatusInternalServerError, err
+	if len(req.Evidence) == 0 || len(s.RecoveryJournalPublicKey) == 0 {
+		return nil, http.StatusBadRequest, fmt.Errorf("signed recovery journal evidence and the preserved trusted signing identity are required")
 	}
-	applied, err := s.DB.ReconcileRestore()
+	result, err := s.DB.ReconcileRestoreEvidence(req.Evidence, s.RecoveryJournalPublicKey, actor, s.now())
 	if err != nil {
-		return nil, http.StatusInternalServerError, err
+		return nil, http.StatusBadRequest, err
 	}
-	out := map[string]any{"replayed": applied}
+	out := map[string]any{"reconciliation": result, "quarantined": true}
 	// A replay that re-fenced a Personal credential has only said it is
 	// revoked; the copies still have to be proven gone, and a newer
 	// version the snapshot never heard of may be sitting on a node.
@@ -198,14 +196,6 @@ func (s *Server) reconcileRestore(r *http.Request, id principal.Identity) (any, 
 		}
 	}
 	out["credentialErasures"] = erasures
-	if req.Release {
-		if err := s.DB.ReleaseRestoreQuarantine(actingMember(id)); err != nil {
-			return nil, http.StatusBadRequest, err
-		}
-		out["released"] = true
-	} else {
-		out["note"] = "reconciled but still quarantined. Release it separately once you have " +
-			"looked at what the replay did"
-	}
+	out["note"] = "verified and replayed; restore quarantine remains active pending a separate authorized release"
 	return out, http.StatusOK, nil
 }

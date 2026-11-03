@@ -200,6 +200,7 @@ func TestQuarantineHoldsEveryButlerFacingPath(t *testing.T) {
 	if _, err := db.ReconcileRestore(); err != nil {
 		t.Fatalf("ReconcileRestore under quarantine: %v", err)
 	}
+	installSyntheticRecoveryEvidence(t, db)
 	if err := db.ReleaseRestoreQuarantine("root-admin"); err != nil {
 		t.Fatal(err)
 	}

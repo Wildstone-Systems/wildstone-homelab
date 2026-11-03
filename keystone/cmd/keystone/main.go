@@ -8,6 +8,7 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
 	"errors"
 	"flag"
 	"fmt"
@@ -1318,6 +1319,14 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	// Public plane. Plan approval pokes the reconcile service (R2a); a
 	// new household event pokes the automation engine.
 	apiSrv := api.New(principals, db, state, log)
+	journalTrustPath := filepath.Join(dataDir, "recovery-journal.pub")
+	if journalPub, err := os.ReadFile(journalTrustPath); err == nil && len(journalPub) == ed25519.PublicKeySize {
+		apiSrv.RecoveryJournalPublicKey = ed25519.PublicKey(journalPub)
+	} else if err != nil && !os.IsNotExist(err) {
+		log.Warn("recovery journal trust root unavailable; restore reconciliation will fail closed", "err", err)
+	} else if err == nil {
+		log.Warn("recovery journal trust root has invalid length; restore reconciliation will fail closed", "path", journalTrustPath)
+	}
 	apiSrv.Publisher = publisher
 	if engineCfg.DeploymentConfig != "" {
 		deployments, err := deployment.Open(engineCfg.DeploymentConfig, db, state, publisher)

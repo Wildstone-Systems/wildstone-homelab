@@ -72,7 +72,7 @@ var requiredManagementArtifacts = []string{
 }
 
 var requiredManagementKeys = []string{
-	"sops-age.key", "git-host.key", "git-source-client.key",
+	"sops-age.key", "git-host.key", "git-source-client.key", "recovery-journal.pub",
 }
 
 // VerifyManagementSet performs only local reads of the supplied material and
@@ -129,6 +129,10 @@ func VerifyManagementSet(setDir, keyDir string) (ManagementPreflight, error) {
 		if _, err := verifiedArtifact(keyDir, name, m.Keys[name], m.SHA256); err != nil {
 			return report, err
 		}
+	}
+	journalPub, _ := verifiedArtifact(keyDir, "recovery-journal.pub", m.Keys["recovery-journal.pub"], m.SHA256)
+	if len(journalPub) != ed25519.PublicKeySize {
+		return report, fmt.Errorf("management recovery: recovery-journal.pub is not an Ed25519 public key")
 	}
 	for _, binding := range []struct {
 		required bool
@@ -225,12 +229,16 @@ func RestoreManagementSet(setDir, keyDir, dataDir string) (ManagementPreflight, 
 	if err != nil {
 		return report, fmt.Errorf("management recovery: resolving set directory: %w", err)
 	}
+	keyRoot, err := filepath.EvalSymlinks(keyDir)
+	if err != nil {
+		return report, fmt.Errorf("management recovery: resolving key directory: %w", err)
+	}
 	manifestPath := filepath.Join(setRoot, "management-manifest.json")
 	manifestBefore, err := os.ReadFile(manifestPath)
 	if err != nil {
 		return report, fmt.Errorf("management recovery: reading manifest for restore: %w", err)
 	}
-	report, err = VerifyManagementSet(setRoot, keyDir)
+	report, err = VerifyManagementSet(setRoot, keyRoot)
 	if err != nil {
 		return report, err
 	}
@@ -301,6 +309,10 @@ func RestoreManagementSet(setDir, keyDir, dataDir string) (ManagementPreflight, 
 		if err := copyRegularFile(source, filepath.Join(stage, logical)); err != nil {
 			return report, fmt.Errorf("management recovery: restoring %s: %w", logical, err)
 		}
+	}
+	journalPubSource := filepath.Join(keyRoot, filepath.FromSlash(manifest.Keys["recovery-journal.pub"]))
+	if err := copyRegularFile(journalPubSource, filepath.Join(stage, "recovery-journal.pub")); err != nil {
+		return report, fmt.Errorf("management recovery: restoring independently held journal trust root: %w", err)
 	}
 	if err := os.Rename(stage, target); err != nil {
 		return report, fmt.Errorf("management recovery: publishing target data directory: %w", err)

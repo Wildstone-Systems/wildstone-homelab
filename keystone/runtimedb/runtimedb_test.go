@@ -2,6 +2,7 @@ package runtimedb
 
 import (
 	"errors"
+	"fmt"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -113,6 +114,26 @@ func record(t *testing.T, db *DB, handles ...string) {
 		if err := db.RecordButlerMember(h, RoleMember, "", ""); err != nil {
 			t.Fatalf("recording %q: %v", h, err)
 		}
+	}
+}
+
+// installSyntheticRecoveryEvidence marks an older, non-#284 test fixture as
+// having evidence so that tests of unrelated post-release behavior can cross
+// the stricter schema trigger. Recovery-journal correctness tests never use
+// this helper; they exercise signed evidence end to end.
+func installSyntheticRecoveryEvidence(t *testing.T, db *DB) {
+	t.Helper()
+	id := fmt.Sprintf("synthetic-test-evidence-%d", time.Now().UnixNano())
+	stamp := timeText(time.Now().UTC())
+	if _, err := db.sql.Exec(`INSERT INTO recovery_journal_reconciliations
+		(evidence_id,snapshot_sha256,snapshot_at,journal_source,custody,base_seq,head_seq,head_sha256,
+		 coverage_through,source_fenced_at,signer_fingerprint,verified_at,verified_by,applied_count,evidence_json)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, id, "test-snapshot", stamp, "test-source", "test-only fixture",
+		0, 0, "test-head", stamp, stamp, "test-signer", stamp, "test-owner", 0, `{}`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.sql.Exec(`UPDATE restore_state SET journal_evidence_id=?,journal_verified_at=? WHERE id=1`, id, stamp); err != nil {
+		t.Fatal(err)
 	}
 }
 
