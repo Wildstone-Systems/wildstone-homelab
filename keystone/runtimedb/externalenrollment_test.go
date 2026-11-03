@@ -348,11 +348,16 @@ func TestExternalEnrollmentChallengeMigrationPreservesRegistrationHistory(t *tes
 	if err := db.BindRuntimePrincipal(principal, agent); err != nil {
 		t.Fatal(err)
 	}
-	registration, err := db.CreatePendingExternalRegistration(CreatePendingExternalRegistration{
-		PersonID: person.PersonID, Butler: agent, Connection: connection, Issuer: "https://issuer.invalid",
-		ClientID: "migration-client", RuntimePrincipal: principal, ConfiguredBy: "root-admin",
-	})
-	if err != nil {
+	// This fixture is intentionally held at schema 0105. Current typed
+	// writes fail closed when #284 evidence columns are absent, so populate
+	// the historical row using exactly the 0105 columns under test.
+	registration := ExternalClientRegistration{ID: "migration-registration", PersonID: person.PersonID,
+		Butler: agent, Connection: connection, Issuer: "https://issuer.invalid", ClientID: "migration-client",
+		RuntimePrincipal: principal, State: ExternalRegistrationPendingConsent, ConfiguredBy: "root-admin"}
+	if _, err := db.sql.Exec(`INSERT INTO external_client_registrations
+		(id,person_id,butler,connection,issuer,client_id,runtime_principal,state,configured_at,configured_by)
+		VALUES(?,?,?,?,?,?,?,'pending_consent',?,?)`, registration.ID, registration.PersonID, registration.Butler,
+		registration.Connection, registration.Issuer, registration.ClientID, registration.RuntimePrincipal, now(), registration.ConfiguredBy); err != nil {
 		t.Fatal(err)
 	}
 	var table int

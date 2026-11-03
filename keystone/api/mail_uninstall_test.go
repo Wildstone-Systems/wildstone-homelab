@@ -8,7 +8,14 @@ package api
 // into the removal Plan. A dry run changes nothing.
 
 import (
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -147,9 +154,23 @@ func TestRestoreReplayReFilesTheAdapterRender(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Capture the exact pre-revocation snapshot that the evidence must bind.
+	snapshotAt := time.Now().UTC().Add(-time.Hour)
+	snapshotPath := filepath.Join(t.TempDir(), "keystone-snapshot.db")
+	if err := c.s.DB.BackupTo(snapshotPath); err != nil {
+		t.Fatal(err)
+	}
 	// The restored database: quarantined, and the (current) journal says
 	// sam revoked her monitor and its credential after the snapshot.
-	if err := c.s.DB.EnterRestoreQuarantine("restored from the nightly backup", time.Now().Add(-time.Hour)); err != nil {
+	if err := c.s.DB.EnterRestoreQuarantine("restored from the nightly backup", snapshotAt); err != nil {
+		t.Fatal(err)
+	}
+	snapshotBytes, err := os.ReadFile(snapshotPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshotSum := sha256.Sum256(snapshotBytes)
+	if _, err := c.s.DB.ExecForTest(`UPDATE restore_state SET snapshot_sha256=? WHERE id=1`, hex.EncodeToString(snapshotSum[:])); err != nil {
 		t.Fatal(err)
 	}
 	if err := c.s.DB.Journal("grant", "background-authorization/"+strconv.FormatInt(a.Seq, 10), "revoked", "sam", "stop"); err != nil {
@@ -158,13 +179,29 @@ func TestRestoreReplayReFilesTheAdapterRender(t *testing.T) {
 	if err := c.s.DB.Journal("secret", "pc.sam-mail.v1", "revoked", "sam", "stop"); err != nil {
 		t.Fatal(err)
 	}
-	var out struct {
-		Replayed           int                         `json:"replayed"`
-		CredentialErasures map[string][]erasureOutcome `json:"credentialErasures"`
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if code, body := c.consoleCall(c.mika, http.MethodPost, "/api/v1/restore/reconcile",
-		map[string]any{"journalCurrent": true}, &out); code != http.StatusOK {
-		t.Fatalf("reconcile = %d %s", code, body)
+	fencedAt := time.Now().UTC().Add(time.Minute)
+	evidenceJSON, err := c.s.DB.BuildRecoveryJournalEvidence(snapshotPath, "mail-test-source",
+		"independent mail recovery fixture", snapshotAt, fencedAt, fencedAt, priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var evidence any
+	if err := json.Unmarshal(evidenceJSON, &evidence); err != nil {
+		t.Fatal(err)
+	}
+	c.s.RecoveryJournalPublicKey = pub
+	requestJSON, err := json.Marshal(map[string]any{"evidence": evidence})
+	if err != nil {
+		t.Fatal(err)
+	}
+	freshOwner := sessionCookie(c.s.StartConsoleSession("mika", c.s.now()))
+	if code, body := c.sessionRequest(http.MethodPost, "/api/v1/restore/reconcile",
+		string(requestJSON), "mika", freshOwner); code != http.StatusOK {
+		t.Fatalf("reconcile = %d %+v", code, body)
 	}
 	if _, err := c.s.DB.LiveBackgroundAuthorization("sam-mail"); err == nil {
 		t.Fatal("the replay left sam's authorization live")

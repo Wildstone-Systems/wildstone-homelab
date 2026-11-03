@@ -8,6 +8,7 @@ package api
 
 import (
 	"context"
+	"crypto/ed25519"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -75,6 +76,10 @@ type Server struct {
 
 	Principals *principal.Store
 	DB         *runtimedb.DB
+	// RecoveryJournalPublicKey is the independently held journal-custodian
+	// trust root used to verify terminal recovery evidence. Its private half
+	// is never stored in Keystone's runtime or recovery snapshot.
+	RecoveryJournalPublicKey ed25519.PublicKey
 	// EnrollmentSignInHTTP is the test seam for the distinct external-
 	// enrollment relying party. Production uses the default client.
 	EnrollmentSignInHTTP *http.Client

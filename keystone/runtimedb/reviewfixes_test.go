@@ -292,6 +292,7 @@ func TestReconciliationRevokesACredentialARestoredPlacementStillHolds(t *testing
 	if len(pending) != 1 || pending[0] != "node-a" {
 		t.Fatalf("unproven removals = %v, want node-a fenced and unproven", pending)
 	}
+	installSyntheticRecoveryEvidence(t, db)
 	if err := db.ReleaseRestoreQuarantine("root-admin"); err != nil {
 		t.Fatal(err)
 	}
@@ -353,6 +354,7 @@ func TestQuarantineHoldsPushesThatCameBackWithTheRestore(t *testing.T) {
 	if _, err := db.ReconcileRestore(); err != nil {
 		t.Fatal(err)
 	}
+	installSyntheticRecoveryEvidence(t, db)
 	if err := db.ReleaseRestoreQuarantine("root-admin"); err != nil {
 		t.Fatal(err)
 	}
