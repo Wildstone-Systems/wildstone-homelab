@@ -9,11 +9,20 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/recovery"
 )
 
 func recoverCommand(args []string) error {
+	if len(args) > 0 {
+		switch args[0] {
+		case "preflight-management":
+			return preflightManagementCommand(args[1:])
+		case "restore-management":
+			return restoreManagementCommand(args[1:])
+		}
+	}
 	fs := flag.NewFlagSet("keystone recover", flag.ContinueOnError)
 	setDir := fs.String("set", "", "directory containing the restored wildstone recovery set")
 	kitPath := fs.String("kit", "", "recovery kit JSON; downloads the wildstone set from the bucket")
@@ -56,6 +65,50 @@ func recoverCommand(args []string) error {
 	}
 	fmt.Printf("restored Statefile and quarantined runtime database into %s\n", *dataDir)
 	fmt.Println("start Keystone, re-join each node, import its .sealed bundle, then run wild restore reconcile --release")
+	return nil
+}
+
+func restoreManagementCommand(args []string) error {
+	fs := flag.NewFlagSet("keystone recover restore-management", flag.ContinueOnError)
+	setDir := fs.String("set", "", "directory containing the extracted private management recovery set")
+	keyDir := fs.String("keys", "", "separately held directory containing bootstrap/decryption keys")
+	dataDir := fs.String("data-dir", "", "new chart 0.2 Keystone private data directory")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *setDir == "" || *keyDir == "" || *dataDir == "" || fs.NArg() != 0 {
+		return fmt.Errorf("usage: keystone recover restore-management -set <directory> -keys <directory> -data-dir <new-directory>")
+	}
+	report, err := recovery.RestoreManagementSet(*setDir, *keyDir, *dataDir)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("restored the preserved management runtime into %s in quarantine\n", *dataDir)
+	fmt.Printf("accepted Statefile: %s\n", report.ApprovedStatefileRevision)
+	fmt.Printf("preserved coordinator: %s epoch %d (Owner release and promotion are still required)\n", report.CoordinatorHolder, report.CoordinatorEpoch)
+	fmt.Println("do not start Keystone until the original writer is fenced; never start more than one writer")
+	return nil
+}
+
+func preflightManagementCommand(args []string) error {
+	fs := flag.NewFlagSet("keystone recover preflight-management", flag.ContinueOnError)
+	setDir := fs.String("set", "", "directory containing the extracted private management recovery set")
+	keyDir := fs.String("keys", "", "separately held directory containing bootstrap/decryption keys")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *setDir == "" || *keyDir == "" || fs.NArg() != 0 {
+		return fmt.Errorf("usage: keystone recover preflight-management -set <directory> -keys <directory>")
+	}
+	report, err := recovery.VerifyManagementSet(*setDir, *keyDir)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("management recovery preflight passed\n")
+	fmt.Printf("snapshot: %s\n", report.SnapshotAt.UTC().Format(time.RFC3339))
+	fmt.Printf("accepted Statefile: %s\n", report.ApprovedStatefileRevision)
+	fmt.Printf("promoted deployment: %s\n", report.PromotedDeploymentRevision)
+	fmt.Printf("preserved coordinator: %s epoch %d (promotion is still required before dispatch)\n", report.CoordinatorHolder, report.CoordinatorEpoch)
 	return nil
 }
 

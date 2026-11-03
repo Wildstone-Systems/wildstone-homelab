@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -223,6 +224,39 @@ func TestUsedTokenPersistenceSurvivesRestart(t *testing.T) {
 		NodeId: "node-b", JoinToken: tok, CsrPem: testCSR(t, "node-b"),
 	}); err == nil {
 		t.Fatal("used token was accepted again after gateway restart")
+	}
+}
+
+func TestPersistedTokenStoreRejectsInvalidRecords(t *testing.T) {
+	token := strings.Repeat("a", 64)
+	valid := `{"` + token + `":{"expires":"2030-01-01T00:00:00Z","used":true}}`
+	if err := ValidatePersistedTokenStore([]byte(valid)); err != nil {
+		t.Fatalf("valid persisted token rejected: %v", err)
+	}
+	for name, body := range map[string]string{
+		"null store":           `null`,
+		"null record":          `{"` + token + `":null}`,
+		"missing expiration":   `{"` + token + `":{"used":false}}`,
+		"invalid expiration":   `{"` + token + `":{"expires":"not-a-time","used":false}}`,
+		"invalid token length": `{"abcd":{"expires":"2030-01-01T00:00:00Z","used":false}}`,
+		"uppercase token":      `{"` + strings.Repeat("A", 64) + `":{"expires":"2030-01-01T00:00:00Z","used":false}}`,
+		"wrong record shape":   `{"` + token + `":"valid JSON, invalid record"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := ValidatePersistedTokenStore([]byte(body)); err == nil {
+				t.Fatal("invalid persisted token store was accepted")
+			}
+		})
+	}
+}
+
+func TestLoadTokenStoreUsesPersistedRecordValidation(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "tokens.json"), []byte(`{"`+strings.Repeat("a", 64)+`":null}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadTokenStore(dir); err == nil {
+		t.Fatal("gateway startup accepted a null persisted token record")
 	}
 }
 
