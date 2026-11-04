@@ -247,7 +247,7 @@ the vector half never becomes a path that ranks before it filters
 
 ### F-156-05 — Durable memory embedding has a coordinator-gated producer and consumer
 
-- **Current status:** partial
+- **Current status:** open
 - **Current evidence:** `RecordMemory` and `CorrectMemory` atomically queue source identities; `keystone/indexworker` leases them only under the active coordinator, resolves the S1 embedder, and atomically rechecks source eligibility, authority metadata and the claim before publication. Query embedding/recall remains #234, and additional document-source producers remain within #233.
 - **Current owner:** chickenrat17
 - **Tracking:** #311
