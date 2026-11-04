@@ -476,11 +476,10 @@ func (s *Server) themeBackgroundClear(r *http.Request, id principal.Identity) (a
 
 // writeThemeBackground serves one theme's picture.
 //
-// ON THE PORTAL ONLY. The Console does not draw wallpapers — it is the
-// screen somebody opens when the house is broken, and ADR-W027's dense
-// operator layout is drawn on a flat ground on purpose — so it has no
-// reason to fetch a megabyte of somebody's art. Its picker says a theme
-// brings a picture; the dashboard is where the picture is.
+// ON BOTH DOORS. The portal and the Console draw the caller's theme
+// picture behind their pages, so a person sees the same ground
+// everywhere. The --wallpaper-veil in the token block keeps the Console's
+// dense text readable over it, at the same contrast floors.
 //
 // NOT SCOPED TO THE CALLER'S OWN THEME, deliberately: every theme in
 // the catalogue is one this person may choose, so a picker showing what
@@ -522,8 +521,13 @@ func (s *Server) writeThemeBackground(w http.ResponseWriter, r *http.Request) (a
 	return nil, http.StatusOK, nil
 }
 
-// homeThemeBackground serves the same bytes to the household portal,
-// which is where a wallpaper is actually drawn.
+// homeThemeBackground serves the bytes to the household portal.
 func (s *Server) homeThemeBackground(w http.ResponseWriter, r *http.Request, _ string, _ []resource.Resource) (any, int, error) {
+	return s.writeThemeBackground(w, r)
+}
+
+// consoleThemeBackground serves the same bytes to the Console, which
+// fetches them with its session cookie as a CSS background.
+func (s *Server) consoleThemeBackground(w http.ResponseWriter, r *http.Request, _ principal.Identity) (any, int, error) {
 	return s.writeThemeBackground(w, r)
 }
