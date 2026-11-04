@@ -152,25 +152,28 @@ func (r *Reconciler) presentSecrets(ctx context.Context, nodeID string) (map[str
 }
 
 // ensureNodeSecrets generates every desired Secret that is not
-// operator-supplied. Capabilities awaiting a supplied secret are skipped
-// rather than aborting the node: their steps are removed from the plan
-// by the caller, so generating their other secrets would be work for a
-// capability that is not going to converge this pass.
+// operator-supplied. For a capability awaiting a supplied secret, the
+// pre-pass makes one narrow exception: a generated secret referenced as a
+// BackupPlan password. The backup scheduler consumes that dependency outside
+// the capability's ordinary plan even while the caller correctly removes all
+// owned steps. Other generated secrets stay held back with the capability, so
+// this exception cannot become general partial convergence.
 func (r *Reconciler) ensureNodeSecrets(
 	ctx context.Context, nodeID string, desired []resource.Resource, awaiting map[string]string,
 ) string {
 	if nodeID == "" {
 		return ""
 	}
+	backupPasswords := requiredBackupPasswordSecrets(desired)
 	for _, res := range desired {
-		if _, blocked := awaiting[res.Metadata.Owner]; blocked {
-			continue
-		}
 		if res.Kind != resource.KindSecret || res.Secret == nil {
 			continue
 		}
 		if res.Secret.Provided {
 			continue // never generated; presence was checked above
+		}
+		if _, blocked := awaiting[res.Metadata.Owner]; blocked && !backupPasswords[res.Metadata.Owner][res.Secret.Name] {
+			continue
 		}
 		out, err := r.retryDispatch(ctx, nodeID, ensureSecretOp(res.Secret))
 		if err != nil {
@@ -181,6 +184,29 @@ func (r *Reconciler) ensureNodeSecrets(
 		}
 	}
 	return ""
+}
+
+func requiredBackupPasswordSecrets(desired []resource.Resource) map[string]map[string]bool {
+	required := map[string]map[string]bool{}
+	for _, res := range desired {
+		if res.Kind != resource.KindBackupPlan || res.BackupPlan == nil {
+			continue
+		}
+		refs := []string{res.BackupPlan.PasswordSecret}
+		if res.BackupPlan.Offsite != nil {
+			refs = append(refs, res.BackupPlan.Offsite.PasswordSecret)
+		}
+		for _, ref := range refs {
+			if !strings.HasPrefix(ref, "secret/") {
+				continue
+			}
+			if required[res.Metadata.Owner] == nil {
+				required[res.Metadata.Owner] = map[string]bool{}
+			}
+			required[res.Metadata.Owner][strings.TrimPrefix(ref, "secret/")] = true
+		}
+	}
+	return required
 }
 
 // observeSecret reports a Secret present iff a prior successful apply

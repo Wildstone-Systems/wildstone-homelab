@@ -30,12 +30,21 @@ type fakeAgent struct {
 func (f *fakeAgent) Apply(_ context.Context, _ string, op *wsv1.Operation) (*wsv1.OpResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.tooOld {
-		return &wsv1.OpResult{Result: &wsv1.OpResult_Error{Error: &wsv1.OpError{Code: wsv1.ErrorCode_ERROR_CODE_INVALID, Message: "unknown operation"}}}, nil
-	}
 	notFound := &wsv1.OpResult{Result: &wsv1.OpResult_Error{Error: &wsv1.OpError{Code: wsv1.ErrorCode_ERROR_CODE_NOT_FOUND}}}
 	switch o := op.GetOp().(type) {
+	case *wsv1.Operation_ListSecrets:
+		return &wsv1.OpResult{Result: &wsv1.OpResult_ListSecrets{ListSecrets: &wsv1.ListSecretsResult{Secrets: []*wsv1.SecretInfo{
+			{Name: "restic-photos", Version: 1},
+			{Name: "restic-photos-offsite", Version: 1},
+			{Name: "restic-movies", Version: 1},
+			{Name: "restic-movies-offsite", Version: 1},
+			{Name: "restic-docs", Version: 1},
+			{Name: "restic-docs-offsite", Version: 1},
+		}}}}, nil
 	case *wsv1.Operation_DiskSpace:
+		if f.tooOld {
+			return &wsv1.OpResult{Result: &wsv1.OpResult_Error{Error: &wsv1.OpError{Code: wsv1.ErrorCode_ERROR_CODE_INVALID, Message: "unknown operation"}}}, nil
+		}
 		key := o.DiskSpace.GetPath() + o.DiskSpace.GetVolume()
 		f.asked = append(f.asked, "disk:"+key)
 		d, ok := f.disks[key]
@@ -46,6 +55,9 @@ func (f *fakeAgent) Apply(_ context.Context, _ string, op *wsv1.Operation) (*wsv
 		c := proto.Clone(d).(*wsv1.DiskSpaceResult)
 		return &wsv1.OpResult{Result: &wsv1.OpResult_DiskSpace{DiskSpace: c}}, nil
 	case *wsv1.Operation_MeasureUsage:
+		if f.tooOld {
+			return &wsv1.OpResult{Result: &wsv1.OpResult_Error{Error: &wsv1.OpError{Code: wsv1.ErrorCode_ERROR_CODE_INVALID, Message: "unknown operation"}}}, nil
+		}
 		if f.tooOldUsage {
 			return &wsv1.OpResult{Result: &wsv1.OpResult_Error{Error: &wsv1.OpError{Code: wsv1.ErrorCode_ERROR_CODE_RUNTIME, Message: "usage walk exceeded 1M entries"}}}, nil
 		}

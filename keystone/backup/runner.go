@@ -54,6 +54,14 @@ type ApplierRunner struct {
 }
 
 func (a *ApplierRunner) RunContainer(ctx context.Context, node, name string, spec resource.ContainerSpec) error {
+	// Recheck at the final execution boundary. The scheduler performs the
+	// same check before it opens provenance, but a secret can disappear or
+	// a node can become unreachable between that decision and container
+	// creation. No pull, leftover removal, or EnsureContainer is allowed on
+	// an unconfirmed password dependency.
+	if err := checkSecretRefs(ctx, a.Applier, node, passwordSecretRefs(spec)); err != nil {
+		return err
+	}
 	// Pull before ensure: the agent's ensureContainer never pulls, and a
 	// digest-pinned restic image is never resolved implicitly, so a
 	// fresh node's first backup run would fail at create otherwise
@@ -77,6 +85,13 @@ func (a *ApplierRunner) RunContainer(ctx context.Context, node, name string, spe
 	// and credentials. So the clear-out must succeed; "nothing there" is
 	// success.
 	if err := a.clearLeftover(ctx, node, name); err != nil {
+		return err
+	}
+	// Pulling an image or clearing a stale run can take long enough for the
+	// dependency to change. Recheck at the actual EnsureContainer boundary;
+	// Wardstone must never be asked to materialize a password that this
+	// dispatch has not confirmed on this node.
+	if err := checkSecretRefs(ctx, a.Applier, node, passwordSecretRefs(spec)); err != nil {
 		return err
 	}
 

@@ -43,9 +43,10 @@ const (
 type BackupRunStatus string
 
 const (
-	BackupRunRunning   BackupRunStatus = "running"
-	BackupRunSucceeded BackupRunStatus = "succeeded"
-	BackupRunFailed    BackupRunStatus = "failed"
+	BackupRunRunning               BackupRunStatus = "running"
+	BackupRunSucceeded             BackupRunStatus = "succeeded"
+	BackupRunFailed                BackupRunStatus = "failed"
+	BackupRunDependencyUnavailable BackupRunStatus = "dependency-unavailable"
 )
 
 // BackupRun is one row of the backup run ledger: the durable "when did
@@ -80,8 +81,8 @@ func (db *DB) StartBackupRun(planName string, kind BackupRunKind, planID string)
 
 // FinishBackupRun closes a ledger row with its outcome.
 func (db *DB) FinishBackupRun(seq int64, status BackupRunStatus, detail string) error {
-	if status != BackupRunSucceeded && status != BackupRunFailed {
-		return fmt.Errorf("runtimedb: finish backup run: status must be succeeded or failed, got %q", status)
+	if status != BackupRunSucceeded && status != BackupRunFailed && status != BackupRunDependencyUnavailable {
+		return fmt.Errorf("runtimedb: finish backup run: invalid terminal status %q", status)
 	}
 	res, err := db.sql.Exec(
 		`UPDATE backup_runs SET status = ?, detail = ?, finished_at = ? WHERE seq = ?`,
@@ -97,6 +98,44 @@ func (db *DB) FinishBackupRun(seq int64, status BackupRunStatus, detail string) 
 		return ErrNotFound
 	}
 	return nil
+}
+
+// RecordBackupDependencyUnavailable records a scheduler refusal without
+// opening a run or plan. The INSERT is conditional on the newest row for the
+// same plan and kind, so repeated ticks, restarts, and concurrent evaluators
+// preserve one durable actionable result for one unchanged condition.
+func (db *DB) RecordBackupDependencyUnavailable(planName string, kind BackupRunKind, detail string) (seq int64, inserted bool, err error) {
+	if planName == "" || kind == "" || detail == "" {
+		return 0, false, fmt.Errorf("runtimedb: record backup dependency: plan, kind, and detail required")
+	}
+	at := now()
+	res, err := db.sql.Exec(`
+		INSERT INTO backup_runs (plan_name, run_kind, plan_id, started_at, finished_at, status, detail)
+		SELECT ?, ?, '', ?, ?, ?, ?
+		WHERE NOT EXISTS (
+			SELECT 1 FROM backup_runs
+			 WHERE seq = (SELECT MAX(seq) FROM backup_runs WHERE plan_name = ? AND run_kind = ?)
+			   AND status = ? AND detail = ?
+		)`, planName, string(kind), at, at, string(BackupRunDependencyUnavailable), detail,
+		planName, string(kind), string(BackupRunDependencyUnavailable), detail)
+	if err != nil {
+		return 0, false, fmt.Errorf("runtimedb: recording backup dependency: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, false, err
+	}
+	if n != 0 {
+		seq, err = res.LastInsertId()
+		return seq, true, err
+	}
+	row := db.sql.QueryRow(`SELECT seq FROM backup_runs
+		WHERE plan_name = ? AND run_kind = ? AND status = ? AND detail = ?
+		ORDER BY seq DESC LIMIT 1`, planName, string(kind), string(BackupRunDependencyUnavailable), detail)
+	if err := row.Scan(&seq); err != nil {
+		return 0, false, fmt.Errorf("runtimedb: reading existing backup dependency: %w", err)
+	}
+	return seq, false, nil
 }
 
 // LastBackupRun returns the most recent ledger row for (planName, kind)

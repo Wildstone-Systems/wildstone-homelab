@@ -13,6 +13,7 @@ import (
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/resource"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/runtimedb"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/statefile"
+	wsv1 "github.com/Wildstone-Systems/wildstone-homelab/proto/gen/wardstone/v1"
 )
 
 const testResticImage = "restic/restic@sha256:" + "9940e6c7421ab3a21ee9fdc4e91596d04c792b600d31b102696c75cbf3ac4481"
@@ -30,6 +31,63 @@ type recordedRun struct {
 	node string
 	name string
 	spec resource.ContainerSpec
+}
+
+type fakeSecretInventory struct {
+	mu        sync.Mutex
+	byNode    map[string]map[string]bool
+	transport error
+	operation *wsv1.OpError
+	queries   int
+}
+
+func (f *fakeSecretInventory) Apply(_ context.Context, node string, op *wsv1.Operation) (*wsv1.OpResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if op.GetListSecrets() == nil {
+		return &wsv1.OpResult{Result: &wsv1.OpResult_Error{Error: &wsv1.OpError{
+			Code: wsv1.ErrorCode_ERROR_CODE_INVALID, Message: "unknown operation",
+		}}}, nil
+	}
+	f.queries++
+	if f.transport != nil {
+		return nil, f.transport
+	}
+	if f.operation != nil {
+		return &wsv1.OpResult{Result: &wsv1.OpResult_Error{Error: f.operation}}, nil
+	}
+	result := &wsv1.ListSecretsResult{}
+	for name, present := range f.byNode[node] {
+		if present {
+			result.Secrets = append(result.Secrets, &wsv1.SecretInfo{Name: name, Version: 1})
+		}
+	}
+	return &wsv1.OpResult{Result: &wsv1.OpResult_ListSecrets{ListSecrets: result}}, nil
+}
+
+func (f *fakeSecretInventory) set(node, name string, present bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.byNode == nil {
+		f.byNode = map[string]map[string]bool{}
+	}
+	if f.byNode[node] == nil {
+		f.byNode[node] = map[string]bool{}
+	}
+	f.byNode[node][name] = present
+}
+
+func presentTestSecrets() *fakeSecretInventory {
+	names := []string{
+		"restic-photos", "restic-movies", "restic-docs", "restic-alpha", "restic-beta",
+		"restic-photos-offsite", "restic-movies-offsite", "restic-docs-offsite",
+		"restic-wildstone", "restic-wildstone-offsite", "offsite-password",
+	}
+	byNode := map[string]map[string]bool{"n1": {}}
+	for _, name := range names {
+		byNode["n1"][name] = true
+	}
+	return &fakeSecretInventory{byNode: byNode}
 }
 
 // migrated is the schema, built once for this whole test binary rather
@@ -92,7 +150,7 @@ func newEngine(t *testing.T, run Runner) (*Engine, *runtimedb.DB, *statefile.Sto
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &Engine{State: state, DB: db, Run: run, ResticImage: testResticImage}, db, state
+	return &Engine{State: state, DB: db, Run: run, Agent: presentTestSecrets(), ResticImage: testResticImage}, db, state
 }
 
 func seedPlan(t *testing.T, state *statefile.Store, r resource.Resource) {
@@ -221,6 +279,91 @@ func TestFirstTickRunsBackupAndDrill(t *testing.T) {
 	}
 	if completed != 3 {
 		t.Fatalf("backup.completed events = %d, want 3", completed)
+	}
+}
+
+func TestUnavailablePasswordBlocksBackupCheckAndDrillWithoutDuplicateRuns(t *testing.T) {
+	run := &fakeRunner{}
+	e, db, state := newEngine(t, run)
+	inventory := &fakeSecretInventory{byNode: map[string]map[string]bool{
+		"n2": {"restic-photos": true}, // same name on another node is not authority for n1
+	}}
+	e.Agent = inventory
+	seedPlan(t, state, backupPlanResource("photos"))
+
+	for attempt := 0; attempt < 2; attempt++ {
+		reports, err := e.Tick(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(reports) != 3 {
+			t.Fatalf("attempt %d reports = %+v, want backup/check/drill refusals", attempt, reports)
+		}
+		for _, report := range reports {
+			if !strings.Contains(report.Err, "secret/restic-photos") || !strings.Contains(report.Err, "node n1") {
+				t.Fatalf("attempt %d report = %+v", attempt, report)
+			}
+		}
+	}
+	if got := run.names(); len(got) != 0 {
+		t.Fatalf("Restic containers were dispatched without the password: %v", got)
+	}
+	runs, err := db.ListBackupRuns(100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runs) != 3 {
+		t.Fatalf("unchanged dependency produced %d rows, want one per due kind: %+v", len(runs), runs)
+	}
+	for _, row := range runs {
+		if row.Status != runtimedb.BackupRunDependencyUnavailable || row.PlanID != "" {
+			t.Fatalf("dependency row = %+v", row)
+		}
+	}
+
+	// A scheduler restart rechecks but does not duplicate the durable result.
+	restarted := &Engine{State: state, DB: db, Run: run, Agent: inventory, ResticImage: testResticImage}
+	if _, err := restarted.Tick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	runs, err = db.ListBackupRuns(100)
+	if err != nil || len(runs) != 3 {
+		t.Fatalf("restart rows = %d err=%v", len(runs), err)
+	}
+
+	// Repair is observed on the next evaluation and ordinary dispatch resumes.
+	inventory.set("n1", "restic-photos", true)
+	reports, err := restarted.Tick(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reports) != 3 {
+		t.Fatalf("repaired reports = %+v", reports)
+	}
+	if len(run.names()) == 0 {
+		t.Fatal("ordinary Restic path did not resume after the password appeared")
+	}
+}
+
+func TestUnavailableSecretInventoryFailsClosedBeforeManualDispatch(t *testing.T) {
+	run := &fakeRunner{}
+	e, db, state := newEngine(t, run)
+	e.Agent = &fakeSecretInventory{transport: errors.New("private transport detail")}
+	seedPlan(t, state, backupPlanResource("photos"))
+
+	err := e.RunNow(context.Background(), "photos")
+	if err == nil || !strings.Contains(err.Error(), "cannot confirm password secrets on node n1") || strings.Contains(err.Error(), "private transport detail") {
+		t.Fatalf("error = %v", err)
+	}
+	if len(run.names()) != 0 {
+		t.Fatalf("containers dispatched with unavailable inventory: %v", run.names())
+	}
+	last, err := db.LastBackupRunAny("photos", runtimedb.BackupRunBackup)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if last.Status != runtimedb.BackupRunDependencyUnavailable || strings.Contains(last.Detail, "private transport detail") {
+		t.Fatalf("ledger leaked transport detail or used wrong status: %+v", last)
 	}
 }
 
