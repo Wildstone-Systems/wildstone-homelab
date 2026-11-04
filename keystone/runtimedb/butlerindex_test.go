@@ -251,6 +251,26 @@ func TestIndexJobsAreLocalFirstAndOrdered(t *testing.T) {
 	}
 }
 
+func TestExpiredIndexLeaseIsRecoveredWithoutDuplicateCompletion(t *testing.T) {
+	db := open(t)
+	seq, err := db.QueueIndexJob(IndexJobIndex, `{"memorySeq":1}`, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, ok, err := db.ClaimIndexJobLease("worker-a", time.Nanosecond)
+	if err != nil || !ok || first.Seq != seq {
+		t.Fatalf("first claim = %+v, %t, %v", first, ok, err)
+	}
+	time.Sleep(time.Millisecond)
+	second, ok, err := db.ClaimIndexJobLease("worker-b", time.Minute)
+	if err != nil || !ok || second.Seq != seq || second.Attempts != 2 {
+		t.Fatalf("recovered claim = %+v, %t, %v", second, ok, err)
+	}
+	if err := db.RetryIndexJob(seq, "worker-a", "stale", 0); err == nil {
+		t.Fatal("stale worker released another worker's lease")
+	}
+}
+
 // The implementation choice is RECORDED, not asserted. This fixture run
 // measures the keyword and hybrid strategies over the same corpus and
 // stores what it found, which is what makes the choice reviewable.

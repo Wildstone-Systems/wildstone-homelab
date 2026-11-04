@@ -46,6 +46,7 @@ import (
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/domestic"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/gateway"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/householdtz"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/indexworker"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/ingest"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/kubeapi"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/policy"
@@ -1999,6 +2000,11 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 		// degraded but honest.
 		if coordinating {
 			ledger := butlerstore.New(db, lease)
+			// Semantic indexing is background-only and belongs to the same
+			// coordinator authority as every other durable Butler worker.
+			// The worker rechecks the epoch after provider I/O before it may
+			// publish a derived row.
+			go (&indexworker.Worker{DB: db, Lease: lease}).Run(context.Background(), time.Second)
 			// Derived Task authority is wired explicitly rather than
 			// defaulted, for the reason admission always was: "no
 			// admission records exist yet" and "this person is not

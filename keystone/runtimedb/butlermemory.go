@@ -196,6 +196,9 @@ func (db *DB) RecordMemory(m MemoryRecord) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
+	if err := queueMemoryIndexTx(tx, seq); err != nil {
+		return 0, fmt.Errorf("runtimedb: queueing memory index: %w", err)
+	}
 	// Shared memory changes are other adults' business; private ones are
 	// not, and a digest that leaked them would make correcting a private
 	// record a disclosure (A1).
@@ -471,6 +474,9 @@ func (db *DB) CorrectMemory(seq int64, replacement MemoryRecord, actor string) (
 	newSeq, err := insertMemoryTx(tx, replacement)
 	if err != nil {
 		return 0, err
+	}
+	if err := queueMemoryIndexTx(tx, newSeq); err != nil {
+		return 0, fmt.Errorf("runtimedb: queueing corrected memory index: %w", err)
 	}
 	if err := inheritMemoryConstraints(tx, newSeq, seq); err != nil {
 		return 0, err

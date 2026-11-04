@@ -245,22 +245,20 @@ keyword and nearest-neighbour, both under one permission clause**, so
 the vector half never becomes a path that ranks before it filters
 (`butlerindex.go:198-206` is explicit that no such path may exist).
 
-### F-156-05 — The bounded embedding client exists; the index job queue has neither producer nor consumer
+### F-156-05 — Durable memory embedding has a coordinator-gated producer and consumer
 
-- **Current status:** open
-- **Current evidence:** `keystone/butler/provider/ollama_embed.go` implements the bounded Ollama adapter; `keystone/butlerlive/embedder.go` binds it to the exact current Agent route and live privacy checks. The coordinator-gated producer/consumer and recall wiring remain separate #233/#234 work.
+- **Current status:** partial
+- **Current evidence:** `RecordMemory` and `CorrectMemory` atomically queue source identities; `keystone/indexworker` leases them only under the active coordinator, resolves the S1 embedder, and atomically rechecks source eligibility, authority metadata and the claim before publication. Query embedding/recall remains #234, and additional document-source producers remain within #233.
 - **Current owner:** chickenrat17
 - **Tracking:** #311
 
-- **Audit status:** missing
-- **Audit evidence:** `grep -rn 'QueueIndexJob\|ClaimIndexJob\|FinishIndexJob\|RecordIndexMeasurement' --include=*.go` returns **no callers outside `keystone/runtimedb`**, tests included for the first three; `IndexDocument.Embedding` is set at exactly one non-test site — `keystone/butlerstore/memory.go:185-189` — where it is left nil.
+- **Audit status:** partial
+- **Audit evidence:** `keystone/indexworker/worker_test.go` covers successful semantic publication, forget-during-embedding and coordinator-loss refusal. `TestExpiredIndexLeaseIsRecoveredWithoutDuplicateCompletion` covers crash/lease recovery and stale-worker refusal. Migration 0119 records non-secret model/version/dimension/source-revision metadata.
 
-Confirms established finding 4 in #151, now partially addressed.
-`butler_index_jobs`, its priority scheme and its claim/finish protocol are
-complete but still have no production producer or consumer. Every production
-row in `butler_index` therefore still has
-`embedding IS NULL`, and the hybrid path in `SearchIndex` has never
-run against real data.
+The memory path now produces and consumes real embedding jobs without delaying
+foreground writes. The finding remains partial until bounded producers cover
+every admitted document source and #234 supplies server-side query embeddings
+to production recall.
 
 ### F-156-06 — The record shape is missing household, version, and sensitivity/retention; two statuses do not exist
 
