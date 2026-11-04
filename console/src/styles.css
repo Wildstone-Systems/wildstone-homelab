@@ -150,7 +150,19 @@
 
 body {
   margin: 0;
-  background: var(--color-bg);
+  /* The theme's picture, veiled for readability, over the ground — the
+     same stack the portal draws (keystone/portal/web/assets/nocturne.css).
+     With no picture both variables fall back to a transparent wash, so a
+     theme without one renders exactly as a flat ground. Fixed, so the
+     picture stays put while the page scrolls over it. */
+  background:
+    var(--wallpaper-veil, linear-gradient(transparent, transparent)),
+    var(--wallpaper, linear-gradient(transparent, transparent)),
+    var(--color-bg);
+  background-size: auto, cover, auto;
+  background-position: 0 0, center, 0 0;
+  background-repeat: no-repeat;
+  background-attachment: fixed;
   color: var(--color-text);
   font-family: var(--font-body);
   font-size: 14px;
@@ -2081,8 +2093,7 @@ tr[aria-pressed="true"] { box-shadow: inset 2px 0 0 var(--color-accent); }
 .theme-swatch-line { height: 3px; border-radius: 2px; width: 100%; opacity: 0.85; }
 .theme-swatch-line.short { width: 55%; opacity: 1; }
 
-/* The mark on a theme that brings a wallpaper. The Console does not
- * wear one — this says the picture exists and where it appears. */
+/* The mark on a theme that brings a wallpaper. */
 .theme-name { display: inline-flex; align-items: center; gap: 4px; }
 .theme-haspic { color: var(--muted); flex: none; }
 
