@@ -98,6 +98,7 @@ func (c *fakeContainer) dockerStatus() string {
 
 type fakeVolume struct {
 	owned bool
+	files map[string][]byte
 }
 
 // testAgent is the minimal real Wardstone-protocol client described in the
@@ -110,12 +111,14 @@ type testAgent struct {
 	nodeID  string
 	managed string // managed-file root (t.TempDir())
 
-	mu         sync.Mutex
-	jobExit    map[string]int32
-	jobRuns    map[string]int
-	secrets    map[string]wsv1.SecretKind
-	containers map[string]*fakeContainer
-	volumes    map[string]*fakeVolume
+	mu              sync.Mutex
+	jobExit         map[string]int32
+	jobRuns         map[string]int
+	secrets         map[string]wsv1.SecretKind
+	secretVersions  map[string]uint32
+	suppressSecrets map[string]bool
+	containers      map[string]*fakeContainer
+	volumes         map[string]*fakeVolume
 }
 
 func newTestAgent(t *testing.T, h *harness, nodeID, token string) *testAgent {
@@ -238,7 +241,7 @@ func (a *testAgent) run(ctx context.Context, h *harness, token string) {
 		return
 	}
 	if err := stream.Send(&wsv1.AgentMessage{Msg: &wsv1.AgentMessage_Hello{Hello: &wsv1.Hello{
-		NodeId: a.nodeID, AgentVersion: "test", ProtocolMinor: 4,
+		NodeId: a.nodeID, AgentVersion: "test", ProtocolMinor: 37,
 	}}}); err != nil {
 		return
 	}
@@ -291,10 +294,18 @@ func (a *testAgent) handleOp(opID string, op *wsv1.Operation) *wsv1.OpResult {
 		return a.containerStats(opID, o.ContainerStats)
 	case *wsv1.Operation_EnsureSecret:
 		return a.ensureSecret(opID, o.EnsureSecret)
+	case *wsv1.Operation_PutSecret:
+		return a.putSecret(opID, o.PutSecret)
+	case *wsv1.Operation_ListSecrets:
+		return a.listSecrets(opID)
 	case *wsv1.Operation_InspectContainer:
 		return a.inspectContainer(opID, o.InspectContainer)
 	case *wsv1.Operation_EnsureVolume:
 		return a.ensureVolume(opID, o.EnsureVolume)
+	case *wsv1.Operation_SeedVolumeFile:
+		return a.seedVolumeFile(opID, o.SeedVolumeFile)
+	case *wsv1.Operation_StatVolumeFile:
+		return a.statVolumeFile(opID, o.StatVolumeFile)
 	case *wsv1.Operation_WriteManagedFile:
 		return a.writeManagedFile(opID, o.WriteManagedFile)
 	case *wsv1.Operation_ReadManagedFile:
@@ -412,8 +423,36 @@ func (a *testAgent) ensureVolume(opID string, op *wsv1.EnsureVolume) *wsv1.OpRes
 		}
 		return &wsv1.OpResult{OpId: opID, Result: &wsv1.OpResult_EnsureVolume{EnsureVolume: &wsv1.EnsureVolumeResult{Created: false}}}
 	}
-	a.volumes[op.GetName()] = &fakeVolume{owned: true}
+	a.volumes[op.GetName()] = &fakeVolume{owned: true, files: map[string][]byte{}}
 	return &wsv1.OpResult{OpId: opID, Result: &wsv1.OpResult_EnsureVolume{EnsureVolume: &wsv1.EnsureVolumeResult{Created: true}}}
+}
+
+func (a *testAgent) seedVolumeFile(opID string, op *wsv1.SeedVolumeFile) *wsv1.OpResult {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	v, ok := a.volumes[op.GetVolume()]
+	if !ok {
+		return opErrResult(opID, wsv1.ErrorCode_ERROR_CODE_NOT_FOUND, "volume %q", op.GetVolume())
+	}
+	if v.files == nil {
+		v.files = map[string][]byte{}
+	}
+	_, existed := v.files[op.GetPath()]
+	if !existed {
+		v.files[op.GetPath()] = append([]byte(nil), op.GetContent()...)
+	}
+	return &wsv1.OpResult{OpId: opID, Result: &wsv1.OpResult_SeedVolumeFile{SeedVolumeFile: &wsv1.SeedVolumeFileResult{Written: !existed}}}
+}
+
+func (a *testAgent) statVolumeFile(opID string, op *wsv1.StatVolumeFile) *wsv1.OpResult {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	v, ok := a.volumes[op.GetVolume()]
+	if !ok {
+		return opErrResult(opID, wsv1.ErrorCode_ERROR_CODE_NOT_FOUND, "volume %q", op.GetVolume())
+	}
+	_, exists := v.files[op.GetPath()]
+	return &wsv1.OpResult{OpId: opID, Result: &wsv1.OpResult_StatVolumeFile{StatVolumeFile: &wsv1.StatVolumeFileResult{Exists: exists}}}
 }
 
 func (a *testAgent) writeManagedFile(opID string, op *wsv1.WriteManagedFile) *wsv1.OpResult {
@@ -515,14 +554,46 @@ func (a *testAgent) ensureSecret(opID string, op *wsv1.EnsureSecret) *wsv1.OpRes
 	defer a.mu.Unlock()
 	if a.secrets == nil {
 		a.secrets = map[string]wsv1.SecretKind{}
+		a.secretVersions = map[string]uint32{}
 	}
 	_, existed := a.secrets[op.GetName()]
-	if !existed {
+	if a.suppressSecrets[op.GetName()] {
+		// A vertical regression seam: model the pre-#299 bug where reconcile
+		// believed generation completed but the password was still absent
+		// from the node inventory observed by the backup engine.
+		return &wsv1.OpResult{OpId: opID, Result: &wsv1.OpResult_EnsureSecret{EnsureSecret: &wsv1.EnsureSecretResult{
+			Existed: existed, Version: 1,
+		}}}
+	}
+	if !existed || op.GetRotate() {
 		a.secrets[op.GetName()] = op.GetKind()
+		a.secretVersions[op.GetName()]++
 	}
 	return &wsv1.OpResult{OpId: opID, Result: &wsv1.OpResult_EnsureSecret{EnsureSecret: &wsv1.EnsureSecretResult{
-		Existed: existed, Version: 1,
+		Existed: existed, Version: a.secretVersions[op.GetName()],
 	}}}
+}
+
+func (a *testAgent) putSecret(opID string, op *wsv1.PutSecret) *wsv1.OpResult {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.secrets == nil {
+		a.secrets = map[string]wsv1.SecretKind{}
+		a.secretVersions = map[string]uint32{}
+	}
+	a.secrets[op.GetName()] = wsv1.SecretKind_SECRET_KIND_RANDOM
+	a.secretVersions[op.GetName()]++
+	return &wsv1.OpResult{OpId: opID, Result: &wsv1.OpResult_PutSecret{PutSecret: &wsv1.PutSecretResult{Version: a.secretVersions[op.GetName()]}}}
+}
+
+func (a *testAgent) listSecrets(opID string) *wsv1.OpResult {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	result := &wsv1.ListSecretsResult{}
+	for name, version := range a.secretVersions {
+		result.Secrets = append(result.Secrets, &wsv1.SecretInfo{Name: name, Version: version})
+	}
+	return &wsv1.OpResult{OpId: opID, Result: &wsv1.OpResult_ListSecrets{ListSecrets: result}}
 }
 
 func (a *testAgent) secretKind(name string) (wsv1.SecretKind, bool) {
@@ -530,4 +601,45 @@ func (a *testAgent) secretKind(name string) (wsv1.SecretKind, bool) {
 	defer a.mu.Unlock()
 	k, ok := a.secrets[name]
 	return k, ok
+}
+
+func (a *testAgent) secretVersion(name string) (uint32, bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	v, ok := a.secretVersions[name]
+	return v, ok
+}
+
+func (a *testAgent) suppressSecret(name string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.suppressSecrets == nil {
+		a.suppressSecrets = map[string]bool{}
+	}
+	a.suppressSecrets[name] = true
+}
+
+func (a *testAgent) writeVolumeFile(volume, path string, content []byte) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	v, ok := a.volumes[volume]
+	if !ok {
+		return false
+	}
+	if v.files == nil {
+		v.files = map[string][]byte{}
+	}
+	v.files[path] = append([]byte(nil), content...)
+	return true
+}
+
+func (a *testAgent) readVolumeFile(volume, path string) ([]byte, bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	v, ok := a.volumes[volume]
+	if !ok {
+		return nil, false
+	}
+	b, ok := v.files[path]
+	return append([]byte(nil), b...), ok
 }
