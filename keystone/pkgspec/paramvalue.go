@@ -35,6 +35,7 @@ var ParamShapes = map[string]func(string) error{
 	"private_ipv4":   validatePrivateIPv4,
 	"interface_name": validateInterfaceName,
 	"serial_by_id":   validateSerialByID,
+	"unix_id":        validateUnixID,
 }
 
 // ParamShapeNames lists the vocabulary, for a diagnostic that names what
@@ -202,6 +203,21 @@ func validatePort(v string) error {
 	}
 	if n < 1 || n > 65535 {
 		return fmt.Errorf("port %d is outside 1-65535", n)
+	}
+	return nil
+}
+
+// validateUnixID is the numeric identity shape accepted by
+// resource.ContainerRuntimeIdentity. Keeping the same uint32 bound here means
+// a package parameter is refused at admission instead of becoming malformed
+// YAML or reaching the later resource validator.
+func validateUnixID(v string) error {
+	n, err := strconv.ParseUint(v, 10, 32)
+	if err != nil {
+		return fmt.Errorf("%q is not a numeric Unix uid/gid between 0 and %d", v, uint64(1<<32-1))
+	}
+	if strconv.FormatUint(n, 10) != v {
+		return fmt.Errorf("%q is not a canonical decimal Unix uid/gid", v)
 	}
 	return nil
 }

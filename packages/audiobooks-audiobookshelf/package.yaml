@@ -21,7 +21,7 @@ apiVersion: wildstone.dev/v1
 kind: Package
 metadata:
   name: audiobooks-audiobookshelf
-  version: 1.0.3
+  version: 1.1.0
   capability: audiobooks
   profile: audiobookshelf
 requires:
@@ -33,6 +33,8 @@ params:
   - { name: node, required: true, description: "Which machine to install this on.", source: node }
   - { name: audiobooks_path, default: /srv/wildstone/media/audiobooks, description: "Folder on this machine holding your audiobooks.", source: directory }
   - { name: timezone, default: UTC, source: timezone, validate: iana_timezone, description: "Your timezone, e.g. Europe/London." }
+  - { name: runtime_uid, validate: unix_id, example: "1000", description: "Advanced migration: numeric uid Audiobookshelf should run as. Leave empty to preserve the image-default identity. Review the migration runbook before setting it." }
+  - { name: runtime_gid, validate: unix_id, example: "1000", description: "Advanced migration: numeric gid Audiobookshelf should run as. When runtime_uid is set and this is empty, it uses the same number as runtime_uid." }
 policies:
   classifications: [family_private]
   dataSensitivity: low
@@ -75,6 +77,12 @@ templates:
         - { source: audiobookshelf-metadata, target: /metadata }
         - { source: audiobookshelf-podcasts, target: /podcasts }
         - { source: "{{ .Params.audiobooks_path }}", target: /audiobooks }
+      {{- if or .Params.runtime_uid .Params.runtime_gid }}
+      runtimeIdentity:
+        uid: {{ .Params.runtime_uid }}
+        gid: {{ if .Params.runtime_gid }}{{ .Params.runtime_gid }}{{ else }}{{ .Params.runtime_uid }}{{ end }}
+      preflightMountAccess: true
+      {{- end }}
       restart: unless-stopped
   - |
     apiVersion: wildstone.dev/v1

@@ -7,7 +7,9 @@ contracts from #284–#287. See the
 The isolated
 Kubernetes exercise below requires separate Owner approval. This is not
 household migration, off-host acceptance, live quarantine-release acceptance,
-Flux-owned management acceptance, or HA.
+full Flux-owned management acceptance, or HA. The narrower, accepted #317
+[isolated Flux reconciliation proof](isolated-flux-keystone-proof.md) records
+what was established without widening those claims.
 
 ## Why this is a separate recovery path
 
@@ -279,9 +281,10 @@ off-host recovery.
 - #163: established scheduler/executor and atomic capture of runtime, Git,
   optional claims and keys; actual off-host restore execution.
 - #165: identity-directory, Traefik, certificate/internal-CA and DNS recovery.
-- #166: separately approved Flux-owned management source/Kustomization/
-  HelmRelease, rollback and independent source operation while Keystone is
-  down.
+- #166: #317 accepted an isolated source/Kustomization/HelmRelease, independent
+  source operation while Keystone was down, Pod replacement, continuity, and
+  fail-closed input checks. A reversible source revision change/rollback and
+  full management recovery acceptance remain separately gated.
 - #168: data-preserving chart 0.1-to-0.2 ownership migration and rollback with
   new writes retained.
 - #180: HA. This contract remains one SQLite writer and does not authorize a
