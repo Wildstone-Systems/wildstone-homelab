@@ -6,6 +6,7 @@ package runtimedb
 // state is verified live rather than trusted from the index.
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"testing"
@@ -627,5 +628,27 @@ func TestIndexLeaseTimesCompareInTimeOrder(t *testing.T) {
 	half := whole.Add(500 * time.Millisecond)
 	if !(indexTS(whole) < indexTS(half)) {
 		t.Fatalf("%q must sort before %q", indexTS(whole), indexTS(half))
+	}
+}
+
+func TestPublishMemoryIndexRefusesSupersededCoordinator(t *testing.T) {
+	db := open(t)
+	lease, err := db.AcquireCoordinator("old-coordinator")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.QueueIndexJob(IndexJobIndex, `{"memorySeq":1}`, 0); err != nil {
+		t.Fatal(err)
+	}
+	job, ok, err := db.ClaimIndexJobLease(lease.Holder, time.Minute)
+	if err != nil || !ok {
+		t.Fatalf("claim = %t, %v", ok, err)
+	}
+	if _, err := db.PromoteCoordinator("new-coordinator"); err != nil {
+		t.Fatal(err)
+	}
+	err = db.PublishMemoryIndex(job, MemoryRecord{Seq: 1}, []float32{1}, "m", "1", lease)
+	if !errors.Is(err, ErrCoordinatorFenced) {
+		t.Fatalf("publish after promotion = %v, want ErrCoordinatorFenced", err)
 	}
 }

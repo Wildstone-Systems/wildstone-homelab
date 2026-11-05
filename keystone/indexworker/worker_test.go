@@ -110,3 +110,39 @@ func TestFailingJobStopsAfterMaxAttempts(t *testing.T) {
 		t.Fatalf("job still claimable after max attempts: %t, %v", ok, err)
 	}
 }
+
+func neverEmbed(t *testing.T) indexworker.Resolver {
+	return resolver(embedFunc(func(context.Context, string) ([]float32, error) {
+		t.Fatal("memory content reached the provider")
+		return nil, nil
+	}))
+}
+
+func TestRestrictedAgentNeverReceivesMemory(t *testing.T) {
+	db, lease, memory := fixture(t)
+	m, err := db.GetMemory(memory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Scope != runtimedb.MemoryScopePersonal && m.Scope != runtimedb.MemoryScopeHousehold {
+		t.Skipf("fixture scope %q cannot be restricted", m.Scope)
+	}
+	if err := db.SetAgentMemoryRestriction("memory-agent", m.Scope, true, "owner"); err != nil {
+		t.Fatal(err)
+	}
+	w := &indexworker.Worker{DB: db, Lease: lease, Resolve: neverEmbed(t)}
+	if ok, err := w.RunOnce(context.Background()); err != nil || !ok {
+		t.Fatalf("RunOnce = %t, %v", ok, err)
+	}
+}
+
+func TestRestoreQuarantineHoldsIndexing(t *testing.T) {
+	db, lease, _ := fixture(t)
+	if err := db.EnterRestoreQuarantine("synthetic restore", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	w := &indexworker.Worker{DB: db, Lease: lease, Resolve: neverEmbed(t)}
+	if ok, err := w.RunOnce(context.Background()); err == nil || !ok {
+		t.Fatalf("RunOnce during quarantine = %t, %v", ok, err)
+	}
+}

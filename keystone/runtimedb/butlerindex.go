@@ -777,7 +777,14 @@ func (db *DB) RetryIndexJob(seq int64, holder, failure string, delay time.Durati
 
 // MemoryForIndex returns the current durable source. The worker must call it
 // before provider I/O; PublishMemoryIndex repeats the check transactionally.
+//
+// Restore quarantine is returned as an error so the job retries after it
+// lifts. An Agent restricted from the memory's scope is ErrNotFound: that
+// Agent's model must never receive the content, so the job is finished.
 func (db *DB) MemoryForIndex(seq int64) (MemoryRecord, error) {
+	if err := db.gate(GateIngestion); err != nil {
+		return MemoryRecord{}, err
+	}
 	m, err := db.GetMemory(seq)
 	if err != nil {
 		return MemoryRecord{}, err
@@ -785,14 +792,33 @@ func (db *DB) MemoryForIndex(seq int64) (MemoryRecord, error) {
 	if !m.Eligible() {
 		return MemoryRecord{}, ErrNotFound
 	}
+	restricted, err := agentRestrictedFromScope(db.sql, m.Butler, m.Scope)
+	if err != nil {
+		return MemoryRecord{}, err
+	}
+	if restricted {
+		return MemoryRecord{}, ErrNotFound
+	}
 	return m, nil
+}
+
+// agentRestrictedFromScope mirrors the restriction arm of memoryScopeClause
+// so background embedding cannot route around an owner's restriction.
+func agentRestrictedFromScope(q queryRower, agent, scope string) (bool, error) {
+	var n int
+	err := q.QueryRow(`SELECT COUNT(*) FROM memory_agent_restrictions mr JOIN butlers mb ON mb.seq = mr.agent
+		WHERE mb.name = ? AND mr.scope = ?`, agent, scope).Scan(&n)
+	if err != nil {
+		return false, fmt.Errorf("runtimedb: checking agent memory restriction: %w", err)
+	}
+	return n != 0, nil
 }
 
 // PublishMemoryIndex atomically rechecks the source and lease, replaces its
 // derived row, and completes the job. Authorization/provenance comes only from
 // the current memory row; no payload or model response may widen it.
-func (db *DB) PublishMemoryIndex(job IndexJob, source MemoryRecord, vector []float32, model, version string) error {
-	if job.LeaseOwner == "" || !job.LeaseUntil.After(time.Now().UTC()) || len(vector) == 0 || model == "" || version == "" {
+func (db *DB) PublishMemoryIndex(job IndexJob, source MemoryRecord, vector []float32, model, version string, lease CoordinatorLease) error {
+	if lease.Holder == "" || job.LeaseOwner == "" || !job.LeaseUntil.After(time.Now().UTC()) || len(vector) == 0 || model == "" || version == "" {
 		return fmt.Errorf("runtimedb: invalid index publication")
 	}
 	for _, value := range vector {
@@ -805,8 +831,22 @@ func (db *DB) PublishMemoryIndex(job IndexJob, source MemoryRecord, vector []flo
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
+	// Quarantine, coordinator promotion and a new Agent restriction must all
+	// win against a publication already in flight, so each is rechecked in
+	// the same transaction as the index write.
+	if err := db.gateTx(tx, GateIngestion); err != nil {
+		return err
+	}
+	var holder string
+	var epoch int64
+	if err := tx.QueryRow(`SELECT holder, epoch FROM coordinator_lease WHERE id = 1`).Scan(&holder, &epoch); err != nil || holder != lease.Holder || epoch != lease.Epoch {
+		return fmt.Errorf("%w: publication by a superseded coordinator", ErrCoordinatorFenced)
+	}
 	current, err := scanMemory(tx.QueryRow(memoryColumns+` WHERE r.seq=?`, source.Seq))
-	if err != nil || !current.Eligible() || current.Content != source.Content || current.SourceKind != source.SourceKind || current.SourceID != source.SourceID || current.Owner != source.Owner || current.Audience != source.Audience || current.PermissionLabel != source.PermissionLabel || current.Butler != source.Butler {
+	if err != nil || !current.Eligible() || current.Content != source.Content || current.SourceKind != source.SourceKind || current.SourceID != source.SourceID || current.Owner != source.Owner || current.Audience != source.Audience || current.PermissionLabel != source.PermissionLabel || current.Butler != source.Butler || current.Scope != source.Scope {
+		return fmt.Errorf("runtimedb: index source changed")
+	}
+	if restricted, err := agentRestrictedFromScope(tx, source.Butler, source.Scope); err != nil || restricted {
 		return fmt.Errorf("runtimedb: index source changed")
 	}
 	var leased int

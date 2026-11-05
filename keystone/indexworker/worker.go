@@ -125,7 +125,7 @@ func (w *Worker) RunOnce(ctx context.Context) (ok bool, err error) {
 		// after expiry; the fenced process performs no further durable write.
 		return true, err
 	}
-	if err := w.DB.PublishMemoryIndex(job, source, vector, model, version); err != nil {
+	if err := w.DB.PublishMemoryIndex(job, source, vector, model, version, w.Lease); err != nil {
 		return fail("publication-refused", err)
 	}
 	return true, nil
