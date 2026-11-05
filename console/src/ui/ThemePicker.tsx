@@ -171,10 +171,8 @@ function ThemeTile({
   name: string;
   label: string;
   note?: string;
-  // The theme brings a wallpaper. Marked rather than drawn: the
-  // Console does not wear one, and fetching a megabyte of art to
-  // decorate a 104px tile on a screen that will never show it is not a
-  // trade worth making. The mark says where it does appear.
+  // The theme brings a wallpaper. Marked rather than drawn on the
+  // tile: fetching a megabyte of art per 104px tile is not worth it.
   picture?: boolean;
   // null is Wildstone's own look, which is not a palette and is drawn
   // from the tokens currently in force rather than from a swatch.
@@ -209,7 +207,7 @@ function ThemeTile({
             size={12}
             weight="fill"
             className="theme-haspic"
-            aria-label="brings a picture for the dashboard"
+            aria-label="brings a picture"
           />
         )}
       </span>
@@ -466,8 +464,8 @@ function PictureRow({
         <strong>{theme.label}</strong>
         <span className="muted">
           {theme.background
-            ? "brings a picture — it is the background of the household dashboard"
-            : "no picture; the dashboard uses the theme's flat ground"}
+            ? "brings a picture — it is the background of the dashboard and the Console"
+            : "no picture; pages use the theme's flat ground"}
         </span>
       </div>
       <input

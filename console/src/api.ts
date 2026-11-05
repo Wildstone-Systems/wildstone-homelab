@@ -2949,10 +2949,7 @@ export interface ThemeSummary {
   dark: boolean;
   swatch: { background: string; surface: string; text: string; accent: string };
   // Whether the theme brings a wallpaper, and which version of it. The
-  // Console never draws one — it is the screen you open when the house
-  // is broken, and its density is drawn on a flat ground on purpose —
-  // so this is a fact the picker reports, not an image it fetches. The
-  // picture appears on the household dashboard.
+  // Console and the household dashboard both draw it (theme.ts).
   background?: boolean;
   backgroundVersion?: number;
 }

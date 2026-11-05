@@ -125,10 +125,11 @@ it. The veil is one number and it is the only judgement in the
 derivation: lower shows more picture and pushes the inks further.
 
 Cards stay fully opaque, so everything inside one is exactly as it was.
-The Console gets no wallpaper at all — it is the screen somebody opens
-when the house is broken, and ADR-W027's density is drawn on a flat
-ground on purpose. It has no read route for the bytes; it only manages
-them.
+**Amended:** the Console now draws the same picture, behind the same
+veil, so a person sees one ground everywhere. It reads the bytes from
+`GET /api/v1/appearance/themes/{name}/background` (VerbRead) with its
+session cookie. Its cards stay opaque, so ADR-W027's dense layout reads
+exactly as before; the picture shows only between them.
 
 ## A3. A palette gives colours; a design system gives relationships
 
@@ -230,8 +231,8 @@ picture — because those change what the whole household can choose from.
 - **No fonts, spacing or radii from a theme.** A palette says nothing
   about them, and letting a theme move them would let a theme break a
   layout.
-- **No wallpaper on the Console, and none on the embedded widgets.**
-  See A2.2 and A8.
+- **No wallpaper on the embedded widgets.** See A8. (The Console does
+  draw one — see the amendment in A2.2.)
 - **No theme in desired state.** A restore does not need to reproduce
   what each person likes to read on, and a statefile diff should not
   churn because somebody tried Nord for an afternoon.

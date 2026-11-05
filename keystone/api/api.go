@@ -774,10 +774,11 @@ func (s *Server) Handler() http.Handler {
 	// The picture a theme brings. VerbManage for the same reason the
 	// palette is: it changes what the whole household sees, and it is
 	// the one path by which an image file somebody downloaded reaches
-	// the control plane. The Console never DRAWS one — it has no read
-	// route for the bytes at all — it only manages them.
+	// the control plane. Reading the bytes is VerbRead: the Console draws
+	// the caller's theme picture behind its pages, the same as the portal.
 	mux.Handle("PUT /api/v1/appearance/themes/{name}/background", s.handle(principal.VerbManage, s.themeBackgroundSet))
 	mux.Handle("DELETE /api/v1/appearance/themes/{name}/background", s.handle(principal.VerbManage, s.themeBackgroundClear))
+	mux.Handle("GET /api/v1/appearance/themes/{name}/background", s.handleResponse(principal.VerbRead, s.consoleThemeBackground))
 	// Research administration is never accessible to model/runtime principals.
 	mux.Handle("GET /api/v1/research/providers", s.handle(principal.VerbManage, s.listResearchProviders))
 	mux.Handle("POST /api/v1/research/providers", s.handle(principal.VerbManage, s.proposeResearchProvider))
@@ -1007,7 +1008,7 @@ func (s *Server) Handler() http.Handler {
 	// ADDING a theme is an Owner's act on the Console.
 	mux.Handle("GET /api/v1/home/appearance", s.portal(surfaceHome, s.homeAppearance))
 	mux.Handle("POST /api/v1/home/appearance", s.portal(surfaceHome, s.homeSetAppearance))
-	// The wallpaper itself, which is drawn HERE and nowhere else. Any
+	// The wallpaper itself, drawn here and on the Console. Any
 	// theme's picture is readable by any member on this surface: every
 	// theme in the catalogue is one they may choose, so a picker that
 	// previews them shows nothing picking them would not.
