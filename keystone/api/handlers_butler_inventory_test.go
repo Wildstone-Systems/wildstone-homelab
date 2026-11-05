@@ -1,6 +1,7 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
 	"testing"
 
@@ -98,6 +99,13 @@ func TestAgentInventoryIsScopedToTheCurrentPerson(t *testing.T) {
 		if len(sessions) != 1 || sessions[0].ID != ownSession {
 			t.Fatalf("sessions = %+v, want only %s", sessions, ownSession)
 		}
+		var allSessions []runtimedb.ButlerSession
+		if res := h.doToken(token, http.MethodGet, "/api/v1/butler/sessions", nil, &allSessions); res.StatusCode != http.StatusOK {
+			t.Fatalf("unfiltered sessions = %d", res.StatusCode)
+		}
+		if len(allSessions) != 1 || allSessions[0].ID != ownSession {
+			t.Fatalf("unfiltered sessions = %+v, want only %s", allSessions, ownSession)
+		}
 		var hiddenSessions []runtimedb.ButlerSession
 		if res := h.doToken(token, http.MethodGet, "/api/v1/butler/sessions?butler="+hiddenAgent, nil, &hiddenSessions); res.StatusCode != http.StatusOK || len(hiddenSessions) != 0 {
 			t.Fatalf("hidden sessions = %d %+v, want empty", res.StatusCode, hiddenSessions)
@@ -133,6 +141,76 @@ func TestAgentInventoryIsScopedToTheCurrentPerson(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertInventory(mikaToken, "mika-agent", "sam-agent", mikaSession, samSession, mikaTask, samTask)
+}
+
+// Person and Agent predicates belong inside the task query, before its fixed
+// page limit. Otherwise a busy second Person or a newly revoked Agent can make
+// older visible work disappear from the inventory even though detail still
+// admits it.
+func TestPersonTaskInventoryScopesBeforeLimit(t *testing.T) {
+	h := newHarness(t)
+	if err := h.s.DB.UpsertModel(runtimedb.Model{
+		Name: "fixture-local", Kind: runtimedb.ModelLocal, Provider: "ollama", ProviderModel: "fixture",
+		Readiness: runtimedb.ModelReady, Enabled: true,
+	}, "fixture"); err != nil {
+		t.Fatal(err)
+	}
+	mikaToken := h.console(runtimedb.RoleAdmin, "mika")
+	h.console(runtimedb.RoleAdmin, "sam")
+	for _, name := range []string{"mika-visible", "mika-revoked", "sam-visible"} {
+		if res := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/butlers", map[string]any{
+			"name": name, "agentClass": runtimedb.AgentClassMember, "model": "fixture-local",
+		}, nil); res.StatusCode != http.StatusCreated {
+			t.Fatalf("create %s = %d", name, res.StatusCode)
+		}
+	}
+	for agent, person := range map[string]string{
+		"mika-visible": "mika", "mika-revoked": "mika", "sam-visible": "sam",
+	} {
+		if err := h.s.DB.GrantButlerAccess(agent, person, "fixture"); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	mikaVisibleSession := inventorySession(t, h, "mika", "mika-visible", "visible")
+	mikaRevokedSession := inventorySession(t, h, "mika", "mika-revoked", "revoked")
+	samSession := inventorySession(t, h, "sam", "sam-visible", "other")
+	visibleTask := inventoryTask(t, h, "mika", mikaVisibleSession, "older visible task")
+	if err := h.s.DB.RevokeButlerAccess("mika-revoked", "mika", "fixture"); err != nil {
+		t.Fatal(err)
+	}
+
+	for i := 0; i < 201; i++ {
+		inventoryTask(t, h, "mika", mikaRevokedSession, fmt.Sprintf("newer revoked task %03d", i))
+		inventoryTask(t, h, "sam", samSession, fmt.Sprintf("newer other-Person task %03d", i))
+	}
+
+	var tasks struct {
+		Tasks []runtimedb.ButlerTask `json:"tasks"`
+	}
+	res := h.doToken(mikaToken, http.MethodGet, "/api/v1/butler/tasks", nil, &tasks)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("task inventory = %d", res.StatusCode)
+	}
+	if len(tasks.Tasks) != 1 || tasks.Tasks[0].ID != visibleTask {
+		t.Fatalf("task inventory = %+v, want older visible task %s", tasks.Tasks, visibleTask)
+	}
+}
+
+func TestPersonSessionInventoryKeepsOwnUnstampedHistory(t *testing.T) {
+	h := newHarness(t)
+	id, err := h.s.DB.InsertButlerSession(runtimedb.ButlerSession{
+		Principal: "legacy-runtime", ActingFor: "mika",
+		Surface: runtimedb.ButlerSurfaceFamily, Mode: runtimedb.ButlerModeFull, FinalText: "legacy",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sessions []runtimedb.ButlerSession
+	res := h.doToken(h.console(runtimedb.RoleAdmin, "mika"), http.MethodGet, "/api/v1/butler/sessions", nil, &sessions)
+	if res.StatusCode != http.StatusOK || len(sessions) != 1 || sessions[0].ID != id {
+		t.Fatalf("legacy session inventory = %d %+v, want %s", res.StatusCode, sessions, id)
+	}
 }
 
 // Creation, duplication and retirement are one Console management lifecycle.
@@ -254,6 +332,9 @@ func assertInventoryEmpty(t *testing.T, h *harness, token, agent, session, task 
 	var sessions []runtimedb.ButlerSession
 	if res := h.doToken(token, http.MethodGet, "/api/v1/butler/sessions?butler="+agent, nil, &sessions); res.StatusCode != http.StatusOK || len(sessions) != 0 {
 		t.Fatalf("revoked sessions = %d %+v, want empty", res.StatusCode, sessions)
+	}
+	if res := h.doToken(token, http.MethodGet, "/api/v1/butler/sessions", nil, &sessions); res.StatusCode != http.StatusOK || len(sessions) != 0 {
+		t.Fatalf("revoked unfiltered sessions = %d %+v, want empty", res.StatusCode, sessions)
 	}
 	if res := h.doToken(token, http.MethodGet, "/api/v1/butler/sessions/"+session, nil, nil); res.StatusCode != http.StatusNotFound {
 		t.Fatalf("revoked session detail = %d, want 404", res.StatusCode)

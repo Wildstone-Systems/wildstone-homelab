@@ -669,17 +669,17 @@ func (s *Server) listButlerSessions(r *http.Request, id principal.Identity) (any
 	if sessions == nil {
 		sessions = []runtimedb.ButlerSession{}
 	}
-	visibleNames, scoped := map[string]bool{}, false
-	if filter.Butler != "" {
-		var err error
-		visibleNames, scoped, err = s.visibleButlerNames(id)
-		if err != nil {
-			return nil, http.StatusInternalServerError, err
-		}
+	// Current Agent admission applies to every Person-facing list, including
+	// the unfiltered history view. An empty Butler stamp predates Agent-aware
+	// sessions and discloses no Agent name, so that Person's own legacy row
+	// remains compatible.
+	visibleNames, scoped, err := s.visibleButlerNames(id)
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
 	}
 	visible := sessions[:0]
 	for _, session := range sessions {
-		if scoped && !visibleNames[session.Butler] {
+		if scoped && session.Butler != "" && !visibleNames[session.Butler] {
 			continue
 		}
 		if err := s.DB.CheckSessionPrivacy(session.ID, runtimedb.ModelLocal, apiMemoryDestination(id)); err != nil {

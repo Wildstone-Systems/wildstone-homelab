@@ -86,7 +86,24 @@ func canSeePrivateRows(task runtimedb.ButlerTask, id principal.Identity) bool {
 
 // listButlerTasks lists the tasks this reader may see, newest first.
 func (s *Server) listButlerTasks(r *http.Request, id principal.Identity) (any, int, error) {
-	all, err := s.DB.ListButlerTasks(200, "")
+	var (
+		all []runtimedb.ButlerTask
+		err error
+	)
+	if person := inventoryPerson(id); person != "" {
+		visible, _, visibleErr := s.visibleButlerNames(id)
+		if visibleErr != nil {
+			return nil, http.StatusInternalServerError, visibleErr
+		}
+		names := make([]string, 0, len(visible))
+		for name := range visible {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		all, err = s.DB.ListButlerTasksForInventory(200, person, names)
+	} else {
+		all, err = s.DB.ListButlerTasks(200, "")
+	}
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
