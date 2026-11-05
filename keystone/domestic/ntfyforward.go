@@ -15,6 +15,9 @@ import (
 const (
 	forwardMorningType      = "report.morning"
 	forwardBackupFailedType = "backup.failed"
+	// A pass refused because a password secret is missing or the node
+	// cannot confirm it. Deduplicated upstream, so one alert per condition.
+	forwardBackupBlockedType = "backup.dependency_unavailable"
 )
 
 // forwardBatch bounds one poll so a burst cannot starve the loop.
@@ -119,6 +122,15 @@ func (f *EventForwarder) params(e runtimedb.Event) (map[string]string, bool) {
 			title = fmt.Sprintf("Backup %s failed", kind)
 		}
 		return map[string]string{"topic": f.Topic, "title": title, "message": nonEmpty(e.Message, "A backup pass failed."), "priority": "4", "tags": "warning"}, true
+	case forwardBackupBlockedType:
+		// Only the plan name leaves the house; the detail names nodes and
+		// secret references, which the Console already shows.
+		kind := e.Attrs["kind"]
+		title := "Backup blocked"
+		if kind != "" && kind != "backup" {
+			title = fmt.Sprintf("Backup %s blocked", kind)
+		}
+		return map[string]string{"topic": f.Topic, "title": title, "message": nonEmpty(e.Attrs["backupPlan"], "A backup is waiting on a password secret."), "priority": "4", "tags": "warning"}, true
 	}
 	return nil, false
 }

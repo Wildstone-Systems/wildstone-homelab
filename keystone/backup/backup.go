@@ -542,6 +542,10 @@ func (e *Engine) withProvenance(ctx context.Context, r resource.Resource, kind r
 		return fmt.Errorf("backup: plan %q already has a run in progress", r.Metadata.Name)
 	}
 	defer e.running.Delete(r.Metadata.Name)
+	if err := e.checkPasswordDependencies(ctx, r, kind); err != nil {
+		e.recordDependencyUnavailable(r, kind, err)
+		return err
+	}
 
 	stored, err := json.Marshal(map[string]any{"summary": summary, "backupPlan": r.Metadata.Name, "kind": string(kind)})
 	if err != nil {
@@ -569,6 +573,9 @@ func (e *Engine) withProvenance(ctx context.Context, r resource.Resource, kind r
 	if runErr != nil {
 		status, planState, evt = runtimedb.BackupRunFailed, runtimedb.PlanFailed, "backup.failed"
 		detail = runErr.Error()
+		if _, unavailable := asDependencyUnavailable(runErr); unavailable {
+			status, evt = runtimedb.BackupRunDependencyUnavailable, "backup.dependency_unavailable"
+		}
 	}
 	if err := e.DB.FinishBackupRun(seq, status, detail); err != nil {
 		e.log().Error("backup: closing run ledger", "seq", seq, "err", err)

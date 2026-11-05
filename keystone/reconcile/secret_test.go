@@ -294,3 +294,54 @@ func TestOneCapabilityAwaitingASecretDoesNotStopTheOthers(t *testing.T) {
 		t.Fatalf("the missing secret was not named: %+v", out.Blocked)
 	}
 }
+
+// A generated secret is an independently safe precondition, not an ordinary
+// capability step. Agent Hermes demonstrates why the distinction matters: its
+// provider key is operator-supplied, while its scheduled BackupPlan uses a
+// generated restic password. Holding the whole owner back left the BackupPlan
+// schedulable with no password and caused an endless series of doomed runs.
+func TestBlockedCapabilityStillGetsGeneratedBackupSecretOnly(t *testing.T) {
+	h := startGateway(t, []string{"tok"})
+	agent := newTestAgent(t, h, "node-a", "tok")
+	if !h.gw.WaitConnected("node-a", 10*time.Second) {
+		t.Fatal("agent never connected")
+	}
+
+	container := containerResource("agent-hermes", testDigestImage)
+	container.Metadata.Owner = "capability/agent-hermes"
+	backupPlan := resource.Resource{
+		ApiVersion: resource.ApiVersion,
+		Kind:       resource.KindBackupPlan,
+		Metadata:   resource.Metadata{Name: "agent-hermes", Owner: "capability/agent-hermes", Node: "node-a"},
+		BackupPlan: &resource.BackupPlanSpec{
+			Volumes: []string{"agent-hermes-data"}, Repository: "agent-hermes-backup-repo",
+			PasswordSecret: "secret/restic-agent-hermes", Schedule: "daily",
+		},
+	}
+	desired := []resource.Resource{
+		ownedProvidedSecret("agent-hermes", "agent-hermes-provider-key"),
+		ownedSecret("agent-hermes", "restic-agent-hermes"),
+		ownedSecret("agent-hermes", "agent-hermes-mcp-secret"),
+		backupPlan,
+		container,
+	}
+	out, err := secretReconciler(&GatewayApplier{Gateway: h.gw}).Reconcile(context.Background(), "node-a", desired)
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if _, ok := agent.secretKind("restic-agent-hermes"); !ok {
+		t.Fatal("generated backup password was held behind the unrelated provided secret")
+	}
+	if _, ok := agent.secretKind("agent-hermes-provider-key"); ok {
+		t.Fatal("provided provider key was synthesized")
+	}
+	if _, ok := agent.secretKind("agent-hermes-mcp-secret"); ok {
+		t.Fatal("unrelated generated secret was partially converged")
+	}
+	if agent.opCount("EnsureContainer") != 0 {
+		t.Fatal("blocked capability container was converged while its provided secret was absent")
+	}
+	if len(out.Blocked) == 0 || !strings.Contains(out.Blocked[0].Reason, "agent-hermes-provider-key") {
+		t.Fatalf("missing provided secret was not reported: %+v", out.Blocked)
+	}
+}

@@ -16,12 +16,27 @@ import (
 type scriptedApplier struct {
 	inspects []*wsv1.OpResult
 	ops      []string
+	secrets  [][]string
 	// removeErr, when set, answers every RemoveContainer with it.
 	removeErr *wsv1.OpError
 }
 
 func (s *scriptedApplier) Apply(_ context.Context, _ string, op *wsv1.Operation) (*wsv1.OpResult, error) {
 	switch op.GetOp().(type) {
+	case *wsv1.Operation_ListSecrets:
+		s.ops = append(s.ops, "list")
+		var names []string
+		if len(s.secrets) != 0 {
+			names = s.secrets[0]
+			if len(s.secrets) > 1 {
+				s.secrets = s.secrets[1:]
+			}
+		}
+		result := &wsv1.ListSecretsResult{}
+		for _, name := range names {
+			result.Secrets = append(result.Secrets, &wsv1.SecretInfo{Name: name, Version: 1})
+		}
+		return &wsv1.OpResult{Result: &wsv1.OpResult_ListSecrets{ListSecrets: result}}, nil
 	case *wsv1.Operation_PullImage:
 		s.ops = append(s.ops, "pull")
 	case *wsv1.Operation_EnsureContainer:
@@ -73,6 +88,36 @@ func TestRunnerExitZeroSucceeds(t *testing.T) {
 	want := "pull,remove,ensure,inspect,inspect,stop,remove"
 	if got := strings.Join(app.ops, ","); got != want {
 		t.Fatalf("ops = %s, want %s", got, want)
+	}
+}
+
+func TestRunnerRechecksPasswordImmediatelyBeforeContainerMutation(t *testing.T) {
+	app := &scriptedApplier{}
+	r := &ApplierRunner{Applier: app, Poll: time.Millisecond, Timeout: time.Second}
+	err := r.RunContainer(context.Background(), "n1", "backup-photos", resource.ContainerSpec{
+		Image: testResticImage,
+		Env:   map[string]string{"RESTIC_PASSWORD": "secret/restic-photos"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "secret/restic-photos") {
+		t.Fatalf("error = %v", err)
+	}
+	if got := strings.Join(app.ops, ","); got != "list" {
+		t.Fatalf("container path mutated before dependency refusal: %v", app.ops)
+	}
+}
+
+func TestRunnerCatchesPasswordDisappearanceAtEnsureBoundary(t *testing.T) {
+	app := &scriptedApplier{secrets: [][]string{{"restic-photos"}, {}}}
+	r := &ApplierRunner{Applier: app, Poll: time.Millisecond, Timeout: time.Second}
+	err := r.RunContainer(context.Background(), "n1", "backup-photos", resource.ContainerSpec{
+		Image: testResticImage,
+		Env:   map[string]string{"RESTIC_PASSWORD": "secret/restic-photos"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "secret/restic-photos") {
+		t.Fatalf("error = %v", err)
+	}
+	if got := strings.Join(app.ops, ","); got != "list,pull,remove,list" {
+		t.Fatalf("ops = %s, want no EnsureContainer after the dependency disappeared", got)
 	}
 }
 
