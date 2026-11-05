@@ -31,6 +31,22 @@ const ManagementRecoveryFormat = "wildstone-management-recovery-v1"
 
 var managementRevision = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
+// managementChartLayouts and managementChartTransitions are intentionally
+// explicit. A chart release may change coordinator identity, probes or other
+// packaging without changing the on-disk layout, but recovery must not infer
+// compatibility from SemVer or accept a future version it has not reviewed.
+var managementChartLayouts = map[string]string{
+	"0.1.0": "claim-root",
+	"0.2.0": "private-keystone-child",
+	"0.2.1": "private-keystone-child",
+}
+
+var managementChartTransitions = map[string]map[string]bool{
+	"0.1.0": {"0.2.0": true},
+	"0.2.0": {"0.2.0": true, "0.2.1": true},
+	"0.2.1": {"0.2.1": true},
+}
+
 // ManagementManifest binds a quiesced consistency group. Artifact keys are
 // fixed logical names; their values are relative regular-file paths beneath
 // either the extracted recovery set or the separately held key directory.
@@ -110,8 +126,9 @@ func VerifyManagementSet(setDir, keyDir string) (ManagementPreflight, error) {
 	if !m.Quiesced || !m.OriginalWriterFenced || !m.OwnerApproved {
 		return report, fmt.Errorf("management recovery: quiesce, original-writer fencing, and Owner approval are all required")
 	}
-	wantLayout := map[string]string{"0.1.0": "claim-root", "0.2.0": "private-keystone-child"}[m.SourceChartVersion]
-	if wantLayout == "" || m.RuntimeLayout != wantLayout || m.TargetChartVersion != "0.2.0" {
+	wantLayout := managementChartLayouts[m.SourceChartVersion]
+	if wantLayout == "" || m.RuntimeLayout != wantLayout ||
+		!managementChartTransitions[m.SourceChartVersion][m.TargetChartVersion] {
 		return report, fmt.Errorf("management recovery: unsupported chart/layout transition")
 	}
 	if !regexp.MustCompile(`^sha256:[0-9a-f]{64}$`).MatchString(m.ImageDigest) {
