@@ -113,11 +113,30 @@ func (s *Server) listBackups(r *http.Request, id principal.Identity) (any, int, 
 	return map[string]any{"plans": plans, "targets": targetList, "runs": runs}, http.StatusOK, nil
 }
 
-func backupPasswordDeclaration(desired []resource.Resource, plan resource.Resource) (ref, source string) {
-	ref = plan.BackupPlan.PasswordSecret
+type backupPasswordDeclaration struct {
+	ref    string
+	source string
+}
+
+func backupPasswordDeclarations(desired []resource.Resource, plan resource.Resource) []backupPasswordDeclaration {
+	refs := []string{plan.BackupPlan.PasswordSecret}
+	if plan.BackupPlan.Offsite != nil {
+		if plan.BackupPlan.Offsite.Route == resource.BackupRouteOffsiteOnly {
+			refs = refs[:0]
+		}
+		refs = append(refs, plan.BackupPlan.Offsite.PasswordSecret)
+	}
+	declarations := make([]backupPasswordDeclaration, 0, len(refs))
+	for _, ref := range refs {
+		declarations = append(declarations, backupPasswordDeclaration{ref: ref, source: backupPasswordSource(desired, plan, ref)})
+	}
+	return declarations
+}
+
+func backupPasswordSource(desired []resource.Resource, plan resource.Resource, ref string) string {
 	name := strings.TrimPrefix(ref, "secret/")
 	if !strings.HasPrefix(ref, "secret/") || name == "" {
-		return ref, "unknown"
+		return "unknown"
 	}
 	for _, d := range desired {
 		if d.Kind != resource.KindSecret || d.Secret == nil || d.Secret.Name != name ||
@@ -125,11 +144,11 @@ func backupPasswordDeclaration(desired []resource.Resource, plan resource.Resour
 			continue
 		}
 		if d.Secret.Provided {
-			return ref, "provided"
+			return "provided"
 		}
-		return ref, "generated"
+		return "generated"
 	}
-	return ref, "unknown"
+	return "unknown"
 }
 
 type backupSecretSnapshot struct {
@@ -153,16 +172,33 @@ func (s *Server) backupSecretInventory(ctx context.Context, node string) backupS
 }
 
 func (s *Server) backupPasswordState(desired []resource.Resource, plan resource.Resource, inventory backupSecretSnapshot, owner bool) (backupPasswordStatus, error) {
-	ref, source := backupPasswordDeclaration(desired, plan)
-	status := backupPasswordStatus{PasswordRef: ref, Source: source, Remedy: "none"}
+	declarations := backupPasswordDeclarations(desired, plan)
+	status := backupPasswordStatus{PasswordRef: declarations[0].ref, Source: declarations[0].source, Remedy: "none"}
 	if !inventory.available {
 		status.State, status.Reason, status.Held = "inventory-unavailable", "secret-inventory-unavailable", true
 		return status, nil
 	}
-	name := strings.TrimPrefix(ref, "secret/")
-	if !strings.HasPrefix(ref, "secret/") || name == "" || !inventory.have[name] {
+	missing := make([]backupPasswordDeclaration, 0, len(declarations))
+	for _, declaration := range declarations {
+		name := strings.TrimPrefix(declaration.ref, "secret/")
+		if !strings.HasPrefix(declaration.ref, "secret/") || name == "" || !inventory.have[name] {
+			missing = append(missing, declaration)
+		}
+	}
+	if len(missing) > 0 {
+		// Prefer a dependency that reconciliation cannot repair. Offering a
+		// generated-secret action while a provided or unowned route password
+		// is also absent would claim the whole plan can converge from that click.
+		selected := missing[0]
+		for _, declaration := range missing {
+			if declaration.source != "generated" {
+				selected = declaration
+				break
+			}
+		}
+		status.PasswordRef, status.Source = selected.ref, selected.source
 		status.State, status.Reason, status.Held = "missing", "password-secret-missing", true
-		switch source {
+		switch selected.source {
 		case "generated":
 			status.Remedy, status.CanRepair = "reconcile", owner
 		case "provided":
@@ -170,7 +206,7 @@ func (s *Server) backupPasswordState(desired []resource.Resource, plan resource.
 		}
 		return status, nil
 	}
-	repaired, err := s.DB.HasBackupDependencyUnavailable(plan.Metadata.Name)
+	repaired, err := s.DB.HasUnexercisedBackupDependencyRepair(plan.Metadata.Name)
 	if err != nil {
 		return backupPasswordStatus{}, err
 	}
@@ -210,22 +246,31 @@ func (s *Server) repairBackupPassword(r *http.Request, id principal.Identity) (a
 	if !found {
 		return nil, http.StatusNotFound, fmt.Errorf("BackupPlan %s not found", name)
 	}
-	ref, source := backupPasswordDeclaration(desired, plan)
-	if source != "generated" {
-		if source == "provided" {
-			return nil, http.StatusConflict, fmt.Errorf("%s is operator-provided; enter it through Secrets instead of generating it", ref)
-		}
-		return nil, http.StatusConflict, fmt.Errorf("%s is not a generated Secret owned by BackupPlan %s on node %s", ref, name, plan.Metadata.Node)
-	}
+	declarations := backupPasswordDeclarations(desired, plan)
 	inventory := s.backupSecretInventory(r.Context(), plan.Metadata.Node)
 	if !inventory.available {
 		return nil, http.StatusConflict, fmt.Errorf("cannot confirm password-secret absence on node %s", plan.Metadata.Node)
 	}
-	if inventory.have[strings.TrimPrefix(ref, "secret/")] {
-		return map[string]string{"plan": name, "node": plan.Metadata.Node, "passwordRef": ref, "state": "present"}, http.StatusOK, nil
+	var missing *backupPasswordDeclaration
+	for i := range declarations {
+		name := strings.TrimPrefix(declarations[i].ref, "secret/")
+		if !strings.HasPrefix(declarations[i].ref, "secret/") || name == "" || !inventory.have[name] {
+			if missing == nil || (missing.source == "generated" && declarations[i].source != "generated") {
+				missing = &declarations[i]
+			}
+		}
+	}
+	if missing == nil {
+		return map[string]string{"plan": name, "node": plan.Metadata.Node, "passwordRef": declarations[0].ref, "state": "present"}, http.StatusOK, nil
+	}
+	if missing.source != "generated" {
+		if missing.source == "provided" {
+			return nil, http.StatusConflict, fmt.Errorf("%s is operator-provided; enter it through Secrets instead of generating it", missing.ref)
+		}
+		return nil, http.StatusConflict, fmt.Errorf("%s is not a generated Secret owned by BackupPlan %s on node %s", missing.ref, name, plan.Metadata.Node)
 	}
 	s.OnBackupRepair()
-	return map[string]string{"plan": name, "node": plan.Metadata.Node, "passwordRef": ref, "state": "pending"}, http.StatusAccepted, nil
+	return map[string]string{"plan": name, "node": plan.Metadata.Node, "passwordRef": missing.ref, "state": "pending"}, http.StatusAccepted, nil
 }
 
 func backupTargets(desired []resource.Resource) map[string]backupTargetView {

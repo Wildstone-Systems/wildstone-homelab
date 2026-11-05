@@ -138,15 +138,17 @@ func (db *DB) RecordBackupDependencyUnavailable(planName string, kind BackupRunK
 	return seq, false, nil
 }
 
-// HasBackupDependencyUnavailable reports whether a plan has ever been held
-// before dispatch. The public backup read model combines this durable fact
-// with a fresh node inventory: present with prior refusal is "repaired",
-// while present without one is simply "present".
-func (db *DB) HasBackupDependencyUnavailable(planName string) (bool, error) {
+// HasUnexercisedBackupDependencyRepair reports whether the newest ledger row
+// is a pre-dispatch dependency refusal. The public read model combines that
+// durable fact with fresh inventory: a now-present password is "repaired"
+// only until an ordinary run records the outcome that supersedes the hold.
+func (db *DB) HasUnexercisedBackupDependencyRepair(planName string) (bool, error) {
 	var found bool
 	err := db.sql.QueryRow(`SELECT EXISTS(
-		SELECT 1 FROM backup_runs WHERE plan_name = ? AND status = ?
-	)`, planName, string(BackupRunDependencyUnavailable)).Scan(&found)
+		SELECT 1 FROM backup_runs
+		 WHERE plan_name = ? AND status = ?
+		   AND seq = (SELECT MAX(seq) FROM backup_runs WHERE plan_name = ?)
+	)`, planName, string(BackupRunDependencyUnavailable), planName).Scan(&found)
 	if err != nil {
 		return false, fmt.Errorf("runtimedb: checking backup dependency history: %w", err)
 	}

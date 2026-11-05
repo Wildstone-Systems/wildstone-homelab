@@ -108,6 +108,52 @@ func TestBackupPasswordStatusAndRepair(t *testing.T) {
 	}
 }
 
+func TestBackupPasswordStatusUsesEveryConfiguredRoute(t *testing.T) {
+	h := newHarness(t)
+	plan := resource.Resource{ApiVersion: resource.ApiVersion, Kind: resource.KindBackupPlan,
+		Metadata: resource.Metadata{Name: "photos", Node: "node-example", Owner: "capability/photos"},
+		BackupPlan: &resource.BackupPlanSpec{Volumes: []string{"data"}, Offsite: &resource.BackupOffsite{
+			Target: "archive", Route: resource.BackupRouteOffsiteOnly, PasswordSecret: "secret/restic-offsite", Schedule: "daily"}}}
+	desired := []resource.Resource{
+		{ApiVersion: resource.ApiVersion, Kind: resource.KindSecret,
+			Metadata: resource.Metadata{Name: "restic-offsite", Node: "node-example", Owner: "capability/photos"},
+			Secret:   &resource.SecretSpec{Name: "restic-offsite"}},
+		plan,
+	}
+	status, err := h.s.backupPasswordState(desired, plan, backupSecretSnapshot{available: true, have: map[string]bool{}}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.PasswordRef != "secret/restic-offsite" || status.Source != "generated" || !status.CanRepair || !status.Held {
+		t.Fatalf("offsite-only status = %+v", status)
+	}
+
+	plan.BackupPlan.Repository = "repo"
+	plan.BackupPlan.PasswordSecret = "secret/restic-local"
+	plan.BackupPlan.Schedule = "daily"
+	plan.BackupPlan.Offsite.Route = resource.BackupRouteLocalAndOffsite
+	desired = append([]resource.Resource{
+		{ApiVersion: resource.ApiVersion, Kind: resource.KindSecret,
+			Metadata: resource.Metadata{Name: "restic-local", Node: "node-example", Owner: "capability/photos"},
+			Secret:   &resource.SecretSpec{Name: "restic-local"}},
+	}, desired...)
+	status, err = h.s.backupPasswordState(desired, plan, backupSecretSnapshot{available: true, have: map[string]bool{"restic-local": true}}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.PasswordRef != "secret/restic-offsite" || status.Source != "generated" || !status.Held {
+		t.Fatalf("local-and-offsite status = %+v", status)
+	}
+	desired[1].Secret.Provided = true
+	status, err = h.s.backupPasswordState(desired, plan, backupSecretSnapshot{available: true, have: map[string]bool{}}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.PasswordRef != "secret/restic-offsite" || status.Source != "provided" || status.Remedy != "enter-secret" || status.CanRepair {
+		t.Fatalf("mixed generated/provided status = %+v", status)
+	}
+}
+
 func TestBackupPasswordRepairRefusesUnconfirmedAndProvidedSecrets(t *testing.T) {
 	for _, tc := range []struct {
 		name        string

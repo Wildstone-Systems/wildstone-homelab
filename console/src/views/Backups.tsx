@@ -1,5 +1,5 @@
 import { Archive, ArrowCounterClockwise, Play } from "@phosphor-icons/react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api, BackupPasswordStatus, BackupPlanView, BackupRun, BackupTargetView } from "../api";
 import type { BackupPlanSpec, BackupTargetSpec } from "../generated/resources";
 import { ago, ErrorLine, useAction, useLoad, when } from "../lib";
@@ -89,6 +89,7 @@ export function BackupPlanCard({ ledger, targets = [], onRan }: { ledger: PlanLe
   const run = useAction();
   const restore = useAction();
   const repair = useAction();
+  const [repairPolls, setRepairPolls] = useState(0);
   const busy = run.state.phase === "busy" || restore.state.phase === "busy" || repair.state.phase === "busy";
   const ranNow = run.state.phase === "done" ? run.state : null;
   const restored = restore.state.phase === "done" ? restore.state : null;
@@ -99,8 +100,17 @@ export function BackupPlanCard({ ledger, targets = [], onRan }: { ledger: PlanLe
   // without claiming a percentage nobody has (ADR-W027 A9).
   const running = last?.status === "running" || run.state.phase === "busy";
   const password = ledger.config?.dependency;
+  useEffect(() => {
+    if (repair.state.phase !== "done" || !password?.held || repairPolls >= 15) return;
+    const timer = window.setTimeout(() => {
+      setRepairPolls((count) => count + 1);
+      onRan();
+    }, 2000);
+    return () => window.clearTimeout(timer);
+  }, [onRan, password?.held, repair.state.phase, repairPolls]);
+  const showRepairTransition = password?.state === "repaired" && last?.status === "dependency-unavailable";
   const dependencyHealth: Kind | undefined = password?.state === "missing" ? "bad" :
-    password?.state === "inventory-unavailable" || password?.state === "repaired" ? "warn" : undefined;
+    password?.state === "inventory-unavailable" || showRepairTransition ? "warn" : undefined;
   const health: Kind = ranNow ? "ok" : running ? "warn" : (dependencyHealth ?? ledger.health);
   const latest = {
     local: ledger.runs.find((r) => r.runKind === "backup"),
@@ -117,7 +127,7 @@ export function BackupPlanCard({ ledger, targets = [], onRan }: { ledger: PlanLe
       meta={
         <>
           <StatusPill kind={health}>
-            {ranNow ? ranNow.message : running ? "running" : password?.held ? "held" : password?.state === "repaired" ? "password repaired" : (last?.status ?? "never run")}
+            {ranNow ? ranNow.message : running ? "running" : password?.held ? "held" : showRepairTransition ? "password repaired" : (last?.status ?? "never run")}
           </StatusPill>
           {last && (
             <span className="muted" title={when(last.startedAt)}>
@@ -126,7 +136,7 @@ export function BackupPlanCard({ ledger, targets = [], onRan }: { ledger: PlanLe
           )}
         </>
       }
-      body={password && password.state !== "present" ? explainPassword(password) : last ? explain(last, ledger) : "This plan has no recorded runs yet."}
+      body={password?.held || showRepairTransition ? explainPassword(password) : last ? explain(last, ledger) : "This plan has no recorded runs yet."}
       actions={
         <>
           <button
@@ -155,13 +165,17 @@ export function BackupPlanCard({ ledger, targets = [], onRan }: { ledger: PlanLe
             <button
               className="btn btn-primary"
               disabled={busy}
-              onClick={() => repair.run(() => api.repairBackupPassword(ledger.name).then(onRan), "repair requested — reconciliation is checking the node")}
+              onClick={() => {
+                setRepairPolls(0);
+                void repair.run(() => api.repairBackupPassword(ledger.name).then(onRan), "repair requested — reconciliation is checking the node");
+              }}
             >
               <ArrowCounterClockwise size={14} />
               {repair.state.phase === "busy" ? "Requesting…" : "Repair generated password"}
             </button>
           )}
           {repair.state.phase === "done" && <StatusPill kind="warn">{repair.state.message}</StatusPill>}
+          {repair.state.phase === "done" && password?.held && repairPolls >= 15 && <ErrorLine error="Repair is still blocked; the plan remains held." />}
           {run.state.phase === "error" && <ErrorLine error={run.state.message} />}
           {restore.state.phase === "error" && <ErrorLine error={restore.state.message} />}
           {repair.state.phase === "error" && <ErrorLine error={repair.state.message} />}
