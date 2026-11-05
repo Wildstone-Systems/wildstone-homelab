@@ -12,4 +12,3 @@ ALTER TABLE butler_index ADD COLUMN source_revision TEXT NOT NULL DEFAULT '';
 
 CREATE INDEX butler_index_jobs_lease
     ON butler_index_jobs (state, available_at, lease_until, priority, seq);
-
