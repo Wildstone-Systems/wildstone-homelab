@@ -24,18 +24,23 @@ RUN cd keystone && go build -trimpath \
 FROM ${NODE_IMAGE} AS web-and-native-build
 WORKDIR /src
 # A dated, signed Debian snapshot keeps the two build-only tools repeatable.
-# Acquire::Retries rides out the snapshot mirror's brief 503/504 outages,
-# which otherwise fail the whole image build.
+# Individual fetch retries can exhaust during snapshot CDN 503/504 outages.
+# Retry the pinned install at most three times; never bypass apt verification.
 # The native package script still verifies Node itself with its pinned SHA-256.
 RUN printf '%s\n' \
       'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/20261031T000000Z bookworm main' \
       > /etc/apt/sources.list \
     && rm -f /etc/apt/sources.list.d/* \
     && apt-get -o Acquire::Retries=5 update \
-    && apt-get -o Acquire::Retries=5 install -y --no-install-recommends \
+    && for attempt in 1 2 3; do \
+      if apt-get -o Acquire::Retries=5 install -y --no-install-recommends \
       ca-certificates=20230311+deb12u1 \
       curl=7.88.1-10+deb12u15 \
-      xz-utils=5.4.1-1+deb12u1 \
+      xz-utils=5.4.1-1+deb12u1; then break; fi; \
+      [ "$attempt" -lt 3 ] || exit 1; \
+      echo "Pinned apt install failed; retrying ($attempt/3)" >&2; \
+      sleep 15; \
+    done \
     && rm -rf /var/lib/apt/lists/*
 
 COPY console/package.json console/package-lock.json console/
@@ -73,9 +78,14 @@ RUN printf '%s\n' \
       > /etc/apt/sources.list \
     && rm -f /etc/apt/sources.list.d/* \
     && apt-get -o Acquire::Retries=5 update \
-    && apt-get -o Acquire::Retries=5 install -y --no-install-recommends \
+    && for attempt in 1 2 3; do \
+      if apt-get -o Acquire::Retries=5 install -y --no-install-recommends \
       ca-certificates=20230311+deb12u1 \
-      git=1:2.39.5-0+deb12u3 \
+      git=1:2.39.5-0+deb12u3; then break; fi; \
+      [ "$attempt" -lt 3 ] || exit 1; \
+      echo "Pinned apt install failed; retrying ($attempt/3)" >&2; \
+      sleep 15; \
+    done \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --gid 65532 wildstone \
     && useradd --uid 65532 --gid 65532 --home-dir /home/wildstone --create-home --shell /usr/sbin/nologin wildstone \
