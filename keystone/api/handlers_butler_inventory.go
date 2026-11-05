@@ -41,7 +41,7 @@ func (s *Server) visibleButlers(id principal.Identity) ([]runtimedb.Butler, bool
 	if err != nil {
 		return nil, true, err
 	}
-	all, err := s.DB.ButlersFor(person)
+	all, err := s.DB.ButlerInventoryFor(person)
 	return all, true, err
 }
 

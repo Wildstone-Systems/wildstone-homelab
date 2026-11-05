@@ -306,6 +306,17 @@ func (s *Server) createButler(r *http.Request, id principal.Identity) (any, int,
 		}
 		return nil, http.StatusBadRequest, err
 	}
+	// A Person-facing creation records one explicit access grant for the
+	// authenticated Person. This is stored authority, not creator-name
+	// inference or an Owner bypass: it can be revoked immediately and every
+	// later read still rechecks the current admission and grant. Without it,
+	// the Person-scoped roster would hide the new Agent before the Console
+	// could finish configuring reach.
+	if person := inventoryPerson(id); person != "" {
+		if err := s.DB.GrantButlerAccess(name, person, actingMember(id)); err != nil {
+			return nil, http.StatusInternalServerError, err
+		}
+	}
 	created, err := s.DB.GetButler(name)
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
@@ -874,6 +885,14 @@ func (s *Server) duplicateButler(r *http.Request, id principal.Identity) (any, i
 		}
 		return nil, http.StatusBadRequest, err
 	}
+	// Like a newly created Agent, a Person-facing copy gets only the current
+	// Person's explicit setup grant. It never inherits the source Agent's
+	// access list or any other Person's authority.
+	if person := inventoryPerson(id); person != "" {
+		if err := s.DB.GrantButlerAccess(copyName, person, actingMember(id)); err != nil {
+			return nil, http.StatusInternalServerError, err
+		}
+	}
 	b, err := s.DB.GetButler(copyName)
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
@@ -885,7 +904,11 @@ func (s *Server) duplicateButler(r *http.Request, id principal.Identity) (any, i
 	}
 	s.event("butler.duplicated", "", id, fmt.Sprintf("butler %s copied from %s", copyName, name))
 	out := butlerView(b)
-	out["note"] = "the copy has its model and tool narrowings. It has no connections or secret grants, nobody can talk to it, it remembers nothing, and it has no conversations — grant those fresh; they belong to " + name + "."
+	who := "nobody can talk to it"
+	if inventoryPerson(id) != "" {
+		who = "only its creator may talk to it"
+	}
+	out["note"] = "the copy has its model and tool narrowings. It has no connections or secret grants, " + who + ", it remembers nothing, and it has no conversations — grant those fresh; they belong to " + name + "."
 	return out, http.StatusCreated, nil
 }
 

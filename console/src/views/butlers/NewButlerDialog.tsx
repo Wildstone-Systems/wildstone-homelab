@@ -21,10 +21,9 @@ interface Draft {
 // go: the summary card at the bottom restates the whole choice as a
 // sentence, and turns amber the moment a cloud route is selected.
 //
-// Reach is deliberately absent. A new Butler nobody can talk to is a
-// safe thing to have made by accident; a new Butler three people can
-// already message is not, so access is granted afterwards, on purpose,
-// on its own tab.
+// Reach is deliberately absent. Creation gives only the authenticated
+// Person a stored setup grant; extending reach to anybody else still happens
+// afterwards, on purpose, on its own tab.
 export function NewButlerDialog({
   routes,
   existing,

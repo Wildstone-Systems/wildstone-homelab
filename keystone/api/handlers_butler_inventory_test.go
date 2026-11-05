@@ -135,6 +135,77 @@ func TestAgentInventoryIsScopedToTheCurrentPerson(t *testing.T) {
 	assertInventory(mikaToken, "mika-agent", "sam-agent", mikaSession, samSession, mikaTask, samTask)
 }
 
+// Creation, duplication and retirement are one Console management lifecycle.
+// Person scoping must not strand a new Agent before access can be configured,
+// copy somebody else's access list, or erase the Retired restore path.
+func TestPersonScopedInventoryPreservesAgentSetupAndRetirement(t *testing.T) {
+	h := newHarness(t)
+	if err := h.s.DB.UpsertModel(runtimedb.Model{
+		Name: "fixture-local", Kind: runtimedb.ModelLocal, Provider: "ollama", ProviderModel: "fixture",
+		Readiness: runtimedb.ModelReady, Enabled: true,
+	}, "fixture"); err != nil {
+		t.Fatal(err)
+	}
+	token := h.console(runtimedb.RoleAdmin, "mika")
+	samToken := h.console(runtimedb.RoleAdmin, "sam")
+
+	if res := h.doToken(token, http.MethodPost, "/api/v1/butlers", map[string]any{
+		"name": "setup-agent", "agentClass": runtimedb.AgentClassMember, "model": "fixture-local",
+	}, nil); res.StatusCode != http.StatusCreated {
+		t.Fatalf("create = %d", res.StatusCode)
+	}
+	assertInventoryNames(t, h, token, "setup-agent")
+	assertInventoryNames(t, h, samToken)
+	if err := h.s.DB.GrantButlerAccess("setup-agent", "sam", "fixture"); err != nil {
+		t.Fatal(err)
+	}
+	assertInventoryNames(t, h, samToken, "setup-agent")
+
+	if res := h.doToken(token, http.MethodPost, "/api/v1/butlers/setup-agent/duplicate", map[string]any{
+		"name": "setup-copy",
+	}, nil); res.StatusCode != http.StatusCreated {
+		t.Fatalf("duplicate = %d", res.StatusCode)
+	}
+	assertInventoryNames(t, h, token, "setup-agent", "setup-copy")
+	// A copy receives the acting Person's fresh setup grant, never the
+	// source Agent's access list.
+	assertInventoryNames(t, h, samToken, "setup-agent")
+
+	if res := h.doToken(token, http.MethodDelete, "/api/v1/butlers/setup-agent", nil, nil); res.StatusCode != http.StatusOK {
+		t.Fatalf("retire = %d", res.StatusCode)
+	}
+	assertInventoryNames(t, h, token, "setup-agent", "setup-copy")
+
+	if err := h.s.DB.RevokeButlerAccess("setup-copy", "mika", "fixture"); err != nil {
+		t.Fatal(err)
+	}
+	assertInventoryNames(t, h, token, "setup-agent")
+}
+
+func assertInventoryNames(t *testing.T, h *harness, token string, want ...string) {
+	t.Helper()
+	var roster struct {
+		Butlers []struct {
+			Butler runtimedb.Butler `json:"butler"`
+		} `json:"butlers"`
+	}
+	if res := h.doToken(token, http.MethodGet, "/api/v1/butlers", nil, &roster); res.StatusCode != http.StatusOK {
+		t.Fatalf("roster = %d", res.StatusCode)
+	}
+	got := make([]string, 0, len(roster.Butlers))
+	for _, row := range roster.Butlers {
+		got = append(got, row.Butler.Name)
+	}
+	if len(got) != len(want) {
+		t.Fatalf("inventory = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("inventory = %v, want %v", got, want)
+		}
+	}
+}
+
 func inventorySession(t *testing.T, h *harness, person, agent, final string) string {
 	t.Helper()
 	id, err := h.s.DB.InsertButlerSession(runtimedb.ButlerSession{
