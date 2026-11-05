@@ -6,6 +6,7 @@ package runtimedb
 // state is verified live rather than trusted from the index.
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"testing"
@@ -248,6 +249,26 @@ func TestIndexJobsAreLocalFirstAndOrdered(t *testing.T) {
 	}
 	if _, ok, err := db.ClaimIndexJob(); err != nil || ok {
 		t.Fatalf("an empty queue = %v, %t; want idle", err, ok)
+	}
+}
+
+func TestExpiredIndexLeaseIsRecoveredWithoutDuplicateCompletion(t *testing.T) {
+	db := open(t)
+	seq, err := db.QueueIndexJob(IndexJobIndex, `{"memorySeq":1}`, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, ok, err := db.ClaimIndexJobLease("worker-a", time.Nanosecond)
+	if err != nil || !ok || first.Seq != seq {
+		t.Fatalf("first claim = %+v, %t, %v", first, ok, err)
+	}
+	time.Sleep(time.Millisecond)
+	second, ok, err := db.ClaimIndexJobLease("worker-b", time.Minute)
+	if err != nil || !ok || second.Seq != seq || second.Attempts != 2 {
+		t.Fatalf("recovered claim = %+v, %t, %v", second, ok, err)
+	}
+	if err := db.RetryIndexJob(seq, "worker-a", "stale", 0); err == nil {
+		t.Fatal("stale worker released another worker's lease")
 	}
 }
 
@@ -599,5 +620,35 @@ func TestSemanticCandidatesHonourForgetAndCorrect(t *testing.T) {
 		return false
 	}() {
 		t.Fatalf("a stray chunk for a forgotten record was returned: %+v", hits)
+	}
+}
+
+func TestIndexLeaseTimesCompareInTimeOrder(t *testing.T) {
+	whole := time.Date(2026, 1, 1, 12, 0, 5, 0, time.UTC)
+	half := whole.Add(500 * time.Millisecond)
+	if !(indexTS(whole) < indexTS(half)) {
+		t.Fatalf("%q must sort before %q", indexTS(whole), indexTS(half))
+	}
+}
+
+func TestPublishMemoryIndexRefusesSupersededCoordinator(t *testing.T) {
+	db := open(t)
+	lease, err := db.AcquireCoordinator("old-coordinator")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.QueueIndexJob(IndexJobIndex, `{"memorySeq":1}`, 0); err != nil {
+		t.Fatal(err)
+	}
+	job, ok, err := db.ClaimIndexJobLease(lease.Holder, time.Minute)
+	if err != nil || !ok {
+		t.Fatalf("claim = %t, %v", ok, err)
+	}
+	if _, err := db.PromoteCoordinator("new-coordinator"); err != nil {
+		t.Fatal(err)
+	}
+	err = db.PublishMemoryIndex(job, MemoryRecord{Seq: 1}, []float32{1}, "m", "1", lease)
+	if !errors.Is(err, ErrCoordinatorFenced) {
+		t.Fatalf("publish after promotion = %v, want ErrCoordinatorFenced", err)
 	}
 }

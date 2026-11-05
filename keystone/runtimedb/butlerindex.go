@@ -29,6 +29,8 @@ package runtimedb
 import (
 	"database/sql"
 	"encoding/binary"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"sort"
@@ -597,13 +599,46 @@ func (db *DB) ListIndexMeasurements() ([]IndexMeasurement, error) {
 
 // IndexJob is one piece of background retrieval work.
 type IndexJob struct {
-	Seq       int64     `json:"seq"`
-	Kind      string    `json:"kind"`
-	Payload   string    `json:"payload,omitempty"`
-	State     string    `json:"state"`
-	Priority  int       `json:"priority"`
-	CreatedAt time.Time `json:"createdAt"`
-	Error     string    `json:"error,omitempty"`
+	Seq        int64     `json:"seq"`
+	Kind       string    `json:"kind"`
+	Payload    string    `json:"payload,omitempty"`
+	State      string    `json:"state"`
+	Priority   int       `json:"priority"`
+	CreatedAt  time.Time `json:"createdAt"`
+	Error      string    `json:"error,omitempty"`
+	Attempts   int       `json:"attempts"`
+	LeaseOwner string    `json:"-"`
+	LeaseUntil time.Time `json:"-"`
+}
+
+// MemoryIndexJob is the bounded payload for indexing one durable memory row.
+// It contains only a database identity, never source text or authority claims.
+type MemoryIndexJob struct {
+	MemorySeq int64 `json:"memorySeq"`
+}
+
+// QueueMemoryIndex schedules the current revision of one memory row. Duplicate
+// queued/running work is harmless: publication rechecks the row and replaces
+// the one derived index outcome transactionally.
+func (db *DB) QueueMemoryIndex(memorySeq int64) (int64, error) {
+	if memorySeq <= 0 {
+		return 0, fmt.Errorf("runtimedb: memory index job needs a memory sequence")
+	}
+	payload, err := json.Marshal(MemoryIndexJob{MemorySeq: memorySeq})
+	if err != nil {
+		return 0, err
+	}
+	return db.QueueIndexJob(IndexJobIndex, string(payload), BackgroundJobPriority)
+}
+
+func queueMemoryIndexTx(tx *sql.Tx, memorySeq int64) error {
+	payload, err := json.Marshal(MemoryIndexJob{MemorySeq: memorySeq})
+	if err != nil {
+		return err
+	}
+	_, err = tx.Exec(`INSERT INTO butler_index_jobs (kind, payload, state, priority, created_at)
+		VALUES (?, ?, ?, ?, ?)`, IndexJobIndex, string(payload), IndexJobQueued, BackgroundJobPriority, now())
+	return err
 }
 
 // QueueIndexJob adds background work. It defaults to background
@@ -633,25 +668,48 @@ func (db *DB) QueueIndexJob(kind, payload string, priority int) (int64, error) {
 // ClaimIndexJob takes the highest-priority queued job, or ok=false when
 // there is nothing to do.
 func (db *DB) ClaimIndexJob() (IndexJob, bool, error) {
+	return db.ClaimIndexJobLease("legacy-index-worker", time.Minute)
+}
+
+// ClaimIndexJobLease atomically requeues expired attempts and leases one job.
+// holder is process-local evidence only; coordinator authority is checked by
+// the worker before provider I/O and again before publication.
+func (db *DB) ClaimIndexJobLease(holder string, ttl time.Duration) (IndexJob, bool, error) {
+	if holder == "" || ttl <= 0 {
+		return IndexJob{}, false, fmt.Errorf("runtimedb: index claim needs a holder and positive lease")
+	}
 	tx, err := db.sql.Begin()
 	if err != nil {
 		return IndexJob{}, false, fmt.Errorf("runtimedb: claiming index job: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	stamp := time.Now().UTC()
+	if _, err := tx.Exec(`UPDATE butler_index_jobs
+		SET state=?, lease_owner='', lease_until='', error='previous attempt lease expired'
+		WHERE state=? AND lease_until<>'' AND lease_until<?`, IndexJobQueued, IndexJobRunning, indexTS(stamp)); err != nil {
+		return IndexJob{}, false, fmt.Errorf("runtimedb: recovering index jobs: %w", err)
+	}
 	var j IndexJob
-	var created string
+	var created, leaseUntil string
 	err = tx.QueryRow(
-		`SELECT seq, kind, payload, state, priority, created_at, error FROM butler_index_jobs
-		 WHERE state = ? ORDER BY priority, seq LIMIT 1`, IndexJobQueued).
-		Scan(&j.Seq, &j.Kind, &j.Payload, &j.State, &j.Priority, &created, &j.Error)
-	if err != nil {
+		`SELECT seq, kind, payload, state, priority, created_at, error, attempts, lease_owner, lease_until
+		 FROM butler_index_jobs WHERE state=? AND (available_at='' OR available_at<=?)
+		 ORDER BY priority, seq LIMIT 1`, IndexJobQueued, indexTS(stamp)).
+		Scan(&j.Seq, &j.Kind, &j.Payload, &j.State, &j.Priority, &created, &j.Error, &j.Attempts, &j.LeaseOwner, &leaseUntil)
+	if errors.Is(err, sql.ErrNoRows) {
 		// No rows is the normal idle case, not a failure.
 		return IndexJob{}, false, nil
 	}
+	if err != nil {
+		return IndexJob{}, false, fmt.Errorf("runtimedb: claiming index job: %w", err)
+	}
+	j.LeaseOwner = holder
+	j.LeaseUntil = stamp.Add(ttl)
 	if _, err := tx.Exec(
-		`UPDATE butler_index_jobs SET state = ?, started_at = ? WHERE seq = ?`,
-		IndexJobRunning, now(), j.Seq); err != nil {
+		`UPDATE butler_index_jobs SET state=?, started_at=?, attempts=attempts+1,
+		 lease_owner=?, lease_until=?, error='' WHERE seq=? AND state=?`,
+		IndexJobRunning, now(), holder, indexTS(j.LeaseUntil), j.Seq, IndexJobQueued); err != nil {
 		return IndexJob{}, false, fmt.Errorf("runtimedb: claiming index job: %w", err)
 	}
 	if j.CreatedAt, err = time.Parse(time.RFC3339Nano, created); err != nil {
@@ -661,6 +719,7 @@ func (db *DB) ClaimIndexJob() (IndexJob, bool, error) {
 		return IndexJob{}, false, fmt.Errorf("runtimedb: claiming index job: %w", err)
 	}
 	j.State = IndexJobRunning
+	j.Attempts++
 	return j, true, nil
 }
 
@@ -677,6 +736,143 @@ func (db *DB) FinishIndexJob(seq int64, failure string) error {
 		return fmt.Errorf("runtimedb: finishing index job: %w", err)
 	}
 	return nil
+}
+
+// FinishIndexJobLease completes only the caller's still-current lease.
+func (db *DB) FinishIndexJobLease(seq int64, holder, failure string) error {
+	state := IndexJobDone
+	if failure != "" {
+		state = IndexJobFailed
+	}
+	res, err := db.sql.Exec(`UPDATE butler_index_jobs SET state=?, finished_at=?, error=?, lease_owner='', lease_until=''
+		WHERE seq=? AND state=? AND lease_owner=? AND lease_until>=?`, state, now(), failure, seq,
+		IndexJobRunning, holder, indexTS(time.Now()))
+	if err != nil {
+		return fmt.Errorf("runtimedb: finishing leased index job: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		return fmt.Errorf("runtimedb: index job lease lost")
+	}
+	return nil
+}
+
+// RetryIndexJob releases a claimed job for a bounded later attempt. Error text
+// is a closed operational class supplied by the worker, never provider output.
+func (db *DB) RetryIndexJob(seq int64, holder, failure string, delay time.Duration) error {
+	if holder == "" || failure == "" || delay < 0 {
+		return fmt.Errorf("runtimedb: invalid index retry")
+	}
+	res, err := db.sql.Exec(`UPDATE butler_index_jobs SET state=?, available_at=?,
+		lease_owner='', lease_until='', error=? WHERE seq=? AND state=? AND lease_owner=?`,
+		IndexJobQueued, indexTS(time.Now().Add(delay)), failure,
+		seq, IndexJobRunning, holder)
+	if err != nil {
+		return fmt.Errorf("runtimedb: retrying index job: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		return fmt.Errorf("runtimedb: index job lease lost")
+	}
+	return nil
+}
+
+// MemoryForIndex returns the current durable source. The worker must call it
+// before provider I/O; PublishMemoryIndex repeats the check transactionally.
+//
+// Restore quarantine is returned as an error so the job retries after it
+// lifts. An Agent restricted from the memory's scope is ErrNotFound: that
+// Agent's model must never receive the content, so the job is finished.
+func (db *DB) MemoryForIndex(seq int64) (MemoryRecord, error) {
+	if err := db.gate(GateIngestion); err != nil {
+		return MemoryRecord{}, err
+	}
+	m, err := db.GetMemory(seq)
+	if err != nil {
+		return MemoryRecord{}, err
+	}
+	if !m.Eligible() {
+		return MemoryRecord{}, ErrNotFound
+	}
+	restricted, err := agentRestrictedFromScope(db.sql, m.Butler, m.Scope)
+	if err != nil {
+		return MemoryRecord{}, err
+	}
+	if restricted {
+		return MemoryRecord{}, ErrNotFound
+	}
+	return m, nil
+}
+
+// agentRestrictedFromScope mirrors the restriction arm of memoryScopeClause
+// so background embedding cannot route around an owner's restriction.
+func agentRestrictedFromScope(q queryRower, agent, scope string) (bool, error) {
+	var n int
+	err := q.QueryRow(`SELECT COUNT(*) FROM memory_agent_restrictions mr JOIN butlers mb ON mb.seq = mr.agent
+		WHERE mb.name = ? AND mr.scope = ?`, agent, scope).Scan(&n)
+	if err != nil {
+		return false, fmt.Errorf("runtimedb: checking agent memory restriction: %w", err)
+	}
+	return n != 0, nil
+}
+
+// PublishMemoryIndex atomically rechecks the source and lease, replaces its
+// derived row, and completes the job. Authorization/provenance comes only from
+// the current memory row; no payload or model response may widen it.
+func (db *DB) PublishMemoryIndex(job IndexJob, source MemoryRecord, vector []float32, model, version string, lease CoordinatorLease) error {
+	if lease.Holder == "" || job.LeaseOwner == "" || !job.LeaseUntil.After(time.Now().UTC()) || len(vector) == 0 || model == "" || version == "" {
+		return fmt.Errorf("runtimedb: invalid index publication")
+	}
+	for _, value := range vector {
+		if math.IsNaN(float64(value)) || math.IsInf(float64(value), 0) {
+			return fmt.Errorf("runtimedb: invalid embedding")
+		}
+	}
+	tx, err := db.sql.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	// Quarantine, coordinator promotion and a new Agent restriction must all
+	// win against a publication already in flight, so each is rechecked in
+	// the same transaction as the index write.
+	if err := db.gateTx(tx, GateIngestion); err != nil {
+		return err
+	}
+	var holder string
+	var epoch int64
+	if err := tx.QueryRow(`SELECT holder, epoch FROM coordinator_lease WHERE id = 1`).Scan(&holder, &epoch); err != nil || holder != lease.Holder || epoch != lease.Epoch {
+		return fmt.Errorf("%w: publication by a superseded coordinator", ErrCoordinatorFenced)
+	}
+	current, err := scanMemory(tx.QueryRow(memoryColumns+` WHERE r.seq=?`, source.Seq))
+	if err != nil || !current.Eligible() || current.Content != source.Content || current.SourceKind != source.SourceKind || current.SourceID != source.SourceID || current.Owner != source.Owner || current.Audience != source.Audience || current.PermissionLabel != source.PermissionLabel || current.Butler != source.Butler || current.Scope != source.Scope {
+		return fmt.Errorf("runtimedb: index source changed")
+	}
+	if restricted, err := agentRestrictedFromScope(tx, source.Butler, source.Scope); err != nil || restricted {
+		return fmt.Errorf("runtimedb: index source changed")
+	}
+	var leased int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM butler_index_jobs WHERE seq=? AND state=? AND lease_owner=? AND lease_until>=?`, job.Seq, IndexJobRunning, job.LeaseOwner, indexTS(time.Now())).Scan(&leased); err != nil || leased != 1 {
+		return fmt.Errorf("runtimedb: index job lease lost")
+	}
+	if _, err := tx.Exec(`DELETE FROM butler_index WHERE memory=?`, source.Seq); err != nil {
+		return err
+	}
+	owner, err := ownerPersonID(tx, source.Owner)
+	if err != nil {
+		return err
+	}
+	revision := contentKey(source.Content)
+	if _, err := tx.Exec(`INSERT INTO butler_index (source_kind, source_id, memory, owner_person_id, audience,
+		permission_label, content, observed_at, indexed_at, volatile, embedding, tokens, butler,
+		embedding_model, embedding_version, embedding_dimension, source_revision)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, source.SourceKind, source.SourceID, source.Seq, owner,
+		string(source.Audience), source.PermissionLabel, source.Content, timeText(source.ObservedAt), now(), 0,
+		encodeEmbedding(vector), len(strings.Fields(source.Content)), source.Butler, model, version, len(vector), revision); err != nil {
+		return fmt.Errorf("runtimedb: publishing memory index: %w", err)
+	}
+	if _, err := tx.Exec(`UPDATE butler_index_jobs SET state=?, finished_at=?, error='', lease_owner='', lease_until='' WHERE seq=?`, IndexJobDone, now(), job.Seq); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // promotionSources maps each promoted Household memory among hits to the
@@ -706,3 +902,8 @@ func (db *DB) promotionSources(hits []IndexHit) (map[int64]int64, error) {
 	}
 	return out, nil
 }
+
+// indexTS writes lease/retry times at a fixed width. RFC3339Nano drops
+// trailing fractional zeros, so its TEXT order is not time order
+// ("…05Z" sorts after "…05.5Z"); SQL comparisons need equal-width text.
+func indexTS(t time.Time) string { return mailTS(t) }

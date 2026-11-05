@@ -184,33 +184,18 @@ func memorySeams(db *runtimedb.DB, butlerName, member string, read *runtimedb.Me
 			if err != nil {
 				return err
 			}
-			// Searchable now rather than at the next sweep.
-			//
-			// Indexing is a queued job for DOCUMENTS, where the slow
-			// part is the embedding and a person waiting on an answer
-			// should not wait on it. A note is one row and there is no
-			// embedder yet; queueing it would mean telling somebody it
-			// is remembered while recall cannot find it until a worker
-			// runs.
-			//
-			// MemorySeq is what makes forgetting whole: correcting and
-			// forgetting delete the chunks that point at the record, in
-			// their own transaction, so a note taken back does not live
-			// on as a search hit.
+			// Keep keyword recall available immediately. RecordMemory also
+			// queued the semantic upgrade atomically; the background worker
+			// later replaces this exact derived row after fresh authority
+			// checks rather than making the person wait on a model.
 			if _, err := db.IndexDocumentInto(runtimedb.IndexDocument{
 				SourceKind: n.SourceKind, SourceID: n.SourceID, MemorySeq: seq,
 				Owner: member, Audience: runtimedb.ButlerAudiencePrivate,
 				PermissionLabel: butlerName, Butler: butlerName,
 				Content: n.Content, ObservedAt: rec.ObservedAt,
-			}); err != nil {
-				// The note IS kept, and saying otherwise would have the
-				// person say it again — two records, one of them a lie.
-				// What was lost is finding it by searching, which the
-				// next reindex restores.
-				if log != nil {
-					log.Error("a remembered note could not be indexed; it is stored, and recall will not find it until it is reindexed",
-						"memory", seq, "butler", butlerName, "err", err)
-				}
+			}); err != nil && log != nil {
+				log.Error("a remembered note could not be indexed for immediate keyword recall",
+					"memory", seq, "butler", butlerName, "err", err)
 			}
 			return nil
 		},

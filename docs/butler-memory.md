@@ -145,17 +145,18 @@ looks true and the material has already left.
 
 ### 3. The job runner — something drains the queue
 
-`QueueIndexJob` / `ClaimIndexJob` / `FinishIndexJob` exist and nothing
-claims. A worker belongs beside the reconcile service in
-`cmd/keystone`, and it must be **coordinator-gated**: two processes
-draining one queue would index the same chunk twice and race the
-compaction. The lease is already there — `AcquireCoordinator` — and
-butlerlive already takes it.
+The memory producer and coordinator-gated worker are wired beside the durable
+Butler services in `cmd/keystone`. A write queues its source identity in the
+same transaction; claims carry expiring attempt leases, and an expired attempt
+is safely offered again. Provider work is fenced before it starts and before
+publication. Publication reloads the current source and derives every
+permission/provenance field from it, so correction, forgetting, revocation and
+coordinator loss win a race with an embedding response.
 
 Indexing is a job rather than an inline write because embedding is slow
 and a person waiting on an answer should not wait on it.
 
-### 4. Embeddings — adapter delivered, indexing still pending
+### 4. Embeddings — adapter and memory indexing delivered
 
 The bounded provider seam and Ollama `/api/embed` adapter now exist. The
 adapter accepts text only, takes its endpoint and model from the exact Agent
@@ -164,8 +165,9 @@ dimension, and rechecks the live route and privacy policy before every HTTP
 attempt and after return. The store side is ready: with a query
 embedding, `SearchIndex` also retrieves rows by cosine similarity alone
 (floor `minSemanticSimilarity`) under the same permission predicate as the
-keyword path. The coordinator-gated index worker and recall call sites do not
-yet resolve the adapter or pass embeddings, so keyword-only remains an
+keyword path. The coordinator-gated worker resolves that adapter for durable
+memory rows and stores model/version/dimension metadata with the vector. Query
+embedding at recall call sites remains #234, so keyword-only remains an
 explicit supported deployment. `IndexDocument.Embedding` is optional and
 its comment is explicit that nil "is a working configuration and not a
 degraded one", so **bm25 alone works on day one** and A3's "hybrid
@@ -197,10 +199,9 @@ an opinion.
      key/value separator. A3.1 asks for exclusion of credentials *on top
      of* the redaction path, so `redact.NamesACredential` is a predicate
      and the tool refuses rather than storing the wrong half.
-   - A note is indexed inline rather than queued. Step 3's queue is for
-     documents, where the slow part is the embedding; a note is one row
-     and no producer resolves the embedder yet, so queueing it would mean telling
-     somebody it is remembered while `recall` cannot find it.
+   - A note is indexed inline for immediate keyword recall and also queued in
+     the record transaction for its semantic upgrade. This keeps `remember`
+     truthful while ensuring a crash cannot leave durable memory unqueued.
    - The seams moved from `cmd/keystone` to `butlerstore`, beside the
      ledger. The read path could live in a closure in a main function;
      the write path makes claims — the speaker owns a statement made in
