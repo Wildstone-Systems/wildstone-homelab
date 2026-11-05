@@ -12,7 +12,7 @@ agent-hermes 0.1.7 79ba84623554562e
 ai-ollama 1.0.0 f6b24b7aed67c8ea
 ai-open-webui 1.0.2 96ab7372c86f62ad
 assistant-wildstone 1.0.1 75fe068a57dbe4c9
-audiobooks-audiobookshelf 1.0.3 403e534e727e7974
+audiobooks-audiobookshelf 1.1.0 573d549638b9cd2a
 bookmarks-linkding 1.0.2 244e8d7f8885964f
 books-calibre-web 1.0.3 c3bdac664deed86b
 books-kavita 1.0.3 6c6fe6006484fde9

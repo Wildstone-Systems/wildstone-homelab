@@ -63,6 +63,19 @@ func TestValidateParamValueExistingShapesUnaffected(t *testing.T) {
 	}
 }
 
+func TestValidateParamValueUnixID(t *testing.T) {
+	for _, value := range []string{"0", "1000", "4294967295"} {
+		if err := ValidateParamValue("unix_id", value); err != nil {
+			t.Errorf("unix_id %q: %v", value, err)
+		}
+	}
+	for _, value := range []string{"-1", "4294967296", "1000:1000", "worker", "+1", "01"} {
+		if err := ValidateParamValue("unix_id", value); err == nil {
+			t.Errorf("unix_id %q unexpectedly passed", value)
+		}
+	}
+}
+
 // TestPrivateIPv4Shape: a LAN or tailnet listener gets one private
 // address, and each thing an operator might type instead — every
 // interface, loopback, a public address, a name, IPv6 — is refused with
