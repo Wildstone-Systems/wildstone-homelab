@@ -13,13 +13,21 @@ import (
 )
 
 type backupInventoryAgent struct {
-	secrets     map[string][]string
-	unavailable map[string]bool
+	secrets         map[string][]string
+	unavailable     map[string]bool
+	requireDeadline map[string]bool
 }
 
-func (f *backupInventoryAgent) Apply(_ context.Context, node string, op *wsv1.Operation) (*wsv1.OpResult, error) {
+func (f *backupInventoryAgent) Apply(ctx context.Context, node string, op *wsv1.Operation) (*wsv1.OpResult, error) {
 	if op.GetListSecrets() == nil {
 		return nil, errors.New("unexpected non-inventory operation")
+	}
+	if f.requireDeadline[node] {
+		deadline, ok := ctx.Deadline()
+		if !ok || time.Until(deadline) <= 0 || time.Until(deadline) > backupSecretInventoryTimeout {
+			return nil, errors.New("inventory request is not bounded by the backup probe deadline")
+		}
+		return nil, context.DeadlineExceeded
 	}
 	if f.unavailable[node] {
 		return nil, errors.New("synthetic inventory outage")
@@ -183,6 +191,31 @@ func TestBackupPasswordRepairRefusesUnconfirmedAndProvidedSecrets(t *testing.T) 
 				t.Fatalf("refused repair poked reconciler %d times", pokes)
 			}
 		})
+	}
+}
+
+func TestBackupPasswordInventoryTimeoutDoesNotHideHealthyPlans(t *testing.T) {
+	h := newHarness(t)
+	h.s.Agents = &backupInventoryAgent{
+		secrets:         map[string][]string{"node-healthy": {"restic-healthy"}},
+		unavailable:     map[string]bool{},
+		requireDeadline: map[string]bool{"node-stalled": true},
+	}
+	putBackupPasswordFixture(t, h, "stalled", "node-stalled", "capability/stalled", "restic-stalled", false)
+	putBackupPasswordFixture(t, h, "healthy", "node-healthy", "capability/healthy", "restic-healthy", false)
+
+	var out struct {
+		Plans []backupPlanView `json:"plans"`
+	}
+	if resp := h.do(runtimedb.RoleAdmin, http.MethodGet, "/api/v1/backups", nil, &out); resp.StatusCode != http.StatusOK {
+		t.Fatalf("list backups = %d", resp.StatusCode)
+	}
+	states := make(map[string]string, len(out.Plans))
+	for _, plan := range out.Plans {
+		states[plan.Name] = plan.Dependency.State
+	}
+	if states["stalled"] != "inventory-unavailable" || states["healthy"] != "present" {
+		t.Fatalf("dependency states = %+v", states)
 	}
 }
 

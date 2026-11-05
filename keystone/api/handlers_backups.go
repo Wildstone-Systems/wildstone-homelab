@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/principal"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/resource"
@@ -156,11 +157,19 @@ type backupSecretSnapshot struct {
 	available bool
 }
 
+// backupSecretInventoryTimeout keeps one connected-but-stalled Agent from
+// withholding every plan and historical run in the shared backup view. The
+// inventory is observational: a timeout is unavailable evidence, never proof
+// that a password is absent.
+const backupSecretInventoryTimeout = 3 * time.Second
+
 func (s *Server) backupSecretInventory(ctx context.Context, node string) backupSecretSnapshot {
 	if s.Agents == nil {
 		return backupSecretSnapshot{}
 	}
-	res, err := s.Agents.Apply(ctx, node, &wsv1.Operation{Op: &wsv1.Operation_ListSecrets{ListSecrets: &wsv1.ListSecrets{}}})
+	probeCtx, cancel := context.WithTimeout(ctx, backupSecretInventoryTimeout)
+	defer cancel()
+	res, err := s.Agents.Apply(probeCtx, node, &wsv1.Operation{Op: &wsv1.Operation_ListSecrets{ListSecrets: &wsv1.ListSecrets{}}})
 	if err != nil || res == nil || res.GetError() != nil || res.GetListSecrets() == nil {
 		return backupSecretSnapshot{}
 	}
