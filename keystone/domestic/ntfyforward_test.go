@@ -167,3 +167,15 @@ func TestForwarderRunDoesNotReplayHistory(t *testing.T) {
 	cancel()
 	<-done
 }
+
+func TestForwarderPublishesBlockedBackupWithoutDetail(t *testing.T) {
+	f := newFakeNtfy(t)
+	src := &fakeSource{events: []runtimedb.Event{{Seq: 1, Type: "backup.dependency_unavailable",
+		Message: "password secret(s) secret/restic-photos are not present on node n1",
+		Attrs:   map[string]string{"backupPlan": "photos", "kind": "backup", "code": "password_secret_missing"}}}}
+	fw := &EventForwarder{Source: src, Topic: "wild", Notifier: &Notifier{Authority: permittedExecution{}, BaseURL: f.URL}}
+	fw.Poll(context.Background(), 0)
+	if f.got.Title != "Backup blocked" || f.got.Message != "photos" || f.got.Priority != 4 {
+		t.Fatalf("blocked published %+v", f.got)
+	}
+}
