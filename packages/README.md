@@ -486,7 +486,7 @@ params:
 
 `validate:` names a shape from a closed vocabulary (`iana_timezone`,
 `url`, `hostname`, `email`, `port`, `duration`, `private_ipv4`,
-`interface_name`, `serial_by_id`) and `capability.Expand`
+`interface_name`, `serial_by_id`, `unix_id`) and `capability.Expand`
 refuses a value that fails it — so the check runs against the value an
 operator actually supplied, not only the one you shipped.
 
