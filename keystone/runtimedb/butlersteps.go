@@ -408,6 +408,15 @@ func (db *DB) RecoverInterruptedButlerAttempts() error {
 	if err := db.CheckCoordinator(lease.Holder, lease.Epoch); err != nil {
 		return err
 	}
+	return db.recoverInterruptedButlerAttempts()
+}
+
+// recoverInterruptedButlerAttempts performs the durable, provider-free part
+// of attempt recovery. Normal startup reaches it through the lease-checked
+// wrapper above. Signed restore reconciliation also uses it while quarantine
+// is active: that path has no execution lease by design, but must still fence
+// the snapshot's abandoned attempts before quarantine can ever be released.
+func (db *DB) recoverInterruptedButlerAttempts() error {
 	rows, err := db.sql.Query(`SELECT DISTINCT t.seq,
 	 EXISTS(SELECT 1 FROM butler_task_attempts pending
 	  JOIN butler_task_steps effect_step ON effect_step.seq=pending.step

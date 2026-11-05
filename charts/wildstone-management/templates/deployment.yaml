@@ -29,6 +29,10 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
     spec:
+      # Keystone's coordinator holder includes the OS hostname. Bind it to the
+      # singleton release identity so a replacement Pod presents the same
+      # holder while a distinct release presents a distinct holder.
+      hostname: {{ include "wildstone-management.fullname" . }}
       serviceAccountName: {{ include "wildstone-management.serviceAccountName" . }}
       automountServiceAccountToken: false
       securityContext:
