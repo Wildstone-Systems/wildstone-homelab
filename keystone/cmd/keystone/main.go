@@ -1489,6 +1489,7 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 	apiSrv.OnHouseholdEvent = auto.Poke
 	apiSrv.Catalog = cat
 	apiSrv.OnApproved = svc.Poke
+	apiSrv.OnBackupRepair = svc.Poke
 	apiSrv.Policy = pol
 	apiSrv.Agents = &reconcile.GatewayApplier{Gateway: gw} // secrets endpoints (ADR-W012 W2)
 	apiSrv.MintJoin = gw.MintJoinToken                     // pairing endpoint (ADR-W014 A3)

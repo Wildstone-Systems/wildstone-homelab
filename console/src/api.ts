@@ -147,6 +147,16 @@ export interface BackupRun {
   detail?: string;
 }
 
+export interface BackupPasswordStatus {
+  state: "missing" | "inventory-unavailable" | "present" | "repaired";
+  reason: "password-secret-missing" | "secret-inventory-unavailable" | "password-secret-present" | "password-secret-repaired";
+  passwordRef: string;
+  source: "generated" | "provided" | "unknown";
+  remedy: "reconcile" | "enter-secret" | "none";
+  held: boolean;
+  canRepair: boolean;
+}
+
 export interface BackupPlanView {
   name: string;
   node: string;
@@ -155,6 +165,7 @@ export interface BackupPlanView {
   sourceBytes?: number;
   estimatedMonthlyCostUsd?: number;
   costNote?: string;
+  dependency?: BackupPasswordStatus;
 }
 
 export interface BackupTargetView {
@@ -2821,6 +2832,8 @@ export const api = {
     call<{ sourceBytes: number; diskCheck: string; estimatedMonthlyCostUsd?: number; costNote?: string }>("POST", `/api/v1/backups/plans/${encodeURIComponent(plan)}/estimate`, { node, spec }),
   runBackup: (plan: string) =>
     call<unknown>("POST", `/api/v1/backups/${encodeURIComponent(plan)}/run`),
+  repairBackupPassword: (plan: string) =>
+    call<{ plan: string; node: string; passwordRef: string; state: "pending" | "present" }>("POST", `/api/v1/backups/${encodeURIComponent(plan)}/repair-password`),
   restoreBackup: (plan: string) =>
     call<unknown>("POST", `/api/v1/backups/${encodeURIComponent(plan)}/restore`),
   probeBlockDevices: (node: string) =>

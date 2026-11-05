@@ -1,6 +1,6 @@
 import { Archive, ArrowCounterClockwise, Play } from "@phosphor-icons/react";
-import { useState } from "react";
-import { api, BackupPlanView, BackupRun, BackupTargetView } from "../api";
+import { useEffect, useState } from "react";
+import { api, BackupPasswordStatus, BackupPlanView, BackupRun, BackupTargetView } from "../api";
 import type { BackupPlanSpec, BackupTargetSpec } from "../generated/resources";
 import { ago, ErrorLine, useAction, useLoad, when } from "../lib";
 import { Kind, kindOf, StatusPill } from "../ui/status";
@@ -88,7 +88,9 @@ export function BackupsView({
 export function BackupPlanCard({ ledger, targets = [], onRan }: { ledger: PlanLedger; targets?: BackupTargetView[]; onRan: () => void }) {
   const run = useAction();
   const restore = useAction();
-  const busy = run.state.phase === "busy" || restore.state.phase === "busy";
+  const repair = useAction();
+  const [repairPolls, setRepairPolls] = useState(0);
+  const busy = run.state.phase === "busy" || restore.state.phase === "busy" || repair.state.phase === "busy";
   const ranNow = run.state.phase === "done" ? run.state : null;
   const restored = restore.state.phase === "done" ? restore.state : null;
 
@@ -97,7 +99,19 @@ export function BackupPlanCard({ ledger, targets = [], onRan }: { ledger: PlanLe
   // about how far through it is. An indeterminate bar says "working"
   // without claiming a percentage nobody has (ADR-W027 A9).
   const running = last?.status === "running" || run.state.phase === "busy";
-  const health: Kind = ranNow ? "ok" : running ? "warn" : ledger.health;
+  const password = ledger.config?.dependency;
+  useEffect(() => {
+    if (repair.state.phase !== "done" || !password?.held || repairPolls >= 15) return;
+    const timer = window.setTimeout(() => {
+      setRepairPolls((count) => count + 1);
+      onRan();
+    }, 2000);
+    return () => window.clearTimeout(timer);
+  }, [onRan, password?.held, repair.state.phase, repairPolls]);
+  const showRepairTransition = password?.state === "repaired" && last?.status === "dependency-unavailable";
+  const dependencyHealth: Kind | undefined = password?.state === "missing" ? "bad" :
+    password?.state === "inventory-unavailable" || showRepairTransition ? "warn" : undefined;
+  const health: Kind = ranNow ? "ok" : running ? "warn" : (dependencyHealth ?? ledger.health);
   const latest = {
     local: ledger.runs.find((r) => r.runKind === "backup"),
     offsite: ledger.runs.find((r) => r.runKind === "offsite"),
@@ -113,7 +127,7 @@ export function BackupPlanCard({ ledger, targets = [], onRan }: { ledger: PlanLe
       meta={
         <>
           <StatusPill kind={health}>
-            {ranNow ? ranNow.message : running ? "running" : (last?.status ?? "never run")}
+            {ranNow ? ranNow.message : running ? "running" : password?.held ? "held" : showRepairTransition ? "password repaired" : (last?.status ?? "never run")}
           </StatusPill>
           {last && (
             <span className="muted" title={when(last.startedAt)}>
@@ -122,12 +136,12 @@ export function BackupPlanCard({ ledger, targets = [], onRan }: { ledger: PlanLe
           )}
         </>
       }
-      body={last ? explain(last, ledger) : "This plan has no recorded runs yet."}
+      body={password?.held || showRepairTransition ? explainPassword(password) : last ? explain(last, ledger) : "This plan has no recorded runs yet."}
       actions={
         <>
           <button
             className="btn btn-primary"
-            disabled={busy}
+            disabled={busy || password?.held}
             onClick={() => run.run(() => api.runBackup(ledger.name).then(onRan), "started")}
           >
             <Play size={14} />
@@ -135,7 +149,7 @@ export function BackupPlanCard({ ledger, targets = [], onRan }: { ledger: PlanLe
           </button>
           <button
             className="btn btn-secondary"
-            disabled={busy}
+            disabled={busy || password?.held}
             onClick={() =>
               restore.run(
                 () => api.restoreBackup(ledger.name).then(onRan),
@@ -147,8 +161,24 @@ export function BackupPlanCard({ ledger, targets = [], onRan }: { ledger: PlanLe
             Restore alongside
           </button>
           {restored && <StatusPill kind="ok">{restored.message}</StatusPill>}
+          {password?.state === "missing" && password.remedy === "reconcile" && password.canRepair && (
+            <button
+              className="btn btn-primary"
+              disabled={busy}
+              onClick={() => {
+                setRepairPolls(0);
+                void repair.run(() => api.repairBackupPassword(ledger.name).then(onRan), "repair requested — reconciliation is checking the node");
+              }}
+            >
+              <ArrowCounterClockwise size={14} />
+              {repair.state.phase === "busy" ? "Requesting…" : "Repair generated password"}
+            </button>
+          )}
+          {repair.state.phase === "done" && <StatusPill kind="warn">{repair.state.message}</StatusPill>}
+          {repair.state.phase === "done" && password?.held && repairPolls >= 15 && <ErrorLine error="Repair is still blocked; the plan remains held." />}
           {run.state.phase === "error" && <ErrorLine error={run.state.message} />}
           {restore.state.phase === "error" && <ErrorLine error={restore.state.message} />}
+          {repair.state.phase === "error" && <ErrorLine error={repair.state.message} />}
         </>
       }
       aside={
@@ -175,6 +205,25 @@ export function BackupPlanCard({ ledger, targets = [], onRan }: { ledger: PlanLe
       }
     />
   );
+}
+
+export function explainPassword(password: BackupPasswordStatus): string {
+  switch (password.state) {
+    case "inventory-unavailable":
+      return `Scheduled work is held because Wildstone cannot confirm whether ${password.passwordRef} exists on this plan's node. No absence or repair is assumed while inventory is unavailable.`;
+    case "missing":
+      if (password.source === "generated") {
+        return `Scheduled work is held before dispatch because generated password ${password.passwordRef} is missing on this plan's node. Repair requests the normal reconciler; it does not reveal, replace, or rotate the password.`;
+      }
+      if (password.source === "provided") {
+        return `Scheduled work is held before dispatch because operator-provided password ${password.passwordRef} is missing. Enter it through Secrets; Wildstone will never generate this value.`;
+      }
+      return `Scheduled work is held before dispatch because ${password.passwordRef} is missing and is not a generated Secret owned by this plan. Review the plan and its Secret declaration.`;
+    case "repaired":
+      return `${password.passwordRef} is present again on this plan's node. The hold is cleared; the next ordinary scheduled run will prove the backup path.`;
+    default:
+      return `${password.passwordRef} is present on this plan's node.`;
+  }
 }
 
 function TargetManager({ targets, onChanged }: { targets: BackupTargetView[]; onChanged: () => void }) {

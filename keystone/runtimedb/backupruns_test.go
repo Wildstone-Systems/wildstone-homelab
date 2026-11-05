@@ -56,6 +56,9 @@ func TestBackupDependencyUnavailableDeduplicatesUntilConditionChanges(t *testing
 	if err != nil || !inserted {
 		t.Fatalf("first record: seq=%d inserted=%v err=%v", first, inserted, err)
 	}
+	if repaired, err := db.HasUnexercisedBackupDependencyRepair("photos"); err != nil || !repaired {
+		t.Fatalf("unexercised repair = %v, err %v", repaired, err)
+	}
 	second, inserted, err := db.RecordBackupDependencyUnavailable("photos", BackupRunBackup, detail)
 	if err != nil || inserted || second != first {
 		t.Fatalf("duplicate record: first=%d second=%d inserted=%v err=%v", first, second, inserted, err)
@@ -67,6 +70,9 @@ func TestBackupDependencyUnavailableDeduplicatesUntilConditionChanges(t *testing
 	}
 	if err := db.FinishBackupRun(run, BackupRunSucceeded, ""); err != nil {
 		t.Fatal(err)
+	}
+	if repaired, err := db.HasUnexercisedBackupDependencyRepair("photos"); err != nil || repaired {
+		t.Fatalf("exercised repair = %v, err %v", repaired, err)
 	}
 	third, inserted, err := db.RecordBackupDependencyUnavailable("photos", BackupRunBackup, detail)
 	if err != nil || !inserted || third == first {

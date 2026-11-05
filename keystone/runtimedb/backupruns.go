@@ -138,6 +138,23 @@ func (db *DB) RecordBackupDependencyUnavailable(planName string, kind BackupRunK
 	return seq, false, nil
 }
 
+// HasUnexercisedBackupDependencyRepair reports whether the newest ledger row
+// is a pre-dispatch dependency refusal. The public read model combines that
+// durable fact with fresh inventory: a now-present password is "repaired"
+// only until an ordinary run records the outcome that supersedes the hold.
+func (db *DB) HasUnexercisedBackupDependencyRepair(planName string) (bool, error) {
+	var found bool
+	err := db.sql.QueryRow(`SELECT EXISTS(
+		SELECT 1 FROM backup_runs
+		 WHERE plan_name = ? AND status = ?
+		   AND seq = (SELECT MAX(seq) FROM backup_runs WHERE plan_name = ?)
+	)`, planName, string(BackupRunDependencyUnavailable), planName).Scan(&found)
+	if err != nil {
+		return false, fmt.Errorf("runtimedb: checking backup dependency history: %w", err)
+	}
+	return found, nil
+}
+
 // LastBackupRun returns the most recent ledger row for (planName, kind)
 // with the given status, or ErrNotFound. The scheduler asks for
 // BackupRunSucceeded: a failed run never counts as coverage, so a failing

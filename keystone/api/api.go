@@ -146,6 +146,11 @@ type Server struct {
 	// reconcile service's Poke so convergence starts immediately instead
 	// of at the next interval (ADR-W008 R2a).
 	OnApproved func()
+	// OnBackupRepair wakes the ordinary level-triggered reconciler after an
+	// Owner asks it to repair a generated backup password. The API never
+	// generates or rotates the secret itself; nil leaves the repair endpoint
+	// unavailable rather than claiming a request was scheduled.
+	OnBackupRepair func()
 
 	// Policy validates every proposed target tree (ADR-W009 A1). New
 	// installs a no-exemptions engine; there is deliberately no way to
@@ -525,6 +530,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/backups/plans/{plan}/estimate", s.handle(principal.VerbRead, s.estimateBackupPlan))
 	mux.Handle("POST /api/v1/backups/{plan}/run", s.handle(principal.VerbApprove, s.runBackup))
 	mux.Handle("POST /api/v1/backups/{plan}/restore", s.handle(principal.VerbApprove, s.consequential(s.restoreBackup)))
+	mux.Handle("POST /api/v1/backups/{plan}/repair-password", s.handle(principal.VerbManage, s.consequential(s.repairBackupPassword)))
 
 	// Morning report (ADR-W017 A5): deterministic digest, read verb.
 	mux.Handle("GET /api/v1/reports/morning", s.handle(principal.VerbRead, s.morningReport))
