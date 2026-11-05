@@ -621,3 +621,11 @@ func TestSemanticCandidatesHonourForgetAndCorrect(t *testing.T) {
 		t.Fatalf("a stray chunk for a forgotten record was returned: %+v", hits)
 	}
 }
+
+func TestIndexLeaseTimesCompareInTimeOrder(t *testing.T) {
+	whole := time.Date(2026, 1, 1, 12, 0, 5, 0, time.UTC)
+	half := whole.Add(500 * time.Millisecond)
+	if !(indexTS(whole) < indexTS(half)) {
+		t.Fatalf("%q must sort before %q", indexTS(whole), indexTS(half))
+	}
+}

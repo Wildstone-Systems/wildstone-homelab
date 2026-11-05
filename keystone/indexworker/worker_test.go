@@ -2,8 +2,10 @@ package indexworker_test
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/butler/provider"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/indexworker"
@@ -89,5 +91,22 @@ func TestCoordinatorLossPreventsPublication(t *testing.T) {
 	}))}
 	if ok, err := w.RunOnce(context.Background()); err == nil || !ok {
 		t.Fatalf("RunOnce after promotion = %t, %v", ok, err)
+	}
+}
+
+func TestFailingJobStopsAfterMaxAttempts(t *testing.T) {
+	db, lease, _ := fixture(t)
+	w := &indexworker.Worker{DB: db, Lease: lease, Resolve: resolver(embedFunc(func(context.Context, string) ([]float32, error) {
+		return nil, errors.New("synthetic provider failure")
+	})), RetryDelay: time.Nanosecond}
+	for i := 0; i < 5; i++ {
+		time.Sleep(time.Millisecond)
+		if ok, err := w.RunOnce(context.Background()); err == nil || !ok {
+			t.Fatalf("attempt %d = %t, %v", i+1, ok, err)
+		}
+	}
+	time.Sleep(time.Millisecond)
+	if ok, err := w.RunOnce(context.Background()); err != nil || ok {
+		t.Fatalf("job still claimable after max attempts: %t, %v", ok, err)
 	}
 }

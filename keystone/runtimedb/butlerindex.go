@@ -687,7 +687,7 @@ func (db *DB) ClaimIndexJobLease(holder string, ttl time.Duration) (IndexJob, bo
 	stamp := time.Now().UTC()
 	if _, err := tx.Exec(`UPDATE butler_index_jobs
 		SET state=?, lease_owner='', lease_until='', error='previous attempt lease expired'
-		WHERE state=? AND lease_until<>'' AND lease_until<?`, IndexJobQueued, IndexJobRunning, stamp.Format(time.RFC3339Nano)); err != nil {
+		WHERE state=? AND lease_until<>'' AND lease_until<?`, IndexJobQueued, IndexJobRunning, indexTS(stamp)); err != nil {
 		return IndexJob{}, false, fmt.Errorf("runtimedb: recovering index jobs: %w", err)
 	}
 	var j IndexJob
@@ -695,7 +695,7 @@ func (db *DB) ClaimIndexJobLease(holder string, ttl time.Duration) (IndexJob, bo
 	err = tx.QueryRow(
 		`SELECT seq, kind, payload, state, priority, created_at, error, attempts, lease_owner, lease_until
 		 FROM butler_index_jobs WHERE state=? AND (available_at='' OR available_at<=?)
-		 ORDER BY priority, seq LIMIT 1`, IndexJobQueued, stamp.Format(time.RFC3339Nano)).
+		 ORDER BY priority, seq LIMIT 1`, IndexJobQueued, indexTS(stamp)).
 		Scan(&j.Seq, &j.Kind, &j.Payload, &j.State, &j.Priority, &created, &j.Error, &j.Attempts, &j.LeaseOwner, &leaseUntil)
 	if errors.Is(err, sql.ErrNoRows) {
 		// No rows is the normal idle case, not a failure.
@@ -709,7 +709,7 @@ func (db *DB) ClaimIndexJobLease(holder string, ttl time.Duration) (IndexJob, bo
 	if _, err := tx.Exec(
 		`UPDATE butler_index_jobs SET state=?, started_at=?, attempts=attempts+1,
 		 lease_owner=?, lease_until=?, error='' WHERE seq=? AND state=?`,
-		IndexJobRunning, now(), holder, j.LeaseUntil.Format(time.RFC3339Nano), j.Seq, IndexJobQueued); err != nil {
+		IndexJobRunning, now(), holder, indexTS(j.LeaseUntil), j.Seq, IndexJobQueued); err != nil {
 		return IndexJob{}, false, fmt.Errorf("runtimedb: claiming index job: %w", err)
 	}
 	if j.CreatedAt, err = time.Parse(time.RFC3339Nano, created); err != nil {
@@ -746,7 +746,7 @@ func (db *DB) FinishIndexJobLease(seq int64, holder, failure string) error {
 	}
 	res, err := db.sql.Exec(`UPDATE butler_index_jobs SET state=?, finished_at=?, error=?, lease_owner='', lease_until=''
 		WHERE seq=? AND state=? AND lease_owner=? AND lease_until>=?`, state, now(), failure, seq,
-		IndexJobRunning, holder, time.Now().UTC().Format(time.RFC3339Nano))
+		IndexJobRunning, holder, indexTS(time.Now()))
 	if err != nil {
 		return fmt.Errorf("runtimedb: finishing leased index job: %w", err)
 	}
@@ -764,7 +764,7 @@ func (db *DB) RetryIndexJob(seq int64, holder, failure string, delay time.Durati
 	}
 	res, err := db.sql.Exec(`UPDATE butler_index_jobs SET state=?, available_at=?,
 		lease_owner='', lease_until='', error=? WHERE seq=? AND state=? AND lease_owner=?`,
-		IndexJobQueued, time.Now().UTC().Add(delay).Format(time.RFC3339Nano), failure,
+		IndexJobQueued, indexTS(time.Now().Add(delay)), failure,
 		seq, IndexJobRunning, holder)
 	if err != nil {
 		return fmt.Errorf("runtimedb: retrying index job: %w", err)
@@ -810,7 +810,7 @@ func (db *DB) PublishMemoryIndex(job IndexJob, source MemoryRecord, vector []flo
 		return fmt.Errorf("runtimedb: index source changed")
 	}
 	var leased int
-	if err := tx.QueryRow(`SELECT COUNT(*) FROM butler_index_jobs WHERE seq=? AND state=? AND lease_owner=? AND lease_until>=?`, job.Seq, IndexJobRunning, job.LeaseOwner, time.Now().UTC().Format(time.RFC3339Nano)).Scan(&leased); err != nil || leased != 1 {
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM butler_index_jobs WHERE seq=? AND state=? AND lease_owner=? AND lease_until>=?`, job.Seq, IndexJobRunning, job.LeaseOwner, indexTS(time.Now())).Scan(&leased); err != nil || leased != 1 {
 		return fmt.Errorf("runtimedb: index job lease lost")
 	}
 	if _, err := tx.Exec(`DELETE FROM butler_index WHERE memory=?`, source.Seq); err != nil {
@@ -862,3 +862,8 @@ func (db *DB) promotionSources(hits []IndexHit) (map[int64]int64, error) {
 	}
 	return out, nil
 }
+
+// indexTS writes lease/retry times at a fixed width. RFC3339Nano drops
+// trailing fractional zeros, so its TEXT order is not time order
+// ("…05Z" sorts after "…05.5Z"); SQL comparisons need equal-width text.
+func indexTS(t time.Time) string { return mailTS(t) }

@@ -19,6 +19,9 @@ import (
 const (
 	leaseDuration = 2 * time.Minute
 	retryDelay    = 30 * time.Second
+	// maxAttempts bounds retries so one permanently broken source cannot
+	// cycle forever; after it the job is marked failed with its last class.
+	maxAttempts = 5
 )
 
 // Resolver returns the current server-owned embedding route and its stable
@@ -31,6 +34,8 @@ type Worker struct {
 	Lease   runtimedb.CoordinatorLease
 	Resolve Resolver
 	Now     func() time.Time
+	// RetryDelay overrides the default wait before a failed job is retried.
+	RetryDelay time.Duration
 }
 
 // DefaultResolver binds the exact Agent assignment through S1.
@@ -62,8 +67,18 @@ func (w *Worker) RunOnce(ctx context.Context) (ok bool, err error) {
 	if err != nil || !ok {
 		return ok, err
 	}
+	delay := w.RetryDelay
+	if delay <= 0 {
+		delay = retryDelay
+	}
 	fail := func(class string, cause error) (bool, error) {
-		if retryErr := w.DB.RetryIndexJob(job.Seq, job.LeaseOwner, class, retryDelay); retryErr != nil {
+		if job.Attempts >= maxAttempts {
+			if finishErr := w.DB.FinishIndexJobLease(job.Seq, job.LeaseOwner, class); finishErr != nil {
+				return true, finishErr
+			}
+			return true, cause
+		}
+		if retryErr := w.DB.RetryIndexJob(job.Seq, job.LeaseOwner, class, delay); retryErr != nil {
 			return true, retryErr
 		}
 		return true, cause
