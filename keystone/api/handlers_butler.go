@@ -658,17 +658,30 @@ func (s *Server) listButlerSessions(r *http.Request, id principal.Identity) (any
 	// It is not defaulted from the surface: showing every household
 	// Butler's conversations under one Butler's name is the one thing
 	// this list must not do.
-	sessions, err := s.DB.ListButlerSessions(limit, runtimedb.ButlerSessionFilter{
-		Surface: surface, Butler: r.URL.Query().Get("butler"),
-	})
+	filter := runtimedb.ButlerSessionFilter{Surface: surface, Butler: r.URL.Query().Get("butler")}
+	if person := inventoryPerson(id); person != "" {
+		filter.ActingFor = person
+	}
+	sessions, err := s.DB.ListButlerSessions(limit, filter)
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
 	if sessions == nil {
 		sessions = []runtimedb.ButlerSession{}
 	}
+	visibleNames, scoped := map[string]bool{}, false
+	if filter.Butler != "" {
+		var err error
+		visibleNames, scoped, err = s.visibleButlerNames(id)
+		if err != nil {
+			return nil, http.StatusInternalServerError, err
+		}
+	}
 	visible := sessions[:0]
 	for _, session := range sessions {
+		if scoped && !visibleNames[session.Butler] {
+			continue
+		}
 		if err := s.DB.CheckSessionPrivacy(session.ID, runtimedb.ModelLocal, apiMemoryDestination(id)); err != nil {
 			if errors.Is(err, runtimedb.ErrPrivacy) {
 				continue
@@ -688,6 +701,16 @@ func (s *Server) getButlerSession(r *http.Request, id principal.Identity) (any, 
 	}
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
+	}
+	if person := inventoryPerson(id); person != "" {
+		if !strings.EqualFold(sess.ActingFor, person) {
+			return nil, http.StatusNotFound, fmt.Errorf("butler session not found")
+		}
+		if sess.Butler != "" {
+			if _, _, err := s.visibleButler(sess.Butler, id); err != nil {
+				return nil, http.StatusNotFound, fmt.Errorf("butler session not found")
+			}
+		}
 	}
 	if err := s.DB.CheckSessionPrivacy(sess.ID, runtimedb.ModelLocal, apiMemoryDestination(id)); err != nil {
 		return nil, http.StatusForbidden, err

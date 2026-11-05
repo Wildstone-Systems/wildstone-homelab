@@ -495,3 +495,30 @@ func (db *DB) ButlerScope(butler string) (ButlerScopeSummary, error) {
 	}
 	return s, nil
 }
+
+// ButlerScopeForPerson is ButlerScope with the memory count resolved through
+// the same audience, ownership and Agent restrictions as a live retrieval.
+// Counting every record attached to an Agent would let one Person infer
+// another Person's private memory from the drawer even though retrieval
+// correctly withholds the content.
+func (db *DB) ButlerScopeForPerson(butler, reader string) (ButlerScopeSummary, error) {
+	s, err := db.ButlerScope(butler)
+	if err != nil {
+		return ButlerScopeSummary{}, err
+	}
+	if reader == "" {
+		return ButlerScopeSummary{}, fmt.Errorf("runtimedb: person-scoped Butler scope needs the reader")
+	}
+	person, err := personIDForRead(db.sql, reader)
+	if err != nil {
+		return ButlerScopeSummary{}, err
+	}
+	clause, args, err := db.memoryReadClause("r", person, butler, "", nil)
+	if err != nil {
+		return ButlerScopeSummary{}, err
+	}
+	if err := db.sql.QueryRow(`SELECT COUNT(*) FROM butler_memory r WHERE `+clause, args...).Scan(&s.MemoryCount); err != nil {
+		return ButlerScopeSummary{}, fmt.Errorf("runtimedb: counting a Person's visible Butler memory: %w", err)
+	}
+	return s, nil
+}

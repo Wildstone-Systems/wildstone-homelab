@@ -415,8 +415,12 @@ func TestAPIHistoryDoesNotBypassTrustedMemory(t *testing.T) {
 					t.Fatalf("incorrect collection %s protected=%v: %s", path, protected, body)
 				}
 			}
-			if code, _ := h.sessionRequest(http.MethodGet, path, "", "mika", cookie); code != http.StatusOK {
-				t.Fatalf("Console denied: %s %d", path, code)
+			consoleWant := http.StatusOK
+			if single && (strings.Contains(path, "/sessions/") || strings.Contains(path, "/tasks/")) {
+				consoleWant = http.StatusNotFound
+			}
+			if code, _ := h.sessionRequest(http.MethodGet, path, "", "mika", cookie); code != consoleWant {
+				t.Fatalf("Console path %s = %d, want %d", path, code, consoleWant)
 			}
 		}
 	}
