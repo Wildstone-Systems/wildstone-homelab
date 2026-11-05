@@ -506,15 +506,23 @@ func (db *DB) reconcileRestore(recoveryEvidenceID string) (applied int, err erro
 		applied++
 	}
 
-	// Work whose outcome was unknown stays paused. A restored
-	// coordinator that resumes it is doing the one thing A4 forbids:
-	// retrying an action that may already have happened.
+	// Fence every attempt that the snapshot captured after its durable
+	// checkpoint-before-dispatch. Model calls have no household effect and may
+	// retry at the new task epoch. Tool and delivery attempts are parked with
+	// an uncertain-outcome wait because they may already have crossed an
+	// external boundary. This is the same kind-aware reconciliation startup
+	// performs, but it runs without an execution lease while quarantine holds;
+	// it never invokes a provider.
+	if err := db.recoverInterruptedButlerAttempts(); err != nil {
+		return applied, fmt.Errorf("runtimedb: recovering interrupted work after a restore: %w", err)
+	}
+
+	// Work already carrying explicit uncertainty stays paused. Attempt rows
+	// were handled above, including an epoch bump that rejects late results.
 	if _, err := db.sql.Exec(
 		`UPDATE butler_tasks SET state = ?, updated_at = ?
-		 WHERE state IN (?, ?) AND (uncertainty <> '' OR seq IN (
-		     SELECT DISTINCT task FROM butler_task_attempts WHERE state = ?))`,
-		ButlerTaskPausedOffboarded, now(), ButlerTaskRunning, ButlerTaskWaiting,
-		ButlerAttemptDispatched); err != nil {
+		 WHERE state IN (?, ?) AND uncertainty <> ''`,
+		ButlerTaskPausedOffboarded, now(), ButlerTaskRunning, ButlerTaskWaiting); err != nil {
 		return applied, fmt.Errorf("runtimedb: pausing uncertain work after a restore: %w", err)
 	}
 

@@ -487,9 +487,8 @@ func TestAThemesPictureIsTheDashboardsBackground(t *testing.T) {
 	}
 }
 
-// The bytes come back on the household surface, where the picture is
-// actually drawn, and the Console has no route for them at all.
-func TestTheWallpaperIsServedToTheDashboardAndNotTheConsole(t *testing.T) {
+// The bytes come back on the household surface and on the Console.
+func TestTheWallpaperIsServedToTheDashboardAndTheConsole(t *testing.T) {
 	h := homeHarness(t)
 	owner := h.console(runtimedb.RoleAdmin, "mika")
 	h.person("sandy")
@@ -521,6 +520,35 @@ func TestTheWallpaperIsServedToTheDashboardAndNotTheConsole(t *testing.T) {
 	defer missing.Body.Close()
 	if missing.StatusCode != http.StatusNotFound {
 		t.Errorf("a theme with no picture gave %d, want 404", missing.StatusCode)
+	}
+
+	// The Console reads the same bytes with an ordinary read grant.
+	reader := h.console(runtimedb.RoleOperator, "sandy")
+	req, _ := http.NewRequest(http.MethodGet, h.srv.URL+"/api/v1/appearance/themes/nord/background", nil)
+	req.Header.Set("Authorization", "Bearer "+reader)
+	cres, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cres.Body.Close()
+	if cres.StatusCode != http.StatusOK {
+		t.Fatalf("the Console reading the picture: %d", cres.StatusCode)
+	}
+	if got := cres.Header.Get("Content-Type"); got != "image/png" {
+		t.Errorf("Console Content-Type = %q", got)
+	}
+	if got, _ := io.ReadAll(cres.Body); !bytes.Equal(got, onePNG) {
+		t.Error("the Console got different bytes")
+	}
+	creq, _ := http.NewRequest(http.MethodGet, h.srv.URL+"/api/v1/appearance/themes/gruvbox/background", nil)
+	creq.Header.Set("Authorization", "Bearer "+reader)
+	cmiss, err := http.DefaultClient.Do(creq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cmiss.Body.Close()
+	if cmiss.StatusCode != http.StatusNotFound {
+		t.Errorf("the Console reading a theme with no picture gave %d, want 404", cmiss.StatusCode)
 	}
 }
 

@@ -112,7 +112,20 @@ export function start() {
 
 // adopt applies a fresh answer from the server and caches it.
 export function adopt(a: Appearance) {
-  apply(a.tokens, a.dark);
-  if (a.tokens && a.theme) write({ theme: a.theme, tokens: a.tokens, dark: a.dark });
+  const tokens = withWallpaper(a);
+  apply(tokens, a.dark);
+  if (tokens && a.theme) write({ theme: a.theme, tokens, dark: a.dark });
   else write(null);
+}
+
+// withWallpaper adds the theme's picture as --wallpaper, the one token
+// the server leaves out because each door serves it at its own address.
+// The session cookie rides along with the CSS fetch (same origin), and
+// the version in the URL changes when the bytes do, so the browser cache
+// is always right. A missing picture is a 404, which CSS draws as no
+// layer: the ground underneath simply shows.
+export function withWallpaper(a: Appearance): Record<string, string> | undefined {
+  if (!a.tokens || !a.background || !a.theme) return a.tokens;
+  const url = `/api/v1/appearance/themes/${encodeURIComponent(a.theme)}/background?v=${a.backgroundVersion ?? 0}`;
+  return { ...a.tokens, "--wallpaper": `url(${JSON.stringify(url)})` };
 }

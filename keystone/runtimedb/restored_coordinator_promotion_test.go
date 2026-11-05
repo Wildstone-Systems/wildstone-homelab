@@ -315,8 +315,12 @@ func TestRestoredCoordinatorPromotionPreservesReceiptsAndHoldsUncertainEffects(t
 		t.Fatalf("completed task before promotion = %+v, %v", completedBefore, err)
 	}
 	uncertainBefore, err := restored.GetButlerTask(uncertain)
-	if err != nil || uncertainBefore.State != ButlerTaskPausedOffboarded {
+	if err != nil || uncertainBefore.State != ButlerTaskWaiting {
 		t.Fatalf("uncertain task before promotion = %+v, %v", uncertainBefore, err)
+	}
+	waits, err := restored.ListButlerTaskWaits(uncertain)
+	if err != nil || len(waits) != 1 || waits[0].Reason != ButlerWaitUncertainOutcome {
+		t.Fatalf("uncertain task wait before promotion = %+v, %v", waits, err)
 	}
 
 	if _, err := restored.PromoteRestoredCoordinator("keystone-restored", "mika", f.publicKey); err != nil {

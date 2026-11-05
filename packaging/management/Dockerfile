@@ -24,13 +24,15 @@ RUN cd keystone && go build -trimpath \
 FROM ${NODE_IMAGE} AS web-and-native-build
 WORKDIR /src
 # A dated, signed Debian snapshot keeps the two build-only tools repeatable.
+# Acquire::Retries rides out the snapshot mirror's brief 503/504 outages,
+# which otherwise fail the whole image build.
 # The native package script still verifies Node itself with its pinned SHA-256.
 RUN printf '%s\n' \
       'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/20261031T000000Z bookworm main' \
       > /etc/apt/sources.list \
     && rm -f /etc/apt/sources.list.d/* \
-    && apt-get update \
-    && apt-get install -y --no-install-recommends \
+    && apt-get -o Acquire::Retries=5 update \
+    && apt-get -o Acquire::Retries=5 install -y --no-install-recommends \
       ca-certificates=20230311+deb12u1 \
       curl=7.88.1-10+deb12u15 \
       xz-utils=5.4.1-1+deb12u1 \
@@ -70,8 +72,8 @@ RUN printf '%s\n' \
       'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/20261031T000000Z bookworm main' \
       > /etc/apt/sources.list \
     && rm -f /etc/apt/sources.list.d/* \
-    && apt-get update \
-    && apt-get install -y --no-install-recommends \
+    && apt-get -o Acquire::Retries=5 update \
+    && apt-get -o Acquire::Retries=5 install -y --no-install-recommends \
       ca-certificates=20230311+deb12u1 \
       git=1:2.39.5-0+deb12u3 \
     && rm -rf /var/lib/apt/lists/* \
