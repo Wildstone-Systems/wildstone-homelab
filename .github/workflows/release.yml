@@ -11,6 +11,12 @@ on:
 
 permissions:
   contents: write
+  packages: write
+  id-token: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   release:
@@ -153,29 +159,64 @@ jobs:
           tar -xzf "$RUNNER_TEMP/gh.tar.gz" -C "$RUNNER_TEMP"
           echo "$RUNNER_TEMP/gh_${v}_linux_$arch/bin" >> "$GITHUB_PATH"
           "$RUNNER_TEMP/gh_${v}_linux_$arch/bin/gh" --version
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - name: refuse published release replacement
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh release view "$GITHUB_REF_NAME" --json isDraft > "$RUNNER_TEMP/release.json"; then
+            jq -e '.isDraft == true' "$RUNNER_TEMP/release.json"
+          else
+            # A failed read is not proof of absence: create must succeed.
+            gh release create "$GITHUB_REF_NAME" --draft --verify-tag --generate-notes
+          fi
+      - name: build, test and publish management image
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s scripts -p test_management_release.py
+          python3 scripts/management-release.py --tag "$GITHUB_REF_NAME" \
+            --commit "$GITHUB_SHA" --digest "sha256:$(printf '%064d' 0)" \
+            --output "$RUNNER_TEMP/manifest-preflight.json"
+          image=ghcr.io/wildstone-systems/wildstone-management
+          refs=()
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          for arch in amd64 arm64; do
+            docker buildx build --platform "linux/$arch" --load \
+              -f packaging/management/Dockerfile \
+              --build-arg VERSION="$GITHUB_REF_NAME" --build-arg VCS_REF="$GITHUB_SHA" \
+              -t "wildstone-management:test-$arch" .
+            scripts/test-management-image.sh "wildstone-management:test-$arch"
+            docker tag "wildstone-management:test-$arch" "$image:$GITHUB_REF_NAME-$arch"
+            docker push "$image:$GITHUB_REF_NAME-$arch"
+            ref=$(docker image inspect "$image:$GITHUB_REF_NAME-$arch" --format '{{index .RepoDigests 0}}')
+            refs+=("$ref")
+          done
+          docker buildx imagetools create -t "$image:$GITHUB_REF_NAME" "${refs[@]}"
+          digest=$(docker buildx imagetools inspect "$image:$GITHUB_REF_NAME" --format '{{.Manifest.Digest}}')
+          python3 scripts/management-release.py --tag "$GITHUB_REF_NAME" \
+            --commit "$GITHUB_SHA" --digest "$digest" --output dist/management-release.json
+          cosign sign-blob --yes --bundle dist/management-release.sigstore.json dist/management-release.json
+          scripts/verify-management-release.sh "$GITHUB_REF_NAME" \
+            dist/management-release.json dist/management-release.sigstore.json
       - name: publish release
         env:
           GH_TOKEN: ${{ github.token }}
-        # Idempotent: publishing a release from the GitHub UI creates the
-        # tag AND the release together, so this workflow's create then
-        # collides ("a release with the same tag name already exists") and
-        # the release ships with zero assets. Fall back to uploading onto
-        # the existing release instead.
-        #
-        # A release-candidate tag (anything with "-rc." in it, such as
-        # v0.1.13-rc.mail1, cut from a feature branch to test on a VM) is
-        # published as a PRE-release, so it never becomes "latest": the
-        # installer's default (releases/latest) keeps pointing at the last
-        # real release, and only an explicit --version installs the
-        # candidate. Ordinary tags, -alpha ones included, are unchanged.
+        # Stage all assets before exposing a completed release. Published releases
+        # are never overwritten. A failed draft can be retried before publication.
         run: |
-          prerelease=()
-          case "${GITHUB_REF_NAME}" in
-            *-rc.*) prerelease=(--prerelease) ;;
+          set -euo pipefail
+          prerelease=false
+          case "$GITHUB_REF_NAME" in
+            *-*) prerelease=true ;;
           esac
-          if ! gh release create "${GITHUB_REF_NAME}" dist/* \
-            --title "${GITHUB_REF_NAME}" \
-            --generate-notes "${prerelease[@]}"; then
-            echo "release exists; uploading assets onto it"
-            gh release upload "${GITHUB_REF_NAME}" dist/* --clobber
+          gh release upload "$GITHUB_REF_NAME" dist/* --clobber
+          if [[ "$prerelease" == true ]]; then
+            gh release edit "$GITHUB_REF_NAME" --draft=false --prerelease --latest=false
+          else
+            gh release edit "$GITHUB_REF_NAME" --draft=false --prerelease=false --latest=false
           fi

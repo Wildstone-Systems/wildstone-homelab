@@ -338,6 +338,8 @@ jobs:
       # Both images are built and exercised on GitHub's native architecture,
       # not merely cross-compiled. No third-party action or emulation setup is
       # introduced, and the existing standalone-image job stays unchanged.
+      - name: validate management release contract
+        run: python3 -m unittest discover -s scripts -p test_management_release.py
       - name: build management image
         run: |
           docker build -f packaging/management/Dockerfile \

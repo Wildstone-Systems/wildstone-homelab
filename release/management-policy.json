@@ -1,0 +1,8 @@
+{
+  "upgradeFrom": [],
+  "wardstoneCompatibility": "unverified",
+  "recovery": {
+    "backupRequired": true,
+    "imageRollbackSupported": false
+  }
+}
