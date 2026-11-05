@@ -138,6 +138,21 @@ func (db *DB) RecordBackupDependencyUnavailable(planName string, kind BackupRunK
 	return seq, false, nil
 }
 
+// HasBackupDependencyUnavailable reports whether a plan has ever been held
+// before dispatch. The public backup read model combines this durable fact
+// with a fresh node inventory: present with prior refusal is "repaired",
+// while present without one is simply "present".
+func (db *DB) HasBackupDependencyUnavailable(planName string) (bool, error) {
+	var found bool
+	err := db.sql.QueryRow(`SELECT EXISTS(
+		SELECT 1 FROM backup_runs WHERE plan_name = ? AND status = ?
+	)`, planName, string(BackupRunDependencyUnavailable)).Scan(&found)
+	if err != nil {
+		return false, fmt.Errorf("runtimedb: checking backup dependency history: %w", err)
+	}
+	return found, nil
+}
+
 // LastBackupRun returns the most recent ledger row for (planName, kind)
 // with the given status, or ErrNotFound. The scheduler asks for
 // BackupRunSucceeded: a failed run never counts as coverage, so a failing

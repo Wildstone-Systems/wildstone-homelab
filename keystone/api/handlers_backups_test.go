@@ -5,11 +5,218 @@ import (
 	"errors"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/resource"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/runtimedb"
 	wsv1 "github.com/Wildstone-Systems/wildstone-homelab/proto/gen/wardstone/v1"
 )
+
+type backupInventoryAgent struct {
+	secrets     map[string][]string
+	unavailable map[string]bool
+}
+
+func (f *backupInventoryAgent) Apply(_ context.Context, node string, op *wsv1.Operation) (*wsv1.OpResult, error) {
+	if op.GetListSecrets() == nil {
+		return nil, errors.New("unexpected non-inventory operation")
+	}
+	if f.unavailable[node] {
+		return nil, errors.New("synthetic inventory outage")
+	}
+	out := &wsv1.ListSecretsResult{}
+	for _, name := range f.secrets[node] {
+		out.Secrets = append(out.Secrets, &wsv1.SecretInfo{Name: name, Version: 1})
+	}
+	return &wsv1.OpResult{Result: &wsv1.OpResult_ListSecrets{ListSecrets: out}}, nil
+}
+
+func putBackupPasswordFixture(t *testing.T, h *harness, planName, node, owner, secret string, provided bool) {
+	t.Helper()
+	for _, r := range []resource.Resource{
+		{ApiVersion: resource.ApiVersion, Kind: resource.KindSecret,
+			Metadata: resource.Metadata{Name: secret, Node: node, Owner: owner}, Secret: &resource.SecretSpec{Name: secret, Provided: provided}},
+		{ApiVersion: resource.ApiVersion, Kind: resource.KindBackupPlan,
+			Metadata: resource.Metadata{Name: planName, Node: node, Owner: owner}, BackupPlan: &resource.BackupPlanSpec{
+				Volumes: []string{"data"}, Repository: "repo", PasswordSecret: "secret/" + secret, Schedule: "daily"}},
+	} {
+		if err := h.s.State.Put(r); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func backupPlanStatus(t *testing.T, h *harness, role runtimedb.Role, plan string) backupPasswordStatus {
+	t.Helper()
+	var out struct {
+		Plans []backupPlanView `json:"plans"`
+	}
+	if resp := h.do(role, http.MethodGet, "/api/v1/backups", nil, &out); resp.StatusCode != http.StatusOK {
+		t.Fatalf("list backups = %d", resp.StatusCode)
+	}
+	for _, p := range out.Plans {
+		if p.Name == plan {
+			return p.Dependency
+		}
+	}
+	t.Fatalf("plan %s missing from response: %+v", plan, out.Plans)
+	return backupPasswordStatus{}
+}
+
+func TestBackupPasswordStatusAndRepair(t *testing.T) {
+	h := newHarness(t)
+	fake := &backupInventoryAgent{secrets: map[string][]string{"node-example": {}}, unavailable: map[string]bool{}}
+	h.s.Agents = fake
+	pokes := 0
+	h.s.OnBackupRepair = func() { pokes++ }
+	putBackupPasswordFixture(t, h, "photos", "node-example", "capability/photos", "restic-photos", false)
+
+	readOnly := backupPlanStatus(t, h, runtimedb.RoleButler, "photos")
+	if readOnly.State != "missing" || readOnly.Source != "generated" || readOnly.Remedy != "reconcile" || readOnly.CanRepair || !readOnly.Held {
+		t.Fatalf("Butler status = %+v", readOnly)
+	}
+	owner := backupPlanStatus(t, h, runtimedb.RoleAdmin, "photos")
+	if !owner.CanRepair {
+		t.Fatalf("Owner status = %+v", owner)
+	}
+	for _, role := range []runtimedb.Role{runtimedb.RoleOperator, runtimedb.RoleButler} {
+		if resp := h.do(role, http.MethodPost, "/api/v1/backups/photos/repair-password", nil, nil); resp.StatusCode != http.StatusForbidden {
+			t.Fatalf("%s repair = %d, want 403", role, resp.StatusCode)
+		}
+	}
+	var repaired map[string]string
+	if resp := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/backups/photos/repair-password", nil, &repaired); resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("Owner repair = %d", resp.StatusCode)
+	}
+	if pokes != 1 || repaired["state"] != "pending" || repaired["node"] != "node-example" || repaired["passwordRef"] != "secret/restic-photos" {
+		t.Fatalf("repair = %+v, pokes %d", repaired, pokes)
+	}
+
+	if _, _, err := h.s.DB.RecordBackupDependencyUnavailable("photos", runtimedb.BackupRunBackup, "closed synthetic reason"); err != nil {
+		t.Fatal(err)
+	}
+	fake.secrets["node-example"] = []string{"restic-photos"}
+	present := backupPlanStatus(t, h, runtimedb.RoleAdmin, "photos")
+	if present.State != "repaired" || present.Held || present.CanRepair {
+		t.Fatalf("repaired status = %+v", present)
+	}
+	if resp := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/backups/photos/repair-password", nil, &repaired); resp.StatusCode != http.StatusOK {
+		t.Fatalf("idempotent repaired request = %d", resp.StatusCode)
+	}
+	if pokes != 1 || repaired["state"] != "present" {
+		t.Fatalf("idempotent repair = %+v, pokes %d", repaired, pokes)
+	}
+}
+
+func TestBackupPasswordRepairRefusesUnconfirmedAndProvidedSecrets(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		provided    bool
+		unavailable bool
+		wantSource  string
+		wantRemedy  string
+		wantState   string
+	}{
+		{name: "provided", provided: true, wantSource: "provided", wantRemedy: "enter-secret", wantState: "missing"},
+		{name: "inventory unavailable", unavailable: true, wantSource: "generated", wantRemedy: "none", wantState: "inventory-unavailable"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			h.s.Agents = &backupInventoryAgent{secrets: map[string][]string{"node-example": {}}, unavailable: map[string]bool{"node-example": tc.unavailable}}
+			pokes := 0
+			h.s.OnBackupRepair = func() { pokes++ }
+			putBackupPasswordFixture(t, h, "photos", "node-example", "capability/photos", "restic-photos", tc.provided)
+			status := backupPlanStatus(t, h, runtimedb.RoleAdmin, "photos")
+			if status.State != tc.wantState || status.Source != tc.wantSource || status.Remedy != tc.wantRemedy || status.CanRepair {
+				t.Fatalf("status = %+v", status)
+			}
+			if resp := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/backups/photos/repair-password", nil, nil); resp.StatusCode != http.StatusConflict {
+				t.Fatalf("repair = %d, want 409", resp.StatusCode)
+			}
+			if pokes != 0 {
+				t.Fatalf("refused repair poked reconciler %d times", pokes)
+			}
+		})
+	}
+}
+
+func TestBackupPasswordRepairRefusesUnrelatedDeclaration(t *testing.T) {
+	h := newHarness(t)
+	h.s.Agents = &backupInventoryAgent{secrets: map[string][]string{"node-example": {}}, unavailable: map[string]bool{}}
+	pokes := 0
+	h.s.OnBackupRepair = func() { pokes++ }
+	plan := resource.Resource{ApiVersion: resource.ApiVersion, Kind: resource.KindBackupPlan,
+		Metadata:   resource.Metadata{Name: "photos", Node: "node-example", Owner: "capability/photos"},
+		BackupPlan: &resource.BackupPlanSpec{Volumes: []string{"data"}, Repository: "repo", PasswordSecret: "secret/restic-photos", Schedule: "daily"}}
+	// The same name on another node and under another capability grants no
+	// authority to repair this plan's dependency.
+	unrelated := resource.Resource{ApiVersion: resource.ApiVersion, Kind: resource.KindSecret,
+		Metadata: resource.Metadata{Name: "restic-photos", Node: "other-node", Owner: "capability/other"},
+		Secret:   &resource.SecretSpec{Name: "restic-photos"}}
+	for _, r := range []resource.Resource{plan, unrelated} {
+		if err := h.s.State.Put(r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	status := backupPlanStatus(t, h, runtimedb.RoleAdmin, "photos")
+	if status.Source != "unknown" || status.Remedy != "none" || status.CanRepair {
+		t.Fatalf("unrelated declaration status = %+v", status)
+	}
+	if resp := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/backups/photos/repair-password", nil, nil); resp.StatusCode != http.StatusConflict {
+		t.Fatalf("unrelated repair = %d, want 409", resp.StatusCode)
+	}
+	if pokes != 0 {
+		t.Fatalf("unrelated repair poked reconciler %d times", pokes)
+	}
+}
+
+func TestBackupPasswordRepairRejectsCrossSiteConsoleRequest(t *testing.T) {
+	h := freshnessHarness(t)
+	h.s.Agents = &backupInventoryAgent{secrets: map[string][]string{"node-example": {}}, unavailable: map[string]bool{}}
+	pokes := 0
+	h.s.OnBackupRepair = func() { pokes++ }
+	putBackupPasswordFixture(t, h, "photos", "node-example", "capability/photos", "restic-photos", false)
+	session := sessionCookie(h.s.StartConsoleSession("mika", time.Now()))
+	req, _ := http.NewRequest(http.MethodPost, h.srv.URL+"/api/v1/backups/photos/repair-password", nil)
+	req.Header.Set(TrustedIngressHeader, "mika")
+	req.Header.Set(ConsoleGroupsHeader, ConsoleGroup)
+	req.Header.Set("Sec-Fetch-Site", "cross-site")
+	req.AddCookie(session)
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if res.StatusCode != http.StatusForbidden || pokes != 0 {
+		t.Fatalf("cross-site repair = %d, pokes %d", res.StatusCode, pokes)
+	}
+	sameOrigin, _ := http.NewRequest(http.MethodPost, h.srv.URL+"/api/v1/backups/photos/repair-password", nil)
+	sameOrigin.Header.Set(TrustedIngressHeader, "mika")
+	sameOrigin.Header.Set(ConsoleGroupsHeader, ConsoleGroup)
+	sameOrigin.Header.Set("Sec-Fetch-Site", "same-origin")
+	sameOrigin.AddCookie(session)
+	allowed, err := http.DefaultClient.Do(sameOrigin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	allowed.Body.Close()
+	if allowed.StatusCode != http.StatusAccepted || pokes != 1 {
+		t.Fatalf("same-origin repair = %d, pokes %d", allowed.StatusCode, pokes)
+	}
+	records, err := h.s.DB.ListAudit(20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, record := range records {
+		if record.Path == "/api/v1/backups/photos/repair-password" && record.Status == http.StatusForbidden {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("cross-site refusal was not audited")
+	}
+}
 
 func TestBackupEndpoints(t *testing.T) {
 	h := newHarness(t)

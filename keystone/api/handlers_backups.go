@@ -19,7 +19,18 @@ import (
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/principal"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/resource"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/runtimedb"
+	wsv1 "github.com/Wildstone-Systems/wildstone-homelab/proto/gen/wardstone/v1"
 )
+
+type backupPasswordStatus struct {
+	State       string `json:"state"`
+	Reason      string `json:"reason"`
+	PasswordRef string `json:"passwordRef"`
+	Source      string `json:"source"`
+	Remedy      string `json:"remedy"`
+	Held        bool   `json:"held"`
+	CanRepair   bool   `json:"canRepair"`
+}
 
 type backupPlanView struct {
 	Name                    string                   `json:"name"`
@@ -29,6 +40,7 @@ type backupPlanView struct {
 	SourceBytes             *uint64                  `json:"sourceBytes,omitempty"`
 	EstimatedMonthlyCostUSD *float64                 `json:"estimatedMonthlyCostUsd,omitempty"`
 	CostNote                string                   `json:"costNote,omitempty"`
+	Dependency              backupPasswordStatus     `json:"dependency"`
 }
 
 type backupTargetView struct {
@@ -49,7 +61,7 @@ type backupPlanRequest struct {
 	Spec resource.BackupPlanSpec `json:"spec"`
 }
 
-func (s *Server) listBackups(r *http.Request, _ principal.Identity) (any, int, error) {
+func (s *Server) listBackups(r *http.Request, id principal.Identity) (any, int, error) {
 	desired, err := s.State.Load()
 	if err != nil {
 		return nil, http.StatusInternalServerError, fmt.Errorf("loading statefile: %w", err)
@@ -63,11 +75,21 @@ func (s *Server) listBackups(r *http.Request, _ principal.Identity) (any, int, e
 	}
 	targets := backupTargets(desired)
 	plans := make([]backupPlanView, 0)
+	inventories := make(map[string]backupSecretSnapshot)
 	for _, d := range desired {
 		if d.Kind != resource.KindBackupPlan || d.BackupPlan == nil {
 			continue
 		}
-		v := backupPlanView{Name: d.Metadata.Name, Node: d.Metadata.Node, Owner: d.Metadata.Owner, Spec: d.BackupPlan}
+		inventory, ok := inventories[d.Metadata.Node]
+		if !ok {
+			inventory = s.backupSecretInventory(r.Context(), d.Metadata.Node)
+			inventories[d.Metadata.Node] = inventory
+		}
+		password, err := s.backupPasswordState(desired, d, inventory, id.Role == runtimedb.RoleAdmin)
+		if err != nil {
+			return nil, http.StatusInternalServerError, err
+		}
+		v := backupPlanView{Name: d.Metadata.Name, Node: d.Metadata.Node, Owner: d.Metadata.Owner, Spec: d.BackupPlan, Dependency: password}
 		if samples, sampleErr := s.DB.LatestBackupSourceSamples(d.Metadata.Name, 1); sampleErr != nil {
 			return nil, http.StatusInternalServerError, sampleErr
 		} else if len(samples) > 0 {
@@ -89,6 +111,121 @@ func (s *Server) listBackups(r *http.Request, _ principal.Identity) (any, int, e
 		}
 	}
 	return map[string]any{"plans": plans, "targets": targetList, "runs": runs}, http.StatusOK, nil
+}
+
+func backupPasswordDeclaration(desired []resource.Resource, plan resource.Resource) (ref, source string) {
+	ref = plan.BackupPlan.PasswordSecret
+	name := strings.TrimPrefix(ref, "secret/")
+	if !strings.HasPrefix(ref, "secret/") || name == "" {
+		return ref, "unknown"
+	}
+	for _, d := range desired {
+		if d.Kind != resource.KindSecret || d.Secret == nil || d.Secret.Name != name ||
+			d.Metadata.Node != plan.Metadata.Node || d.Metadata.Owner != plan.Metadata.Owner {
+			continue
+		}
+		if d.Secret.Provided {
+			return ref, "provided"
+		}
+		return ref, "generated"
+	}
+	return ref, "unknown"
+}
+
+type backupSecretSnapshot struct {
+	have      map[string]bool
+	available bool
+}
+
+func (s *Server) backupSecretInventory(ctx context.Context, node string) backupSecretSnapshot {
+	if s.Agents == nil {
+		return backupSecretSnapshot{}
+	}
+	res, err := s.Agents.Apply(ctx, node, &wsv1.Operation{Op: &wsv1.Operation_ListSecrets{ListSecrets: &wsv1.ListSecrets{}}})
+	if err != nil || res == nil || res.GetError() != nil || res.GetListSecrets() == nil {
+		return backupSecretSnapshot{}
+	}
+	have := make(map[string]bool, len(res.GetListSecrets().GetSecrets()))
+	for _, secret := range res.GetListSecrets().GetSecrets() {
+		have[secret.GetName()] = true
+	}
+	return backupSecretSnapshot{have: have, available: true}
+}
+
+func (s *Server) backupPasswordState(desired []resource.Resource, plan resource.Resource, inventory backupSecretSnapshot, owner bool) (backupPasswordStatus, error) {
+	ref, source := backupPasswordDeclaration(desired, plan)
+	status := backupPasswordStatus{PasswordRef: ref, Source: source, Remedy: "none"}
+	if !inventory.available {
+		status.State, status.Reason, status.Held = "inventory-unavailable", "secret-inventory-unavailable", true
+		return status, nil
+	}
+	name := strings.TrimPrefix(ref, "secret/")
+	if !strings.HasPrefix(ref, "secret/") || name == "" || !inventory.have[name] {
+		status.State, status.Reason, status.Held = "missing", "password-secret-missing", true
+		switch source {
+		case "generated":
+			status.Remedy, status.CanRepair = "reconcile", owner
+		case "provided":
+			status.Remedy = "enter-secret"
+		}
+		return status, nil
+	}
+	repaired, err := s.DB.HasBackupDependencyUnavailable(plan.Metadata.Name)
+	if err != nil {
+		return backupPasswordStatus{}, err
+	}
+	if repaired {
+		status.State, status.Reason = "repaired", "password-secret-repaired"
+	} else {
+		status.State, status.Reason = "present", "password-secret-present"
+	}
+	return status, nil
+}
+
+func (s *Server) repairBackupPassword(r *http.Request, id principal.Identity) (any, int, error) {
+	if code, err := planDecider(id); err != nil {
+		return nil, code, err
+	}
+	if id.AuthTime != nil {
+		if err := sameSiteWrite(r); err != nil {
+			return nil, http.StatusForbidden, fmt.Errorf("backup password repair requires a same-origin request")
+		}
+	}
+	if s.OnBackupRepair == nil {
+		return nil, http.StatusServiceUnavailable, fmt.Errorf("backup reconciliation is not wired")
+	}
+	desired, err := s.State.Load()
+	if err != nil {
+		return nil, http.StatusInternalServerError, fmt.Errorf("loading statefile: %w", err)
+	}
+	name := r.PathValue("plan")
+	var plan resource.Resource
+	found := false
+	for _, d := range desired {
+		if d.Kind == resource.KindBackupPlan && d.BackupPlan != nil && d.Metadata.Name == name {
+			plan, found = d, true
+			break
+		}
+	}
+	if !found {
+		return nil, http.StatusNotFound, fmt.Errorf("BackupPlan %s not found", name)
+	}
+	ref, source := backupPasswordDeclaration(desired, plan)
+	if source != "generated" {
+		if source == "provided" {
+			return nil, http.StatusConflict, fmt.Errorf("%s is operator-provided; enter it through Secrets instead of generating it", ref)
+		}
+		return nil, http.StatusConflict, fmt.Errorf("%s is not a generated Secret owned by BackupPlan %s on node %s", ref, name, plan.Metadata.Node)
+	}
+	inventory := s.backupSecretInventory(r.Context(), plan.Metadata.Node)
+	if !inventory.available {
+		return nil, http.StatusConflict, fmt.Errorf("cannot confirm password-secret absence on node %s", plan.Metadata.Node)
+	}
+	if inventory.have[strings.TrimPrefix(ref, "secret/")] {
+		return map[string]string{"plan": name, "node": plan.Metadata.Node, "passwordRef": ref, "state": "present"}, http.StatusOK, nil
+	}
+	s.OnBackupRepair()
+	return map[string]string{"plan": name, "node": plan.Metadata.Node, "passwordRef": ref, "state": "pending"}, http.StatusAccepted, nil
 }
 
 func backupTargets(desired []resource.Resource) map[string]backupTargetView {

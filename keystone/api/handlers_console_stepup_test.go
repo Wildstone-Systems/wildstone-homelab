@@ -25,6 +25,7 @@ var consequentialRoutes = []struct{ method, path, body string }{
 	{http.MethodPost, "/api/v1/join-tokens", `{}`},
 	{http.MethodPost, "/api/v1/nodes/n1/secrets/s1/rotate", `{}`},
 	{http.MethodPost, "/api/v1/backups/p1/restore", `{}`},
+	{http.MethodPost, "/api/v1/backups/p1/repair-password", `{}`},
 	{http.MethodPost, "/api/v1/household/publishers/home-automation", `{}`},
 	// Pairing mints a publisher token and stores a credential; unpairing
 	// revokes them (ADR-W044 A6).
