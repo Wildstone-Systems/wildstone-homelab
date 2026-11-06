@@ -273,7 +273,7 @@ a ninth.
 ### F-155-08 — the A2.1 link-generation check is wired for all live identity surfaces
 
 - **Current status:** implemented
-- **Current evidence:** `ResolveSurfaceIdentity` now gates API-principal and trusted-ingress Butler retrieval/dispatch; `ResolveChatBinding` gates chat ingress; the admitted generation is carried by durable tasks, sessions and queued deliveries and rechecked before model/tool dispatch and publication. `TestEveryLiveSurfaceLinkUsesTheCurrentGeneration`, `TestAPIPrincipalGenerationFencesOldSessionAndTask`, `TestDashboardAssistantRequiresCurrentTrustedIngressLink`, `TestGenerationIsRecheckedAfterModelBeforePublication`, and `TestQueuedChatReplyCannotBorrowANewerBindingGeneration` cover positive, revoke, re-admit, late-revoke, and delivery cases.
+- **Current evidence:** `ResolveSurfaceIdentity` now gates API-principal and trusted-ingress Butler retrieval/dispatch; `ResolveChatBinding` gates chat ingress; the admitted generation is carried by durable tasks, sessions and queued deliveries and rechecked before model/tool dispatch and publication. Commit `3b1863f6`; `TestEveryLiveSurfaceLinkUsesTheCurrentGeneration`, `TestAPIPrincipalGenerationFencesOldSessionAndTask`, `TestDashboardAssistantRequiresCurrentTrustedIngressLink`, `TestGenerationIsRecheckedAfterModelBeforePublication`, and `TestQueuedChatReplyCannotBorrowANewerBindingGeneration` cover positive, revoke, re-admit, late-revoke, and delivery cases.
 - **Current owner:** chickenrat17
 - **Tracking:** #305
 - **Audit status:** implemented
