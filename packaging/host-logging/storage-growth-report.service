@@ -1,0 +1,26 @@
+[Unit]
+Description=Record read-only host storage growth categories
+
+[Service]
+Type=oneshot
+Environment=RETENTION_DAYS=30
+Environment=MIN_FREE_BYTES=17179869184
+Environment=PROTECTED_IMAGE_FILE=/etc/wildstone/storage-growth.protected-images
+Environment=STORAGE_REPORT_ROOT=/
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=/usr/local/libexec/wildstone-storage-growth-report
+TimeoutStartSec=5m
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictRealtime=true
+SystemCallArchitectures=native
