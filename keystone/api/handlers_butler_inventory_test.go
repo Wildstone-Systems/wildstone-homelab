@@ -197,6 +197,102 @@ func TestPersonTaskInventoryScopesBeforeLimit(t *testing.T) {
 	}
 }
 
+// Handles are labels, and distinct People may carry case-differing labels.
+// Task detail must compare the stable identities stored on the task rather
+// than folding those labels together.
+func TestPersonTaskDetailUsesCanonicalIdentity(t *testing.T) {
+	h := newHarness(t)
+	lowerToken := h.console(runtimedb.RoleAdmin, "sam")
+	upperToken := h.console(runtimedb.RoleAdmin, "Sam")
+
+	lowerTask, err := h.s.DB.InsertButlerTask(runtimedb.ButlerTask{
+		Kind: runtimedb.ButlerTaskConversation, Author: "sam", Owner: "sam",
+		Surface: runtimedb.ButlerSurfaceFamily, AgentClass: runtimedb.AgentClassMember,
+		Audience: runtimedb.ButlerAudiencePrivate, ObjectiveKind: runtimedb.ObjectiveInformational,
+		Objective: "lower-case Person private task",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	upperTask, err := h.s.DB.InsertButlerTask(runtimedb.ButlerTask{
+		Kind: runtimedb.ButlerTaskConversation, Author: "Sam", Owner: "Sam",
+		Surface: runtimedb.ButlerSurfaceFamily, AgentClass: runtimedb.AgentClassMember,
+		Audience: runtimedb.ButlerAudiencePrivate, ObjectiveKind: runtimedb.ObjectiveInformational,
+		Objective: "upper-case Person private task",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		token string
+		own   string
+		other string
+	}{
+		{lowerToken, lowerTask, upperTask},
+		{upperToken, upperTask, lowerTask},
+	} {
+		if res := h.doToken(tc.token, http.MethodGet, "/api/v1/butler/tasks/"+tc.own, nil, nil); res.StatusCode != http.StatusOK {
+			t.Fatalf("own task detail = %d", res.StatusCode)
+		}
+		if res := h.doToken(tc.token, http.MethodGet, "/api/v1/butler/tasks/"+tc.other, nil, nil); res.StatusCode != http.StatusNotFound {
+			t.Fatalf("case-distinct Person task detail = %d, want 404", res.StatusCode)
+		}
+	}
+}
+
+func TestPersonSessionInventoryUsesCanonicalIdentityBeforeLimit(t *testing.T) {
+	h := newHarness(t)
+	if err := h.s.DB.UpsertModel(runtimedb.Model{
+		Name: "fixture-local", Kind: runtimedb.ModelLocal, Provider: "ollama", ProviderModel: "fixture",
+		Readiness: runtimedb.ModelReady, Enabled: true,
+	}, "fixture"); err != nil {
+		t.Fatal(err)
+	}
+	token := h.console(runtimedb.RoleAdmin, "mika")
+	for _, name := range []string{"visible-agent", "revoked-agent"} {
+		if res := h.doToken(token, http.MethodPost, "/api/v1/butlers", map[string]any{
+			"name": name, "agentClass": runtimedb.AgentClassMember, "model": "fixture-local",
+		}, nil); res.StatusCode != http.StatusCreated {
+			t.Fatalf("create %s = %d", name, res.StatusCode)
+		}
+	}
+
+	visibleSession := inventorySession(t, h, "mika", "visible-agent", "older visible session")
+	for i := 0; i < 51; i++ {
+		inventorySession(t, h, "mika", "revoked-agent", fmt.Sprintf("newer revoked session %02d", i))
+	}
+	if err := h.s.DB.RevokeButlerAccess("revoked-agent", "mika", "fixture"); err != nil {
+		t.Fatal(err)
+	}
+
+	var sessions []runtimedb.ButlerSession
+	if res := h.doToken(token, http.MethodGet, "/api/v1/butler/sessions", nil, &sessions); res.StatusCode != http.StatusOK {
+		t.Fatalf("session inventory = %d", res.StatusCode)
+	}
+	if len(sessions) != 1 || sessions[0].ID != visibleSession {
+		t.Fatalf("session inventory = %+v, want older visible session %s", sessions, visibleSession)
+	}
+
+	if err := h.s.DB.RenameButlerMemberHandle("mika", "mikhail"); err != nil {
+		t.Fatal(err)
+	}
+	renamedToken, err := h.s.Principals.Mint(principalNameFor(t, runtimedb.RoleAdmin), "mikhail", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessions = nil
+	if res := h.doToken(renamedToken, http.MethodGet, "/api/v1/butler/sessions", nil, &sessions); res.StatusCode != http.StatusOK {
+		t.Fatalf("renamed session inventory = %d", res.StatusCode)
+	}
+	if len(sessions) != 1 || sessions[0].ID != visibleSession {
+		t.Fatalf("renamed session inventory = %+v, want %s", sessions, visibleSession)
+	}
+	if res := h.doToken(renamedToken, http.MethodGet, "/api/v1/butler/sessions/"+visibleSession, nil, nil); res.StatusCode != http.StatusOK {
+		t.Fatalf("renamed session detail = %d", res.StatusCode)
+	}
+}
+
 func TestPersonSessionInventoryKeepsOwnUnstampedHistory(t *testing.T) {
 	h := newHarness(t)
 	id, err := h.s.DB.InsertButlerSession(runtimedb.ButlerSession{

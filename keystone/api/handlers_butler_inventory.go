@@ -24,24 +24,38 @@ func inventoryPerson(id principal.Identity) string {
 	return strings.TrimSpace(id.ActingFor)
 }
 
+// inventoryMember resolves the request's current handle to its stable Person.
+// A missing or inactive Person is still a Person-facing request, but receives
+// an empty view so no hidden Agent or history state is distinguishable.
+func (s *Server) inventoryMember(id principal.Identity) (runtimedb.ButlerMember, bool, error) {
+	person := inventoryPerson(id)
+	if person == "" {
+		return runtimedb.ButlerMember{}, false, nil
+	}
+	member, err := s.DB.GetButlerMember(person)
+	if errors.Is(err, runtimedb.ErrNotFound) || (err == nil && !member.Active()) {
+		return runtimedb.ButlerMember{}, true, nil
+	}
+	return member, true, err
+}
+
 // visibleButlers returns the live Agents the current Person is admitted to.
 // The boolean says whether this is a Person-facing view. An inactive Person
 // receives an empty set rather than an error that could distinguish another
 // Person's Agent from an absent one.
 func (s *Server) visibleButlers(id principal.Identity) ([]runtimedb.Butler, bool, error) {
-	person := inventoryPerson(id)
-	if person == "" {
+	member, scoped, err := s.inventoryMember(id)
+	if err != nil {
+		return nil, scoped, err
+	}
+	if !scoped {
 		all, err := s.DB.ListButlers()
 		return all, false, err
 	}
-	member, err := s.DB.GetButlerMember(person)
-	if errors.Is(err, runtimedb.ErrNotFound) || (err == nil && !member.Active()) {
+	if member.PersonID == "" {
 		return []runtimedb.Butler{}, true, nil
 	}
-	if err != nil {
-		return nil, true, err
-	}
-	all, err := s.DB.ButlerInventoryFor(person)
+	all, err := s.DB.ButlerInventoryFor(member.Member)
 	return all, true, err
 }
 
@@ -124,12 +138,15 @@ func (s *Server) administrativeButlerManifest(b runtimedb.Butler, authority *but
 	}
 }
 
-func taskBelongsToInventoryPerson(task runtimedb.ButlerTask, id principal.Identity) bool {
-	person := inventoryPerson(id)
-	if person == "" {
-		return canSeeTask(task, id)
+func (s *Server) taskBelongsToInventoryPerson(task runtimedb.ButlerTask, id principal.Identity) (bool, error) {
+	member, scoped, err := s.inventoryMember(id)
+	if err != nil {
+		return false, err
 	}
-	return strings.EqualFold(task.Owner, person) || strings.EqualFold(task.Author, person)
+	if !scoped {
+		return canSeeTask(task, id), nil
+	}
+	return s.DB.ButlerTaskBelongsToPerson(task.ID, member.PersonID)
 }
 
 func (s *Server) taskUsesVisibleButler(task runtimedb.ButlerTask, id principal.Identity) bool {

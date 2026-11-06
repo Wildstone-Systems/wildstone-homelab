@@ -679,6 +679,23 @@ func (db *DB) ListButlerTasksForInventory(limit int, person string, visibleButle
 	return collectButlerTasks(rows)
 }
 
+// ButlerTaskBelongsToPerson reports whether the stable Person owns or authored
+// the task. It deliberately compares person_id values rather than the mutable
+// handles rendered by GetButlerTask.
+func (db *DB) ButlerTaskBelongsToPerson(id, personID string) (bool, error) {
+	seq, err := parseButlerTaskID(id)
+	if err != nil || personID == "" {
+		return false, nil
+	}
+	var count int
+	if err := db.sql.QueryRow(`SELECT COUNT(*) FROM butler_tasks
+		WHERE seq = ? AND (owner_person_id = ? OR author_person_id = ?)`,
+		seq, personID, personID).Scan(&count); err != nil {
+		return false, fmt.Errorf("runtimedb: checking Person task ownership: %w", err)
+	}
+	return count == 1, nil
+}
+
 // openButlerTaskStates is every state a task can still do work in — the
 // set ListOpenButlerTasksByButler fences on revocation (ADR-W039 §3.7)
 // and ButlerTasksInState's resume queue draws from one at a time.

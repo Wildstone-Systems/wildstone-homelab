@@ -659,8 +659,15 @@ func (s *Server) listButlerSessions(r *http.Request, id principal.Identity) (any
 	// Butler's conversations under one Butler's name is the one thing
 	// this list must not do.
 	filter := runtimedb.ButlerSessionFilter{Surface: surface, Butler: r.URL.Query().Get("butler")}
-	if person := inventoryPerson(id); person != "" {
-		filter.ActingFor = person
+	if member, scoped, memberErr := s.inventoryMember(id); memberErr != nil {
+		return nil, http.StatusInternalServerError, memberErr
+	} else if scoped {
+		if member.PersonID == "" {
+			return []runtimedb.ButlerSession{}, http.StatusOK, nil
+		}
+		filter.ActingFor = member.Member
+		filter.PersonID = member.PersonID
+		filter.ScopeAgents = true
 	}
 	sessions, err := s.DB.ListButlerSessions(limit, filter)
 	if err != nil {
@@ -702,8 +709,11 @@ func (s *Server) getButlerSession(r *http.Request, id principal.Identity) (any, 
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
-	if person := inventoryPerson(id); person != "" {
-		if !strings.EqualFold(sess.ActingFor, person) {
+	if member, scoped, memberErr := s.inventoryMember(id); memberErr != nil {
+		return nil, http.StatusInternalServerError, memberErr
+	} else if scoped {
+		if member.PersonID == "" || (sess.PersonID != "" && sess.PersonID != member.PersonID) ||
+			(sess.PersonID == "" && sess.ActingFor != member.Member) {
 			return nil, http.StatusNotFound, fmt.Errorf("butler session not found")
 		}
 		if sess.Butler != "" {

@@ -109,7 +109,11 @@ func (s *Server) listButlerTasks(r *http.Request, id principal.Identity) (any, i
 	}
 	out := make([]runtimedb.ButlerTask, 0, len(all))
 	for _, t := range all {
-		if taskBelongsToInventoryPerson(t, id) && s.taskUsesVisibleButler(t, id) {
+		belongs, belongsErr := s.taskBelongsToInventoryPerson(t, id)
+		if belongsErr != nil {
+			return nil, http.StatusInternalServerError, belongsErr
+		}
+		if belongs && s.taskUsesVisibleButler(t, id) {
 			if err := s.checkAPITaskDisclosure(r, id, t.ID); err != nil {
 				if errors.Is(err, runtimedb.ErrPrivacy) {
 					continue
@@ -148,7 +152,11 @@ func (s *Server) getButlerTask(r *http.Request, id principal.Identity) (any, int
 		// answer identically: otherwise the 403 confirms it exists.
 		return nil, http.StatusNotFound, fmt.Errorf("no such task")
 	}
-	if !taskBelongsToInventoryPerson(task, id) || !s.taskUsesVisibleButler(task, id) {
+	belongs, belongsErr := s.taskBelongsToInventoryPerson(task, id)
+	if belongsErr != nil {
+		return nil, http.StatusInternalServerError, belongsErr
+	}
+	if !belongs || !s.taskUsesVisibleButler(task, id) {
 		return nil, http.StatusNotFound, fmt.Errorf("no such task")
 	}
 	if err := s.checkAPITaskDisclosure(r, id, taskID); err != nil {
