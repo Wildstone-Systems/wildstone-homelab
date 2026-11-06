@@ -86,6 +86,28 @@ func TestLocalDeploymentRejectsForeignReposAndEnvironmentRedirection(t *testing.
 	}
 }
 
+func TestLocalDeploymentAllowsOnlyOneFixedPrivateSecretFile(t *testing.T) {
+	d, err := OpenLocalDeployment(filepath.Join(t.TempDir(), "deployment.git"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := localFiles()
+	files["secret.sops.yaml"] = []byte("synthetic ciphertext\n")
+	candidate, err := d.Build("", "example-private", files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := d.git(nil, "show", candidate+":secret.sops.yaml")
+	if err != nil || got != "synthetic ciphertext" {
+		t.Fatal("private file bytes changed", err)
+	}
+	delete(files, "secret.sops.yaml")
+	files["other.sops.yaml"] = []byte("refused\n")
+	if _, err := d.Build("", "example-arbitrary", files); err == nil {
+		t.Fatal("arbitrary fourth projection file accepted")
+	}
+}
+
 func TestInspectLocalDeploymentDoesNotInitializeOrAcceptForeignRepository(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "not-created.git")
 	if _, err := InspectLocalDeployment(missing); err == nil {

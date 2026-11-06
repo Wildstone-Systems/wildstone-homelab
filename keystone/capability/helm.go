@@ -24,7 +24,13 @@ type HelmBindings struct {
 	SecretName     string
 	// SecretRevision identifies the encrypted configuration revision, not a
 	// plaintext secret hash. Publication must verify it before dispatch.
-	SecretRevision string
+	SecretRevision string `json:",omitempty"`
+	// SecretFile enables the separately owned encrypted Secret projection.
+	// Only one fixed relative filename and deterministic restart policy are
+	// supported; the ciphertext bytes are never passed to this package.
+	SecretFile          string `json:",omitempty"`
+	SecretGeneration    uint64 `json:",omitempty"`
+	SecretRestartPolicy string `json:",omitempty"`
 }
 
 // HelmProjection is review material, not approval or a deployable operation.
@@ -53,6 +59,14 @@ func (e *Engine) ProjectHelm(pkg *pkgspec.Package, params map[string]string, b H
 	}
 	if !secretRevision.MatchString(b.SecretRevision) {
 		return nil, fmt.Errorf("capability: encrypted secret revision must be a full content digest")
+	}
+	managedSecret := b.SecretFile != ""
+	if managedSecret {
+		if b.SecretFile != "secret.sops.yaml" || b.SecretGeneration == 0 || b.SecretRestartPolicy != "recreate-on-ciphertext-revision" {
+			return nil, fmt.Errorf("capability: unsupported encrypted secret projection")
+		}
+	} else if b.SecretGeneration != 0 || b.SecretRestartPolicy != "" {
+		return nil, fmt.Errorf("capability: incomplete encrypted secret projection")
 	}
 	for field, value := range map[string]string{"name": b.Name, "namespace": b.Namespace, "serviceAccount": b.ServiceAccount, "configClaim": b.ConfigClaim, "metadataClaim": b.MetadataClaim, "mediaClaim": b.MediaClaim, "secretName": b.SecretName} {
 		if !kubeName.MatchString(value) {
@@ -91,6 +105,9 @@ func (e *Engine) ProjectHelm(pkg *pkgspec.Package, params map[string]string, b H
 		"mediaMounts":              []any{map[string]any{"name": "audiobooks", "existingClaim": b.MediaClaim, "mountPath": "/audiobooks", "readOnly": false}},
 		"resources":                map[string]any{"requests": map[string]any{"cpu": "100m", "memory": "256Mi"}, "limits": map[string]any{"cpu": "1", "memory": "1Gi"}},
 	}
+	if managedSecret {
+		values["podAnnotations"] = map[string]any{"wildstone.dev/encrypted-secret-revision": b.SecretRevision}
+	}
 	for _, name := range []string{"startupProbe", "readinessProbe", "livenessProbe"} {
 		probe := map[string]any{"httpGet": map[string]any{"path": "/healthcheck", "port": "http"}, "periodSeconds": 10}
 		if name == "startupProbe" {
@@ -105,7 +122,11 @@ func (e *Engine) ProjectHelm(pkg *pkgspec.Package, params map[string]string, b H
 		"interval": "10m", "timeout": "10m", "releaseName": b.Name, "serviceAccountName": b.ServiceAccount,
 		"chart":   map[string]any{"spec": map[string]any{"chart": h.ChartPath, "version": h.ChartVersion, "reconcileStrategy": "Revision", "sourceRef": map[string]any{"kind": "GitRepository", "name": b.Name}}},
 		"install": map[string]any{"remediation": map[string]any{"retries": 0}}, "upgrade": map[string]any{"remediation": map[string]any{"retries": 0}}, "values": values}}
-	kustomization := map[string]any{"apiVersion": "kustomize.config.k8s.io/v1beta1", "kind": "Kustomization", "resources": []string{"source.yaml", "release.yaml"}}
+	resources := []string{"source.yaml", "release.yaml"}
+	if managedSecret {
+		resources = append(resources, b.SecretFile)
+	}
+	kustomization := map[string]any{"apiVersion": "kustomize.config.k8s.io/v1beta1", "kind": "Kustomization", "resources": resources}
 	files := map[string][]byte{}
 	for name, obj := range map[string]any{"source.yaml": source, "release.yaml": release, "kustomization.yaml": kustomization} {
 		data, err := yaml.Marshal(obj)

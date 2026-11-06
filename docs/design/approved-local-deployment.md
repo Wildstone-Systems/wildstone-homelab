@@ -31,32 +31,56 @@ Synthetic inventory example, to be created locally by a separately reviewed boot
     "MetadataClaim": "example-metadata",
     "MediaClaim": "example-media",
     "SecretName": "example-jwt"
+  },
+  "secretDelivery": {
+    "generation": 1,
+    "outputPath": "secret.sops.yaml",
+    "kustomizationNamespace": "example-flux",
+    "kustomizationName": "example-app",
+    "decryptionSecretName": "example-age-identity",
+    "restartPolicy": "recreate-on-ciphertext-revision"
   }
 }
 ```
 
-Bindings use the existing projector's field names. `SecretRevision` must be absent: the server derives it. The package profile is the validated #256 schema with immutable chart commit and image digest. Bootstrap must supply the supported software profile, existing isolated claims, scoped Flux reconciliation permissions and named Secret. Opening the manager initializes/checks only the private local promotion repository; it installs no software, account, key, listener, service or Kubernetes resource. The separate [delivery bootstrap](local-git-source.md) must use the same repository and mirror paths.
+Bindings use the existing projector's field names. `SecretRevision`,
+`SecretFile`, `SecretGeneration` and `SecretRestartPolicy` must be absent: the
+server derives them from the reviewed file and `secretDelivery`. Omitting
+`secretDelivery` preserves the legacy pre-provisioned-Secret path. Enabling it
+requires exactly the fields/values above; callers cannot select paths,
+reconcilers, identities or restart behavior. Bootstrap must supply the
+supported software profile, existing isolated claims, scoped outer Flux
+Kustomization/RBAC and its independently held age identity. Opening the
+manager initializes/checks only the private local promotion repository; it
+installs no software, account, key, listener, service or Kubernetes resource.
+The separate [delivery bootstrap](local-git-source.md) must use the same
+repository and mirror paths.
 
 The encrypted file must identify the exact namespace/name and one SOPS-shaped
 encrypted `jwt-secret` payload with encrypted MAC. Its byte digest versions the
 **local encrypted configuration reference**, not a Kubernetes Secret
-resourceVersion. This implementation does not decrypt it, authenticate its
-SOPS MAC, deliver it, prove its live contents, provision it or rotate it.
-Plaintext/extra payloads are refused, and neither ciphertext nor key material
-appears in review, generated Git output or public fixtures.
+resourceVersion. With `secretDelivery` enabled, the manager requires the
+pinned SOPS/age shape, fingerprints public recipients, places the exact bytes
+at `secret.sops.yaml` in private deployment Git and lists that resource in the
+public-safe Kustomization. It also binds a deterministic ciphertext-revision
+Pod annotation. It does not decrypt, authenticate the SOPS MAC, read/create
+the age identity, prove live contents or itself apply/rotate a Kubernetes
+Secret. Flux is the first authoritative decrypt/MAC boundary.
 
-The [#162 custody contract](flux-secret-custody.md) defines the bounded path
-that may later place the exact approved ciphertext—never its age private
-identity—into private generated deployment Git for Flux decryption. Until that
-implementation and its separate bootstrap/proof gates land, bootstrap retains
-delivery/decryption responsibility and #258 verifies only the actual
-pre-provisioned Secret and application.
+Plan JSON, API/Console responses and ordinary generated-file review contain
+only the safe metadata defined by the [#162 custody contract](flux-secret-custody.md):
+target, generation, ciphertext revision, recipient fingerprints, relative
+output, outer binding and restart effect. Ciphertext, raw recipients, SOPS
+metadata, private host/repository paths and keys are withheld. Missing or
+changed files fail closed; generation cannot decrease or advance while reusing
+the same ciphertext. Live decryption/bootstrap/rotation evidence remains a
+separate Child C Owner gate.
 
 ## Existing public API and Console
 
 1. An active Owner with a fresh Console session calls `POST /api/v1/plans` with `{"deployment":{"instance":"example-app","timezone":"UTC"}}`. The installed-slot discovery endpoint is `GET /api/v1/deployments`; it returns supported choices, never local paths/keys.
-2. The server snapshots current accepted input, inventory bytes, profile identity, encrypted configuration version, expected deployment parent and exact generated files. It retains the immutable product candidate and records one standalone high-risk Plan.
-3. Existing Plan detail and Owner Review Queue show immutable chart commit/image, placement, versions, product candidate, output digest and exact YAML. The proposing Owner approves via existing `POST /api/v1/plans/{id}/approve` with a fresh session. Another Owner must prepare their own Plan. Agents and machine credentials cannot approve/apply; generic proposals cannot bypass this path.
+2. The server snapshots current accepted input, inventory bytes, profile identity, encrypted configuration version/generation, expected deployment parent, exact public generated files and private filename/digest. It retains the immutable product candidate and records one standalone high-risk Plan without private file bytes.
+3. Existing Plan detail and Owner Review Queue show immutable chart commit/image, placement, versions, product candidate, output digest, safe Secret metadata and exact public YAML. The private ciphertext file is explicitly withheld. The proposing Owner approves via existing `POST /api/v1/plans/{id}/approve` with a fresh session. Another Owner must prepare their own Plan. Agents and machine credentials cannot approve/apply; generic proposals cannot bypass this path.
 4. Approval re-derives the projection, refuses stale inputs, and atomically accepts canonical product input plus the exact approval/current-Plan pointer in the existing publication transaction. It does not advance the deployment ref itself.
 5. The dispatcher rechecks inputs and current authority, prepares/journals output and enters #264's final SQLite authority fence before bounded expected-old-ref Git promotion. Within that fence it repeats bounded file/version checks. A newer approval, even for unchanged product bytes, invalidates the older approval. Changed placement requires a separate adoption/retention decision.
 6. Existing `POST /api/v1/plans/{id}/reject` also withdraws a pending deployment's future promotion authority. Any active Owner with fresh sign-in can revoke it. Revocation serializes with the ref effect; it neither rewinds a completed effect nor rewrites accepted product intent. Resubmission requires a new exact Plan.
@@ -73,6 +97,15 @@ If Git already advanced and acknowledgment was lost, the exact recorded candidat
 
 ## Evidence and deferred work
 
-Synthetic real-Git integration tests cover the public Owner flow, exact review/redaction, generic/agent bypass refusal, stale and cross-instance input, Owner revocation/role change, superseding no-op approval, pending stop/quarantine/coordinator loss, ref conflict, restart before promotion and after ref advance, and independent mirror observation. The existing final-fence concurrency tests remain required. UI checks verify full review is loaded and incomplete output disables approval.
+Synthetic real-Git integration tests cover the public Owner flow, exact
+review/redaction, separate private ciphertext publication, deterministic
+restart annotation, generation continuity, missing/changed input refusal,
+generic/agent bypass refusal, stale and cross-instance input, Owner
+revocation/role change, superseding no-op approval, pending
+stop/quarantine/coordinator loss, ref conflict, restart before promotion and
+after ref advance, and independent mirror observation. The existing
+final-fence concurrency tests remain required. UI checks verify full safe
+review is loaded, ciphertext/private paths stay absent and incomplete output
+or Secret metadata disables approval.
 
 #257 is accepted with merged repository evidence and executed supported-environment SSH retrieval/refusal tests. #258 must repeat the flow through a real authenticated Owner session and verify the product observer, runtime failure/recovery and data persistence on the existing development VM. No current release adoption, deletion/pruning, backup/Hetzner work, public exposure, reboot or path retirement is included.
