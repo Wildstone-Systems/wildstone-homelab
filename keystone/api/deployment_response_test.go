@@ -17,8 +17,9 @@ func TestDeploymentResponsePreservesTypedEvidenceAndRedactsSecrets(t *testing.T)
 	digest := strings.Repeat("cd", 32)
 	secret40 := strings.Repeat("ef", 20)
 	secret64 := strings.Repeat("12", 32)
+	secretReview := &runtimedb.DeploymentSecretReview{Validation: "encrypted-reference-validated", Target: runtimedb.DeploymentSecretTarget{Namespace: "example-app", Name: "example-jwt", Key: "jwt-secret", Type: "Opaque"}, SecretGeneration: 7, CiphertextRevision: digest, RecipientFingerprints: []string{"sha256:" + digest}, OutputPath: "secret.sops.yaml", OuterKustomization: runtimedb.DeploymentSecretKustomization{Namespace: "example-flux", Name: "example-app"}, DecryptionSecretName: "example-age-identity", RestartPolicy: "recreate-on-ciphertext-revision", RestartEffect: "singleton-recreate-bounded-outage", PrivateFileCount: 1}
 	view := planView{DeploymentPlan: true, PlanRecord: runtimedb.PlanRecord{ID: "plan-example", Summary: "private " + secret40},
-		Deployment:       &runtimedb.DeploymentReview{ProductRevision: commit, PreviousProductRevision: commit, ExpectedDeploymentRevision: commit, ChartCommit: commit, ProjectionDigest: digest, ProfileDigest: digest, InventoryDigest: digest, EncryptedSecretRevision: digest, DesiredResource: "private " + secret64, Files: map[string]string{"release.yaml": "private " + secret40, secret64: "private " + secret64}},
+		Deployment:       &runtimedb.DeploymentReview{ProductRevision: commit, PreviousProductRevision: commit, ExpectedDeploymentRevision: commit, ChartCommit: commit, ProjectionDigest: digest, ProfileDigest: digest, InventoryDigest: digest, EncryptedSecretRevision: digest, DesiredResource: "private " + secret64, Files: map[string]string{"release.yaml": "private " + secret40, secret64: "private " + secret64}, Secret: secretReview},
 		DeploymentStatus: &runtimedb.DeploymentStatus{ProductRevision: commit, PreparedRevision: commit, PromotedRevision: commit, MirrorRevision: commit, SourceRevision: "deploy@sha1:" + commit, ReconciledRevision: "deploy@sha1:" + commit, Detail: "private " + secret64, ControllerDetail: "private " + secret40, SourceGeneration: 2, SourceObservedGeneration: 2, KustomizationGeneration: 3, KustomizationObservedGeneration: 3, HelmGeneration: 4, HelmObservedGeneration: 4, WorkloadGeneration: 5, WorkloadObservedGeneration: 5, ObservedAt: time.Now().UTC()},
 	}
 	for _, list := range []bool{false, true} {
@@ -60,6 +61,10 @@ func TestDeploymentResponsePreservesTypedEvidenceAndRedactsSecrets(t *testing.T)
 					t.Errorf("review %s corrupted: %v", field, review[field])
 				}
 			}
+			secret := review["secret"].(map[string]any)
+			if secret["validation"] != "encrypted-reference-validated" || secret["ciphertextRevision"] != digest || secret["outputPath"] != "secret.sops.yaml" || secret["secretGeneration"] != float64(7) {
+				t.Errorf("safe Secret review corrupted: %v", secret)
+			}
 			for _, field := range []string{"productRevision", "preparedRevision", "promotedRevision", "mirrorRevision"} {
 				if status[field] != commit {
 					t.Errorf("status %s corrupted: %v", field, status[field])
@@ -90,6 +95,26 @@ func TestDeploymentMetadataExceptionDoesNotApplyToArbitraryReplies(t *testing.T)
 		(&Server{}).writeJSON(w, http.StatusOK, body)
 		if strings.Contains(w.Body.String(), secret) {
 			t.Fatal("untyped/free-text metadata bypassed redaction")
+		}
+	}
+}
+
+func TestDeploymentSecretReviewExceptionRejectsUnsafeMetadata(t *testing.T) {
+	private := "REPLACED-private-recipient-or-path"
+	valid := runtimedb.DeploymentSecretReview{Validation: "encrypted-reference-validated", Target: runtimedb.DeploymentSecretTarget{Namespace: "example-app", Name: "example-jwt", Key: "jwt-secret", Type: "Opaque"}, SecretGeneration: 1, CiphertextRevision: strings.Repeat("a", 64), RecipientFingerprints: []string{"sha256:" + strings.Repeat("b", 64)}, OutputPath: "secret.sops.yaml", OuterKustomization: runtimedb.DeploymentSecretKustomization{Namespace: "example-flux", Name: "example-app"}, DecryptionSecretName: "example-age-identity", RestartPolicy: "recreate-on-ciphertext-revision", RestartEffect: "singleton-recreate-bounded-outage", PrivateFileCount: 1}
+	for _, mutate := range []func(*runtimedb.DeploymentSecretReview){
+		func(v *runtimedb.DeploymentSecretReview) { v.OutputPath = "/private/" + private },
+		func(v *runtimedb.DeploymentSecretReview) { v.RecipientFingerprints = []string{private} },
+		func(v *runtimedb.DeploymentSecretReview) { v.DecryptionSecretName = private },
+		func(v *runtimedb.DeploymentSecretReview) { v.PrivateFileCount = 2 },
+	} {
+		value := valid
+		value.RecipientFingerprints = append([]string(nil), valid.RecipientFingerprints...)
+		mutate(&value)
+		w := httptest.NewRecorder()
+		(&Server{}).writeJSON(w, http.StatusOK, planView{DeploymentPlan: true, Deployment: &runtimedb.DeploymentReview{Secret: &value}})
+		if strings.Contains(w.Body.String(), private) {
+			t.Fatalf("unsafe Secret metadata bypassed redaction: %s", w.Body.String())
 		}
 	}
 }

@@ -364,7 +364,10 @@ export function PendingPlan({
           .every(value => Number.isInteger(value) && value > 0) &&
         Array.isArray(research.config.backends) && Array.isArray(research.config.fallbackOrder))),
   );
-  const reviewableDeployment = !plan.deploymentPlan || Boolean(plan.deployment?.productRevision && plan.deployment?.projectionDigest && plan.deployment?.image && ["source.yaml","release.yaml","kustomization.yaml"].every(name=>plan.deployment?.files?.[name]));
+  const deploymentSecret=plan.deployment?.secret;
+  const kubeName=/^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
+  const reviewableSecret=!deploymentSecret||Boolean(deploymentSecret.validation==="encrypted-reference-validated"&&Number.isInteger(deploymentSecret.secretGeneration)&&deploymentSecret.secretGeneration>0&&/^[0-9a-f]{64}$/.test(deploymentSecret.ciphertextRevision)&&deploymentSecret.recipientFingerprints.length&&deploymentSecret.recipientFingerprints.every(value=>/^sha256:[0-9a-f]{64}$/.test(value))&&deploymentSecret.outputPath==="secret.sops.yaml"&&kubeName.test(deploymentSecret.target.namespace)&&kubeName.test(deploymentSecret.target.name)&&deploymentSecret.target.key==="jwt-secret"&&deploymentSecret.target.type==="Opaque"&&kubeName.test(deploymentSecret.outerKustomization.namespace)&&kubeName.test(deploymentSecret.outerKustomization.name)&&kubeName.test(deploymentSecret.decryptionSecretName)&&deploymentSecret.restartPolicy==="recreate-on-ciphertext-revision"&&deploymentSecret.restartEffect==="singleton-recreate-bounded-outage"&&deploymentSecret.privateFileCount===1);
+  const reviewableDeployment = !plan.deploymentPlan || Boolean(plan.deployment?.productRevision && plan.deployment?.projectionDigest && plan.deployment?.image && ["source.yaml","release.yaml","kustomization.yaml"].every(name=>plan.deployment?.files?.[name])&&reviewableSecret);
   const risky = kindOf(plan.risk) === "bad";
   const restores = (plan.plan?.steps ?? []).some((s) => (s.action ?? "").toLowerCase().includes("restore"));
 
@@ -637,8 +640,17 @@ export function DeploymentDetails({plan}:{plan:PlanRecord}) {
       <dt>Projection digest</dt><dd>{d.projectionDigest}</dd>
       <dt>Profile / inventory versions</dt><dd>{d.profileDigest} / {d.inventoryDigest}</dd>
       <dt>Encrypted configuration version</dt><dd>{d.encryptedSecretRevision}</dd>
+      {d.secret&&<>
+        <dt>Encrypted Secret target</dt><dd>{d.secret.target.namespace} / {d.secret.target.name} / {d.secret.target.key} ({d.secret.target.type})</dd>
+        <dt>Secret generation</dt><dd>{d.secret.secretGeneration}</dd>
+        <dt>Ciphertext revision</dt><dd>{d.secret.ciphertextRevision}</dd>
+        <dt>Recipient fingerprints</dt><dd>{d.secret.recipientFingerprints.join(", ")}</dd>
+        <dt>Private output</dt><dd>{d.secret.outputPath} ({d.secret.privateFileCount} withheld file)</dd>
+        <dt>Flux decryption binding</dt><dd>{d.secret.outerKustomization.namespace} / {d.secret.outerKustomization.name} using {d.secret.decryptionSecretName}</dd>
+        <dt>Restart effect</dt><dd>{d.secret.restartPolicy} · {d.secret.restartEffect}</dd>
+      </>}
     </dl>
-    <p>Existing claims and the named Secret are bootstrap prerequisites. This Plan does not provision or rotate their contents. A singleton upgrade can interrupt service; persistent claims are retained.</p>
+    <p>{d.secret?"The exact encrypted Secret file is withheld from this response and published only to private deployment Git. Flux performs decryption; this Plan cannot create or read the age identity.":"Existing claims and the named Secret are bootstrap prerequisites. This Plan does not provision or rotate their contents."} A singleton upgrade can interrupt service; persistent claims are retained.</p>
     {Object.entries(d.files ?? {}).sort(([a],[b])=>a.localeCompare(b)).map(([name,contents])=><details key={name}><summary>Exact generated {name}</summary><pre>{contents}</pre></details>)}
     {plan.deploymentStatus && <DeploymentObservation status={plan.deploymentStatus} />}
   </section>;

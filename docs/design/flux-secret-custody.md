@@ -1,9 +1,10 @@
 # Flux deployment-secret custody and recovery
 
 Status: merged repository contract for #162 under amended ADR-W050. Child A
-adds only the synthetic contract oracle and exact implementation-version pins
-below. This document does not create an age identity, decrypt a value, change
-a cluster, migrate a release, or authorize live secret rotation.
+pins the synthetic oracle and versions; Child B implements the opt-in private
+ciphertext projection and safe review boundary. Neither child creates an age
+identity, decrypts a value, changes a cluster, migrates a release, or
+authorizes live secret rotation.
 
 ## Scope
 
@@ -330,6 +331,9 @@ namespace cleanup must state their Secret/PVC consequences explicitly.
 - No decryption, live key, cluster change, or private deployment data.
 
 ### Child B — private encrypted projection
+
+Repository implementation status: implemented behind explicit
+`secretDelivery` bootstrap inventory; live enablement remains unapproved.
 
 - Split public-safe review files from private encrypted publication files.
 - Include the exact SOPS Secret in the private candidate tree and Kustomize

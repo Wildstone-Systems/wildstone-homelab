@@ -7,7 +7,7 @@
     "type": "Opaque"
   },
   "secretGeneration": 1,
-  "ciphertextRevision": "a4c86d74bfceed4e1c3272da512559b2abfe4b5884f41f4a23ed809cd0e9b75d",
+  "ciphertextRevision": "c2baf71fd6ec432cdf1289857c27d6bd17194b211a8c6604b05448f548173456",
   "recipientFingerprints": [
     "sha256:69973c046e1189c906ec7c4538d7cd48b14e3618f51064c9f74c151bcd0469ba"
   ],

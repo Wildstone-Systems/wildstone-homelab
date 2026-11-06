@@ -11,28 +11,57 @@ import (
 
 // DeploymentReview carries bounded non-secret exact review material. It holds
 // ordinary generated YAML and references, never bootstrap paths or credentials.
+type DeploymentSecretTarget struct {
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
+	Key       string `json:"key"`
+	Type      string `json:"type"`
+}
+
+type DeploymentSecretKustomization struct {
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
+}
+
+// DeploymentSecretReview is safe identity/version metadata only. It never
+// contains ciphertext, SOPS metadata, raw recipients, local paths or keys.
+type DeploymentSecretReview struct {
+	Validation            string                        `json:"validation"`
+	Target                DeploymentSecretTarget        `json:"target"`
+	SecretGeneration      uint64                        `json:"secretGeneration"`
+	CiphertextRevision    string                        `json:"ciphertextRevision"`
+	RecipientFingerprints []string                      `json:"recipientFingerprints"`
+	OutputPath            string                        `json:"outputPath"`
+	OuterKustomization    DeploymentSecretKustomization `json:"outerKustomization"`
+	DecryptionSecretName  string                        `json:"decryptionSecretName"`
+	RestartPolicy         string                        `json:"restartPolicy"`
+	RestartEffect         string                        `json:"restartEffect"`
+	PrivateFileCount      int                           `json:"privateFileCount"`
+}
+
 type DeploymentReview struct {
-	Instance                   string            `json:"instance"`
-	OperationID                string            `json:"operationId"`
-	PreviousProductRevision    string            `json:"previousProductRevision"`
-	ProductRevision            string            `json:"productRevision"`
-	ExpectedDeploymentRevision string            `json:"expectedDeploymentRevision"`
-	ProjectionDigest           string            `json:"projectionDigest"`
-	ProfileDigest              string            `json:"profileDigest"`
-	InventoryDigest            string            `json:"inventoryDigest"`
-	EncryptedSecretRevision    string            `json:"encryptedSecretRevision"`
-	Package                    string            `json:"package"`
-	PackageVersion             string            `json:"packageVersion"`
-	ChartSource                string            `json:"chartSource"`
-	ChartCommit                string            `json:"chartCommit"`
-	ChartPath                  string            `json:"chartPath"`
-	ChartVersion               string            `json:"chartVersion"`
-	Image                      string            `json:"image"`
-	Namespace                  string            `json:"namespace"`
-	Release                    string            `json:"release"`
-	Timezone                   string            `json:"timezone"`
-	DesiredResource            string            `json:"desiredResource"`
-	Files                      map[string]string `json:"files"`
+	Instance                   string                  `json:"instance"`
+	OperationID                string                  `json:"operationId"`
+	PreviousProductRevision    string                  `json:"previousProductRevision"`
+	ProductRevision            string                  `json:"productRevision"`
+	ExpectedDeploymentRevision string                  `json:"expectedDeploymentRevision"`
+	ProjectionDigest           string                  `json:"projectionDigest"`
+	ProfileDigest              string                  `json:"profileDigest"`
+	InventoryDigest            string                  `json:"inventoryDigest"`
+	EncryptedSecretRevision    string                  `json:"encryptedSecretRevision"`
+	Package                    string                  `json:"package"`
+	PackageVersion             string                  `json:"packageVersion"`
+	ChartSource                string                  `json:"chartSource"`
+	ChartCommit                string                  `json:"chartCommit"`
+	ChartPath                  string                  `json:"chartPath"`
+	ChartVersion               string                  `json:"chartVersion"`
+	Image                      string                  `json:"image"`
+	Namespace                  string                  `json:"namespace"`
+	Release                    string                  `json:"release"`
+	Timezone                   string                  `json:"timezone"`
+	DesiredResource            string                  `json:"desiredResource"`
+	Files                      map[string]string       `json:"files"`
+	Secret                     *DeploymentSecretReview `json:"secret,omitempty"`
 }
 
 func DecodeDeploymentPlan(raw string) (DeploymentPlanDocument, error) {

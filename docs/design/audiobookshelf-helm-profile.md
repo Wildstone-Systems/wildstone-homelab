@@ -20,15 +20,29 @@ The chart's optional root permissions init container recursively chowns app path
 
 `pkgspec.Package.Helm` records source URL, full commit, relative chart path, chart version and digest-pinned application image. Only the experimental Audiobookshelf mapping is supported. Reuse existing Package metadata, policies, parameter declaration and timezone validation; do not invent a second catalog or a general templating/plugin engine.
 
-`capability.Engine.ProjectHelm` accepts that profile, timezone, explicit namespace/release/reconciler/claim/secret bindings, encrypted-secret configuration digest and accepted product revision. It returns three standard files and a review digest:
+`capability.Engine.ProjectHelm` accepts that profile, timezone, explicit namespace/release/reconciler/claim/secret bindings, encrypted-secret configuration digest and accepted product revision. It returns three public-safe standard files and a review digest:
 
 - `source.yaml`: Flux GitRepository pinned to upstream commit, in the application namespace.
 - `release.yaml`: Flux HelmRelease referencing the chart path, scoped reconciler, pinned image and validated values.
-- `kustomization.yaml`: standard Kustomize file listing the source/release. The surrounding Flux Kustomization and its scoped ServiceAccount belong to reviewed bootstrap/publication configuration, not this ordinary app output.
+- `kustomization.yaml`: standard Kustomize file listing the source/release and, when the separately configured #162 path is enabled, the fixed private `secret.sops.yaml` resource. The surrounding Flux Kustomization, SOPS decryption reference and scoped ServiceAccount belong to reviewed bootstrap configuration, not this ordinary app output.
+
+The capability projector never receives ciphertext. The deployment manager
+holds it in a separate private-file set, verifies its exact digest and combines
+it with these three files only inside local Git publication. Managed-secret
+values include the deterministic Pod annotation
+`wildstone.dev/encrypted-secret-revision`; a ciphertext change therefore
+replaces the singleton Pod without exposing a plaintext hash, resourceVersion,
+clock or random input.
 
 For a Git source, immutable commit selection pins chart bytes; the declared chart version is inventory/review metadata and is verified against upstream Chart.yaml during integration validation. Flux's Git chart build does not enforce that version selector as an HTTP repository would. `reconcileStrategy: Revision` follows the pinned source revision.
 
-All three claims and the named Secret/key `jwt-secret` must already exist in the application namespace. The projector neither creates replacement empty claims nor obtains secret values. The supplied secret revision is a digest of encrypted configuration, not a plaintext secret hash. #257 must verify that revision and reconcile the secret provisioning sequence; supplying a digest here is not proof of current cluster contents.
+All three claims must already exist in the application namespace. With legacy
+bootstrap the named Secret/key `jwt-secret` must also pre-exist. With the
+opt-in #162 delivery inventory, private Git carries the exact SOPS document and
+Flux creates/reconciles that Secret; the chart still only references it and
+never creates, generates or deletes it. The supplied secret revision is a
+digest of encrypted configuration, not a plaintext secret hash or proof of
+successful decryption/current cluster contents.
 
 The caller supplies an accepted revision from the authoritative product snapshot, not arbitrary working-tree HEAD. Review digest binds the entire parsed Package, accepted revision, all bindings and exact file bytes. It is review material, never an authorization token. #257 must verify source authority and the digest before publishing; this API does not establish that the caller owns a named claim or namespace.
 
@@ -41,7 +55,7 @@ The profile lives only in `keystone/capability/testdata/audiobookshelf-helm.yaml
 | Deployment | Standard source/release files; singleton Recreate with declared interruption |
 | Configuration | Validated timezone; fixed private ClusterIP service, health probes and bounded resources; no arbitrary Helm values |
 | Storage | Distinct pre-existing config, metadata and writable media claims; UID/GID 1000 prerequisite; no automatic relocation |
-| Credentials | Named secret reference plus encrypted revision in review binding; no generated/loaded value |
+| Credentials | Named Secret reference plus encrypted revision/generation in review; optional exact SOPS ciphertext delivered privately for Flux, with no decryption/key access in Keystone |
 | Identity/exposure | Application-native authentication; no public ingress or forward-auth rule generated; native-client/OIDC integration deferred |
 | Backup/recovery | Contract required below; no backup Job or automated restore implemented by projection |
 | Agent API actions/events | Unsupported in this slice; chart installation grants no Agent tools |

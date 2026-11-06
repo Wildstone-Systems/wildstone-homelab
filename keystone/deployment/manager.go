@@ -95,12 +95,33 @@ func request(id string, doc runtimedb.DeploymentPlanDocument) publish.Deployment
 	for name, data := range r.Files {
 		files[name] = []byte(data)
 	}
-	return publish.DeploymentRequest{OperationID: r.OperationID, PlanID: id, AcceptedRevision: doc.Deployment.SourceRevision, ReviewDigest: r.ProjectionDigest, ExpectedRevision: r.ExpectedDeploymentRevision, Files: files}
+	var privateDigests map[string]string
+	if r.Secret != nil {
+		privateDigests = map[string]string{}
+		privateDigests[r.Secret.OutputPath] = r.Secret.CiphertextRevision
+	}
+	return publish.DeploymentRequest{OperationID: r.OperationID, PlanID: id, AcceptedRevision: doc.Deployment.SourceRevision, ReviewDigest: r.ProjectionDigest, ExpectedRevision: r.ExpectedDeploymentRevision, Files: files, PrivateFileDigests: privateDigests}
 }
 func review(s inputs, want resource.Resource, source, base, operation, expected string, p *capability.HelmProjection) *runtimedb.DeploymentReview {
 	raw, _ := resource.Marshal(want)
 	h := s.pkg.Helm
-	return &runtimedb.DeploymentReview{Instance: s.config.Instance, OperationID: operation, PreviousProductRevision: base, ProductRevision: source, ExpectedDeploymentRevision: expected, ProjectionDigest: p.Digest, ProfileDigest: s.profile, InventoryDigest: s.inventory, EncryptedSecretRevision: s.secret, Package: s.pkg.Metadata.Name, PackageVersion: s.pkg.Metadata.Version, ChartSource: h.SourceURL, ChartCommit: h.SourceCommit, ChartPath: h.ChartPath, ChartVersion: h.ChartVersion, Image: h.Image, Namespace: s.config.Bindings.Namespace, Release: s.config.Bindings.Name, Timezone: want.HelmDeployment.Timezone, DesiredResource: string(raw), Files: asFiles(p)}
+	result := &runtimedb.DeploymentReview{Instance: s.config.Instance, OperationID: operation, PreviousProductRevision: base, ProductRevision: source, ExpectedDeploymentRevision: expected, ProjectionDigest: p.Digest, ProfileDigest: s.profile, InventoryDigest: s.inventory, EncryptedSecretRevision: s.secret, Package: s.pkg.Metadata.Name, PackageVersion: s.pkg.Metadata.Version, ChartSource: h.SourceURL, ChartCommit: h.SourceCommit, ChartPath: h.ChartPath, ChartVersion: h.ChartVersion, Image: h.Image, Namespace: s.config.Bindings.Namespace, Release: s.config.Bindings.Name, Timezone: want.HelmDeployment.Timezone, DesiredResource: string(raw), Files: asFiles(p)}
+	if delivery := s.config.SecretDelivery; delivery != nil {
+		result.Secret = &runtimedb.DeploymentSecretReview{
+			Validation:            "encrypted-reference-validated",
+			Target:                runtimedb.DeploymentSecretTarget{Namespace: s.config.Bindings.Namespace, Name: s.config.Bindings.SecretName, Key: "jwt-secret", Type: s.secretInfo.secretType},
+			SecretGeneration:      delivery.Generation,
+			CiphertextRevision:    s.secret,
+			RecipientFingerprints: append([]string(nil), s.secretInfo.recipientFingerprints...),
+			OutputPath:            delivery.OutputPath,
+			OuterKustomization:    runtimedb.DeploymentSecretKustomization{Namespace: delivery.KustomizationNamespace, Name: delivery.KustomizationName},
+			DecryptionSecretName:  delivery.DecryptionSecretName,
+			RestartPolicy:         delivery.RestartPolicy,
+			RestartEffect:         "singleton-recreate-bounded-outage",
+			PrivateFileCount:      1,
+		}
+	}
+	return result
 }
 
 func (m *Manager) Propose(owner, instance, timezone string) (runtimedb.PlanRecord, error) {
@@ -148,6 +169,15 @@ func (m *Manager) Propose(owner, instance, timezone string) (runtimedb.PlanRecor
 	}
 	if expected != "" && !m.knownHead(instance, expected) {
 		return runtimedb.PlanRecord{}, fmt.Errorf("deployment: unreviewed local ref change; publication held")
+	}
+	if expected != "" {
+		previous, ok := m.reviewForHead(instance, expected)
+		if !ok {
+			return runtimedb.PlanRecord{}, fmt.Errorf("deployment: prior reviewed deployment unavailable")
+		}
+		if err := secretContinuity(s, previous); err != nil {
+			return runtimedb.PlanRecord{}, err
+		}
 	}
 	var random [16]byte
 	if _, err := rand.Read(random[:]); err != nil {
@@ -339,6 +369,7 @@ func (m *Manager) resumeOne(rec runtimedb.PlanRecord) {
 		note("blocked", "inputs_changed")
 		return
 	}
+	req.PrivateFiles = baseline.privateFiles()
 	p := &publish.DeploymentPublisher{Repo: m.repo, DB: m.DB, Gate: func(got publish.DeploymentRequest) error {
 		latest, err := m.DB.GetPlan(rec.ID)
 		if err != nil {
@@ -347,7 +378,9 @@ func (m *Manager) resumeOne(rec runtimedb.PlanRecord) {
 		if _, err := m.checkPlan(latest, false); err != nil {
 			return err
 		}
-		if !reflect.DeepEqual(req, got) {
+		expected := req
+		expected.PrivateFiles = nil
+		if !reflect.DeepEqual(expected, got) {
 			return fmt.Errorf("deployment: changed dispatcher input")
 		}
 		return nil
@@ -371,10 +404,15 @@ func (m *Manager) resumeOne(rec runtimedb.PlanRecord) {
 }
 
 func (m *Manager) knownHead(instance, head string) bool {
+	_, ok := m.reviewForHead(instance, head)
+	return ok
+}
+
+func (m *Manager) reviewForHead(instance, head string) (*runtimedb.DeploymentReview, bool) {
 	for _, state := range []runtimedb.PlanState{runtimedb.PlanApproved, runtimedb.PlanApplying, runtimedb.PlanApplied, runtimedb.PlanFailed, runtimedb.PlanSuperseded} {
 		records, err := m.DB.PlansInState(state)
 		if err != nil {
-			return false
+			return nil, false
 		}
 		for _, rec := range records {
 			doc, err := runtimedb.DecodeDeploymentPlan(rec.PlanJSON)
@@ -383,11 +421,28 @@ func (m *Manager) knownHead(instance, head string) bool {
 			}
 			row, err := m.DB.GetDeploymentPromotion(doc.Deployment.Review.OperationID)
 			if err == nil && row.CandidateRevision == head && row.Binding == doc.Deployment.Binding {
-				return true
+				return doc.Deployment.Review, true
 			}
 		}
 	}
-	return false
+	return nil, false
+}
+
+func secretContinuity(current inputs, previous *runtimedb.DeploymentReview) error {
+	if previous == nil {
+		return fmt.Errorf("deployment: prior Secret generation unavailable")
+	}
+	if previous.Secret == nil && current.config.SecretDelivery == nil {
+		return nil
+	}
+	if previous.Secret == nil || current.config.SecretDelivery == nil {
+		return fmt.Errorf("deployment: encrypted Secret delivery adoption/removal requires separate review")
+	}
+	generation := current.config.SecretDelivery.Generation
+	if generation < previous.Secret.SecretGeneration || (generation > previous.Secret.SecretGeneration && current.secret == previous.Secret.CiphertextRevision) {
+		return fmt.Errorf("deployment: invalid encrypted Secret generation continuity")
+	}
+	return nil
 }
 
 func (m *Manager) Revoke(id, owner string) error {
