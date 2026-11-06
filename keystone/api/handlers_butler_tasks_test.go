@@ -261,16 +261,16 @@ func adultsGroupID(t *testing.T, h *harness) string {
 // the shape of what happened and none of its content.
 func TestReviewedFailureBecomesAnEvaluation(t *testing.T) {
 	h := newHarness(t)
-	h.person("root-admin")
+	actor := h.console(runtimedb.RoleAdmin, "root-admin")
 	id := seedTracedTask(t, h, "root-admin", runtimedb.ButlerAudiencePrivate)
 
 	// First the human judgement.
-	if res := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/butler/tasks/"+id+"/feedback",
+	if res := h.doToken(actor, http.MethodPost, "/api/v1/butler/tasks/"+id+"/feedback",
 		map[string]any{"label": "stale-read", "note": "it answered from a reading taken an hour earlier"}, nil,
 	); res.StatusCode != http.StatusOK {
 		t.Fatalf("feedback = %d", res.StatusCode)
 	}
-	if res := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/butler/tasks/"+id+"/feedback",
+	if res := h.doToken(actor, http.MethodPost, "/api/v1/butler/tasks/"+id+"/feedback",
 		map[string]any{"label": "it felt wrong"}, nil,
 	); res.StatusCode != http.StatusBadRequest {
 		t.Fatalf("a free-text label = %d, want 400", res.StatusCode)
@@ -280,7 +280,7 @@ func TestReviewedFailureBecomesAnEvaluation(t *testing.T) {
 	var made struct {
 		Name string `json:"name"`
 	}
-	res := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/butler/tasks/"+id+"/evaluation",
+	res := h.doToken(actor, http.MethodPost, "/api/v1/butler/tasks/"+id+"/evaluation",
 		map[string]any{
 			"name":             "photos-stale-health-read",
 			"expected":         "it re-reads immich-server's health rather than answering from the earlier reading",
@@ -320,13 +320,13 @@ func TestReviewedFailureBecomesAnEvaluation(t *testing.T) {
 	}
 	// An expectation is required: a fixture the model writes for itself
 	// checks nothing.
-	if res := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/butler/tasks/"+id+"/evaluation",
+	if res := h.doToken(actor, http.MethodPost, "/api/v1/butler/tasks/"+id+"/evaluation",
 		map[string]any{"name": "no-expectation", "expected": "  "}, nil,
 	); res.StatusCode != http.StatusBadRequest {
 		t.Fatalf("an evaluation with no expectation = %d, want 400", res.StatusCode)
 	}
 	// And names are unique, so a report naming one check means one check.
-	if res := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/butler/tasks/"+id+"/evaluation",
+	if res := h.doToken(actor, http.MethodPost, "/api/v1/butler/tasks/"+id+"/evaluation",
 		map[string]any{"name": "photos-stale-health-read", "expected": "something else"}, nil,
 	); res.StatusCode != http.StatusBadRequest {
 		t.Fatalf("a duplicate evaluation name = %d, want 400", res.StatusCode)
@@ -336,22 +336,22 @@ func TestReviewedFailureBecomesAnEvaluation(t *testing.T) {
 // Debug capture is explicit, scoped, bounded, and visible.
 func TestDebugCaptureIsBoundedAndVisible(t *testing.T) {
 	h := newHarness(t)
-	h.person("root-admin")
+	actor := h.console(runtimedb.RoleAdmin, "root-admin")
 	id := seedTracedTask(t, h, "root-admin", runtimedb.ButlerAudiencePrivate)
 
-	if res := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/butler/tasks/"+id+"/debug",
+	if res := h.doToken(actor, http.MethodPost, "/api/v1/butler/tasks/"+id+"/debug",
 		map[string]any{"reason": "intermittent stale read", "minutes": 30}, nil,
 	); res.StatusCode != http.StatusOK {
 		t.Fatalf("enable debug = %d", res.StatusCode)
 	}
 	// No reason means no capture: "why is this on" must have an answer.
-	if res := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/butler/tasks/"+id+"/debug",
+	if res := h.doToken(actor, http.MethodPost, "/api/v1/butler/tasks/"+id+"/debug",
 		map[string]any{"minutes": 30}, nil,
 	); res.StatusCode != http.StatusBadRequest {
 		t.Fatalf("debug capture with no reason = %d, want 400", res.StatusCode)
 	}
 	// There is no "until further notice".
-	if res := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/butler/tasks/"+id+"/debug",
+	if res := h.doToken(actor, http.MethodPost, "/api/v1/butler/tasks/"+id+"/debug",
 		map[string]any{"reason": "forever please", "minutes": 60 * 24 * 30}, nil,
 	); res.StatusCode != http.StatusBadRequest {
 		t.Fatalf("an unbounded debug window = %d, want 400", res.StatusCode)

@@ -723,34 +723,34 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/butler/tools", s.handle(principal.VerbRead, s.listButlerToolControls))
 	mux.Handle("PUT /api/v1/butler/tools", s.handle(principal.VerbManage, s.setButlerToolControl))
 	mux.Handle("GET /api/v1/butler/grants", s.handle(principal.VerbRead, s.listButlerGrants))
-	mux.Handle("POST /api/v1/butler/grants", s.handle(principal.VerbManage, s.grantButlerTool))
-	mux.Handle("POST /api/v1/butler/grants/revoke", s.handle(principal.VerbManage, s.revokeButlerGrant))
+	mux.Handle("POST /api/v1/butler/grants", s.handle(principal.VerbManage, personHandler(s.grantButlerTool)))
+	mux.Handle("POST /api/v1/butler/grants/revoke", s.handle(principal.VerbManage, personHandler(s.revokeButlerGrant)))
 	mux.Handle("GET /api/v1/butler/requests", s.handle(principal.VerbRead, s.listCapabilityRequests))
 	// Asking needs only read: a request grants nothing, and requiring
 	// manage to ask would mean only the people who can already enable a
 	// tool could request one (ADR-W030 A7).
-	mux.Handle("POST /api/v1/butler/requests", s.handle(principal.VerbRead, s.fileCapabilityRequest))
-	mux.Handle("POST /api/v1/butler/requests/decide", s.handle(principal.VerbManage, s.decideCapabilityRequest))
+	mux.Handle("POST /api/v1/butler/requests", s.handle(principal.VerbRead, personHandler(s.fileCapabilityRequest)))
+	mux.Handle("POST /api/v1/butler/requests/decide", s.handle(principal.VerbManage, personHandler(s.decideCapabilityRequest)))
 	mux.Handle("GET /api/v1/butler/members", s.handle(principal.VerbRead, s.listButlerMembers))
 	mux.Handle("POST /api/v1/butler/members", s.handle(principal.VerbManage, s.recordButlerMember))
 	mux.Handle("POST /api/v1/butler/members/{member}/admit", s.handle(principal.VerbManage, s.admitButlerMember))
 	mux.Handle("POST /api/v1/butler/members/{member}/demote", s.handle(principal.VerbManage, s.consequential(s.demoteButlerMember)))
 	mux.Handle("POST /api/v1/butler/members/{member}/disable", s.handle(principal.VerbManage, s.consequential(s.disableButlerMember)))
-	mux.Handle("POST /api/v1/butler/members/{member}/offboard", s.handle(principal.VerbManage, s.consequential(s.offboardButlerMember)))
+	mux.Handle("POST /api/v1/butler/members/{member}/offboard", s.handle(principal.VerbManage, personHandler(s.consequential(s.offboardButlerMember))))
 	mux.Handle("POST /api/v1/butler/members/{member}/links", s.handle(principal.VerbManage, s.linkButlerIdentity))
 	mux.Handle("POST /api/v1/butler/links/revoke", s.handle(principal.VerbManage, s.unlinkButlerIdentity))
-	mux.Handle("POST /api/v1/butler/conversations", s.handle(principal.VerbRead, s.startButlerConversation))
-	mux.Handle("POST /api/v1/butler/conversations/{id}/handoff", s.handle(principal.VerbRead, s.handoffButlerConversation))
+	mux.Handle("POST /api/v1/butler/conversations", s.handle(principal.VerbRead, personHandler(s.startButlerConversation)))
+	mux.Handle("POST /api/v1/butler/conversations/{id}/handoff", s.handle(principal.VerbRead, personHandler(s.handoffButlerConversation)))
 	mux.Handle("GET /api/v1/butler/tasks", s.handle(principal.VerbRead, s.listButlerTasks))
 	mux.Handle("GET /api/v1/butler/tasks/{id}", s.handle(principal.VerbRead, s.getButlerTask))
-	mux.Handle("POST /api/v1/butler/tasks/{id}/feedback", s.handle(principal.VerbRead, s.addButlerTaskFeedback))
-	mux.Handle("POST /api/v1/butler/tasks/{id}/evaluation", s.handle(principal.VerbManage, s.exportButlerEvaluation))
-	mux.Handle("POST /api/v1/butler/tasks/{id}/debug", s.handle(principal.VerbManage, s.enableButlerDebugCapture))
-	mux.Handle("POST /api/v1/butler/tasks/{id}/cancel", s.handle(principal.VerbManage, s.cancelButlerTask))
-	mux.Handle("POST /api/v1/butler/tasks/{id}/work-review", s.handle(principal.VerbApprove, s.reviewConversationWork))
+	mux.Handle("POST /api/v1/butler/tasks/{id}/feedback", s.handle(principal.VerbRead, personHandler(s.addButlerTaskFeedback)))
+	mux.Handle("POST /api/v1/butler/tasks/{id}/evaluation", s.handle(principal.VerbManage, personHandler(s.exportButlerEvaluation)))
+	mux.Handle("POST /api/v1/butler/tasks/{id}/debug", s.handle(principal.VerbManage, personHandler(s.enableButlerDebugCapture)))
+	mux.Handle("POST /api/v1/butler/tasks/{id}/cancel", s.handle(principal.VerbManage, personHandler(s.cancelButlerTask)))
+	mux.Handle("POST /api/v1/butler/tasks/{id}/work-review", s.handle(principal.VerbApprove, personHandler(s.reviewConversationWork)))
 	mux.Handle("GET /api/v1/butler/evaluations", s.handle(principal.VerbRead, s.listButlerEvaluations))
 	mux.Handle("GET /api/v1/butler/debug", s.handle(principal.VerbRead, s.listButlerDebugCaptures))
-	mux.Handle("POST /api/v1/butler/members/{member}/offboarding", s.handle(principal.VerbManage, s.consequential(s.offboardMember)))
+	mux.Handle("POST /api/v1/butler/members/{member}/offboarding", s.handle(principal.VerbManage, personHandler(s.consequential(s.offboardMember))))
 	mux.Handle("GET /api/v1/butler/members/{member}/offboarding", s.handle(principal.VerbRead, s.getOffboarding))
 	mux.Handle("GET /api/v1/restore", s.handle(principal.VerbRead, s.getRestoreState))
 	mux.Handle("POST /api/v1/restore/quarantine", s.handle(principal.VerbManage, s.consequential(s.enterRestoreQuarantine)))
@@ -853,7 +853,7 @@ func (s *Server) Handler() http.Handler {
 	// ceiling: this one takes it from the named Butler rather than from
 	// the door, which is the only correct answer for a caller who holds
 	// both surfaces.
-	mux.Handle("POST /api/v1/butlers/{name}/ask", s.handle(principal.VerbRead, s.askOneButler))
+	mux.Handle("POST /api/v1/butlers/{name}/ask", s.handle(principal.VerbRead, personHandler(s.askOneButler)))
 	// Dictation in the Console: sound to text for the text box, the same
 	// verb and the same Butler resolution as asking (ADR-W042).
 	mux.Handle("POST /api/v1/butlers/{name}/transcribe", s.handle(principal.VerbRead, s.transcribeForButler))
@@ -867,7 +867,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/butler/models/{name}/enabled", s.handle(principal.VerbManage, s.setModelEnabled))
 	mux.Handle("GET /api/v1/butler/settings", s.handle(principal.VerbManage, s.getButlerSettings))
 	mux.Handle("PUT /api/v1/butler/settings", s.handle(principal.VerbManage, s.setButlerSettings))
-	mux.Handle("POST /api/v1/butler/ask", s.handle(principal.VerbRead, s.askButler))
+	mux.Handle("POST /api/v1/butler/ask", s.handle(principal.VerbRead, personHandler(s.askButler)))
 	mux.Handle("GET /api/v1/butler/sessions", s.handle(principal.VerbRead, s.listButlerSessions))
 	// The coordinator lease (ADR-W030 A11). Reading it is `read`
 	// because an operator diagnosing a Butler that has gone quiet needs
@@ -881,7 +881,7 @@ func (s *Server) Handler() http.Handler {
 	// A follow-up carries the read verb like the first question does:
 	// conversing is not a write. The surface it runs on comes from the
 	// stored session, never from this request (ADR-W027).
-	mux.Handle("POST /api/v1/butler/sessions/{id}/ask", s.handle(principal.VerbRead, s.continueButlerSession))
+	mux.Handle("POST /api/v1/butler/sessions/{id}/ask", s.handle(principal.VerbRead, personHandler(s.continueButlerSession)))
 
 	// The family surface (ADR-W026 A1): a sibling route, not a mode of
 	// the operator's. Same read verb — talking is not a write — with a
@@ -1107,8 +1107,8 @@ func (s *Server) Handler() http.Handler {
 	// rather than naming one (portalAsset).
 	mux.Handle("GET /portal/{dir}/{name}", s.portalAsset(s.portalAssetFile))
 
-	mux.Handle("GET /api/v1/household/butler", s.handle(principal.VerbRead, s.getHouseholdButlerStatus))
-	mux.Handle("POST /api/v1/household/butler/ask", s.handle(principal.VerbRead, s.askHouseholdButler))
+	mux.Handle("GET /api/v1/household/butler", s.handle(principal.VerbRead, personHandler(s.getHouseholdButlerStatus)))
+	mux.Handle("POST /api/v1/household/butler/ask", s.handle(principal.VerbRead, personHandler(s.askHouseholdButler)))
 
 	// The Agent API over HTTP (ADR-W039 Phase 2c, #337; ADR-W040 §2–§3):
 	// the identical keystone/agentgateway.Gateway methods a native
@@ -1165,6 +1165,21 @@ func (s *Server) handle(verb principal.Verb, h handlerFunc) http.Handler {
 		}
 		return body, status, err
 	})
+}
+
+// personHandler marks a route whose operation is authored by a Person.
+// Authentication has already resolved ActingFor to one current canonical
+// Person. A machine principal may still inspect the administrative surfaces
+// deliberately left on handle, but it cannot create Person-scoped work by
+// falling back to its own principal name.
+func personHandler(h handlerFunc) handlerFunc {
+	return func(r *http.Request, id principal.Identity) (any, int, error) {
+		if id.ActingFor == "" {
+			return nil, http.StatusForbidden,
+				fmt.Errorf("this Agent operation requires an authenticated canonical Person")
+		}
+		return h(r, id)
+	}
 }
 
 // handleResponse retains the same authentication/RBAC/rate/audit chain for
@@ -1322,6 +1337,10 @@ func (s *Server) authenticate(r *http.Request) (principal.Identity, bool, error)
 			if err != nil {
 				return principal.Identity{}, false, err
 			}
+			id, ok := s.canonicalActingPerson(id)
+			if !ok {
+				return principal.Identity{}, false, nil
+			}
 			*r = *r.WithContext(oauthresource.WithRequestAuth(r.Context(), auth))
 			return id, true, nil
 		}
@@ -1329,12 +1348,17 @@ func (s *Server) authenticate(r *http.Request) (principal.Identity, bool, error)
 		if err != nil {
 			return principal.Identity{}, false, nil
 		}
-		if !s.actingPersonMayStillHold(id) {
+		id, ok := s.canonicalActingPerson(id)
+		if !ok {
 			return principal.Identity{}, false, nil
 		}
 		return id, true, nil
 	}
 	id, ok := s.consoleForwardAuth(r)
+	if !ok {
+		return principal.Identity{}, false, nil
+	}
+	id, ok = s.canonicalActingPerson(id)
 	return id, ok, nil
 }
 
@@ -1394,9 +1418,11 @@ func (s *Server) oauthProtectedResourceMetadata(w http.ResponseWriter, r *http.R
 	})
 }
 
-// actingPersonMayStillHold re-derives the standing of the PERSON a token
-// acts for, on every request (design §3.2, §10.1; §18.1 "Demoting an
-// Owner immediately invalidates Console access/session").
+// canonicalActingPerson derives the one Person a request is for and rewrites
+// ActingFor to that Person's stored handle. This is the sole derivation used
+// by authenticated public-plane handlers and their audit row. The principal
+// name remains untouched, so a Console identity, linked API principal, and
+// runtime credential never collapse into the same authenticating identity.
 //
 // A token is minted once and then presented. Authenticate asks whether
 // it was revoked, whether it expired, and whether its principal is
@@ -1413,14 +1439,13 @@ func (s *Server) oauthProtectedResourceMetadata(w http.ResponseWriter, r *http.R
 // of that seam, unconditionally, on the one path every authenticated
 // request passes through.
 //
-// Two deliberate limits:
+// Two deliberate boundaries:
 //
-//   - A token's name with no Person behind it passes. Tokens are the
-//     installer's and the host's path, and Person records are created
-//     through an API that lives behind this check, so refusing here would
-//     leave the installer no way to create the first Owner (§2.4). The
-//     Console's own door has no such exception: it refuses a forwarded
-//     name with no Person record (forwardedUserMayHoldConsole).
+//   - A credential with no ActingFor value remains a machine identity. The
+//     installer and host can therefore bootstrap the first Owner, while
+//     personHandler prevents that machine identity from authoring Agent work.
+//     A non-empty ActingFor value is different: it claims a Person and must
+//     resolve uniquely and currently or authentication fails closed.
 //   - Only the CONSOLE's own role requires Owner. RoleAdmin is what
 //     consoleForwardAuth mints, so a RoleAdmin token is the Console's
 //     authority in another wrapper and is held to the Console's rule.
@@ -1435,61 +1460,34 @@ func (s *Server) oauthProtectedResourceMetadata(w http.ResponseWriter, r *http.R
 // Offboarding somebody stops their chat reach as surely as their
 // Console, and a concierge acting for a Member must keep working while
 // they are active — that is what a family Butler is.
-func (s *Server) actingPersonMayStillHold(id principal.Identity) bool {
-	// ActingFor, not actingMember(id), and the difference is a real gap
-	// that belongs to another slice.
-	//
-	// actingMember falls back to the principal's own NAME when a token
-	// acts for nobody, so a machine principal named after a person's
-	// handle writes their memory and their work under them. Checking
-	// that name here would revoke such a credential — but it would do it
-	// by treating a `principals` row and a `butler_members` row as the
-	// same person because they share a string, which merges the two
-	// registries decision 6 of #201 keeps apart. `root-admin` the
-	// credential and `root-admin` the household member are not the same
-	// subject, and a name collision must not make them one.
-	//
-	// The real defect is the fallback itself: a machine principal's name
-	// is not a person handle, and every actingMember call site inherits
-	// that. Narrowing the legacy machine axis is #210, which is where it
-	// can be fixed once rather than papered over here.
+func (s *Server) canonicalActingPerson(id principal.Identity) (principal.Identity, bool) {
 	if id.ActingFor == "" {
-		return true
+		return id, true
 	}
-	// Case-insensitively, and for the same reason the Console door is:
-	// handles are compared exactly everywhere else, so an exact lookup
-	// would miss the Person whenever a different capitalisation was
-	// recorded and fall into the permissive "no record" branch — turning
-	// a data-hygiene defect into a way to keep a revoked credential.
-	people, err := s.DB.ButlerMembersByHandleFold(id.ActingFor)
-	if err != nil {
+	// An exact current handle already names one canonical Person, including
+	// when a distinct Person has a case-differing handle. Only an inexact
+	// claim needs case-fold inference; that inference must find exactly one
+	// record or it is ambiguous and fails closed.
+	m, err := s.DB.GetButlerMember(id.ActingFor)
+	if errors.Is(err, runtimedb.ErrNotFound) {
+		people, foldErr := s.DB.ButlerMembersByHandleFold(id.ActingFor)
+		if foldErr != nil || len(people) != 1 {
+			return principal.Identity{}, false
+		}
+		m = people[0]
+	} else if err != nil {
 		// A lookup that failed is not a lookup that passed.
-		return false
-	}
-	if len(people) == 0 {
-		// No Person of that name, so there is no lifecycle to check.
-		// This is the ordinary case for a machine credential —
-		// root-admin, an adapter, the node agent — and it must stay
-		// permissive: resolving "names nobody" to "refused" would fail
-		// the whole control plane closed. It is NOT the Console door's
-		// rule, which refuses an unknown name once the household has an
-		// Owner; a forwarded human identity and a machine credential are
-		// different questions.
-		return true
+		return principal.Identity{}, false
 	}
 	console := id.Role == runtimedb.RoleAdmin
-	// Every match must qualify. With two records differing only by case
-	// there is no way to tell which one was meant, and an authorization
-	// check that guesses is not a check.
-	for _, m := range people {
-		if !m.Active() {
-			return false
-		}
-		if console && m.Role != runtimedb.RoleOwner {
-			return false
-		}
+	if !m.Active() {
+		return principal.Identity{}, false
 	}
-	return true
+	if console && m.Role != runtimedb.RoleOwner {
+		return principal.Identity{}, false
+	}
+	id.ActingFor = m.Member
+	return id, true
 }
 
 // writeJSON is the ONLY response encoder on the public plane: it redacts

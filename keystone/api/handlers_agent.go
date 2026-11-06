@@ -603,7 +603,11 @@ func (s *Server) runtimeRequestCredential(r *http.Request, expected principal.Id
 	}
 	secret := strings.TrimSpace(strings.TrimPrefix(auth, scheme))
 	id, err := s.Principals.Authenticate(secret)
-	if err != nil || id.Name != expected.Name || id.Role != expected.Role || id.ActingFor != expected.ActingFor {
+	if err != nil {
+		return runtimedb.RuntimeDeliveryCredential{}, principal.ErrUnauthenticated
+	}
+	id, ok := s.canonicalActingPerson(id)
+	if !ok || id.Name != expected.Name || id.Role != expected.Role || id.ActingFor != expected.ActingFor {
 		return runtimedb.RuntimeDeliveryCredential{}, principal.ErrUnauthenticated
 	}
 	hash, err := principal.TokenHash(secret)
