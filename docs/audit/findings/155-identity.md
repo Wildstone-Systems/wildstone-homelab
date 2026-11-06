@@ -419,7 +419,7 @@ to someone who no longer has authority.
 ### F-155-15 — two derivations of "who is asking" in the same server
 
 - **Current status:** implemented
-- **Current evidence:** `keystone/api/api.go:canonicalActingPerson` resolves every authenticated `ActingFor` claim to one active Person before handlers run; `personHandler` rejects Person-authored Agent operations that lack that binding. `keystone/api/handlers_butler_person_test.go:TestConsoleAndLinkedAPIPrincipalUseOneCanonicalActingPerson` proves Console and linked API principals author the same sessions, tasks, and feedback while audit rows retain distinct principals. The adjacent regressions refuse bare-machine impersonation and unknown or ambiguous Person claims.
+- **Current evidence:** `keystone/api/api.go:canonicalActingPerson` resolves every authenticated `ActingFor` claim to one active Person before handlers run; `personHandler` rejects Person-authored Agent operations that lack that binding, including capability requests and decisions. `runtimeRequestCredential` repeats the same derivation at the static delivery poll/ack boundary. `TestConsoleAndLinkedAPIPrincipalUseOneCanonicalActingPerson`, `TestCapabilityRequestPermissionsAndSeparation`, and `TestDeliveryReauthenticationUsesTheCanonicalActingPerson` prove canonical attribution while audit rows retain distinct principals. The adjacent regressions refuse bare-machine impersonation and unknown or ambiguous Person claims.
 - **Current owner:** chickenrat17
 - **Tracking:** #306
 - **Audit status:** implemented
