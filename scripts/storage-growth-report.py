@@ -132,7 +132,9 @@ class Collector:
             return None
         return result.stdout
 
-    def optional_command(self, argv: list[str]) -> str | None:
+    def optional_command(
+        self, argv: list[str], error_code: str
+    ) -> tuple[str | None, bool]:
         """Run a lookup where a nonzero result means the object is absent."""
         try:
             result = subprocess.run(
@@ -144,8 +146,9 @@ class Collector:
                 timeout=30,
             )
         except (OSError, subprocess.TimeoutExpired):
-            return None
-        return result.stdout if result.returncode == 0 else None
+            self.errors.append(error_code)
+            return None, False
+        return (result.stdout, True) if result.returncode == 0 else (None, True)
 
     @staticmethod
     def nonempty_lines(output: str) -> list[str]:
@@ -240,10 +243,13 @@ class Collector:
                 else:
                     references.add(self.nonempty_lines(image_id)[0])
         for image_ref in protected_refs:
-            image_id = self.optional_command(
+            image_id, lookup_ok = self.optional_command(
                 [*DOCKER, "image", "inspect", "--format", "{{.Id}}", image_ref],
+                "docker_protected_image_reference_failed",
             )
-            if image_id is None:
+            if not lookup_ok:
+                references_ok = False
+            elif image_id is None:
                 continue
             elif len(self.nonempty_lines(image_id)) == 1:
                 references.add(self.nonempty_lines(image_id)[0])

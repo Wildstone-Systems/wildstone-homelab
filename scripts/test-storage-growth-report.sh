@@ -176,6 +176,24 @@ status=0
 run_report "$output" DOCKER_MODE=protected-multiline || status=$?
 [[ $status == 1 ]]
 assert_report "$output" 'r["status"] == "partial" and "docker_protected_image_reference_malformed" in r["errors"] and r["runtime"]["docker"]["unreferencedImageCount"] is None'
+"$python_bin" - "$script_dir/storage-growth-report.py" <<'PY'
+import importlib.util
+import sys
+from unittest import mock
+
+spec = importlib.util.spec_from_file_location("storage_growth_report", sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+collector = object.__new__(module.Collector)
+collector.errors = []
+with mock.patch.object(module.subprocess, "run", side_effect=OSError("private-path")):
+    output, lookup_ok = collector.optional_command(
+        ["docker", "image", "inspect", "private-reference"],
+        "docker_protected_image_reference_failed",
+    )
+assert output is None and not lookup_ok
+assert collector.errors == ["docker_protected_image_reference_failed"]
+PY
 reset_root
 touch "$root/run/k3s/containerd/containerd.sock"
 mkdir -p "$root/var/lib/rancher/k3s/agent/containerd/io.containerd.content.v1.content"
@@ -184,15 +202,23 @@ run_report "$output" CTR_MODE=malformed || status=$?
 [[ $status == 1 ]]
 assert_report "$output" 'r["status"] == "partial" and "containerd_container_reference_malformed" in r["errors"]'
 
-# Invalid configuration is rejected without echoing the supplied value.
+# Invalid configuration is rejected with fixed codes and never echoes values.
+for setting in RETENTION_DAYS=not-a-number RETENTION_DAYS=0; do
+  status=0
+  run_report "$output" "$setting" || status=$?
+  [[ $status == 2 ]]
+  assert_report "$output" 'r == {"schemaVersion": 1, "status": "error", "error": "retention_days_invalid"} and "not-a-number" not in str(r)'
+done
 status=0
-run_report "$output" RETENTION_DAYS=not-a-number || status=$?
+run_report "$output" MIN_FREE_BYTES=private-example-value || status=$?
 [[ $status == 2 ]]
-assert_report "$output" 'r == {"schemaVersion": 1, "status": "error", "error": "retention_days_invalid"}'
-status=0
-run_report "$output" REPORT_TIMESTAMP=private-example-value || status=$?
-[[ $status == 2 ]]
-assert_report "$output" 'r == {"schemaVersion": 1, "status": "error", "error": "report_timestamp_invalid"} and "private-example-value" not in str(r)'
+assert_report "$output" 'r == {"schemaVersion": 1, "status": "error", "error": "min_free_bytes_invalid"} and "private-example-value" not in str(r)'
+for timestamp in private-example-value 2026-11-06T00:00:00; do
+  status=0
+  run_report "$output" REPORT_TIMESTAMP="$timestamp" || status=$?
+  [[ $status == 2 ]]
+  assert_report "$output" 'r == {"schemaVersion": 1, "status": "error", "error": "report_timestamp_invalid"} and "private-example-value" not in str(r)'
+done
 
 unit_dir="$script_dir/../packaging/host-logging"
 timer_target=$(sed -n 's/^Unit=//p' "$unit_dir/storage-growth-report.timer")
@@ -205,4 +231,4 @@ if grep -Eiq '^Exec(Start|StartPre|StartPost)=.*(delete|prune|remove|rm )' \
   exit 1
 fi
 
-echo 'storage-growth-report: 11 offline scenarios passed'
+echo 'storage-growth-report: 16 offline scenarios passed'
