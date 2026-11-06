@@ -142,7 +142,7 @@ func TestUnknownOrAmbiguousActingPersonFailsAuthentication(t *testing.T) {
 	h.person("mika", "Mika")
 	for name, actingFor := range map[string]string{
 		"missing-person":   "nobody",
-		"ambiguous-person": "mika",
+		"ambiguous-person": "MIKA",
 	} {
 		if err := h.s.Principals.Create(name, runtimedb.RoleOperator, actingFor); err != nil {
 			t.Fatal(err)

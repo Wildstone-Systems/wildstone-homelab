@@ -1464,21 +1464,22 @@ func (s *Server) canonicalActingPerson(id principal.Identity) (principal.Identit
 	if id.ActingFor == "" {
 		return id, true
 	}
-	// Case-insensitively, and for the same reason the Console door is: a
-	// different forwarded capitalization must resolve to the stored handle,
-	// while two case-distinct records are ambiguous and therefore denied.
-	people, err := s.DB.ButlerMembersByHandleFold(id.ActingFor)
-	if err != nil {
+	// An exact current handle already names one canonical Person, including
+	// when a distinct Person has a case-differing handle. Only an inexact
+	// claim needs case-fold inference; that inference must find exactly one
+	// record or it is ambiguous and fails closed.
+	m, err := s.DB.GetButlerMember(id.ActingFor)
+	if errors.Is(err, runtimedb.ErrNotFound) {
+		people, foldErr := s.DB.ButlerMembersByHandleFold(id.ActingFor)
+		if foldErr != nil || len(people) != 1 {
+			return principal.Identity{}, false
+		}
+		m = people[0]
+	} else if err != nil {
 		// A lookup that failed is not a lookup that passed.
 		return principal.Identity{}, false
 	}
-	if len(people) != 1 {
-		// Missing and case-ambiguous names are both non-identities. Exact
-		// principal-name equality is never used as a fallback.
-		return principal.Identity{}, false
-	}
 	console := id.Role == runtimedb.RoleAdmin
-	m := people[0]
 	if !m.Active() {
 		return principal.Identity{}, false
 	}
