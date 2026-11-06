@@ -188,7 +188,7 @@ func (h *harness) console(role runtimedb.Role, handle string) string {
 		h.person(handle)
 	}
 	h.nextPersonPrincipal++
-	name := fmt.Sprintf("fixture-person-%d", h.nextPersonPrincipal)
+	name := fixturePersonPrincipal(h.nextPersonPrincipal)
 	if err := h.s.Principals.Create(name, role, handle); err != nil {
 		h.t.Fatalf("creating a %s principal acting for %q: %v", role, handle, err)
 	}
@@ -200,6 +200,10 @@ func (h *harness) console(role runtimedb.Role, handle string) string {
 		h.t.Fatalf("minting a %s token acting for %q: %v", role, handle, err)
 	}
 	return tok
+}
+
+func fixturePersonPrincipal(sequence int) string {
+	return fmt.Sprintf("fixture-person-%d", sequence)
 }
 
 func principalNameFor(t *testing.T, role runtimedb.Role) string {

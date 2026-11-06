@@ -141,6 +141,7 @@ func TestAPIPrincipalGenerationFencesOldSessionAndTask(t *testing.T) {
 	h.wireHouseholdButler(answerTurns("first", "new generation"), runtimedb.ButlerModeFull)
 	h.bindAccount(t, "family", "mika", "telegram", "synthetic-account")
 	token := h.console(runtimedb.RoleOperator, "mika")
+	apiPrincipal := fixturePersonPrincipal(h.nextPersonPrincipal)
 
 	var first askResponse
 	if res := h.doToken(token, http.MethodPost, "/api/v1/household/butler/ask",
@@ -167,7 +168,7 @@ func TestAPIPrincipalGenerationFencesOldSessionAndTask(t *testing.T) {
 	ledger := butlerstore.New(h.s.DB, lease)
 	ledger.DerivedAuthorityChecks()
 
-	if err := h.s.DB.RevokeSurfaceLink(runtimedb.LinkAPIPrincipal, "fixture-person-1", "root-admin"); err != nil {
+	if err := h.s.DB.RevokeSurfaceLink(runtimedb.LinkAPIPrincipal, apiPrincipal, "root-admin"); err != nil {
 		t.Fatal(err)
 	}
 	if res := h.doToken(token, http.MethodPost, "/api/v1/household/butler/ask",
@@ -184,7 +185,7 @@ func TestAPIPrincipalGenerationFencesOldSessionAndTask(t *testing.T) {
 	if err := h.s.DB.AdmitButlerMember("mika", "root-admin"); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.s.DB.LinkSurfaceIdentity(runtimedb.LinkAPIPrincipal, "fixture-person-1", "mika", "root-admin"); err != nil {
+	if err := h.s.DB.LinkSurfaceIdentity(runtimedb.LinkAPIPrincipal, apiPrincipal, "mika", "root-admin"); err != nil {
 		t.Fatal(err)
 	}
 	if res := h.doToken(token, http.MethodPost, "/api/v1/household/butler/ask",
