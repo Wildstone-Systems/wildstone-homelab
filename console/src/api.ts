@@ -85,6 +85,13 @@ export interface DeploymentReview {
   inventoryDigest: string; encryptedSecretRevision: string; package: string; packageVersion: string;
   chartSource: string; chartCommit: string; chartPath: string; chartVersion: string; image: string;
   namespace: string; release: string; timezone: string; desiredResource: string; files: Record<string,string>;
+  secret?: {
+    validation: "encrypted-reference-validated";
+    target: {namespace:string;name:string;key:"jwt-secret";type:"Opaque"};
+    secretGeneration:number; ciphertextRevision:string; recipientFingerprints:string[]; outputPath:"secret.sops.yaml";
+    outerKustomization:{namespace:string;name:string}; decryptionSecretName:string;
+    restartPolicy:"recreate-on-ciphertext-revision"; restartEffect:"singleton-recreate-bounded-outage"; privateFileCount:1;
+  };
 }
 export interface DeploymentStatus {
   phase:string; detail:string; attemptCode?:string; productRevision:string; preparedRevision?:string;

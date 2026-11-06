@@ -1,0 +1,23 @@
+{
+  "validation": "encrypted-reference-validated",
+  "target": {
+    "namespace": "example-app",
+    "name": "example-jwt",
+    "key": "jwt-secret",
+    "type": "Opaque"
+  },
+  "secretGeneration": 1,
+  "ciphertextRevision": "c2baf71fd6ec432cdf1289857c27d6bd17194b211a8c6604b05448f548173456",
+  "recipientFingerprints": [
+    "sha256:69973c046e1189c906ec7c4538d7cd48b14e3618f51064c9f74c151bcd0469ba"
+  ],
+  "outputPath": "secret.sops.yaml",
+  "outerKustomization": {
+    "namespace": "example-flux",
+    "name": "example-app"
+  },
+  "decryptionSecretName": "example-age-identity",
+  "restartPolicy": "recreate-on-ciphertext-revision",
+  "restartEffect": "singleton-recreate-bounded-outage",
+  "privateFileCount": 1
+}
