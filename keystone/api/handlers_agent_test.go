@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -688,6 +689,37 @@ func TestDeliveryClientIsByteIdenticalInProcessAndOverHTTP(t *testing.T) {
 	conformance.Compare(t, targetA, targetB, func(t *testing.T, target conformance.Target) any {
 		return runDeliveryScript(t, target)
 	})
+}
+
+func TestDeliveryReauthenticationUsesTheCanonicalActingPerson(t *testing.T) {
+	h, _ := agentEnvHarness(t)
+	createAgent(t, h, "alfred")
+	cred := rotate(t, h, "alfred", nil)
+	token, err := h.s.Principals.Mint(cred.CredentialRef, "MIKA", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := h.s.DB.GetButler("alfred")
+	if err != nil {
+		t.Fatal(err)
+	}
+	deliveryID, err := h.s.DB.RecordAgentDelivery(b.Seq, agentapi.DeliveryProposalOutcome,
+		`{"plan":"p-1","outcome":"approved"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var deliveries deliveriesResponse
+	if res := h.doToken(token, http.MethodGet, "/api/v1/agent/deliveries", nil, &deliveries); res.StatusCode != http.StatusOK {
+		t.Fatalf("delivery poll = %d, want 200", res.StatusCode)
+	}
+	if len(deliveries.Deliveries) != 1 || deliveries.Deliveries[0].ID != fmt.Sprintf("%d", deliveryID) {
+		t.Fatalf("deliveries = %+v, want delivery %d", deliveries.Deliveries, deliveryID)
+	}
+	if res := h.doToken(token, http.MethodPost,
+		fmt.Sprintf("/api/v1/agent/deliveries/%d/ack", deliveryID), nil, nil); res.StatusCode != http.StatusOK {
+		t.Fatalf("delivery ack = %d, want 200", res.StatusCode)
+	}
 }
 
 // newTestHTTPServer starts s.Handler() and returns its base URL,

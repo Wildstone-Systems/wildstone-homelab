@@ -36,15 +36,21 @@ func TestEnablingAToolAProfileLacksSaysSo(t *testing.T) {
 // request does not enable anything.
 func TestCapabilityRequestPermissionsAndSeparation(t *testing.T) {
 	h := newHarness(t)
+	requester := h.console(runtimedb.RoleOperator, "sam")
+	owner := h.console(runtimedb.RoleAdmin, "mika")
 
 	var filed struct {
 		Seq int64 `json:"seq"`
 	}
-	if res := h.do(runtimedb.RoleOperator, http.MethodPost, "/api/v1/butler/requests",
-		map[string]any{
-			"kind": "supported-tool", "agentClass": "owner", "tool": "get_calendar",
-			"description": "to answer what is on today",
-		}, &filed,
+	body := map[string]any{
+		"kind": "supported-tool", "agentClass": "owner", "tool": "get_calendar",
+		"description": "to answer what is on today",
+	}
+	if res := h.do(runtimedb.RoleOperator, http.MethodPost, "/api/v1/butler/requests", body, nil); res.StatusCode != http.StatusForbidden {
+		t.Fatalf("a machine operator filed a Person request: %d", res.StatusCode)
+	}
+	if res := h.doToken(requester, http.MethodPost, "/api/v1/butler/requests",
+		body, &filed,
 	); res.StatusCode != http.StatusOK {
 		t.Fatalf("an operator could not file a request: %d", res.StatusCode)
 	}
@@ -58,12 +64,24 @@ func TestCapabilityRequestPermissionsAndSeparation(t *testing.T) {
 		Note string `json:"note"`
 	}
 	if res := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/butler/requests/decide",
+		map[string]any{"seq": filed.Seq, "state": "approved", "note": "reasonable"}, nil,
+	); res.StatusCode != http.StatusForbidden {
+		t.Fatalf("a machine administrator decided a Person request: %d", res.StatusCode)
+	}
+	if res := h.doToken(owner, http.MethodPost, "/api/v1/butler/requests/decide",
 		map[string]any{"seq": filed.Seq, "state": "approved", "note": "reasonable"}, &decided,
 	); res.StatusCode != http.StatusOK {
 		t.Fatalf("decide = %d", res.StatusCode)
 	}
 	if !strings.Contains(decided.Note, "does not enable") {
 		t.Fatalf("approving did not say it enables nothing: %q", decided.Note)
+	}
+	requests, err := h.s.DB.ListCapabilityRequests("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(requests) != 1 || requests[0].RequestedBy != "sam" || requests[0].DecidedBy != "mika" {
+		t.Fatalf("capability request attribution = %+v, want sam then mika", requests)
 	}
 	// The tool control is still absent — approving recorded a decision
 	// and changed no authority.
