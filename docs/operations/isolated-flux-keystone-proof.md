@@ -1,9 +1,12 @@
 # Isolated Flux-managed Keystone proof
 
-Status: accepted synthetic operational evidence for #317 under #166 on
-2026-11-05. This is a sanitized record. Private deployment identifiers,
-credentials, source refs, endpoint details, claim/PV identities, and retained
-evidence hashes are intentionally absent.
+Status: accepted Gate 1 and Gate 2a synthetic operational evidence for #317
+under #166 on 2026-11-05, plus a completed reversible source-change/rollback
+exercise on 2026-11-06. The Owner accepted that exercise for #317 closeout
+with the Helm history-retention limitation disclosed below. This is a
+sanitized record. Private
+deployment identifiers, credentials, source refs, endpoint details, claim/PV
+identities, and retained evidence hashes are intentionally absent.
 
 ## Scope and tested artifacts
 
@@ -92,23 +95,52 @@ The retained private record contains the exact source revision, rendered and
 controller-normalized objects, events, object identities, evidence hashes, and
 timestamps. It is not public deployment configuration.
 
-## Deliberately untested and unclaimed
+## Reversible source change and rollback
 
-The Owner accepted the install, replacement, continuity, and fail-closed
-results while explicitly excluding source revision change/rollback, Flux
-suspension, uninstall, deletion, fault injection, and cleanup. Those actions
-were not performed. In particular, #317's proposed reversible source-change
-and rollback check remains unproven and requires a new exact-action approval.
+Under a separate exact-action approval, one fast-forward source commit added a
+single non-secret Pod-template annotation. Both private source refs moved by
+compare-and-swap; no ref was force-pushed or rewound. Flux selected the exact
+forward revision, then rollback repinned the GitRepository to the accepted
+baseline ancestor while leaving the branch forward.
+
+The forward and rollback paths each converged through the GitRepository,
+Kustomization, and HelmRelease to the exact reviewed revision and observed
+generation. Each replaced only the singleton Recreate Pod. After both
+transitions, retained Jobs proved API and Console usability, earlier runtime
+markers, rejection of the disabled synthetic credential, stable hostname and
+coordinator holder, unchanged epoch, and one runtime writer. Final values and
+rendered objects returned to the exact baseline.
+
+Flux's independently reconciling source, Kustomize, and Helm controllers
+produced multiple ordered Helm history entries for each Git transition. Every
+manifest and values diff was inspected. Intermediate states changed only the
+revision-derived chart label or the one approved annotation; no unreviewed
+tree, chart, value, or object appeared.
+
+The HelmRelease did not set `spec.maxHistory`, so helm-controller retained its
+default five records. The additional controller entries reached release
+revision six and automatically rotated out the initial release-metadata
+Secret. No explicit delete or cleanup command was issued. The current release
+manifest and config digest equal the recorded baseline; the evidence PVC,
+continuity Jobs, source evidence, and recorded initial identity remain. This
+does mean the preflight expectation that every existing Helm metadata object
+would remain present was not met. Do not represent the exercise as preserving
+unbounded Helm history, and set/review a suitable `maxHistory` before a future
+proof that requires every Helm release record to remain live.
+
+## Deliberately unclaimed
 
 The minimal fixture exposed a coordinator epoch but did not exercise a stale
 writer or receipt-fencing transition. Repository evidence from #287 remains
 the applicable receipt and stale-epoch evidence; this exercise does not extend
 that claim.
 
-All proof resources and evidence remain retained pending a separate Owner
-decision. This same-node synthetic result establishes only isolated Flux
-reconciliation, replacement, runtime-data continuity, synthetic credential
-revocation continuity, singleton ownership, and fail-closed missing-input
-behavior. It does not establish off-host recovery, secret custody, adoption of
-an existing release, household migration, new-write-preserving rollback, or
-high availability. Those remain under #162, #163, #168, and #180.
+All Owner-retained proof Jobs, probes, claims, PV-backed evidence, and source
+evidence remain; the bounded Helm-history rotation is disclosed above. This
+same-node synthetic result establishes only isolated Flux reconciliation,
+replacement, reversible source selection, runtime-data continuity, synthetic
+credential revocation continuity, singleton ownership, and fail-closed
+missing-input behavior. It does not establish off-host recovery, secret
+custody, adoption of an existing release, household migration,
+new-write-preserving application rollback, or high availability. Those remain
+under #162, #163, #168, and #180.
