@@ -52,6 +52,50 @@ configuration and mount-fallback checks. These use fake commands and do not
 change host state. Monitor the service result and the timer's last
 successful run from outside the VM. Also monitor NAS capacity and backup age.
 
+## Weekly storage growth report
+
+Install `scripts/storage-growth-report.py` as
+`/usr/local/libexec/wildstone-storage-growth-report`. Install
+`packaging/host-logging/storage-growth-report.service` and its timer under
+`/etc/systemd/system/`, and install the root-owned
+`storage-growth.protected-images` file under `/etc/wildstone/`. Add every
+image used by a scheduled job to that file as an immutable reference. The
+pinned Restic image is protected in the collector as well as in the shipped
+file. After `systemctl daemon-reload`, enable the weekly sample with
+`systemctl enable --now storage-growth-report.timer`.
+
+The service writes one JSON object to the journal for each sample. It records
+the UTC collection time, root free-space state, runtime presence, allocated
+bytes for Docker metadata/snapshot storage, containerd content/snapshot
+storage, Docker named volumes, logs, and fixed build/tool caches. Docker also
+reports the sum of each unique image's logical size. Compare matching fields
+between samples to attribute growth. The category totals deliberately overlap:
+logical image, content, snapshot, and runtime totals must not be added together
+as if they were independent disk usage. An absent runtime or path is reported
+as `not_present`; a missing
+binary beside runtime storage, unreadable path, failed command, or malformed
+reference inventory makes the report `partial` and the service exits nonzero.
+No incomplete reference scan reports an unreferenced-image count.
+
+`candidates` is a dry-run review list, not a deletion request. It can contain
+only aggregate entries for the four fixed disposable caches built into the
+collector: `/var/cache/apt/archives`, `/var/cache/wildstone/build`,
+`/var/cache/wildstone/go-build`, and `/var/cache/wildstone/tools`. Each entry
+has allocated bytes, retention age, and reason. The report never contains
+named volumes, images, snapshots, logs, arbitrary paths, filenames, image
+references, command output, or environment values. Low free space does not
+delete anything. Runtime image counts are informational and are never cleanup
+candidates. Any future mutation requires a separate human-approved Plan slice.
+
+Review the report locally before sharing it even though its schema excludes
+hostnames, addresses, usernames, home paths, and runtime references. The
+repository fixtures are synthetic; they are not evidence that the report ran
+on a household host. Representative-host collection and verification that
+services and scheduled backups remain healthy are owner-operated acceptance
+steps retained on issue #136. Run
+`bash scripts/test-storage-growth-report.sh` for the offline Docker-only,
+containerd-only, coexistence, absent-runtime, failure, and privacy fixtures.
+
 ## Backup and restore evidence
 
 Inspect the backup ledger for successful runs at each plan's declared

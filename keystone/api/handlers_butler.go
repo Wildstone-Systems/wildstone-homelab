@@ -233,10 +233,27 @@ func (s *Server) askButler(r *http.Request, id principal.Identity) (any, int, er
 		return nil, st, err
 	}
 	if s.butlersConfigured() {
+		linked, err := s.resolveRequestSurface(id)
+		if err != nil {
+			return nil, http.StatusForbidden, runtimedb.ErrNotAdmitted
+		}
+		r = r.WithContext(withSurfaceGeneration(r.Context(), linked.Generation))
 		// The person the caller acts for, as below — a turn is had by a
 		// Person (ADR-W033 B10), and this branch used the credential's
 		// own name while the one below it did not.
 		return s.askNamedButler(r.Context(), message, named, actingMember(id), actingAsOwner(id), nil)
+	}
+	// Preserve the established unconfigured response: a deployment with no
+	// Butler has no live dispatch boundary to authenticate. The runner takes
+	// the authoritative snapshot again; this read only decides whether there
+	// is a surface whose canonical link must be resolved.
+	provider, gateway, _, _, _ := s.ButlerHost.Current()
+	if provider != nil && gateway != nil {
+		linked, err := s.resolveRequestSurface(id)
+		if err != nil {
+			return nil, http.StatusForbidden, runtimedb.ErrNotAdmitted
+		}
+		r = r.WithContext(withSurfaceGeneration(r.Context(), linked.Generation))
 	}
 	// The unconfigured check lives in the session runner, with the one
 	// snapshot it takes — checking here as well would read the backend
@@ -285,6 +302,11 @@ func (s *Server) askOneButler(r *http.Request, id principal.Identity) (any, int,
 		return nil, http.StatusServiceUnavailable,
 			fmt.Errorf("no butler is configured on this deployment")
 	}
+	linked, err := s.resolveRequestSurface(id)
+	if err != nil {
+		return nil, http.StatusForbidden, runtimedb.ErrNotAdmitted
+	}
+	r = r.WithContext(withSurfaceGeneration(r.Context(), linked.Generation))
 	return s.runNamedButlerSession(r.Context(), butlerlive.Turn{
 		Butler: name,
 		// The person the caller acts for, not the credential's own
@@ -369,6 +391,11 @@ func (s *Server) continueButlerSession(r *http.Request, id principal.Identity) (
 	if err != nil {
 		return nil, st, err
 	}
+	linked, err := s.resolveRequestSurface(id)
+	if err != nil {
+		return nil, http.StatusForbidden, runtimedb.ErrNotAdmitted
+	}
+	r = r.WithContext(withSurfaceGeneration(r.Context(), linked.Generation))
 	sess, err := s.DB.GetButlerSession(r.PathValue("id"))
 	if errors.Is(err, runtimedb.ErrNotFound) {
 		return nil, http.StatusNotFound, fmt.Errorf("butler session not found")

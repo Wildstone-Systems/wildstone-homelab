@@ -243,6 +243,12 @@ func (s *Server) assistantAsk(_ http.ResponseWriter, r *http.Request, member str
 	case s.DB == nil:
 		return nil, http.StatusServiceUnavailable, fmt.Errorf("no assistant is configured on this deployment")
 	}
+	linked, err := s.DB.ResolveSurfaceIdentity(runtimedb.LinkTrustedIngress,
+		strings.TrimSpace(r.Header.Get(TrustedIngressHeader)))
+	if err != nil || linked.Member != member {
+		return nil, http.StatusForbidden, runtimedb.ErrNotAdmitted
+	}
+	r = r.WithContext(withSurfaceGeneration(r.Context(), linked.Generation))
 
 	var prior *turnContext
 	agent := strings.TrimSpace(req.Agent)

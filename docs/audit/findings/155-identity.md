@@ -98,7 +98,7 @@ database and the harness scripts were deleted afterwards.
 | R15 | §16 | Re-check the destination before sending if audience or membership changed | missing | The reply is rendered and queued at answer time and delivered with no re-check (F-155-09, observed end to end); a thread keeps its history when its audience changes (F-155-18) |
 | R16 | §16 | Revocation: pause affected work, end its grants | implemented | `runtimedb/offboarding.go:96-140` — personal work pauses, shared transfers keeping its author, task grants revoked; `TestOffboardingReportsPerStore` |
 | R17 | §16 | Revocation: invalidate cached private context and outstanding approvals | partial | Private memory is quarantined and notices stopped (`runtimedb/offboarding.go:176-197`); bearer tokens of linked principals are revoked (F-155-07); queued replies (F-155-09) and proposed plans (F-155-14) survive, and a model round in flight retries after the pause (F-155-20) |
-| R18 | §16 | Revocation lands at the next check rather than at a cache expiry | partial | True on the chat path at each slice and each round (binding revoked *and* admission rechecked); not between a model round's retries (F-155-20); the link-generation mechanism designed for this is unwired (F-155-08) and the Console path checks neither (F-155-05) |
+| R18 | §16 | Revocation lands at the next check rather than at a cache expiry | partial | Current Person-link generations now fence API-principal, trusted-ingress, chat-binding, task, session, and delivery boundaries (F-155-08); model-round retry behavior remains tracked by F-155-20 and the broader Console authorization gap by F-155-05. |
 | R19 | §18 | Person-specific enforcement for adults, children, guests and operators reaching the same Butler | missing | Enforcement is per Butler and per surface. The only per-person decision is whether the person may open a session at all (F-155-01, F-155-03) |
 
 ## Acceptance criteria
@@ -270,26 +270,14 @@ worth flagging as more than a missing line: it tells the operator
 exactly which stores were settled, and a reader has no reason to suspect
 a ninth.
 
-### F-155-08 — the A2.1 link-generation check is wired for one of its three link types
+### F-155-08 — the A2.1 link-generation check is wired for all live identity surfaces
 
-- **Current status:** open
-- **Current evidence:** The live link-generation paths need a three-type authorization regression, beyond the original single-link check.
+- **Current status:** implemented
+- **Current evidence:** `ResolveSurfaceIdentity` now gates API-principal and trusted-ingress Butler retrieval/dispatch; `ResolveChatBinding` gates chat ingress; the admitted generation is carried by durable tasks, sessions and queued deliveries and rechecked before model/tool dispatch and publication. `TestEveryLiveSurfaceLinkUsesTheCurrentGeneration`, `TestAPIPrincipalGenerationFencesOldSessionAndTask`, `TestDashboardAssistantRequiresCurrentTrustedIngressLink`, `TestGenerationIsRecheckedAfterModelBeforePublication`, and `TestQueuedChatReplyCannotBorrowANewerBindingGeneration` cover positive, revoke, re-admit, late-revoke, and delivery cases.
 - **Current owner:** chickenrat17
-- **Tracking:** #316
-- **Audit status:** missing
-- **Audit evidence:** `keystone/runtimedb/butleridentity.go:354-386` — `ResolveSurfaceIdentity`, "the call A2.1 means by *check current membership and link generation at every retrieval and dispatch*… meant to be made every time, not cached". Its only caller outside `runtimedb` is `api/handlers_household_review.go:286`, with `LinkTrustedIngress`. `ResolveChatBinding` (`:388-391`), the convenience wrapper for the chat case, has **no** callers outside `runtimedb` — only `runtimedb/butleridentity_test.go:74,98,110`. `LinkAPIPrincipal` is never resolved anywhere.
-
-The chat path instead re-derives the person from `chat_bindings.identity`
-(`api/handlers_chat_message.go:209`), and revocation happens to land
-because `LookupChatBinding` filters `revoked_at = ''`
-(`runtimedb/chatbindings.go:181`) and `ResolveButlerFor` rechecks
-`Active()`. So the *outcome* is right on that path and the designed
-mechanism is not the reason for it. The generation counter — the part
-that makes re-admission a new decision rather than an undo
-(`butleridentity.go:110-114`) — is never consulted on any live path.
-
-Marked `missing` rather than `implemented` per the README: the mechanism
-exists, its callers are tests, and one live route uses a third of it.
+- **Tracking:** #305
+- **Audit status:** implemented
+- **Audit evidence:** `keystone/api/surface_identity.go`, `handlers_butler*.go`, `handlers_portal_assistant.go`, and `handlers_chat_message.go` resolve the current canonical link at the live doors. `keystone/butlerstore/butlerstore.go`, `runtimedb/butlersessions.go`, `sessioncontinuity.go`, `sessionrevocation.go`, and `chatoutbound.go` compare the admitted generation at later retrieval, dispatch, continuation, poll, and pre-send boundaries. Migration `0120_butler_task_identity_generation.sql` preserves existing valid task/session/delivery generations and projects existing human-established chat bindings without name inference.
 
 ### F-155-09 — a queued reply is delivered after the person is revoked
 

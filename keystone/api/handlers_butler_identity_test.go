@@ -5,10 +5,14 @@ package api
 // unlinked, disabled and household-only identities fail closed.
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"testing"
 	"time"
 
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/butlerlive"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/butlerstore"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/runtimedb"
 )
 
@@ -129,5 +133,96 @@ func TestButlerCannotAdmitAnyone(t *testing.T) {
 		if res.StatusCode != http.StatusForbidden {
 			t.Fatalf("butler POST %s = %d, want 403", tc.path, res.StatusCode)
 		}
+	}
+}
+
+func TestAPIPrincipalGenerationFencesOldSessionAndTask(t *testing.T) {
+	h := newHarness(t)
+	h.wireHouseholdButler(answerTurns("first", "new generation"), runtimedb.ButlerModeFull)
+	h.bindAccount(t, "family", "mika", "telegram", "synthetic-account")
+	token := h.console(runtimedb.RoleOperator, "mika")
+
+	var first askResponse
+	if res := h.doToken(token, http.MethodPost, "/api/v1/household/butler/ask",
+		map[string]string{"message": "hello"}, &first); res.StatusCode != http.StatusOK {
+		t.Fatalf("first ask = %d", res.StatusCode)
+	}
+	member, err := h.s.DB.GetButlerMember("mika")
+	if err != nil {
+		t.Fatal(err)
+	}
+	taskID, err := h.s.DB.InsertButlerTask(runtimedb.ButlerTask{
+		Kind: runtimedb.ButlerTaskConversation, Author: "mika", Owner: "mika",
+		IdentityGeneration: member.Generation, Surface: runtimedb.ButlerSurfaceFamily,
+		AgentClass: runtimedb.AgentClassMember, Audience: runtimedb.ButlerAudiencePrivate,
+		OriginConnection: "console", Objective: "synthetic identity fence",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease, err := h.s.DB.AcquireCoordinator("api-effect-fixture")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ledger := butlerstore.New(h.s.DB, lease)
+	ledger.DerivedAuthorityChecks()
+
+	if err := h.s.DB.RevokeSurfaceLink(runtimedb.LinkAPIPrincipal, "fixture-person-1", "root-admin"); err != nil {
+		t.Fatal(err)
+	}
+	if res := h.doToken(token, http.MethodPost, "/api/v1/household/butler/ask",
+		map[string]string{"message": "stale"}, nil); res.StatusCode != http.StatusForbidden {
+		t.Fatalf("revoked API link dispatched = %d", res.StatusCode)
+	}
+	if err := h.s.DB.ButlerSessionActive(first.SessionID); !errors.Is(err, runtimedb.ErrSessionRevoked) {
+		t.Fatalf("old session stayed active: %v", err)
+	}
+	if err := ledger.Authorize(taskID); !errors.Is(err, butlerstore.ErrAuthorityWithdrawn) {
+		t.Fatalf("old task kept authority: %v", err)
+	}
+
+	if err := h.s.DB.AdmitButlerMember("mika", "root-admin"); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.s.DB.LinkSurfaceIdentity(runtimedb.LinkAPIPrincipal, "fixture-person-1", "mika", "root-admin"); err != nil {
+		t.Fatal(err)
+	}
+	if res := h.doToken(token, http.MethodPost, "/api/v1/household/butler/ask",
+		map[string]string{"message": "fresh"}, nil); res.StatusCode != http.StatusOK {
+		t.Fatalf("current generation ask = %d", res.StatusCode)
+	}
+	if err := ledger.Authorize(taskID); !errors.Is(err, butlerstore.ErrAuthorityWithdrawn) {
+		t.Fatalf("re-admission revived old task: %v", err)
+	}
+}
+
+type revokingSurfaceButlers struct {
+	db       *runtimedb.DB
+	external string
+}
+
+func (b *revokingSurfaceButlers) Any() (bool, error) { return true, nil }
+func (b *revokingSurfaceButlers) Sole(runtimedb.ButlerSurface, string, bool) (runtimedb.Butler, error) {
+	return b.db.GetButler("sandy")
+}
+func (b *revokingSurfaceButlers) Serve(context.Context, butlerlive.Turn) (butlerlive.Answer, error) {
+	if err := b.db.RevokeSurfaceLink(runtimedb.LinkAPIPrincipal, b.external, "root-admin"); err != nil {
+		return butlerlive.Answer{}, err
+	}
+	return butlerlive.Answer{Butler: "sandy", Surface: runtimedb.ButlerSurfaceFamily,
+		Provider: "synthetic", FinalText: "must not be published"}, nil
+}
+
+func TestGenerationIsRecheckedAfterModelBeforePublication(t *testing.T) {
+	h := newHarness(t)
+	h.bindAccount(t, "family", "sam", "telegram", "synthetic-account")
+	token := h.console(runtimedb.RoleOperator, "sam")
+	h.s.Butlers = &revokingSurfaceButlers{db: h.s.DB, external: "fixture-person-1"}
+	if res := h.doToken(token, http.MethodPost, "/api/v1/household/butler/ask",
+		map[string]string{"message": "revoke during model call"}, nil); res.StatusCode != http.StatusForbidden {
+		t.Fatalf("late-revoked answer published = %d", res.StatusCode)
+	}
+	if sessions, err := h.s.DB.ListButlerSessions(10, runtimedb.ButlerSessionFilter{ActingFor: "sam"}); err != nil || len(sessions) != 0 {
+		t.Fatalf("late-revoked turn persisted: %+v err=%v", sessions, err)
 	}
 }

@@ -94,7 +94,9 @@ func (s *Server) consoleForwardAuth(r *http.Request) (principal.Identity, bool) 
 	// ActingFor carries the person as well as Name so every audit row,
 	// every Butler grant and every plan approval reads their directory
 	// account rather than a shared administrator.
-	return principal.Identity{Name: user, Role: runtimedb.RoleAdmin, ActingFor: user, AuthTime: &at}, true
+	return principal.Identity{Name: user, Role: runtimedb.RoleAdmin, ActingFor: user, AuthTime: &at,
+		SurfaceLinkType: runtimedb.LinkTrustedIngress, SurfaceExternalID: user,
+	}, true
 }
 
 // forwardedUserMayHoldConsole refuses a forwarded identity the household
