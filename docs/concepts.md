@@ -6,6 +6,17 @@ section cites the ADR that decided it. Reviewed 2026-10-22 against
 for shared terms and [documentation review](design/documentation-refresh-2026-10-22.md)
 for evidence and limits. Proposed placement/contract semantics are not runtime guarantees.
 
+> [!NOTE]
+> **This describes the shipped runtime, which is being replaced.** Sections on
+> the reconciler, Wardstone container execution, Docker ports and Caddy routes
+> describe what releases run today. The amended [ADR-W050](decisions/ADR-W050-multi-node-runtime-kubernetes-engine-host-providers-editions.md)
+> (2026-11-01) hands application scheduling to Kubernetes (K3s), deployment to
+> Flux and upstream Helm charts, and ingress to Traefik. The Statefile, Plans,
+> approval, policy and the shared public API stay. Wardstone narrows to typed
+> host operations and is not an application reconciler. Working code remains
+> until its replacement is proven; see the [migration plan](design/w050-migration-plan.md) and
+> [Where this is heading](#where-this-is-heading).
+
 ## Desired state lives in the Statefile
 
 The **Statefile** is a git-backed store of typed resources
@@ -629,8 +640,8 @@ physical node or a claim of high availability. Multiple guests may share one
 physical failure domain. The installer does not provision the guests.
 
 [ADR-W051](decisions/ADR-W051-failure-domains-and-recovery.md)
-proposes independent management and packages as recovery groups, under the
-accepted [ADR-W050](decisions/ADR-W050-multi-node-runtime-kubernetes-engine-host-providers-editions.md) runtime. The
+proposes independent management and packages as recovery groups, on the
+amended ADR-W050 platform described below. The
 [Application Management Contract 0.1](design/application-management-contract-v0.1.md)
 proposes common operational facets; it complements existing package traits
 and service-domain adapters. Both remain drafts. A provider manages approved
@@ -693,3 +704,26 @@ tell "this is fine" from "this is broken".
 
 Choosing nothing is the resting state, and it renders as Wildstone's own
 look: the household's hue, through the stylesheets that already ship.
+
+## Where this is heading
+
+The amended [ADR-W050](decisions/ADR-W050-multi-node-runtime-kubernetes-engine-host-providers-editions.md) changes who does what. In short:
+
+| Job | Today | Direction |
+|---|---|---|
+| Run and schedule apps | Keystone reconciler + Wardstone on Docker | Kubernetes (K3s) |
+| Deploy approved changes | Reconciler converges nodes | Flux reads a locally promoted Git ref |
+| Package apps | Wildstone packages | Pinned upstream Helm charts, added in curated waves |
+| Ingress | Caddy fragments | Traefik |
+| Identity | Existing identity packages | Authelia + LLDAP |
+| Deployment secrets | Scoped credential boundaries | SOPS/age with Flux (runtime credentials unchanged) |
+| Host tasks | Wardstone | Wardstone, narrowed to typed host operations |
+
+What stays the same: the Statefile is canonical product input, changes go
+through Plans and human approval, agents cannot approve or apply
+infrastructure Plans, Console/CLI/Butler share one public API, and
+deployment configuration stays local to the installation. Status, readiness
+and errors are explained from Flux and Kubernetes observations. Owners may
+also use Flux, Helm and kubectl directly; Wildstone reports divergence
+rather than overwriting it. See the [migration plan](design/w050-migration-plan.md) for what is
+done and what remains.

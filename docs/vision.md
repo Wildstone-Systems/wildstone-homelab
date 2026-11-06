@@ -69,10 +69,27 @@ should not also remove every way to diagnose it. Keep management small,
 resource ownership explicit, and application data recoverable with keys and
 instructions that survive the lost host.
 
+## Built on established tools
+
+Wildstone is a small household platform composed of established services,
+not a replacement for them. Under the amended [ADR-W050](decisions/ADR-W050-multi-node-runtime-kubernetes-engine-host-providers-editions.md)
+(2026-11-01), Kubernetes (K3s) runs and schedules applications, Flux and
+upstream Helm charts deploy them, and Traefik, Authelia/LLDAP, SOPS and
+Restic cover ingress, identity, deployment secrets and backups. Wildstone
+provides what those tools do not: guided setup, a curated household
+experience, approval of changes, application integrations and clear
+explanations of what happened. It does not build a second scheduler,
+chart renderer or storage engine.
+
+Configuration stays home too. Each installation keeps its Statefile,
+deployment repository, settings and secrets on local storage; Flux reads
+approved output from a local Git ref. No GitHub account, external Git
+remote or cloud publication service is required. This transition is in
+progress; see the [migration plan](design/w050-migration-plan.md).
+
 [ADR-W051](decisions/ADR-W051-failure-domains-and-recovery.md)
-proposes independent management and packages as recovery groups, on the
-runtime of the accepted [ADR-W050](decisions/ADR-W050-multi-node-runtime-kubernetes-engine-host-providers-editions.md):
-one model from one machine to several, with no cluster required to start. The [management contract](design/application-management-contract-v0.1.md)
+proposes independent management and packages as recovery groups on that
+platform: one model from one machine to several, with no cluster required to start. The [management contract](design/application-management-contract-v0.1.md)
 proposes consistent semantics across hosting environments, using existing
 packages and traits rather than a second integration model.
 
@@ -95,7 +112,7 @@ restart dependencies on the actual installation.
    each deployment must also verify its data, keys and application restore procedure.
 5. **Coordinate, don't colonize.** Wildstone manages what it created
    and never deletes what it didn't. It composes the self-hosted
-   ecosystem; it does not replace it.
+   ecosystem and established infrastructure tools; it does not replace them.
 6. **No dark patterns, ever.** No ads, no attention engineering, no
    growth hooks, no pressure. The product is quiet infrastructure that
    serves the household and otherwise stays out of the way.
