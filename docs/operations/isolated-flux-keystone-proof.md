@@ -2,8 +2,9 @@
 
 Status: accepted Gate 1 and Gate 2a synthetic operational evidence for #317
 under #166 on 2026-11-05, plus a completed reversible source-change/rollback
-exercise on 2026-11-06. Closeout of the latter remains subject to the Helm
-history-retention limitation below. This is a sanitized record. Private
+exercise on 2026-11-06. The Owner accepted that exercise for #317 closeout
+with the Helm history-retention limitation disclosed below. This is a
+sanitized record. Private
 deployment identifiers, credentials, source refs, endpoint details, claim/PV
 identities, and retained evidence hashes are intentionally absent.
 
