@@ -354,6 +354,14 @@ type ButlerSessionFilter struct {
 	// list beneath a heading that says it is their history. Over-reading
 	// only moves the number at which that happens.
 	ActingFor string
+	// PersonID is the canonical identity for a Person-facing inventory.
+	// ActingFor remains the exact-label fallback only for rows written before
+	// sessions carried structural Person identity.
+	PersonID string
+	// ScopeAgents applies current Agent admission before LIMIT. Structural
+	// Agent IDs are authoritative; the name join is only for legacy rows that
+	// predate that stamp.
+	ScopeAgents bool
 }
 
 // ListButlerSessions returns the newest limit sessions matching the
@@ -375,16 +383,27 @@ func (db *DB) ListButlerSessions(limit int, f ButlerSessionFilter) ([]ButlerSess
 		clauses = append(clauses, "butler = ?")
 		args = append(args, f.Butler)
 	}
-	if f.ActingFor != "" {
-		// NOCASE, because the household has one Sandy however she
-		// signed in (ADR-W032 A4) and the door admits her either way:
-		// the proxy asserting a different capitalisation would leave
-		// her authenticated and her own conversations invisible. Every
-		// other reader of a member name compares this way; a predicate
-		// that did not would be the one place the household had two of
-		// her.
+	if f.PersonID != "" {
+		// A canonical Person makes the legacy fallback exact. Case-distinct
+		// handles can name different People until ADR-W032 A4's migration is
+		// built, so folding here would disclose one Person's unstamped history
+		// to the other.
+		clauses = append(clauses, "(person_id = ? OR (person_id IS NULL AND acting_for = ?))")
+		args = append(args, f.PersonID, f.ActingFor)
+	} else if f.ActingFor != "" {
+		// The legacy family portal has no canonical Person stamp and has
+		// historically treated the forwarded label case-insensitively.
 		clauses = append(clauses, "acting_for = ? COLLATE NOCASE")
 		args = append(args, f.ActingFor)
+	}
+	if f.ScopeAgents {
+		clauses = append(clauses, `(agent_id IS NULL AND butler = '' OR
+			EXISTS (SELECT 1 FROM butler_access a
+				WHERE a.butler = butler_sessions.agent_id AND a.person_id = ? AND a.revoked_at = '') OR
+			(agent_id IS NULL AND EXISTS (SELECT 1 FROM butlers b
+				JOIN butler_access a ON a.butler = b.seq
+				WHERE b.name = butler_sessions.butler AND a.person_id = ? AND a.revoked_at = '')))`)
+		args = append(args, f.PersonID, f.PersonID)
 	}
 	where := ""
 	if len(clauses) > 0 {

@@ -30,7 +30,6 @@ import (
 	"strings"
 
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/butler"
-	"github.com/Wildstone-Systems/wildstone-homelab/keystone/butlerstore"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/principal"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/runtimedb"
 
@@ -61,18 +60,17 @@ func butlerView(b runtimedb.Butler) map[string]any {
 // nothing to stop one of them failing and a row silently reading "no
 // people" for a Butler two people talk to.
 //
-// The tool ceiling is resolved ONCE per (profile, verdict) pair rather
-// than once per Butler. Every Butler on a profile has the same
-// structural ceiling and the same deployment wiring; what differs is
-// its own narrowings, which is a single cheap read. Building a gateway
-// per row would be the same answer computed ten times.
-func (s *Server) listButlers(_ *http.Request, _ principal.Identity) (any, int, error) {
-	all, err := s.DB.ListButlers()
+// Tool counts are resolved per row because the answer is a function of the
+// authenticated Person, this Agent and the Console Connection. Reusing one
+// class-level manifest would put the deployment-wide count back on a
+// Person-facing screen and omit Person-bound tools such as memory.
+func (s *Server) listButlers(_ *http.Request, id principal.Identity) (any, int, error) {
+	all, _, err := s.visibleButlers(id)
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
-	available := map[string]map[string]bool{}
 	out := make([]map[string]any, 0, len(all))
+	wired := map[string]map[string]bool{}
 	for _, b := range all {
 		view := butlerView(b)
 
@@ -84,33 +82,35 @@ func (s *Server) listButlers(_ *http.Request, _ principal.Identity) (any, int, e
 		if err != nil {
 			return nil, http.StatusInternalServerError, err
 		}
-		narrowed, err := s.DB.ButlerToolNarrowings(b.Name)
-		if err != nil {
-			return nil, http.StatusInternalServerError, err
-		}
 		view["people"] = len(people)
 		view["connections"] = len(conns)
 
+		// The denominator is what this deployment wired for the class, not
+		// the structural ceiling: "5 of 13" would count integrations nobody
+		// set up as if someone had switched them off. Person-bound tools
+		// (memory) are absent from the administrative set, so any tool the
+		// Person-scoped manifest makes available is counted too, keeping
+		// allowed <= available.
 		readOnly := !b.CarriesActionAuthority()
 		key := fmt.Sprintf("%s/%t", b.AgentClass, readOnly)
-		set, ok := available[key]
+		set, ok := wired[key]
 		if !ok {
 			set = s.availableTools(b.AgentClass, readOnly)
-			available[key] = set
+			wired[key] = set
 		}
-		// Allowed is available minus this Butler's own narrowings, and
-		// the denominator is AVAILABLE rather than the whole ceiling.
-		// "5 of 6" is a sentence about what this Butler can do here;
-		// "5 of 13" counts tools no deployment ever wired and reads as
-		// somebody having switched eight things off.
-		allowed := 0
-		for tool := range set {
-			if _, off := narrowed[tool]; !off {
-				allowed++
+		manifest := s.butlerManifestFor(b, id)
+		allowed, available := 0, len(set)
+		for _, tool := range manifest.Tools {
+			if !tool.Available {
+				continue
+			}
+			allowed++
+			if !set[tool.Name] {
+				available++
 			}
 		}
 		view["toolsAllowed"] = allowed
-		view["toolsAvailable"] = len(set)
+		view["toolsAvailable"] = available
 		out = append(out, view)
 	}
 	return map[string]any{"butlers": out}, http.StatusOK, nil
@@ -323,6 +323,17 @@ func (s *Server) createButler(r *http.Request, id principal.Identity) (any, int,
 			return nil, http.StatusNotFound, err
 		}
 		return nil, http.StatusBadRequest, err
+	}
+	// A Person-facing creation records one explicit access grant for the
+	// authenticated Person. This is stored authority, not creator-name
+	// inference or an Owner bypass: it can be revoked immediately and every
+	// later read still rechecks the current admission and grant. Without it,
+	// the Person-scoped roster would hide the new Agent before the Console
+	// could finish configuring reach.
+	if person := inventoryPerson(id); person != "" {
+		if err := s.DB.GrantButlerAccess(name, person, actingMember(id)); err != nil {
+			return nil, http.StatusInternalServerError, err
+		}
 	}
 	created, err := s.DB.GetButler(name)
 	if err != nil {
@@ -593,9 +604,21 @@ func (s *Server) setButlerDirective(r *http.Request, id principal.Identity) (any
 
 // butlerScope answers "what does this Butler see" in one call, so a
 // person does not assemble it from three screens.
-func (s *Server) butlerScope(r *http.Request, _ principal.Identity) (any, int, error) {
+func (s *Server) butlerScope(r *http.Request, id principal.Identity) (any, int, error) {
 	name := r.PathValue("name")
-	scope, err := s.DB.ButlerScope(name)
+	if _, _, err := s.visibleButler(name, id); err != nil {
+		if errors.Is(err, runtimedb.ErrNotFound) {
+			return nil, http.StatusNotFound, fmt.Errorf("no butler named %q", name)
+		}
+		return nil, http.StatusInternalServerError, err
+	}
+	var scope runtimedb.ButlerScopeSummary
+	var err error
+	if person := inventoryPerson(id); person != "" {
+		scope, err = s.DB.ButlerScopeForPerson(name, person)
+	} else {
+		scope, err = s.DB.ButlerScope(name)
+	}
 	if errors.Is(err, runtimedb.ErrNotFound) {
 		return nil, http.StatusNotFound, fmt.Errorf("no butler named %q", name)
 	}
@@ -880,6 +903,14 @@ func (s *Server) duplicateButler(r *http.Request, id principal.Identity) (any, i
 		}
 		return nil, http.StatusBadRequest, err
 	}
+	// Like a newly created Agent, a Person-facing copy gets only the current
+	// Person's explicit setup grant. It never inherits the source Agent's
+	// access list or any other Person's authority.
+	if person := inventoryPerson(id); person != "" {
+		if err := s.DB.GrantButlerAccess(copyName, person, actingMember(id)); err != nil {
+			return nil, http.StatusInternalServerError, err
+		}
+	}
 	b, err := s.DB.GetButler(copyName)
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
@@ -891,7 +922,11 @@ func (s *Server) duplicateButler(r *http.Request, id principal.Identity) (any, i
 	}
 	s.event("butler.duplicated", "", id, fmt.Sprintf("butler %s copied from %s", copyName, name))
 	out := butlerView(b)
-	out["note"] = "the copy has its model and tool narrowings. It has no connections or secret grants, nobody can talk to it, it remembers nothing, and it has no conversations — grant those fresh; they belong to " + name + "."
+	who := "nobody can talk to it"
+	if inventoryPerson(id) != "" {
+		who = "only its creator may talk to it"
+	}
+	out["note"] = "the copy has its model and tool narrowings. It has no connections or secret grants, " + who + ", it remembers nothing, and it has no conversations — grant those fresh; they belong to " + name + "."
 	return out, http.StatusCreated, nil
 }
 
@@ -1000,9 +1035,9 @@ func (s *Server) butlerStatus(r *http.Request, _ principal.Identity) (any, int, 
 // So the answer comes from the gateway itself, bound to this Butler's
 // authority, and each unavailable tool carries the resolver's own
 // words rather than a sentence a screen invented.
-func (s *Server) butlerTools(r *http.Request, _ principal.Identity) (any, int, error) {
+func (s *Server) butlerTools(r *http.Request, id principal.Identity) (any, int, error) {
 	name := r.PathValue("name")
-	b, err := s.DB.GetButler(name)
+	b, _, err := s.visibleButler(name, id)
 	if errors.Is(err, runtimedb.ErrNotFound) {
 		return nil, http.StatusNotFound, fmt.Errorf("no butler named %q", name)
 	}
@@ -1014,32 +1049,8 @@ func (s *Server) butlerTools(r *http.Request, _ principal.Identity) (any, int, e
 	// rather than the one it would have on a working model. Otherwise
 	// somebody looks at a Butler that answers questions only and sees a
 	// list of things it will refuse.
-	readOnly := !b.CarriesActionAuthority()
-	authority := &butlerstore.Authority{DB: s.DB, Butler: b.Name}
-
-	var manifest butler.CapabilityManifest
-	switch b.AgentClass {
-	case runtimedb.AgentClassMember:
-		gw := butler.NewHouseholdGateway("", s.ButlerHost.inventorySeams()).ForAdministration()
-		gw.SetAuthorizer(authority)
-		manifest = gw.Capabilities(readOnly)
-	case runtimedb.AgentClassOwner:
-		// The host's gateway, because its seams are what this
-		// deployment actually wired — a bare one would report every
-		// tool as unavailable and call it structure. Scoped, never
-		// mutated: it is shared with every session in flight.
-		_, live, _, _, _ := s.ButlerHost.Current()
-		if live == nil {
-			live = butler.NewToolGateway(nil, nil)
-		}
-		// And the household's tools, which an Owner Agent holds too
-		// (ADR-W033 B3) — the same union its sessions are built from
-		// (butler.OwnerToolset), so this screen lists what it can
-		// actually reach and an Owner can narrow a household tool on it.
-		member := butler.NewHouseholdGateway("", s.ButlerHost.inventorySeams()).ForAdministration()
-		member.SetAuthorizer(authority)
-		manifest = butler.NewOwnerToolset(live.Scoped(authority).ForAdministration(), member).Capabilities(readOnly)
-	default:
+	manifest := s.butlerManifestFor(b, id)
+	if b.AgentClass != runtimedb.AgentClassMember && b.AgentClass != runtimedb.AgentClassOwner {
 		return nil, http.StatusBadRequest, fmt.Errorf(
 			"%s is a %s agent, which has no tool surface", b.Name, b.AgentClass)
 	}
