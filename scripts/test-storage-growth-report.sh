@@ -170,6 +170,12 @@ run_report "$output" CTR_MODE=malformed || status=$?
 [[ $status == 1 ]]
 assert_report "$output" 'r["status"] == "partial" and "containerd_container_reference_malformed" in r["errors"]'
 
+# Invalid configuration is rejected without echoing the supplied value.
+status=0
+run_report "$output" RETENTION_DAYS=not-a-number || status=$?
+[[ $status == 2 ]]
+assert_report "$output" 'r["status"] == "error" and "RETENTION_DAYS" in r["error"] and "not-a-number" not in r["error"]'
+
 unit_dir="$script_dir/../packaging/host-logging"
 timer_target=$(sed -n 's/^Unit=//p' "$unit_dir/storage-growth-report.timer")
 test -f "$unit_dir/$timer_target"
@@ -181,4 +187,4 @@ if grep -Eiq '^Exec(Start|StartPre|StartPost)=.*(delete|prune|remove|rm )' \
   exit 1
 fi
 
-echo 'storage-growth-report: 6 offline scenarios passed'
+echo 'storage-growth-report: 7 offline scenarios passed'
