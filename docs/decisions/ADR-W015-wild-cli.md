@@ -47,7 +47,11 @@ endpoint is added to the public plane — never a CLI-only side door.
 The engine gains `RunNow(name)` (run one plan immediately, schedule
 notwithstanding, with the same provenance) and the API reaches it —
 like MintJoin — through function hooks cmd/keystone wires, keeping
-keystone/api free of a backup-engine dependency.
+keystone/api free of a backup-engine dependency. One plan has one live
+reservation across its complete manual or scheduled duty sequence. If a
+scheduled tick finds a manual run or restore holding that reservation, it
+defers the plan without writing a failed ledger/status result; uncovered
+duties remain due after the reservation is released.
 
 # Part B — Work package
 
