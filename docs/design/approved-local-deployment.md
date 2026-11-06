@@ -37,7 +37,20 @@ Synthetic inventory example, to be created locally by a separately reviewed boot
 
 Bindings use the existing projector's field names. `SecretRevision` must be absent: the server derives it. The package profile is the validated #256 schema with immutable chart commit and image digest. Bootstrap must supply the supported software profile, existing isolated claims, scoped Flux reconciliation permissions and named Secret. Opening the manager initializes/checks only the private local promotion repository; it installs no software, account, key, listener, service or Kubernetes resource. The separate [delivery bootstrap](local-git-source.md) must use the same repository and mirror paths.
 
-The encrypted file must identify the exact namespace/name and one SOPS-shaped encrypted `jwt-secret` payload with encrypted MAC. Its byte digest versions the **local encrypted configuration reference**, not a Kubernetes Secret resourceVersion. This implementation does not decrypt it, authenticate its SOPS MAC, deliver it, prove its live contents, provision it or rotate it. Bootstrap retains those responsibilities; #258 must verify the actual referenced Secret and app. Plaintext/extra payloads are refused, and neither ciphertext nor key material appears in review, generated Git output or public fixtures.
+The encrypted file must identify the exact namespace/name and one SOPS-shaped
+encrypted `jwt-secret` payload with encrypted MAC. Its byte digest versions the
+**local encrypted configuration reference**, not a Kubernetes Secret
+resourceVersion. This implementation does not decrypt it, authenticate its
+SOPS MAC, deliver it, prove its live contents, provision it or rotate it.
+Plaintext/extra payloads are refused, and neither ciphertext nor key material
+appears in review, generated Git output or public fixtures.
+
+The [#162 custody contract](flux-secret-custody.md) defines the bounded path
+that may later place the exact approved ciphertext—never its age private
+identity—into private generated deployment Git for Flux decryption. Until that
+implementation and its separate bootstrap/proof gates land, bootstrap retains
+delivery/decryption responsibility and #258 verifies only the actual
+pre-provisioned Secret and application.
 
 ## Existing public API and Console
 

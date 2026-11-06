@@ -276,8 +276,10 @@ off-host recovery.
 
 ## Remaining decisions and gates
 
-- #162: final SOPS/age custody, rotation and recovery mechanism, including
-  which bootstrap Secret owner supplies the Flux decryption key.
+- #162: implement and prove the selected
+  [SOPS/age custody contract](../design/flux-secret-custody.md), including the
+  privileged bootstrap owner that supplies and recovers the Flux decryption
+  identity.
 - #163: established scheduler/executor and atomic capture of runtime, Git,
   optional claims and keys; actual off-host restore execution.
 - #165: identity-directory, Traefik, certificate/internal-CA and DNS recovery.
