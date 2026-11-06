@@ -3,6 +3,7 @@
 set -euo pipefail
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+python_bin=$(command -v python3)
 fixture=$(mktemp -d)
 trap 'rm -rf "$fixture"' EXIT
 root="$fixture/root"
@@ -10,7 +11,7 @@ bin="$fixture/bin"
 mkdir -p "$root" "$bin"
 
 cat > "$bin/docker" <<'STUB'
-#!/usr/bin/env bash
+#!/bin/bash
 if [[ $1 == --host ]]; then
   [[ $2 == unix:///var/run/docker.sock ]] || exit 9
   shift 2
@@ -33,7 +34,7 @@ esac
 STUB
 
 cat > "$bin/ctr" <<'STUB'
-#!/usr/bin/env bash
+#!/bin/bash
 if [[ $1 == --address ]]; then
   [[ $2 == /run/k3s/containerd/containerd.sock && $3 == --namespace && $4 == k8s.io ]] || exit 9
   shift 4
@@ -53,12 +54,12 @@ run_report() {
   local output=$1
   shift
   env \
-    PATH="$bin:/usr/local/bin:/usr/bin:/bin" \
+    PATH="$bin" \
     STORAGE_REPORT_ROOT="$root" \
     REPORT_TIMESTAMP=2026-11-06T00:00:00Z \
     MIN_FREE_BYTES=1 \
     "$@" \
-    python3 "$script_dir/storage-growth-report.py" > "$output"
+    "$python_bin" "$script_dir/storage-growth-report.py" > "$output"
 }
 
 assert_report() {
