@@ -131,24 +131,6 @@ class Collector:
             return None
         return result.stdout
 
-    def optional_command(
-        self, argv: list[str], error_code: str
-    ) -> tuple[str | None, bool]:
-        """Run a lookup where a nonzero result means the object is absent."""
-        try:
-            result = subprocess.run(
-                argv,
-                check=False,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-                text=True,
-                timeout=30,
-            )
-        except (OSError, subprocess.TimeoutExpired):
-            self.errors.append(error_code)
-            return None, False
-        return (result.stdout, True) if result.returncode == 0 else (None, True)
-
     @staticmethod
     def containerd_client() -> list[str] | None:
         if shutil.which("ctr") is not None:
@@ -160,6 +142,89 @@ class Collector:
     @staticmethod
     def nonempty_lines(output: str) -> list[str]:
         return [line.strip() for line in output.splitlines() if line.strip()]
+
+    def docker_images(self, output: str | None) -> tuple[set[str], dict[str, str], bool]:
+        """Return unique image IDs and their public references from JSON lines."""
+        if output is None:
+            return set(), {}, False
+        images: set[str] = set()
+        references: dict[str, str] = {}
+        try:
+            rows = [json.loads(line) for line in self.nonempty_lines(output)]
+        except json.JSONDecodeError:
+            self.errors.append("docker_image_inventory_malformed")
+            return set(), {}, False
+        for row in rows:
+            if not isinstance(row, dict):
+                self.errors.append("docker_image_inventory_malformed")
+                return set(), {}, False
+            image_id = row.get("ID")
+            repository = row.get("Repository")
+            tag = row.get("Tag")
+            digest = row.get("Digest")
+            if not image_id or not all(
+                isinstance(value, str) for value in (image_id, repository, tag, digest)
+            ):
+                self.errors.append("docker_image_inventory_malformed")
+                return set(), {}, False
+            images.add(image_id)
+            if repository != "<none>" and tag != "<none>":
+                reference = f"{repository}:{tag}"
+                if reference in references and references[reference] != image_id:
+                    self.errors.append("docker_image_inventory_malformed")
+                    return set(), {}, False
+                references[reference] = image_id
+            if repository != "<none>" and digest != "<none>":
+                reference = f"{repository}@{digest}"
+                if reference in references and references[reference] != image_id:
+                    self.errors.append("docker_image_inventory_malformed")
+                    return set(), {}, False
+                references[reference] = image_id
+        return images, references, True
+
+    @staticmethod
+    def valid_digest(value: str) -> bool:
+        algorithm, separator, encoded = value.partition(":")
+        return (
+            bool(separator)
+            and algorithm.replace("-", "").replace("_", "").isalnum()
+            and encoded.isalnum()
+        )
+
+    def containerd_images(self, output: str | None) -> tuple[dict[str, str], bool]:
+        """Map containerd aliases to target digests without exposing either."""
+        if output is None:
+            return {}, False
+        lines = self.nonempty_lines(output)
+        if not lines or lines[0].split()[:3] != ["REF", "TYPE", "DIGEST"]:
+            self.errors.append("containerd_image_inventory_malformed")
+            return {}, False
+        images: dict[str, str] = {}
+        for line in lines[1:]:
+            fields = line.split()
+            if len(fields) < 3 or not self.valid_digest(fields[2]):
+                self.errors.append("containerd_image_inventory_malformed")
+                return {}, False
+            image_ref, digest = fields[0], fields[2]
+            if image_ref in images and images[image_ref] != digest:
+                self.errors.append("containerd_image_inventory_malformed")
+                return {}, False
+            images[image_ref] = digest
+        return images, True
+
+    @staticmethod
+    def protected_containerd_identities(
+        protected_refs: list[str], images: dict[str, str]
+    ) -> set[str]:
+        identities = set(images.values())
+        protected: set[str] = set()
+        for image_ref in protected_refs:
+            if image_ref in images:
+                protected.add(images[image_ref])
+            _, separator, digest = image_ref.rpartition("@")
+            if separator and digest in identities:
+                protected.add(digest)
+        return protected
 
     def protected_images(self) -> tuple[list[str], bool]:
         refs = {RESTIC_IMAGE}
@@ -227,15 +292,24 @@ class Collector:
             }
 
         images_output = self.command(
-            [*DOCKER, "image", "ls", "--no-trunc", "--format", "{{.ID}}"],
+            [
+                *DOCKER,
+                "image",
+                "ls",
+                "--no-trunc",
+                "--digests",
+                "--format",
+                "{{json .}}",
+            ],
             "docker_image_inventory_failed",
         )
         containers_output = self.command(
             [*DOCKER, "ps", "-aq", "--no-trunc"], "docker_container_inventory_failed"
         )
+        images, image_refs, images_ok = self.docker_images(images_output)
         protected_refs, protected_ok = self.protected_images()
         references: set[str] = set()
-        references_ok = containers_output is not None and protected_ok
+        references_ok = containers_output is not None and protected_ok and images_ok
         if containers_output is not None:
             for container_id in self.nonempty_lines(containers_output):
                 image_id = self.command(
@@ -250,21 +324,9 @@ class Collector:
                 else:
                     references.add(self.nonempty_lines(image_id)[0])
         for image_ref in protected_refs:
-            image_id, lookup_ok = self.optional_command(
-                [*DOCKER, "image", "inspect", "--format", "{{.Id}}", image_ref],
-                "docker_protected_image_reference_failed",
-            )
-            if not lookup_ok:
-                references_ok = False
-            elif image_id is None:
-                continue
-            elif len(self.nonempty_lines(image_id)) == 1:
-                references.add(self.nonempty_lines(image_id)[0])
-            else:
-                self.errors.append("docker_protected_image_reference_malformed")
-                references_ok = False
+            if image_ref in image_refs:
+                references.add(image_refs[image_ref])
 
-        images = set(self.nonempty_lines(images_output)) if images_output is not None else set()
         if references - images:
             self.errors.append("docker_reference_unknown")
             references_ok = False
@@ -284,7 +346,7 @@ class Collector:
                 image_bytes += int(size_lines[0], 10)
         statuses = (image_status, snapshot_status, volume_status)
         complete = (
-            images_output is not None
+            images_ok
             and image_sizes_ok
             and references_ok
             and all(status != "incomplete" for status in statuses)
@@ -300,7 +362,7 @@ class Collector:
             "snapshotStorageStatus": snapshot_status,
             "volumeBytes": volume_bytes,
             "volumeStorageStatus": volume_status,
-            "imageCount": len(images) if images_output is not None else None,
+            "imageCount": len(images) if images_ok else None,
             "referencedImageCount": referenced_count,
             "unreferencedImageCount": len(images) - referenced_count if complete else None,
         }
@@ -344,16 +406,18 @@ class Collector:
             }
 
         images_output = self.command(
-            [*containerd_client, "images", "list", "-q"],
+            [*containerd_client, "images", "list"],
             "containerd_image_inventory_failed",
         )
         containers_output = self.command(
             [*containerd_client, "containers", "list", "-q"],
             "containerd_container_inventory_failed",
         )
+        images, images_ok = self.containerd_images(images_output)
+        identities = set(images.values())
         protected_refs, protected_ok = self.protected_images()
         references: set[str] = set()
-        references_ok = containers_output is not None and protected_ok
+        references_ok = containers_output is not None and protected_ok and images_ok
         if containers_output is not None:
             for container_id in self.nonempty_lines(containers_output):
                 info = self.command(
@@ -370,21 +434,20 @@ class Collector:
                 if not isinstance(image_ref, str) or not image_ref:
                     self.errors.append("containerd_container_reference_malformed")
                     references_ok = False
+                elif image_ref not in images:
+                    self.errors.append("containerd_reference_unknown")
+                    references_ok = False
                 else:
-                    references.add(image_ref)
+                    references.add(images[image_ref])
 
-        images = set(self.nonempty_lines(images_output)) if images_output is not None else set()
-        if references - images:
-            self.errors.append("containerd_reference_unknown")
-            references_ok = False
-        references.update(image_ref for image_ref in protected_refs if image_ref in images)
+        references.update(self.protected_containerd_identities(protected_refs, images))
         complete = (
-            images_output is not None
+            images_ok
             and references_ok
             and image_status != "incomplete"
             and snapshot_status != "incomplete"
         )
-        referenced_count = len(images & references) if complete else None
+        referenced_count = len(identities & references) if complete else None
         return {
             "presence": "present",
             "collectionStatus": "complete" if complete else "incomplete",
@@ -392,9 +455,9 @@ class Collector:
             "imageStorageStatus": image_status,
             "snapshotBytes": snapshot_bytes,
             "snapshotStorageStatus": snapshot_status,
-            "imageCount": len(images) if images_output is not None else None,
+            "imageCount": len(identities) if images_ok else None,
             "referencedImageCount": referenced_count,
-            "unreferencedImageCount": len(images) - referenced_count if complete else None,
+            "unreferencedImageCount": len(identities) - referenced_count if complete else None,
         }
 
     def caches(self) -> tuple[dict[str, int], dict[str, str], list[dict[str, Any]]]:
@@ -447,6 +510,7 @@ class Collector:
             "schemaVersion": 1,
             "collectedAt": self.now.isoformat().replace("+00:00", "Z"),
             "status": "partial" if self.errors else "complete",
+            "retentionDays": self.retention_days,
             "filesystem": {
                 "freeBytes": free_bytes,
                 "minimumFreeBytes": self.min_free_bytes,

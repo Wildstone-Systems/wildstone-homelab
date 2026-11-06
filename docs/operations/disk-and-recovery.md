@@ -78,13 +78,17 @@ reference inventory makes the report `partial` and the service exits nonzero.
 No incomplete reference scan reports an unreferenced-image count.
 Containerd inventory uses a standalone `ctr` when installed and otherwise the
 `k3s ctr` client bundled by the supported k3s installation; both are fixed to
-the local k3s containerd socket and `k8s.io` namespace.
+the local k3s containerd socket and `k8s.io` namespace. Containerd image counts
+collapse aliases that share one target digest, so a live or protected image is
+not reported as unreferenced under another tag or normalized name.
 
 `candidates` is a dry-run review list, not a deletion request. It can contain
 only aggregate entries for the four fixed disposable caches built into the
 collector: `/var/cache/apt/archives`, `/var/cache/wildstone/build`,
 `/var/cache/wildstone/go-build`, and `/var/cache/wildstone/tools`. Each entry
-has allocated bytes, retention age, and reason. The report never contains
+has allocated bytes, retention age, and reason. The root `retentionDays` field
+records the configured threshold even when no candidate is old enough. The
+report never contains
 named volumes, images, snapshots, logs, arbitrary paths, filenames, image
 references, command output, or environment values. Low free space does not
 delete anything. Runtime image counts are informational and are never cleanup
