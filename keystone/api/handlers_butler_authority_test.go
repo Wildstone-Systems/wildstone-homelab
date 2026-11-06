@@ -81,9 +81,9 @@ func TestCapabilityRequestPermissionsAndSeparation(t *testing.T) {
 // A grant is a manage act, bound to real work, and revocable.
 func TestGrantEndpointsAreBoundAndRevocable(t *testing.T) {
 	h := newHarness(t)
-	h.person("root-admin")
+	owner := h.console(runtimedb.RoleAdmin, "mika")
 	taskID, err := h.s.DB.InsertButlerTask(runtimedb.ButlerTask{
-		Kind: runtimedb.ButlerTaskConversation, Author: "root-admin", Owner: "root-admin",
+		Kind: runtimedb.ButlerTaskConversation, Author: "mika", Owner: "mika",
 		Surface: runtimedb.ButlerSurfaceAdmin, AgentClass: "operator",
 		Audience: runtimedb.ButlerAudiencePrivate, Objective: "work", CompletionCriteria: "done",
 	})
@@ -97,25 +97,28 @@ func TestGrantEndpointsAreBoundAndRevocable(t *testing.T) {
 	if res := h.do(runtimedb.RoleOperator, http.MethodPost, "/api/v1/butler/grants", body, nil); res.StatusCode != http.StatusForbidden {
 		t.Fatalf("an operator issued a grant: %d", res.StatusCode)
 	}
+	if res := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/butler/grants", body, nil); res.StatusCode != http.StatusForbidden {
+		t.Fatalf("a machine administrator issued a Person grant: %d", res.StatusCode)
+	}
 	var granted struct {
 		Seq int64 `json:"seq"`
 	}
-	if res := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/butler/grants", body, &granted); res.StatusCode != http.StatusOK {
+	if res := h.doToken(owner, http.MethodPost, "/api/v1/butler/grants", body, &granted); res.StatusCode != http.StatusOK {
 		t.Fatalf("grant = %d", res.StatusCode)
 	}
 	// Against a task that does not exist, it is refused rather than
 	// becoming a permission nothing can expire.
 	bad := map[string]any{"scope": "task", "scopeId": "bt-999", "agentClass": "owner", "tool": "x"}
-	if res := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/butler/grants", bad, nil); res.StatusCode != http.StatusBadRequest {
+	if res := h.doToken(owner, http.MethodPost, "/api/v1/butler/grants", bad, nil); res.StatusCode != http.StatusBadRequest {
 		t.Fatalf("a grant against a missing task = %d, want 400", res.StatusCode)
 	}
-	if res := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/butler/grants/revoke",
+	if res := h.doToken(owner, http.MethodPost, "/api/v1/butler/grants/revoke",
 		map[string]any{"seq": granted.Seq}, nil); res.StatusCode != http.StatusOK {
 		t.Fatalf("revoke = %d", res.StatusCode)
 	}
 	// Revoking twice is a 404: the second call and the queue disagree
 	// about reality.
-	if res := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/butler/grants/revoke",
+	if res := h.doToken(owner, http.MethodPost, "/api/v1/butler/grants/revoke",
 		map[string]any{"seq": granted.Seq}, nil); res.StatusCode != http.StatusNotFound {
 		t.Fatalf("revoking twice = %d, want 404", res.StatusCode)
 	}

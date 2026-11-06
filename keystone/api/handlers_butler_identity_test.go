@@ -15,8 +15,8 @@ import (
 func TestButlerAdmissionAndHandoffThroughTheAPI(t *testing.T) {
 	h := newHarness(t)
 
-	// The admin token acts as "root-admin", which is who the harness
-	// mints it for.
+	// A machine administrator may establish the first Person record, but
+	// it cannot perform a Person-authored operation on that Person's behalf.
 	if res := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/butler/members",
 		map[string]any{"member": "root-admin", "role": "owner"}, nil,
 	); res.StatusCode != http.StatusOK {
@@ -33,10 +33,14 @@ func TestButlerAdmissionAndHandoffThroughTheAPI(t *testing.T) {
 	if res := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/butler/members/root-admin/admit", nil, nil); res.StatusCode != http.StatusOK {
 		t.Fatalf("admit = %d", res.StatusCode)
 	}
+	rootAdmin, err := h.s.Principals.Mint("root-admin", "root-admin", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
 	var started struct {
 		ConversationID string `json:"conversationId"`
 	}
-	if res := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/butler/conversations",
+	if res := h.doToken(rootAdmin, http.MethodPost, "/api/v1/butler/conversations",
 		map[string]any{"subject": "photos"}, &started,
 	); res.StatusCode != http.StatusOK {
 		t.Fatalf("start conversation = %d", res.StatusCode)
@@ -47,7 +51,7 @@ func TestButlerAdmissionAndHandoffThroughTheAPI(t *testing.T) {
 		Turns    []runtimedb.ButlerTurn `json:"turns"`
 		Withheld int                    `json:"withheld"`
 	}
-	if res := h.do(runtimedb.RoleAdmin, http.MethodPost,
+	if res := h.doToken(rootAdmin, http.MethodPost,
 		"/api/v1/butler/conversations/"+started.ConversationID+"/handoff",
 		map[string]any{"from": "family", "to": "admin"}, &ctx,
 	); res.StatusCode != http.StatusOK {
@@ -56,7 +60,8 @@ func TestButlerAdmissionAndHandoffThroughTheAPI(t *testing.T) {
 
 	// Somebody else's conversation answers 404, not 403: a 403 confirms
 	// it exists.
-	if res := h.do(runtimedb.RoleOperator, http.MethodPost,
+	other := h.console(runtimedb.RoleOperator, "op")
+	if res := h.doToken(other, http.MethodPost,
 		"/api/v1/butler/conversations/"+started.ConversationID+"/handoff",
 		map[string]any{"from": "family", "to": "admin"}, nil,
 	); res.StatusCode != http.StatusNotFound {
@@ -100,10 +105,10 @@ func TestButlerAdmissionAndHandoffThroughTheAPI(t *testing.T) {
 		t.Fatalf("task after offboarding = %q", task.State)
 	}
 	// And nothing more can be started.
-	if res := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/butler/conversations",
+	if res := h.doToken(rootAdmin, http.MethodPost, "/api/v1/butler/conversations",
 		map[string]any{"subject": "again"}, nil,
-	); res.StatusCode != http.StatusForbidden {
-		t.Fatalf("an offboarded member started a conversation: %d", res.StatusCode)
+	); res.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("an offboarded member started a conversation: %d, want 401", res.StatusCode)
 	}
 }
 

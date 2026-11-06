@@ -76,7 +76,8 @@ func (h *harness) wireButler(turns []*provider.ChatResponse, mode runtimedb.Butl
 
 func TestButlerAskUnconfigured503(t *testing.T) {
 	h := newHarness(t)
-	resp := h.do(runtimedb.RoleOperator, "POST", "/api/v1/butler/ask", map[string]string{"message": "hi"}, nil)
+	asks := h.console(runtimedb.RoleOperator, "mika")
+	resp := h.doToken(asks, "POST", "/api/v1/butler/ask", map[string]string{"message": "hi"}, nil)
 	if resp.StatusCode != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want 503", resp.StatusCode)
 	}
@@ -178,12 +179,13 @@ func TestButlerAskQAOnlyRefusesPropose(t *testing.T) {
 func TestButlerAskInputValidation(t *testing.T) {
 	h := newHarness(t)
 	h.wireButler(nil, runtimedb.ButlerModeFull)
+	asks := h.console(runtimedb.RoleOperator, "mika")
 
-	if resp := h.do(runtimedb.RoleOperator, "POST", "/api/v1/butler/ask", map[string]string{"message": ""}, nil); resp.StatusCode != http.StatusBadRequest {
+	if resp := h.doToken(asks, "POST", "/api/v1/butler/ask", map[string]string{"message": ""}, nil); resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("empty message: %d, want 400", resp.StatusCode)
 	}
 	huge := map[string]string{"message": strings.Repeat("x", maxAskBytes+1)}
-	if resp := h.do(runtimedb.RoleOperator, "POST", "/api/v1/butler/ask", huge, nil); resp.StatusCode != http.StatusRequestEntityTooLarge {
+	if resp := h.doToken(asks, "POST", "/api/v1/butler/ask", huge, nil); resp.StatusCode != http.StatusRequestEntityTooLarge {
 		t.Fatalf("oversized message: %d, want 413", resp.StatusCode)
 	}
 }

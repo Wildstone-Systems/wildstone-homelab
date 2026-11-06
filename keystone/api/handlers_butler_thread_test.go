@@ -195,7 +195,8 @@ func TestButlerFollowUpRefusedOnSomeoneElsesSession(t *testing.T) {
 func TestButlerFollowUpUnknownSession404(t *testing.T) {
 	h := newHarness(t)
 	h.wireButler(answerTurns("should never run"), runtimedb.ButlerModeFull)
-	resp := h.do(runtimedb.RoleOperator, "POST", "/api/v1/butler/sessions/bs-404/ask",
+	actor := h.console(runtimedb.RoleOperator, "op")
+	resp := h.doToken(actor, "POST", "/api/v1/butler/sessions/bs-404/ask",
 		map[string]string{"message": "hello?"}, nil)
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404", resp.StatusCode)
@@ -207,14 +208,15 @@ func TestButlerFollowUpUnknownSession404(t *testing.T) {
 func TestButlerFollowUpKeepsTheSessionsSurface(t *testing.T) {
 	h := newHarness(t)
 	h.wireHouseholdButler(answerTurns("Mika had breakfast at 07:15.", "Nobody else has."), runtimedb.ButlerModeFull)
+	actor := h.console(runtimedb.RoleOperator, "op")
 
 	var first askResponse
-	if resp := h.do(runtimedb.RoleOperator, "POST", "/api/v1/household/butler/ask",
+	if resp := h.doToken(actor, "POST", "/api/v1/household/butler/ask",
 		map[string]string{"message": "did anyone have breakfast?"}, &first); resp.StatusCode != http.StatusOK {
 		t.Fatalf("family ask: %d", resp.StatusCode)
 	}
 
-	if resp := h.do(runtimedb.RoleOperator, "POST", "/api/v1/butler/sessions/"+first.SessionID+"/ask",
+	if resp := h.doToken(actor, "POST", "/api/v1/butler/sessions/"+first.SessionID+"/ask",
 		map[string]string{"message": "did anyone else?"}, nil); resp.StatusCode != http.StatusOK {
 		t.Fatalf("family follow-up: %d", resp.StatusCode)
 	}

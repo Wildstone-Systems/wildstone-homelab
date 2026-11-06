@@ -19,6 +19,7 @@ func TestLegacyHouseholdEffectsPassTheStoreFence(t *testing.T) {
 	for _, mode := range []string{"coordinator", "non-coordinator", "stopped", "superseded"} {
 		t.Run(mode, func(t *testing.T) {
 			h := newHarness(t)
+			actor := h.console(runtimedb.RoleOperator, "op")
 			if mode == "non-coordinator" {
 				if _, err := h.s.DB.ExecForTest("INSERT INTO coordinator_lease(id,holder,epoch,acquired_at,heartbeat_at) VALUES(1,'other',1,?,?)", time.Now().Format(time.RFC3339), time.Now().Format(time.RFC3339)); err != nil {
 					t.Fatal(err)
@@ -72,7 +73,7 @@ func TestLegacyHouseholdEffectsPassTheStoreFence(t *testing.T) {
 			if h.s.Butlers != nil {
 				t.Fatal("test must use the legacy path")
 			}
-			response := h.do(runtimedb.RoleOperator, http.MethodPost, "/api/v1/household/butler/ask", map[string]string{"message": "send both notices"}, nil)
+			response := h.doToken(actor, http.MethodPost, "/api/v1/household/butler/ask", map[string]string{"message": "send both notices"}, nil)
 			if response.StatusCode != http.StatusOK {
 				t.Fatalf("legacy request: %d", response.StatusCode)
 			}

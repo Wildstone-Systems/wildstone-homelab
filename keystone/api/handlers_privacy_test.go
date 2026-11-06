@@ -353,6 +353,7 @@ func TestAPIMemoryDisclosureRequiresHumanConsoleForTrustedOnly(t *testing.T) {
 func TestAPIHistoryDoesNotBypassTrustedMemory(t *testing.T) {
 	h := freshnessHarness(t)
 	h.person("sam")
+	owner := h.console(runtimedb.RoleAdmin, "mika")
 	task := failedTurnTask(t, h)
 	session, err := h.s.DB.InsertButlerSession(runtimedb.ButlerSession{Principal: "butler", ActingFor: "sam", Surface: runtimedb.ButlerSurfaceFamily, Mode: runtimedb.ButlerModeFull, FinalText: "jasmine"})
 	if err != nil {
@@ -378,13 +379,13 @@ func TestAPIHistoryDoesNotBypassTrustedMemory(t *testing.T) {
 	if err = h.s.DB.SetButlerTaskSession(plainTask, plainSession); err != nil {
 		t.Fatal(err)
 	}
-	if res := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/butler/tasks/"+plainTask+"/evaluation", map[string]any{"name": "ordinary", "expected": "ordinary", "summary": "ordinary"}, nil); res.StatusCode != http.StatusOK {
+	if res := h.doToken(owner, http.MethodPost, "/api/v1/butler/tasks/"+plainTask+"/evaluation", map[string]any{"name": "ordinary", "expected": "ordinary", "summary": "ordinary"}, nil); res.StatusCode != http.StatusOK {
 		t.Fatal(res.Status)
 	}
 	if _, err = h.s.DB.EnableButlerDebugCapture(plainTask, "mika", "ordinary", time.Hour); err != nil {
 		t.Fatal(err)
 	}
-	if res := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/butler/tasks/"+task+"/evaluation", map[string]any{"name": "privacy-history", "expected": "protect the history", "summary": "jasmine"}, nil); res.StatusCode != http.StatusOK {
+	if res := h.doToken(owner, http.MethodPost, "/api/v1/butler/tasks/"+task+"/evaluation", map[string]any{"name": "privacy-history", "expected": "protect the history", "summary": "jasmine"}, nil); res.StatusCode != http.StatusOK {
 		t.Fatalf("seed evaluation: %d", res.StatusCode)
 	}
 	if _, err = h.s.DB.EnableButlerDebugCapture(task, "mika", "jasmine", time.Hour); err != nil {
