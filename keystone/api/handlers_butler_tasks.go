@@ -86,13 +86,34 @@ func canSeePrivateRows(task runtimedb.ButlerTask, id principal.Identity) bool {
 
 // listButlerTasks lists the tasks this reader may see, newest first.
 func (s *Server) listButlerTasks(r *http.Request, id principal.Identity) (any, int, error) {
-	all, err := s.DB.ListButlerTasks(200, "")
+	var (
+		all []runtimedb.ButlerTask
+		err error
+	)
+	if person := inventoryPerson(id); person != "" {
+		visible, _, visibleErr := s.visibleButlerNames(id)
+		if visibleErr != nil {
+			return nil, http.StatusInternalServerError, visibleErr
+		}
+		names := make([]string, 0, len(visible))
+		for name := range visible {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		all, err = s.DB.ListButlerTasksForInventory(200, person, names)
+	} else {
+		all, err = s.DB.ListButlerTasks(200, "")
+	}
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
 	out := make([]runtimedb.ButlerTask, 0, len(all))
 	for _, t := range all {
-		if canSeeTask(t, id) {
+		belongs, belongsErr := s.taskBelongsToInventoryPerson(t, id)
+		if belongsErr != nil {
+			return nil, http.StatusInternalServerError, belongsErr
+		}
+		if belongs && s.taskUsesVisibleButler(t, id) {
 			if err := s.checkAPITaskDisclosure(r, id, t.ID); err != nil {
 				if errors.Is(err, runtimedb.ErrPrivacy) {
 					continue
@@ -131,7 +152,11 @@ func (s *Server) getButlerTask(r *http.Request, id principal.Identity) (any, int
 		// answer identically: otherwise the 403 confirms it exists.
 		return nil, http.StatusNotFound, fmt.Errorf("no such task")
 	}
-	if !canSeeTask(task, id) {
+	belongs, belongsErr := s.taskBelongsToInventoryPerson(task, id)
+	if belongsErr != nil {
+		return nil, http.StatusInternalServerError, belongsErr
+	}
+	if !belongs || !s.taskUsesVisibleButler(task, id) {
 		return nil, http.StatusNotFound, fmt.Errorf("no such task")
 	}
 	if err := s.checkAPITaskDisclosure(r, id, taskID); err != nil {

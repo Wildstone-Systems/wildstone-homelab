@@ -146,18 +146,19 @@ legs of effective authority; it is absent from the answer.
 
 ### F-155-03 — the admin surface builds one toolset for everybody
 
-- **Current status:** open
-- **Current evidence:** `keystone/api/handlers_butlers.go:listButlers` still computes inventory and tool counts without the acting Person; the Console view needs a Person-scoped toolset contract.
-- **Current owner:** chickenrat17
-- **Tracking:** #316
+- **Current status:** implemented
+- **Current evidence:** `keystone/api/handlers_butler_inventory.go`, `keystone/api/handlers_butlers.go`, and `TestAgentInventoryIsScopedToTheCurrentPerson`; ad0fc813. Roster, scope, tools, drawer sessions and linked task summaries resolve the current `ActingFor` Person against live Agent access; hidden and absent Agents answer alike, and access revocation removes the view on the next request.
 - **Audit status:** partial
 - **Audit evidence:** `keystone/cmd/keystone/main.go:1102-1136`. The family branch builds a gateway *per session, from the member*: `butlerstore.MemorySeams(db, b.Name, t.Member, log)`, then `NewHouseholdGroupGateway(t.Member, mine)` or `NewHouseholdGateway(t.Member, mine)`. The admin branch (`:1134-1135`) is `perSession := *bgw` — a copy of one shared gateway, with no member in it. `butler/gateway.go:253` then authorizes each dispatch against the constant `ProfileOperator`.
 - **Also, at runtime:** the AC03 pair in F-155-01 — a `household`-profile member and an `operator`-profile member on the admin surface received the same toolkit and the same dispatch.
 
-So the family surface does narrow by person (memory scope) and by
-audience (the group gateway), and the operator surface narrows by
-neither. The `partial` is that per-person narrowing exists on one of the
-two surfaces; AC03 is about the other one.
+The Console inventory no longer repeats that historical administrative
+shape. Its manifest is built with the same Person + Agent + Console
+Connection tuple used by a live turn, including the current Person
+admission and Agent assignments/narrowings. An unlinked machine
+administrator retains the separate audit/recovery view; it is not
+treated as a Person by name equality. Repository tests use synthetic
+Persons only and do not establish current household configuration.
 
 ### F-155-04 — the child classification is a record that cannot be used
 
@@ -549,19 +550,18 @@ adapter says on each message.
 
 ### F-155-19 — the per-Butler tools screen is computed for nobody, and omits the tools a session actually has
 
-- **Current status:** open
-- **Current evidence:** `keystone/api/handlers_butlers.go:listButlers` computes deployment-wide tool counts, not the effective tools for the acting Person's session.
-- **Current owner:** chickenrat17
-- **Tracking:** #316
+- **Current status:** implemented
+- **Current evidence:** `keystone/api/handlers_butler_inventory.go:butlerManifestFor`, `keystone/api/handlers_butlers.go:listButlers`, `keystone/api/handlers_butlers.go:butlerTools`, and `TestAgentInventoryIsScopedToTheCurrentPerson`; ad0fc813.
 - **Audit status:** partial
 - **Audit evidence:** `keystone/api/handlers_butlers.go:729` — `butler.NewHouseholdGateway("", s.ButlerHost.householdSeams())`: no member, and the host's seams, which carry no per-session memory. The session gateway is built per member instead (`keystone/cmd/keystone/main.go:1102-1136`, `MemorySeams(db, b.Name, t.Member, log)`). Runtime, 2026-09-10, scratch instance: `GET /api/v1/butlers/Sandy/tools` listed four tools — `describe_capabilities`, `do_household_action`, `get_household_events`, `list_household_actions` — while Sandy's sessions dispatched `recall` (work trace, tasks 23, 29, 30) and wrote three records through `remember`.
 
-The screen answers "what can this Butler do" for no one in particular,
-and on the family surface the answer is short by exactly the two tools
-that read and write a person's private memory. It is F-155-01 seen from
-the Console: there is no person in the question, so there cannot be a
-person-specific answer. `partial` because the four it lists are right;
-the omission is what makes it wrong.
+The roster count and tools drawer now come from a gateway bound to the
+authenticated `ActingFor` Person, the selected Agent and the Console
+Connection. The household gateway uses the inventory memory seams, so
+`recall` and `remember` are described when effective; the manifest's
+own authority decisions determine each available count. A Person with
+no current Agent access receives neither the Agent row nor its tool
+surface, and revocation is re-read rather than cached.
 
 ### F-155-20 — a model round's retries skip the authority recheck, so offboarded work makes another provider call
 

@@ -626,6 +626,35 @@ func (db *DB) ButlersFor(member string) ([]Butler, error) {
 	return out, rows.Err()
 }
 
+// ButlerInventoryFor returns every Agent this person is currently granted,
+// including disabled and retired Agents. It is the management-roster sibling
+// of ButlersFor: chat and execution must still receive live Agents only, while
+// the Console must retain a way to inspect and restore an Agent after it stops
+// answering.
+func (db *DB) ButlerInventoryFor(member string) ([]Butler, error) {
+	if member == "" {
+		return nil, fmt.Errorf("runtimedb: listing the butler inventory needs the person asking")
+	}
+	rows, err := db.sql.Query(butlerColumns+`
+		 JOIN butler_access a ON a.butler = b.seq
+		 JOIN butler_members p ON p.person_id = a.person_id
+		 WHERE p.member = ? AND a.revoked_at = ''
+		 ORDER BY b.name`, member)
+	if err != nil {
+		return nil, fmt.Errorf("runtimedb: listing the butler inventory for %q: %w", member, err)
+	}
+	defer rows.Close()
+	var out []Butler
+	for rows.Next() {
+		b, err := scanButler(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, b)
+	}
+	return out, rows.Err()
+}
+
 // ResolveButlerFor is the check every message goes through: may this
 // person talk to this Butler, and can this Butler answer?
 //

@@ -635,6 +635,67 @@ func (db *DB) ListButlerTasks(limit int, owner string) ([]ButlerTask, error) {
 	return collectButlerTasks(rows)
 }
 
+// ListButlerTasksForInventory returns the newest tasks that belong to one
+// Person and whose linked session either predates Agent stamps or names one of
+// the Person's currently visible Agents. Both predicates are applied before
+// LIMIT: another Person's work or a revoked Agent's history must not crowd the
+// current Person's Work inventory out of a fixed-size page.
+//
+// Sessionless tasks are retained because routines and other non-conversation
+// work have no conversation Agent stamp to reauthorize here. The caller still
+// applies the ordinary task-disclosure check to every returned row.
+func (db *DB) ListButlerTasksForInventory(limit int, person string, visibleButlers []string) ([]ButlerTask, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	personID, err := personIDForRead(db.sql, person)
+	if err != nil {
+		return nil, err
+	}
+	if personID == "" {
+		return nil, nil
+	}
+
+	visibleClause := "s.butler = ''"
+	args := []any{personID, personID}
+	if len(visibleButlers) > 0 {
+		placeholders := make([]string, len(visibleButlers))
+		for i, name := range visibleButlers {
+			placeholders[i] = "?"
+			args = append(args, name)
+		}
+		visibleClause += " OR s.butler IN (" + strings.Join(placeholders, ",") + ")"
+	}
+	args = append(args, limit)
+	rows, err := db.sql.Query(butlerTaskColumns+`
+		 LEFT JOIN butler_sessions s ON s.seq = t.session
+		 WHERE (t.owner_person_id = ? OR t.author_person_id = ?)
+		   AND (t.session IS NULL OR (`+visibleClause+`))
+		 ORDER BY t.seq DESC LIMIT ?`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("runtimedb: listing Person-scoped butler tasks: %w", err)
+	}
+	defer rows.Close()
+	return collectButlerTasks(rows)
+}
+
+// ButlerTaskBelongsToPerson reports whether the stable Person owns or authored
+// the task. It deliberately compares person_id values rather than the mutable
+// handles rendered by GetButlerTask.
+func (db *DB) ButlerTaskBelongsToPerson(id, personID string) (bool, error) {
+	seq, err := parseButlerTaskID(id)
+	if err != nil || personID == "" {
+		return false, nil
+	}
+	var count int
+	if err := db.sql.QueryRow(`SELECT COUNT(*) FROM butler_tasks
+		WHERE seq = ? AND (owner_person_id = ? OR author_person_id = ?)`,
+		seq, personID, personID).Scan(&count); err != nil {
+		return false, fmt.Errorf("runtimedb: checking Person task ownership: %w", err)
+	}
+	return count == 1, nil
+}
+
 // openButlerTaskStates is every state a task can still do work in — the
 // set ListOpenButlerTasksByButler fences on revocation (ADR-W039 §3.7)
 // and ButlerTasksInState's resume queue draws from one at a time.

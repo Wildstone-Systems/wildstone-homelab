@@ -658,17 +658,37 @@ func (s *Server) listButlerSessions(r *http.Request, id principal.Identity) (any
 	// It is not defaulted from the surface: showing every household
 	// Butler's conversations under one Butler's name is the one thing
 	// this list must not do.
-	sessions, err := s.DB.ListButlerSessions(limit, runtimedb.ButlerSessionFilter{
-		Surface: surface, Butler: r.URL.Query().Get("butler"),
-	})
+	filter := runtimedb.ButlerSessionFilter{Surface: surface, Butler: r.URL.Query().Get("butler")}
+	if member, scoped, memberErr := s.inventoryMember(id); memberErr != nil {
+		return nil, http.StatusInternalServerError, memberErr
+	} else if scoped {
+		if member.PersonID == "" {
+			return []runtimedb.ButlerSession{}, http.StatusOK, nil
+		}
+		filter.ActingFor = member.Member
+		filter.PersonID = member.PersonID
+		filter.ScopeAgents = true
+	}
+	sessions, err := s.DB.ListButlerSessions(limit, filter)
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
 	if sessions == nil {
 		sessions = []runtimedb.ButlerSession{}
 	}
+	// Current Agent admission applies to every Person-facing list, including
+	// the unfiltered history view. An empty Butler stamp predates Agent-aware
+	// sessions and discloses no Agent name, so that Person's own legacy row
+	// remains compatible.
+	visibleNames, scoped, err := s.visibleButlerNames(id)
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
 	visible := sessions[:0]
 	for _, session := range sessions {
+		if scoped && session.Butler != "" && !visibleNames[session.Butler] {
+			continue
+		}
 		if err := s.DB.CheckSessionPrivacy(session.ID, runtimedb.ModelLocal, apiMemoryDestination(id)); err != nil {
 			if errors.Is(err, runtimedb.ErrPrivacy) {
 				continue
@@ -688,6 +708,19 @@ func (s *Server) getButlerSession(r *http.Request, id principal.Identity) (any, 
 	}
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
+	}
+	if member, scoped, memberErr := s.inventoryMember(id); memberErr != nil {
+		return nil, http.StatusInternalServerError, memberErr
+	} else if scoped {
+		if member.PersonID == "" || (sess.PersonID != "" && sess.PersonID != member.PersonID) ||
+			(sess.PersonID == "" && sess.ActingFor != member.Member) {
+			return nil, http.StatusNotFound, fmt.Errorf("butler session not found")
+		}
+		if sess.Butler != "" {
+			if _, _, err := s.visibleButler(sess.Butler, id); err != nil {
+				return nil, http.StatusNotFound, fmt.Errorf("butler session not found")
+			}
+		}
 	}
 	if err := s.DB.CheckSessionPrivacy(sess.ID, runtimedb.ModelLocal, apiMemoryDestination(id)); err != nil {
 		return nil, http.StatusForbidden, err

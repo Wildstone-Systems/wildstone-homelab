@@ -165,7 +165,8 @@ func TestButlerFollowUpDoesNotReplayStaleToolResults(t *testing.T) {
 	}
 }
 
-// Reading someone's conversation is an audit. Speaking into it is not.
+// Another Person can neither read nor continue a conversation. A machine
+// administrator retains the separate audit view.
 func TestButlerFollowUpRefusedOnSomeoneElsesSession(t *testing.T) {
 	h := newHarness(t)
 	h.wireButler(answerTurns("Two nodes.", "should never run"), runtimedb.ButlerModeFull)
@@ -186,9 +187,11 @@ func TestButlerFollowUpRefusedOnSomeoneElsesSession(t *testing.T) {
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403", resp.StatusCode)
 	}
-	// They can still read it — that is what the audit is for.
-	if resp := h.doToken(theirs, "GET", "/api/v1/butler/sessions/"+first.SessionID, nil, nil); resp.StatusCode != http.StatusOK {
-		t.Fatalf("admin read = %d, want 200", resp.StatusCode)
+	if resp := h.doToken(theirs, "GET", "/api/v1/butler/sessions/"+first.SessionID, nil, nil); resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("another Person's read = %d, want 404", resp.StatusCode)
+	}
+	if resp := h.do(runtimedb.RoleAdmin, "GET", "/api/v1/butler/sessions/"+first.SessionID, nil, nil); resp.StatusCode != http.StatusOK {
+		t.Fatalf("machine-admin audit read = %d, want 200", resp.StatusCode)
 	}
 }
 
