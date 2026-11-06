@@ -70,6 +70,7 @@ func (s *Server) listButlers(_ *http.Request, id principal.Identity) (any, int, 
 		return nil, http.StatusInternalServerError, err
 	}
 	out := make([]map[string]any, 0, len(all))
+	wired := map[string]map[string]bool{}
 	for _, b := range all {
 		view := butlerView(b)
 
@@ -84,15 +85,32 @@ func (s *Server) listButlers(_ *http.Request, id principal.Identity) (any, int, 
 		view["people"] = len(people)
 		view["connections"] = len(conns)
 
+		// The denominator is what this deployment wired for the class, not
+		// the structural ceiling: "5 of 13" would count integrations nobody
+		// set up as if someone had switched them off. Person-bound tools
+		// (memory) are absent from the administrative set, so any tool the
+		// Person-scoped manifest makes available is counted too, keeping
+		// allowed <= available.
+		readOnly := !b.CarriesActionAuthority()
+		key := fmt.Sprintf("%s/%t", b.AgentClass, readOnly)
+		set, ok := wired[key]
+		if !ok {
+			set = s.availableTools(b.AgentClass, readOnly)
+			wired[key] = set
+		}
 		manifest := s.butlerManifestFor(b, id)
-		allowed := 0
+		allowed, available := 0, len(set)
 		for _, tool := range manifest.Tools {
-			if tool.Available {
-				allowed++
+			if !tool.Available {
+				continue
+			}
+			allowed++
+			if !set[tool.Name] {
+				available++
 			}
 		}
 		view["toolsAllowed"] = allowed
-		view["toolsAvailable"] = len(manifest.Tools)
+		view["toolsAvailable"] = available
 		out = append(out, view)
 	}
 	return map[string]any{"butlers": out}, http.StatusOK, nil

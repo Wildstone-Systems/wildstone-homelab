@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/butlerstore"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/principal"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/runtimedb"
 )
 
@@ -465,5 +467,69 @@ func assertInventoryEmpty(t *testing.T, h *harness, token, agent, session, task 
 	}
 	if res := h.doToken(token, http.MethodGet, "/api/v1/butler/tasks/"+task, nil, nil); res.StatusCode != http.StatusNotFound {
 		t.Fatalf("revoked task detail = %d, want 404", res.StatusCode)
+	}
+}
+
+// The roster's "N of M" denominator is what this deployment wired, not
+// the structural ceiling: integrations nobody set up must not read as
+// tools somebody switched off.
+func TestAgentRosterToolCountExcludesUnwiredTools(t *testing.T) {
+	h := newHarness(t)
+	if err := h.s.DB.UpsertModel(runtimedb.Model{
+		Name: "fixture-local", Kind: runtimedb.ModelLocal, Provider: "ollama", ProviderModel: "fixture",
+		Readiness: runtimedb.ModelReady, Enabled: true,
+	}, "fixture"); err != nil {
+		t.Fatal(err)
+	}
+	token := h.console(runtimedb.RoleAdmin, "mika")
+	if res := h.do(runtimedb.RoleAdmin, http.MethodPost, "/api/v1/butlers", map[string]any{
+		"name": "mika-agent", "agentClass": runtimedb.AgentClassMember, "model": "fixture-local",
+	}, nil); res.StatusCode != http.StatusCreated {
+		t.Fatalf("create = %d", res.StatusCode)
+	}
+	if err := h.s.DB.GrantButlerAccess("mika-agent", "mika", "fixture"); err != nil {
+		t.Fatal(err)
+	}
+	b, err := h.s.DB.GetButler("mika-agent")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The fixture must leave something unwired, or this proves nothing.
+	unwired := 0
+	for _, tool := range h.s.administrativeButlerManifest(b, &butlerstore.Authority{DB: h.s.DB, Butler: b.Name}, !b.CarriesActionAuthority()).Tools {
+		if !tool.Available && !tool.Unassigned {
+			unwired++
+		}
+	}
+	if unwired == 0 {
+		t.Skip("harness wires every integration; no unwired tool to exclude")
+	}
+
+	var roster struct {
+		Butlers []struct {
+			ToolsAllowed   int `json:"toolsAllowed"`
+			ToolsAvailable int `json:"toolsAvailable"`
+		} `json:"butlers"`
+	}
+	if res := h.doToken(token, http.MethodGet, "/api/v1/butlers", nil, &roster); res.StatusCode != http.StatusOK || len(roster.Butlers) != 1 {
+		t.Fatalf("roster = %d %+v", res.StatusCode, roster.Butlers)
+	}
+	row := roster.Butlers[0]
+
+	wired := h.s.availableTools(b.AgentClass, !b.CarriesActionAuthority())
+	want := len(wired)
+	ceiling := 0
+	for _, tool := range h.s.butlerManifestFor(b, principal.Identity{ActingFor: "mika"}).Tools {
+		ceiling++
+		if tool.Available && !wired[tool.Name] {
+			want++
+		}
+	}
+	if row.ToolsAvailable != want {
+		t.Fatalf("toolsAvailable = %d, want %d wired (+ Person-bound); structural ceiling is %d", row.ToolsAvailable, want, ceiling)
+	}
+	if row.ToolsAvailable >= ceiling || row.ToolsAllowed > row.ToolsAvailable {
+		t.Fatalf("counts %+v must exclude %d unwired tools from a ceiling of %d", row, unwired, ceiling)
 	}
 }
