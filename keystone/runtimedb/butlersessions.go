@@ -384,10 +384,14 @@ func (db *DB) ListButlerSessions(limit int, f ButlerSessionFilter) ([]ButlerSess
 		args = append(args, f.Butler)
 	}
 	if f.PersonID != "" {
-		clauses = append(clauses, "(person_id = ? OR (person_id IS NULL AND acting_for = ?))")
+		// The legacy label fallback stays NOCASE: the household has one
+		// Sandy however she signed in (ADR-W032 A4).
+		clauses = append(clauses, "(person_id = ? OR (person_id IS NULL AND acting_for = ? COLLATE NOCASE))")
 		args = append(args, f.PersonID, f.ActingFor)
 	} else if f.ActingFor != "" {
-		clauses = append(clauses, "acting_for = ?")
+		// NOCASE, because the household has one Sandy however she
+		// signed in (ADR-W032 A4) and the door admits her either way.
+		clauses = append(clauses, "acting_for = ? COLLATE NOCASE")
 		args = append(args, f.ActingFor)
 	}
 	if f.ScopeAgents {
