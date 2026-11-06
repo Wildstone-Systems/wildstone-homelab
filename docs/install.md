@@ -2,8 +2,14 @@
 
 Reviewed 2026-10-22 against `60df9dcbc1daa99d43f7692eb83f7d72f7070956`.
 Canonical public repository: [Wildstone-Systems/wildstone-homelab](https://github.com/Wildstone-Systems/wildstone-homelab).
-These instructions describe the existing Linux/systemd installer, not the
-proposed k3s runtime of [ADR-W050](decisions/ADR-W050-multi-node-runtime-kubernetes-engine-host-providers-editions.md). See also [ADR-W051](decisions/ADR-W051-failure-domains-and-recovery.md).
+> [!NOTE]
+> **Current path vs. new direction.** This guide covers the existing
+> Linux/systemd + Docker installer, which is what releases install today.
+> The amended [ADR-W050](decisions/ADR-W050-multi-node-runtime-kubernetes-engine-host-providers-editions.md) (2026-11-01) moves application deployment
+> to K3s, Flux and upstream Helm charts, with Wildstone as the product layer
+> on top. That path is in progress and has no supported installer yet; see the
+> [migration plan](design/w050-migration-plan.md). Expect this guide to change. See also
+> [ADR-W051](decisions/ADR-W051-failure-domains-and-recovery.md) (proposed).
 
 ## Choose the existing installation path
 
