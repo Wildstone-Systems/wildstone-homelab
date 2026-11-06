@@ -38,6 +38,9 @@ STUB
 
 cat > "$bin/ctr" <<'STUB'
 #!/bin/bash
+if [[ $1 == ctr ]]; then
+  shift
+fi
 if [[ $1 == --address ]]; then
   [[ $2 == /run/k3s/containerd/containerd.sock && $3 == --namespace && $4 == k8s.io ]] || exit 9
   shift 4
@@ -52,6 +55,7 @@ case "${CTR_MODE:-ok}:$*" in
 esac
 STUB
 chmod +x "$bin/docker" "$bin/ctr"
+cp "$bin/ctr" "$bin/k3s"
 
 run_report() {
   local output=$1
@@ -118,15 +122,17 @@ assert_report "$output" 'r["filesystem"]["belowMinimum"] is True and [c["id"] fo
 test -f "$root/var/cache/wildstone/build/disposable"
 mv "$bin/ctr.disabled" "$bin/ctr"
 
-# Containerd-only.
+# Containerd-only using the client bundled by the repository's k3s install.
 reset_root
 touch "$root/run/k3s/containerd/containerd.sock"
 mkdir -p "$root/var/lib/rancher/k3s/agent/containerd/io.containerd.content.v1.content" \
   "$root/var/lib/rancher/k3s/agent/containerd/io.containerd.snapshotter.v1.overlayfs"
 mv "$bin/docker" "$bin/docker.disabled"
+mv "$bin/ctr" "$bin/ctr.disabled"
 run_report "$output"
 assert_report "$output" 'r["status"] == "complete" and r["runtime"]["containerd"]["unreferencedImageCount"] == 1'
 assert_report "$output" 'r["runtime"]["docker"]["presence"] == "not_present"'
+mv "$bin/ctr.disabled" "$bin/ctr"
 mv "$bin/docker.disabled" "$bin/docker"
 
 # Coexistence hosts collect both runtimes without double-counting category totals.
@@ -153,6 +159,19 @@ run_report "$output" || status=$?
 assert_report "$output" 'r["status"] == "partial" and "docker_binary_missing_with_runtime" in r["errors"]'
 mv "$bin/docker.disabled" "$bin/docker"
 mv "$bin/ctr.disabled" "$bin/ctr"
+
+# A present k3s runtime with neither supported client fails visibly.
+reset_root
+touch "$root/run/k3s/containerd/containerd.sock"
+mkdir -p "$root/var/lib/rancher/k3s/agent/containerd/io.containerd.content.v1.content"
+mv "$bin/ctr" "$bin/ctr.disabled"
+mv "$bin/k3s" "$bin/k3s.disabled"
+status=0
+run_report "$output" || status=$?
+[[ $status == 1 ]]
+assert_report "$output" 'r["status"] == "partial" and "containerd_binary_missing_with_runtime" in r["errors"] and r["runtime"]["containerd"]["unreferencedImageCount"] is None'
+mv "$bin/ctr.disabled" "$bin/ctr"
+mv "$bin/k3s.disabled" "$bin/k3s"
 
 # Failed and malformed runtime reference output fails closed and reports no unreferenced count.
 reset_root
@@ -231,4 +250,4 @@ if grep -Eiq '^Exec(Start|StartPre|StartPost)=.*(delete|prune|remove|rm )' \
   exit 1
 fi
 
-echo 'storage-growth-report: 16 offline scenarios passed'
+echo 'storage-growth-report: 18 offline scenarios passed'

@@ -18,8 +18,7 @@ RESTIC_IMAGE = (
     "restic/restic@sha256:9940e6c7421ab3a21ee9fdc4e91596d04c792b600d31b102696c75cbf3ac4481"
 )
 DOCKER = ["docker", "--host", "unix:///var/run/docker.sock"]
-CONTAINERD = [
-    "ctr",
+CONTAINERD_ARGS = [
     "--address",
     "/run/k3s/containerd/containerd.sock",
     "--namespace",
@@ -149,6 +148,14 @@ class Collector:
             self.errors.append(error_code)
             return None, False
         return (result.stdout, True) if result.returncode == 0 else (None, True)
+
+    @staticmethod
+    def containerd_client() -> list[str] | None:
+        if shutil.which("ctr") is not None:
+            return ["ctr", *CONTAINERD_ARGS]
+        if shutil.which("k3s") is not None:
+            return ["k3s", "ctr", *CONTAINERD_ARGS]
+        return None
 
     @staticmethod
     def nonempty_lines(output: str) -> list[str]:
@@ -321,7 +328,8 @@ class Collector:
                 "referencedImageCount": None,
                 "unreferencedImageCount": None,
             }
-        if shutil.which("ctr") is None:
+        containerd_client = self.containerd_client()
+        if containerd_client is None:
             self.errors.append("containerd_binary_missing_with_runtime")
             return {
                 "presence": "present",
@@ -336,11 +344,11 @@ class Collector:
             }
 
         images_output = self.command(
-            [*CONTAINERD, "images", "list", "-q"],
+            [*containerd_client, "images", "list", "-q"],
             "containerd_image_inventory_failed",
         )
         containers_output = self.command(
-            [*CONTAINERD, "containers", "list", "-q"],
+            [*containerd_client, "containers", "list", "-q"],
             "containerd_container_inventory_failed",
         )
         protected_refs, protected_ok = self.protected_images()
@@ -349,7 +357,7 @@ class Collector:
         if containers_output is not None:
             for container_id in self.nonempty_lines(containers_output):
                 info = self.command(
-                    [*CONTAINERD, "containers", "info", container_id],
+                    [*containerd_client, "containers", "info", container_id],
                     "containerd_container_reference_failed",
                 )
                 if info is None:
