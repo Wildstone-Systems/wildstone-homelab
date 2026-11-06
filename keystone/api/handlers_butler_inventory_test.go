@@ -307,6 +307,28 @@ func TestPersonSessionInventoryKeepsOwnUnstampedHistory(t *testing.T) {
 	if res.StatusCode != http.StatusOK || len(sessions) != 1 || sessions[0].ID != id {
 		t.Fatalf("legacy session inventory = %d %+v, want %s", res.StatusCode, sessions, id)
 	}
+
+	// Until ADR-W032 A4's normalization migration exists, case-distinct
+	// handles may be different canonical People. Their unstamped legacy
+	// rows therefore use an exact fallback on the Person-scoped Console
+	// path, even though the older family portal remains label-only and
+	// case-insensitive for compatibility.
+	caseDistinctID, err := h.s.DB.InsertButlerSession(runtimedb.ButlerSession{
+		Principal: "legacy-runtime", ActingFor: "Mika",
+		Surface: runtimedb.ButlerSurfaceFamily, Mode: runtimedb.ButlerModeFull, FinalText: "case distinct",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	caseDistinctToken := h.console(runtimedb.RoleAdmin, "Mika")
+	sessions = nil
+	res = h.doToken(caseDistinctToken, http.MethodGet, "/api/v1/butler/sessions", nil, &sessions)
+	if res.StatusCode != http.StatusOK || len(sessions) != 1 || sessions[0].ID != caseDistinctID {
+		t.Fatalf("case-distinct legacy inventory = %d %+v, want only %s", res.StatusCode, sessions, caseDistinctID)
+	}
+	if res := h.doToken(caseDistinctToken, http.MethodGet, "/api/v1/butler/sessions/"+id, nil, nil); res.StatusCode != http.StatusNotFound {
+		t.Fatalf("case-distinct legacy detail = %d, want 404", res.StatusCode)
+	}
 }
 
 // Creation, duplication and retirement are one Console management lifecycle.

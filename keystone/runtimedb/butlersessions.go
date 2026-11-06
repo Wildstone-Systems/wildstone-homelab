@@ -384,13 +384,15 @@ func (db *DB) ListButlerSessions(limit int, f ButlerSessionFilter) ([]ButlerSess
 		args = append(args, f.Butler)
 	}
 	if f.PersonID != "" {
-		// The legacy label fallback stays NOCASE: the household has one
-		// Sandy however she signed in (ADR-W032 A4).
-		clauses = append(clauses, "(person_id = ? OR (person_id IS NULL AND acting_for = ? COLLATE NOCASE))")
+		// A canonical Person makes the legacy fallback exact. Case-distinct
+		// handles can name different People until ADR-W032 A4's migration is
+		// built, so folding here would disclose one Person's unstamped history
+		// to the other.
+		clauses = append(clauses, "(person_id = ? OR (person_id IS NULL AND acting_for = ?))")
 		args = append(args, f.PersonID, f.ActingFor)
 	} else if f.ActingFor != "" {
-		// NOCASE, because the household has one Sandy however she
-		// signed in (ADR-W032 A4) and the door admits her either way.
+		// The legacy family portal has no canonical Person stamp and has
+		// historically treated the forwarded label case-insensitively.
 		clauses = append(clauses, "acting_for = ? COLLATE NOCASE")
 		args = append(args, f.ActingFor)
 	}
