@@ -688,6 +688,30 @@ func TestConcurrentRunRefused(t *testing.T) {
 	}
 }
 
+// TestRunClaimCannotOutliveReservation proves a retained context cannot reuse
+// a released claim or delete the newer reservation that follows it.
+func TestRunClaimCannotOutliveReservation(t *testing.T) {
+	e := &Engine{}
+	stale, releaseStale, ok := e.claimRun(context.Background(), "photos")
+	if !ok || !e.claimedRun(stale, "photos") {
+		t.Fatal("first claim was not live")
+	}
+	releaseStale()
+	if e.claimedRun(stale, "photos") {
+		t.Fatal("released context still carries a live claim")
+	}
+
+	current, releaseCurrent, ok := e.claimRun(context.Background(), "photos")
+	if !ok || !e.claimedRun(current, "photos") {
+		t.Fatal("replacement claim was not live")
+	}
+	releaseStale()
+	if !e.claimedRun(current, "photos") {
+		t.Fatal("stale release deleted the replacement claim")
+	}
+	releaseCurrent()
+}
+
 // TestScheduledWorkDefersWhileRunNowIsActive proves a scheduler tick does
 // not turn an expected overlap into failed backup/check/drill records. The
 // manual local and off-site passes retain the plan reservation, and duties

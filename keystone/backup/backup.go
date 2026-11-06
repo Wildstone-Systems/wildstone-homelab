@@ -112,20 +112,34 @@ type Engine struct {
 
 type claimedRunKey struct{}
 
+// runClaim is the opaque identity of one live reservation. The map and the
+// context must point at the same claim before nested provenance work may reuse
+// it; a context retained after release cannot authorize a later run.
+type runClaim struct {
+	plan string
+}
+
 // claimRun reserves the whole plan, not just one provenance record. A manual
 // backup can contain a local pass followed by an off-site copy, while a
 // scheduled worker can contain backup, check, and drill duties. Keeping the
 // reservation across that sequence prevents the two paths from interleaving.
 func (e *Engine) claimRun(ctx context.Context, plan string) (context.Context, func(), bool) {
-	if _, busy := e.running.LoadOrStore(plan, struct{}{}); busy {
+	claim := &runClaim{plan: plan}
+	if _, busy := e.running.LoadOrStore(plan, claim); busy {
 		return ctx, nil, false
 	}
-	return context.WithValue(ctx, claimedRunKey{}, plan), func() { e.running.Delete(plan) }, true
+	return context.WithValue(ctx, claimedRunKey{}, claim), func() {
+		e.running.CompareAndDelete(plan, claim)
+	}, true
 }
 
-func claimedRun(ctx context.Context, plan string) bool {
-	claimed, _ := ctx.Value(claimedRunKey{}).(string)
-	return claimed == plan
+func (e *Engine) claimedRun(ctx context.Context, plan string) bool {
+	claim, _ := ctx.Value(claimedRunKey{}).(*runClaim)
+	if claim == nil || claim.plan != plan {
+		return false
+	}
+	current, ok := e.running.Load(plan)
+	return ok && current == claim
 }
 
 // resticExit describes restic's documented exit codes (restic 0.17+) for
@@ -568,7 +582,7 @@ func (e *Engine) restoreInto(ctx context.Context, r resource.Resource, targetVol
 // — the standing approval carried by the committed BackupPlan itself),
 // the backup_runs ledger row, events, and the terminal transition.
 func (e *Engine) withProvenance(ctx context.Context, r resource.Resource, kind runtimedb.BackupRunKind, summary string, fn func(context.Context) error) error {
-	if !claimedRun(ctx, r.Metadata.Name) {
+	if !e.claimedRun(ctx, r.Metadata.Name) {
 		var release func()
 		var ok bool
 		ctx, release, ok = e.claimRun(ctx, r.Metadata.Name)
