@@ -5,6 +5,7 @@ import (
 	"regexp"
 
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/redact"
+	"github.com/Wildstone-Systems/wildstone-homelab/keystone/runtimedb"
 )
 
 // Deployment review/status use a typed serialization exception, like artifact
@@ -15,6 +16,27 @@ import (
 var deploymentCommit = regexp.MustCompile(`^[0-9a-f]{40}$`)
 var deploymentDigest = regexp.MustCompile(`^[0-9a-f]{64}$`)
 var deploymentFluxRevision = regexp.MustCompile(`^deploy@sha1:[0-9a-f]{40}$`)
+var deploymentKubeName = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
+var deploymentRecipientFingerprint = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+
+func safeDeploymentSecretReview(raw json.RawMessage) bool {
+	var value runtimedb.DeploymentSecretReview
+	if json.Unmarshal(raw, &value) != nil || value.Validation != "encrypted-reference-validated" || value.SecretGeneration == 0 || !deploymentDigest.MatchString(value.CiphertextRevision) || value.OutputPath != "secret.sops.yaml" || value.RestartPolicy != "recreate-on-ciphertext-revision" || value.RestartEffect != "singleton-recreate-bounded-outage" || value.PrivateFileCount != 1 {
+		return false
+	}
+	if !deploymentKubeName.MatchString(value.Target.Namespace) || !deploymentKubeName.MatchString(value.Target.Name) || value.Target.Key != "jwt-secret" || value.Target.Type != "Opaque" || !deploymentKubeName.MatchString(value.OuterKustomization.Namespace) || !deploymentKubeName.MatchString(value.OuterKustomization.Name) || !deploymentKubeName.MatchString(value.DecryptionSecretName) {
+		return false
+	}
+	if len(value.RecipientFingerprints) == 0 {
+		return false
+	}
+	for _, fingerprint := range value.RecipientFingerprints {
+		if !deploymentRecipientFingerprint.MatchString(fingerprint) {
+			return false
+		}
+	}
+	return true
+}
 
 func redactDeploymentFields(value any, revisions map[string]*regexp.Regexp) (json.RawMessage, error) {
 	raw, err := json.Marshal(value)
@@ -27,6 +49,10 @@ func redactDeploymentFields(value any, revisions map[string]*regexp.Regexp) (jso
 	}
 	for key, original := range fields {
 		fields[key] = json.RawMessage(redact.String(string(original)))
+		if key == "secret" && safeDeploymentSecretReview(original) {
+			fields[key] = original
+			continue
+		}
 		if pattern := revisions[key]; pattern != nil {
 			var value string
 			if json.Unmarshal(original, &value) == nil && pattern.MatchString(value) {

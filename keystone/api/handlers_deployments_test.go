@@ -32,7 +32,7 @@ func deploymentHarness(t *testing.T, observation ...*deployment.ObservationConfi
 	}
 	h.s.State.Accepted = h.s.DB.StatefileHead
 	root := t.TempDir()
-	cfg := deployment.Config{Instance: "example-app", ProfileFile: filepath.Join(root, "profile.yaml"), EncryptedSecretFile: filepath.Join(root, "secret.sops.yaml"), Repository: filepath.Join(root, "deployment.git"), MirrorRepository: filepath.Join(root, "delivery.git"), Bindings: capability.HelmBindings{Name: "example-app", Namespace: "example-app", ServiceAccount: "example-reconciler", ConfigClaim: "example-config", MetadataClaim: "example-metadata", MediaClaim: "example-media", SecretName: "example-jwt"}}
+	cfg := deployment.Config{Instance: "example-app", ProfileFile: filepath.Join(root, "profile.yaml"), EncryptedSecretFile: filepath.Join(root, "secret.sops.yaml"), Repository: filepath.Join(root, "deployment.git"), MirrorRepository: filepath.Join(root, "delivery.git"), Bindings: capability.HelmBindings{Name: "example-app", Namespace: "example-app", ServiceAccount: "example-reconciler", ConfigClaim: "example-config", MetadataClaim: "example-metadata", MediaClaim: "example-media", SecretName: "example-jwt"}, SecretDelivery: &deployment.SecretDeliveryConfig{Generation: 1, OutputPath: "secret.sops.yaml", KustomizationNamespace: "example-flux", KustomizationName: "example-app", DecryptionSecretName: "example-age-identity", RestartPolicy: "recreate-on-ciphertext-revision"}}
 	profile, err := os.ReadFile("../capability/testdata/audiobookshelf-helm.yaml")
 	if err != nil {
 		t.Fatal(err)
@@ -40,7 +40,7 @@ func deploymentHarness(t *testing.T, observation ...*deployment.ObservationConfi
 	if err := os.WriteFile(cfg.ProfileFile, profile, 0600); err != nil {
 		t.Fatal(err)
 	}
-	secret, err := yaml.Marshal(map[string]any{"apiVersion": "v1", "kind": "Secret", "metadata": map[string]any{"name": cfg.Bindings.SecretName, "namespace": cfg.Bindings.Namespace}, "stringData": map[string]any{"jwt-secret": "ENC[" + "REPLACED-payload]"}, "sops": map[string]any{"mac": "ENC[" + "REPLACED-mac]"}})
+	secret, err := yaml.Marshal(map[string]any{"apiVersion": "v1", "kind": "Secret", "metadata": map[string]any{"name": cfg.Bindings.SecretName, "namespace": cfg.Bindings.Namespace}, "type": "Opaque", "stringData": map[string]any{"jwt-secret": "ENC[" + "REPLACED-payload]"}, "sops": map[string]any{"age": []any{map[string]any{"recipient": "age1syntheticrecipientnotadeploymentidentity", "enc": "-----BEGIN AGE ENCRYPTED FILE-----\nREPLACED-stanza\n-----END AGE ENCRYPTED FILE-----\n"}}, "lastmodified": "2026-11-06T00:00:00Z", "mac": "ENC[" + "REPLACED-mac]", "encrypted_regex": "^(data|stringData)$", "version": "3.13.3"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,8 +103,12 @@ func TestDeploymentPublicPlanRequiresFreshOwnerAndExactReview(t *testing.T) {
 			t.Errorf("missing review %s", field)
 		}
 	}
+	secretReview, ok := review["secret"].(map[string]any)
+	if !ok || secretReview["validation"] != "encrypted-reference-validated" || secretReview["secretGeneration"] != float64(1) || secretReview["outputPath"] != "secret.sops.yaml" || secretReview["privateFileCount"] != float64(1) {
+		t.Fatalf("safe managed Secret review missing: %v", review["secret"])
+	}
 	raw, _ := json.Marshal(out)
-	for _, private := range []string{cfg.Repository, cfg.MirrorRepository, cfg.EncryptedSecretFile, "REPLACED-payload", "REPLACED-mac"} {
+	for _, private := range []string{cfg.Repository, cfg.MirrorRepository, cfg.EncryptedSecretFile, "REPLACED-payload", "REPLACED-mac", "REPLACED-stanza", "age1syntheticrecipientnotadeploymentidentity", "ENC["} {
 		if strings.Contains(string(raw), private) {
 			t.Errorf("review exposed private material")
 		}

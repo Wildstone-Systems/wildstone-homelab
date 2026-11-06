@@ -323,6 +323,10 @@ func (s *Server) runFamilySession(ctx context.Context, message, member, systemEx
 	if code, err := s.turnHasAPerson(member); err != nil {
 		return nil, code, err
 	}
+	generation, genErr := s.admittedGeneration(ctx, member)
+	if genErr != nil {
+		return nil, http.StatusForbidden, genErr
+	}
 	gateway := host.householdGateway(member)
 	if group {
 		gateway = host.householdGroupGateway(member)
@@ -348,6 +352,11 @@ func (s *Server) runFamilySession(ctx context.Context, message, member, systemEx
 	if err != nil {
 		return nil, http.StatusBadGateway, fmt.Errorf("household butler session: %w", err)
 	}
+	// A model call is not a lease on identity: recheck before anything
+	// is persisted or published.
+	if err := s.DB.CheckButlerMemberGeneration(member, generation); err != nil {
+		return nil, http.StatusForbidden, runtimedb.ErrNotAdmitted
+	}
 
 	// Persist the session (ADR-W017 A1, unchanged for this surface): the
 	// record is principal-bound and carries the surface, so an audit can
@@ -370,15 +379,16 @@ func (s *Server) runFamilySession(ctx context.Context, message, member, systemEx
 	}
 	finalText := redact.String(tr.FinalText)
 	sessionID, err := s.recordTurn(prior, runtimedb.ButlerSession{
-		Principal:         butlerPrincipal,
-		ActingFor:         member,
-		Provider:          tr.Audit.Provider,
-		Mode:              mode,
-		Surface:           runtimedb.ButlerSurfaceFamily,
-		InboundConnection: connection,
-		FinalText:         finalText,
-		Capped:            tr.CappedIterations,
-		TranscriptJSON:    redact.String(string(transcriptJSON)),
+		Principal:          butlerPrincipal,
+		ActingFor:          member,
+		Provider:           tr.Audit.Provider,
+		Mode:               mode,
+		Surface:            runtimedb.ButlerSurfaceFamily,
+		IdentityGeneration: generation,
+		InboundConnection:  connection,
+		FinalText:          finalText,
+		Capped:             tr.CappedIterations,
+		TranscriptJSON:     redact.String(string(transcriptJSON)),
 		Turns: []runtimedb.ButlerTurn{
 			{Role: runtimedb.ButlerRoleUser, Text: redact.String(message), Source: turnSource(ctx)},
 			{

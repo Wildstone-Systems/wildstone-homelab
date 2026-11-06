@@ -26,7 +26,7 @@ const deploymentMarker = "wildstone-local-deployment-v1"
 type LocalDeployment struct{ root string }
 
 var deploymentSHA = regexp.MustCompile(`^[0-9a-f]{40}$`)
-var deploymentFiles = map[string]bool{"source.yaml": true, "release.yaml": true, "kustomization.yaml": true}
+var deploymentFiles = map[string]bool{"source.yaml": true, "release.yaml": true, "kustomization.yaml": true, "secret.sops.yaml": true}
 
 // OpenLocalDeployment creates a private dedicated bare repository, or reopens
 // one previously created here. It refuses source checkouts and foreign repos.
@@ -199,7 +199,15 @@ func (d *LocalDeployment) Build(expected, operation string, files map[string][]b
 	if !regexp.MustCompile(`^[a-zA-Z0-9-]{1,80}$`).MatchString(operation) {
 		return "", fmt.Errorf("deployment: invalid operation id")
 	}
-	if len(files) != len(deploymentFiles) {
+	if len(files) != 3 && len(files) != 4 {
+		return "", fmt.Errorf("deployment: exact projection file set required")
+	}
+	for _, required := range []string{"source.yaml", "release.yaml", "kustomization.yaml"} {
+		if len(files[required]) == 0 {
+			return "", fmt.Errorf("deployment: exact projection file set required")
+		}
+	}
+	if len(files) == 4 && len(files["secret.sops.yaml"]) == 0 {
 		return "", fmt.Errorf("deployment: exact projection file set required")
 	}
 	var names []string

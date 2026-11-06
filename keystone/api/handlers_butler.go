@@ -498,6 +498,10 @@ func (s *Server) runAdminButlerSession(ctx context.Context, message, actingFor, 
 	if code, err := s.turnHasAPerson(actingFor); err != nil {
 		return nil, code, err
 	}
+	generation, genErr := s.admittedGeneration(ctx, actingFor)
+	if genErr != nil {
+		return nil, http.StatusForbidden, genErr
+	}
 	// A COPY, because askGw is the host's gateway and is shared by
 	// every request in flight: binding this person to it would be both
 	// a data race and one caller's identity answering for another's.
@@ -517,6 +521,11 @@ func (s *Server) runAdminButlerSession(ctx context.Context, message, actingFor, 
 		// The provider failed mid-session; nothing durable happened (no
 		// proposals are submitted until the session completes).
 		return nil, http.StatusBadGateway, fmt.Errorf("butler session: %w", err)
+	}
+	// A model call is not a lease on identity: recheck before proposals,
+	// persistence, or publication.
+	if err := s.DB.CheckButlerMemberGeneration(actingFor, generation); err != nil {
+		return nil, http.StatusForbidden, runtimedb.ErrNotAdmitted
 	}
 
 	// Submit every accepted proposal through the ONE proposal pipeline
@@ -558,16 +567,17 @@ func (s *Server) runAdminButlerSession(ctx context.Context, message, actingFor, 
 		},
 	}
 	sessionID, err := s.recordTurn(prior, runtimedb.ButlerSession{
-		Principal:         legacyRuntimePrincipal,
-		ActingFor:         actingFor,
-		Provider:          tr.Audit.Provider,
-		Mode:              askMode,
-		Surface:           runtimedb.ButlerSurfaceAdmin,
-		InboundConnection: connection,
-		FinalText:         finalText,
-		Capped:            tr.CappedIterations,
-		TranscriptJSON:    redact.String(string(transcriptJSON)),
-		Turns:             turns,
+		Principal:          legacyRuntimePrincipal,
+		ActingFor:          actingFor,
+		Provider:           tr.Audit.Provider,
+		Mode:               askMode,
+		Surface:            runtimedb.ButlerSurfaceAdmin,
+		IdentityGeneration: generation,
+		InboundConnection:  connection,
+		FinalText:          finalText,
+		Capped:             tr.CappedIterations,
+		TranscriptJSON:     redact.String(string(transcriptJSON)),
+		Turns:              turns,
 	})
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
