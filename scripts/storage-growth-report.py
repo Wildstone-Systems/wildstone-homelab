@@ -182,6 +182,17 @@ class Collector:
     def nonempty_lines(output: str) -> list[str]:
         return [line.strip() for line in output.splitlines() if line.strip()]
 
+    @staticmethod
+    def docker_familiar_reference(image_ref: str) -> str:
+        """Match Docker's familiar-name display for Docker Hub references."""
+        for registry in ("docker.io/", "index.docker.io/"):
+            if image_ref.startswith(registry):
+                image_ref = image_ref[len(registry) :]
+                if image_ref.startswith("library/"):
+                    image_ref = image_ref[len("library/") :]
+                break
+        return image_ref
+
     def docker_images(self, output: str | None) -> tuple[set[str], dict[str, str], bool]:
         """Return unique image IDs and their public references from JSON lines."""
         if output is None:
@@ -208,13 +219,13 @@ class Collector:
                 return set(), {}, False
             images.add(image_id)
             if repository != "<none>" and tag != "<none>":
-                reference = f"{repository}:{tag}"
+                reference = self.docker_familiar_reference(f"{repository}:{tag}")
                 if reference in references and references[reference] != image_id:
                     self.errors.append("docker_image_inventory_malformed")
                     return set(), {}, False
                 references[reference] = image_id
             if repository != "<none>" and digest != "<none>":
-                reference = f"{repository}@{digest}"
+                reference = self.docker_familiar_reference(f"{repository}@{digest}")
                 if reference in references and references[reference] != image_id:
                     self.errors.append("docker_image_inventory_malformed")
                     return set(), {}, False
@@ -272,7 +283,8 @@ class Collector:
         )
         path = self.path(configured)
         if not path.exists():
-            return sorted(refs), True
+            self.errors.append("protected_image_inventory_missing")
+            return sorted(refs), False
         try:
             for line in path.read_text(encoding="utf-8").splitlines():
                 line = line.strip()
@@ -363,8 +375,9 @@ class Collector:
                 else:
                     references.add(self.nonempty_lines(image_id)[0])
         for image_ref in protected_refs:
-            if image_ref in image_refs:
-                references.add(image_refs[image_ref])
+            familiar_ref = self.docker_familiar_reference(image_ref)
+            if familiar_ref in image_refs:
+                references.add(image_refs[familiar_ref])
 
         if references - images:
             self.errors.append("docker_reference_unknown")
@@ -467,9 +480,12 @@ class Collector:
                     references_ok = False
                     continue
                 try:
-                    image_ref = json.loads(info).get("Image")
+                    decoded_info = json.loads(info)
                 except json.JSONDecodeError:
-                    image_ref = None
+                    decoded_info = None
+                image_ref = (
+                    decoded_info.get("Image") if isinstance(decoded_info, dict) else None
+                )
                 if not isinstance(image_ref, str) or not image_ref:
                     self.errors.append("containerd_container_reference_malformed")
                     references_ok = False

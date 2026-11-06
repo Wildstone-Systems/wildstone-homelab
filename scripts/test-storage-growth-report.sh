@@ -24,9 +24,9 @@ case "${DOCKER_MODE:-ok}:$*" in
   *:image\ ls*) printf '%s\n' \
     '{"ID":"sha256:live","Repository":"example.internal/live","Tag":"latest","Digest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}' \
     '{"ID":"sha256:restic","Repository":"restic/restic","Tag":"latest","Digest":"sha256:9940e6c7421ab3a21ee9fdc4e91596d04c792b600d31b102696c75cbf3ac4481"}' \
-    '{"ID":"sha256:scheduled","Repository":"example.internal/scheduled","Tag":"latest","Digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}' \
+    '{"ID":"sha256:scheduled","Repository":"busybox","Tag":"latest","Digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}' \
     '{"ID":"sha256:unused","Repository":"example.internal/unused","Tag":"latest","Digest":"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}' ;;
-  *:'ps -aq --no-trunc') printf '%s\n' live-container scheduled-container ;;
+  *:'ps -aq --no-trunc') printf '%s\n' live-container ;;
   *:'container inspect --format {{.Image}} live-container') printf '%s\n' sha256:live ;;
   *:'container inspect --format {{.Image}} scheduled-container') printf '%s\n' sha256:scheduled ;;
   *:'image inspect --format {{.Size}} sha256:live') printf '%s\n' 100 ;;
@@ -50,6 +50,11 @@ case "${CTR_MODE:-ok}:$*" in
   fail:*) exit 7 ;;
   inventory-malformed:'images list') printf '%s\n' 'REF TYPE DIGEST' 'example.internal/broken text not-a-digest' ;;
   malformed:'containers info workload') printf '%s\n' '{not-json' ;;
+  nonobject-null:'containers info workload') printf '%s\n' 'null' ;;
+  nonobject-array:'containers info workload') printf '%s\n' '[]' ;;
+  nonobject-string:'containers info workload') printf '%s\n' '"example.internal/not-an-object"' ;;
+  nonobject-number:'containers info workload') printf '%s\n' '7' ;;
+  nonobject-boolean:'containers info workload') printf '%s\n' 'true' ;;
   unknown:'containers info workload') printf '%s\n' '{"Image":"example.internal/missing:latest"}' ;;
   *:'images list') printf '%s\n' \
     'REF TYPE DIGEST SIZE PLATFORMS LABELS' \
@@ -96,7 +101,7 @@ reset_root() {
   mkdir -p "$root/etc/wildstone" "$root/var/log" "$root/var/run" "$root/run/k3s/containerd"
   printf '%s\n' \
     '# scheduled job inventory' \
-    'example.internal/scheduled@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' \
+    'docker.io/library/busybox@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' \
     > "$root/etc/wildstone/storage-growth.protected-images"
 }
 
@@ -217,6 +222,12 @@ for mode in container-empty container-multiline; do
   [[ $status == 1 ]]
   assert_report "$output" 'r["status"] == "partial" and "docker_container_reference_malformed" in r["errors"] and r["runtime"]["docker"]["unreferencedImageCount"] is None'
 done
+# Missing scheduled-image inventory cannot make a present runtime look complete.
+rm "$root/etc/wildstone/storage-growth.protected-images"
+status=0
+run_report "$output" || status=$?
+[[ $status == 1 ]]
+assert_report "$output" 'r["status"] == "partial" and "protected_image_inventory_missing" in r["errors"] and r["runtime"]["docker"]["unreferencedImageCount"] is None'
 reset_root
 touch "$root/run/k3s/containerd/containerd.sock"
 mkdir -p "$root/var/lib/rancher/k3s/agent/containerd/io.containerd.content.v1.content"
@@ -224,6 +235,12 @@ status=0
 run_report "$output" CTR_MODE=malformed || status=$?
 [[ $status == 1 ]]
 assert_report "$output" 'r["status"] == "partial" and "containerd_container_reference_malformed" in r["errors"]'
+for mode in nonobject-null nonobject-array nonobject-string nonobject-number nonobject-boolean; do
+  status=0
+  run_report "$output" CTR_MODE="$mode" || status=$?
+  [[ $status == 1 ]]
+  assert_report "$output" 'r["status"] == "partial" and "containerd_container_reference_malformed" in r["errors"] and r["runtime"]["containerd"]["unreferencedImageCount"] is None'
+done
 for mode in inventory-malformed unknown; do
   status=0
   run_report "$output" CTR_MODE="$mode" || status=$?

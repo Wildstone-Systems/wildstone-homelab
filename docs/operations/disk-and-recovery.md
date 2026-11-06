@@ -77,6 +77,9 @@ as `not_present`; a missing
 binary beside runtime storage, unreadable path, failed command, or malformed
 reference inventory makes the report `partial` and the service exits nonzero.
 No incomplete reference scan reports an unreferenced-image count.
+The scheduled-image inventory is part of that reference scan: a missing or
+unreadable file also makes a present runtime report partial. The built-in
+Restic reference remains protected even in that failure state.
 Hard-linked files contribute allocated bytes once within each category scan, so
 rotations or caches that retain multiple names for one inode do not inflate a
 sample.
