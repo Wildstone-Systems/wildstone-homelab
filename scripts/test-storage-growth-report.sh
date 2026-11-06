@@ -18,16 +18,17 @@ if [[ $1 == --host ]]; then
 fi
 case "${DOCKER_MODE:-ok}:$*" in
   fail:*) exit 7 ;;
-  malformed:'image ls --no-trunc --format {{.ID}}') printf '\n' ;;
+  malformed:image\ ls*) printf '%s\n' '{not-json' ;;
   container-empty:'container inspect --format {{.Image}} live-container') printf '\n' ;;
   container-multiline:'container inspect --format {{.Image}} live-container') printf '%s\n' sha256:live sha256:extra ;;
-  protected-multiline:'image inspect --format {{.Id}} example.internal/scheduled@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa') printf '%s\n' sha256:scheduled sha256:extra ;;
-  *:'image ls --no-trunc --format {{.ID}}') printf '%s\n' sha256:live sha256:restic sha256:scheduled sha256:unused ;;
-  *:'ps -aq --no-trunc') printf '%s\n' live-container scheduled-container ;;
+  *:image\ ls*) printf '%s\n' \
+    '{"ID":"sha256:live","Repository":"example.internal/live","Tag":"latest","Digest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}' \
+    '{"ID":"sha256:restic","Repository":"restic/restic","Tag":"latest","Digest":"sha256:9940e6c7421ab3a21ee9fdc4e91596d04c792b600d31b102696c75cbf3ac4481"}' \
+    '{"ID":"sha256:scheduled","Repository":"busybox","Tag":"latest","Digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}' \
+    '{"ID":"sha256:unused","Repository":"example.internal/unused","Tag":"latest","Digest":"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}' ;;
+  *:'ps -aq --no-trunc') printf '%s\n' live-container ;;
   *:'container inspect --format {{.Image}} live-container') printf '%s\n' sha256:live ;;
   *:'container inspect --format {{.Image}} scheduled-container') printf '%s\n' sha256:scheduled ;;
-  *:'image inspect --format {{.Id}} restic/restic@sha256:9940e6c7421ab3a21ee9fdc4e91596d04c792b600d31b102696c75cbf3ac4481') printf '%s\n' sha256:restic ;;
-  *:'image inspect --format {{.Id}} example.internal/scheduled@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa') printf '%s\n' sha256:scheduled ;;
   *:'image inspect --format {{.Size}} sha256:live') printf '%s\n' 100 ;;
   *:'image inspect --format {{.Size}} sha256:restic') printf '%s\n' 200 ;;
   *:'image inspect --format {{.Size}} sha256:scheduled') printf '%s\n' 250 ;;
@@ -47,10 +48,23 @@ if [[ $1 == --address ]]; then
 fi
 case "${CTR_MODE:-ok}:$*" in
   fail:*) exit 7 ;;
+  inventory-malformed:'images list') printf '%s\n' 'REF TYPE DIGEST' 'example.internal/broken text not-a-digest' ;;
   malformed:'containers info workload') printf '%s\n' '{not-json' ;;
-  *:'images list -q') printf '%s\n' example.internal/live@sha256:bbbb example.internal/scheduled@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa example.internal/unused@sha256:cccc ;;
+  nonobject-null:'containers info workload') printf '%s\n' 'null' ;;
+  nonobject-array:'containers info workload') printf '%s\n' '[]' ;;
+  nonobject-string:'containers info workload') printf '%s\n' '"example.internal/not-an-object"' ;;
+  nonobject-number:'containers info workload') printf '%s\n' '7' ;;
+  nonobject-boolean:'containers info workload') printf '%s\n' 'true' ;;
+  unknown:'containers info workload') printf '%s\n' '{"Image":"example.internal/missing:latest"}' ;;
+  *:'images list') printf '%s\n' \
+    'REF TYPE DIGEST SIZE PLATFORMS LABELS' \
+    'example.internal/live:latest application/vnd.oci.image.manifest.v1+json sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb 1.0MiB linux/amd64 -' \
+    'example.internal/live@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb application/vnd.oci.image.manifest.v1+json sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb 1.0MiB linux/amd64 -' \
+    'docker.io/restic/restic@sha256:9940e6c7421ab3a21ee9fdc4e91596d04c792b600d31b102696c75cbf3ac4481 application/vnd.oci.image.manifest.v1+json sha256:9940e6c7421ab3a21ee9fdc4e91596d04c792b600d31b102696c75cbf3ac4481 1.0MiB linux/amd64 -' \
+    'example.internal/scheduled@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa application/vnd.oci.image.manifest.v1+json sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa 1.0MiB linux/amd64 -' \
+    'example.internal/unused@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc application/vnd.oci.image.manifest.v1+json sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc 1.0MiB linux/amd64 -' ;;
   *:'containers list -q') printf '%s\n' workload ;;
-  *:'containers info workload') printf '%s\n' '{"Image":"example.internal/live@sha256:bbbb"}' ;;
+  *:'containers info workload') printf '%s\n' '{"Image":"example.internal/live:latest"}' ;;
   *) exit 8 ;;
 esac
 STUB
@@ -87,7 +101,7 @@ reset_root() {
   mkdir -p "$root/etc/wildstone" "$root/var/log" "$root/var/run" "$root/run/k3s/containerd"
   printf '%s\n' \
     '# scheduled job inventory' \
-    'example.internal/scheduled@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' \
+    'docker.io/library/busybox@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' \
     > "$root/etc/wildstone/storage-growth.protected-images"
 }
 
@@ -97,9 +111,12 @@ output="$fixture/report.json"
 reset_root
 touch "$root/var/run/docker.sock"
 mkdir -p "$root/var/lib/docker/image" "$root/var/lib/docker/overlay2" \
-  "$root/var/lib/docker/volumes/application-data/_data" "$root/var/cache/wildstone/build" \
+  "$root/var/lib/docker/volumes/application-data/_data" \
+  "$root/var/lib/docker/containers/live-container" "$root/var/cache/wildstone/build" \
   "$root/var/cache/unlisted"
 printf data > "$root/var/lib/docker/volumes/application-data/_data/preserve"
+printf log > "$root/var/lib/docker/containers/live-container/live-container-json.log"
+printf rotated > "$root/var/lib/docker/containers/live-container/live-container-json.log.1"
 printf old > "$root/var/cache/wildstone/build/disposable"
 printf old > "$root/var/cache/unlisted/not-a-candidate"
 touch -d '2026-09-01T00:00:00Z' "$root/var/cache/wildstone/build/disposable"
@@ -109,7 +126,20 @@ assert_report "$output" 'r["status"] == "complete" and r["runtime"]["docker"]["u
 assert_report "$output" 'r["runtime"]["containerd"]["presence"] == "not_present"'
 assert_report "$output" 'r["runtime"]["containerd"]["imageStorageStatus"] == "not_present"'
 assert_report "$output" '[c["id"] for c in r["candidates"]] == ["wildstone-build"]'
+assert_report "$output" 'r["categories"]["dockerContainerLogBytes"] > 0 and r["categories"]["dockerContainerLogStatus"] == "complete"'
 assert_report "$output" '"application-data" not in str(r) and "restic/restic" not in str(r) and "example.internal" not in str(r)'
+first_candidate_bytes=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["candidates"][0]["bytes"])' "$output")
+first_docker_log_bytes=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["categories"]["dockerContainerLogBytes"])' "$output")
+ln "$root/var/cache/wildstone/build/disposable" \
+  "$root/var/cache/wildstone/build/disposable-hardlink"
+ln "$root/var/lib/docker/containers/live-container/live-container-json.log.1" \
+  "$root/var/lib/docker/containers/live-container/live-container-json.log.2"
+printf metadata > "$root/var/lib/docker/containers/live-container/config.v2.json"
+run_report "$output"
+second_candidate_bytes=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["candidates"][0]["bytes"])' "$output")
+second_docker_log_bytes=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["categories"]["dockerContainerLogBytes"])' "$output")
+[[ $second_candidate_bytes == "$first_candidate_bytes" ]]
+[[ $second_docker_log_bytes == "$first_docker_log_bytes" ]]
 first_build_bytes=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["categories"]["buildCacheBytes"])' "$output")
 dd if=/dev/zero of="$root/var/cache/wildstone/build/new-growth" bs=4096 count=2 status=none
 run_report "$output"
@@ -119,6 +149,7 @@ status=0
 run_report "$output" MIN_FREE_BYTES=999999999999999999 || status=$?
 [[ $status == 0 ]]
 assert_report "$output" 'r["filesystem"]["belowMinimum"] is True and [c["id"] for c in r["candidates"]] == ["wildstone-build"]'
+assert_report "$output" 'r["retentionDays"] == 30'
 test -f "$root/var/cache/wildstone/build/disposable"
 mv "$bin/ctr.disabled" "$bin/ctr"
 
@@ -130,7 +161,7 @@ mkdir -p "$root/var/lib/rancher/k3s/agent/containerd/io.containerd.content.v1.co
 mv "$bin/docker" "$bin/docker.disabled"
 mv "$bin/ctr" "$bin/ctr.disabled"
 run_report "$output"
-assert_report "$output" 'r["status"] == "complete" and r["runtime"]["containerd"]["unreferencedImageCount"] == 1'
+assert_report "$output" 'r["status"] == "complete" and r["runtime"]["containerd"]["imageCount"] == 4 and r["runtime"]["containerd"]["referencedImageCount"] == 3 and r["runtime"]["containerd"]["unreferencedImageCount"] == 1'
 assert_report "$output" 'r["runtime"]["docker"]["presence"] == "not_present"'
 mv "$bin/ctr.disabled" "$bin/ctr"
 mv "$bin/docker.disabled" "$bin/docker"
@@ -184,35 +215,19 @@ assert_report "$output" 'r["status"] == "partial" and r["runtime"]["docker"]["un
 status=0
 run_report "$output" DOCKER_MODE=malformed || status=$?
 [[ $status == 1 ]]
-assert_report "$output" 'r["status"] == "partial" and "docker_reference_unknown" in r["errors"] and r["runtime"]["docker"]["unreferencedImageCount"] is None'
+assert_report "$output" 'r["status"] == "partial" and "docker_image_inventory_malformed" in r["errors"] and r["runtime"]["docker"]["unreferencedImageCount"] is None'
 for mode in container-empty container-multiline; do
   status=0
   run_report "$output" DOCKER_MODE="$mode" || status=$?
   [[ $status == 1 ]]
   assert_report "$output" 'r["status"] == "partial" and "docker_container_reference_malformed" in r["errors"] and r["runtime"]["docker"]["unreferencedImageCount"] is None'
 done
+# Missing scheduled-image inventory cannot make a present runtime look complete.
+rm "$root/etc/wildstone/storage-growth.protected-images"
 status=0
-run_report "$output" DOCKER_MODE=protected-multiline || status=$?
+run_report "$output" || status=$?
 [[ $status == 1 ]]
-assert_report "$output" 'r["status"] == "partial" and "docker_protected_image_reference_malformed" in r["errors"] and r["runtime"]["docker"]["unreferencedImageCount"] is None'
-"$python_bin" - "$script_dir/storage-growth-report.py" <<'PY'
-import importlib.util
-import sys
-from unittest import mock
-
-spec = importlib.util.spec_from_file_location("storage_growth_report", sys.argv[1])
-module = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(module)
-collector = object.__new__(module.Collector)
-collector.errors = []
-with mock.patch.object(module.subprocess, "run", side_effect=OSError("private-path")):
-    output, lookup_ok = collector.optional_command(
-        ["docker", "image", "inspect", "private-reference"],
-        "docker_protected_image_reference_failed",
-    )
-assert output is None and not lookup_ok
-assert collector.errors == ["docker_protected_image_reference_failed"]
-PY
+assert_report "$output" 'r["status"] == "partial" and "protected_image_inventory_missing" in r["errors"] and r["runtime"]["docker"]["unreferencedImageCount"] is None'
 reset_root
 touch "$root/run/k3s/containerd/containerd.sock"
 mkdir -p "$root/var/lib/rancher/k3s/agent/containerd/io.containerd.content.v1.content"
@@ -220,6 +235,18 @@ status=0
 run_report "$output" CTR_MODE=malformed || status=$?
 [[ $status == 1 ]]
 assert_report "$output" 'r["status"] == "partial" and "containerd_container_reference_malformed" in r["errors"]'
+for mode in nonobject-null nonobject-array nonobject-string nonobject-number nonobject-boolean; do
+  status=0
+  run_report "$output" CTR_MODE="$mode" || status=$?
+  [[ $status == 1 ]]
+  assert_report "$output" 'r["status"] == "partial" and "containerd_container_reference_malformed" in r["errors"] and r["runtime"]["containerd"]["unreferencedImageCount"] is None'
+done
+for mode in inventory-malformed unknown; do
+  status=0
+  run_report "$output" CTR_MODE="$mode" || status=$?
+  [[ $status == 1 ]]
+  assert_report "$output" 'r["status"] == "partial" and r["runtime"]["containerd"]["unreferencedImageCount"] is None'
+done
 
 # Invalid configuration is rejected with fixed codes and never echoes values.
 for setting in RETENTION_DAYS=not-a-number RETENTION_DAYS=0; do

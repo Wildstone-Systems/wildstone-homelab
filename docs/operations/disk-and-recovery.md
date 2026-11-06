@@ -67,7 +67,8 @@ file. After `systemctl daemon-reload`, enable the weekly sample with
 The service writes one JSON object to the journal for each sample. It records
 the UTC collection time, root free-space state, runtime presence, allocated
 bytes for Docker metadata/snapshot storage, containerd content/snapshot
-storage, Docker named volumes, logs, and fixed build/tool caches. Docker also
+storage, Docker named volumes, system logs, Docker `json-file` container logs,
+and fixed build/tool caches. Docker also
 reports the sum of each unique image's logical size. Compare matching fields
 between samples to attribute growth. The category totals deliberately overlap:
 logical image, content, snapshot, and runtime totals must not be added together
@@ -76,15 +77,25 @@ as `not_present`; a missing
 binary beside runtime storage, unreadable path, failed command, or malformed
 reference inventory makes the report `partial` and the service exits nonzero.
 No incomplete reference scan reports an unreferenced-image count.
+The scheduled-image inventory is part of that reference scan: a missing or
+unreadable file also makes a present runtime report partial. The built-in
+Restic reference remains protected even in that failure state.
+Hard-linked files contribute allocated bytes once within each category scan, so
+rotations or caches that retain multiple names for one inode do not inflate a
+sample.
 Containerd inventory uses a standalone `ctr` when installed and otherwise the
 `k3s ctr` client bundled by the supported k3s installation; both are fixed to
-the local k3s containerd socket and `k8s.io` namespace.
+the local k3s containerd socket and `k8s.io` namespace. Containerd image counts
+collapse aliases that share one target digest, so a live or protected image is
+not reported as unreferenced under another tag or normalized name.
 
 `candidates` is a dry-run review list, not a deletion request. It can contain
 only aggregate entries for the four fixed disposable caches built into the
 collector: `/var/cache/apt/archives`, `/var/cache/wildstone/build`,
 `/var/cache/wildstone/go-build`, and `/var/cache/wildstone/tools`. Each entry
-has allocated bytes, retention age, and reason. The report never contains
+has allocated bytes, retention age, and reason. The root `retentionDays` field
+records the configured threshold even when no candidate is old enough. The
+report never contains
 named volumes, images, snapshots, logs, arbitrary paths, filenames, image
 references, command output, or environment values. Low free space does not
 delete anything. Runtime image counts are informational and are never cleanup
