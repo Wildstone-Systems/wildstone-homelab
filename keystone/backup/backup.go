@@ -110,6 +110,24 @@ type Engine struct {
 	workers sync.Map
 }
 
+type claimedRunKey struct{}
+
+// claimRun reserves the whole plan, not just one provenance record. A manual
+// backup can contain a local pass followed by an off-site copy, while a
+// scheduled worker can contain backup, check, and drill duties. Keeping the
+// reservation across that sequence prevents the two paths from interleaving.
+func (e *Engine) claimRun(ctx context.Context, plan string) (context.Context, func(), bool) {
+	if _, busy := e.running.LoadOrStore(plan, struct{}{}); busy {
+		return ctx, nil, false
+	}
+	return context.WithValue(ctx, claimedRunKey{}, plan), func() { e.running.Delete(plan) }, true
+}
+
+func claimedRun(ctx context.Context, plan string) bool {
+	claimed, _ := ctx.Value(claimedRunKey{}).(string)
+	return claimed == plan
+}
+
 // resticExit describes restic's documented exit codes (restic 0.17+) for
 // the ledger. Anything unlisted is reported by number alone.
 var resticExit = map[int32]string{
@@ -222,6 +240,13 @@ func (e *Engine) start(ctx context.Context, done func([]RunReport)) (*sync.WaitG
 // planWork runs whatever of one plan's duties is due, in order.
 func (e *Engine) planWork(ctx context.Context, r resource.Resource, desired []resource.Resource) []RunReport {
 	spec, name := r.BackupPlan, r.Metadata.Name
+	ctx, release, ok := e.claimRun(ctx, name)
+	if !ok {
+		// An on-demand run or restore owns the plan. Scheduled work remains
+		// due because no ledger row is written for this deferred tick.
+		return nil
+	}
+	defer release()
 	var reports []RunReport
 	direct := false
 	if hasLocal(spec) {
@@ -460,6 +485,11 @@ func (e *Engine) RunNow(ctx context.Context, planName string) error {
 	if err != nil {
 		return err
 	}
+	ctx, release, ok := e.claimRun(ctx, planName)
+	if !ok {
+		return fmt.Errorf("backup: plan %q already has a run in progress", planName)
+	}
+	defer release()
 	if hasLocal(r.BackupPlan) {
 		err := e.runBackup(ctx, r, desired)
 		var low *LowDiskError
@@ -538,10 +568,15 @@ func (e *Engine) restoreInto(ctx context.Context, r resource.Resource, targetVol
 // — the standing approval carried by the committed BackupPlan itself),
 // the backup_runs ledger row, events, and the terminal transition.
 func (e *Engine) withProvenance(ctx context.Context, r resource.Resource, kind runtimedb.BackupRunKind, summary string, fn func(context.Context) error) error {
-	if _, busy := e.running.LoadOrStore(r.Metadata.Name, struct{}{}); busy {
-		return fmt.Errorf("backup: plan %q already has a run in progress", r.Metadata.Name)
+	if !claimedRun(ctx, r.Metadata.Name) {
+		var release func()
+		var ok bool
+		ctx, release, ok = e.claimRun(ctx, r.Metadata.Name)
+		if !ok {
+			return fmt.Errorf("backup: plan %q already has a run in progress", r.Metadata.Name)
+		}
+		defer release()
 	}
-	defer e.running.Delete(r.Metadata.Name)
 	if err := e.checkPasswordDependencies(ctx, r, kind); err != nil {
 		e.recordDependencyUnavailable(r, kind, err)
 		return err

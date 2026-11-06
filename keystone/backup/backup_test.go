@@ -27,6 +27,25 @@ type fakeRunner struct {
 	exit map[string]int32
 }
 
+type manualBlockingRunner struct {
+	fakeRunner
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (b *manualBlockingRunner) RunContainer(ctx context.Context, node, name string, spec resource.ContainerSpec) error {
+	if name == "backup-photos" {
+		b.once.Do(func() { close(b.started) })
+		select {
+		case <-b.release:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return b.fakeRunner.RunContainer(ctx, node, name, spec)
+}
+
 type recordedRun struct {
 	node string
 	name string
@@ -666,6 +685,91 @@ func TestConcurrentRunRefused(t *testing.T) {
 	e.running.Delete("photos")
 	if err := e.RunNow(context.Background(), "photos"); err != nil {
 		t.Fatalf("run after the first finished: %v", err)
+	}
+}
+
+// TestScheduledWorkDefersWhileRunNowIsActive proves a scheduler tick does
+// not turn an expected overlap into failed backup/check/drill records. The
+// manual local and off-site passes retain the plan reservation, and duties
+// they do not cover remain due after it is released.
+func TestScheduledWorkDefersWhileRunNowIsActive(t *testing.T) {
+	run := &manualBlockingRunner{
+		fakeRunner: fakeRunner{},
+		started:    make(chan struct{}),
+		release:    make(chan struct{}),
+	}
+	e, db, state := newEngine(t, run)
+	seedAll(t, state, targetResource(false), offsitePlan("photos", resource.BackupRouteLocalAndOffsite))
+
+	manualDone := make(chan error, 1)
+	go func() { manualDone <- e.RunNow(context.Background(), "photos") }()
+	select {
+	case <-run.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("manual backup did not reach its backup pass")
+	}
+	released := false
+	defer func() {
+		if !released {
+			close(run.release)
+		}
+	}()
+
+	reports, err := e.Tick(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reports) != 0 {
+		t.Fatalf("reports during manual run = %+v, want deferred work", reports)
+	}
+	for _, kind := range []runtimedb.BackupRunKind{
+		runtimedb.BackupRunBackup,
+		runtimedb.BackupRunCheck,
+		runtimedb.BackupRunDrill,
+		runtimedb.BackupRunOffsite,
+		runtimedb.BackupRunOffsiteCheck,
+		runtimedb.BackupRunOffsiteDrill,
+	} {
+		if _, err := db.LastBackupRun("photos", kind, runtimedb.BackupRunFailed); !errors.Is(err, runtimedb.ErrNotFound) {
+			t.Fatalf("failed %s row during deferred tick: %v", kind, err)
+		}
+	}
+
+	close(run.release)
+	released = true
+	if err := <-manualDone; err != nil {
+		t.Fatalf("manual run: %v", err)
+	}
+	names := strings.Join(run.names(), ",")
+	if !strings.Contains(names, "backup-photos") || !strings.Contains(names, "offsite-photos") {
+		t.Fatalf("manual run containers = %s, want local and off-site passes", names)
+	}
+
+	reports, err = e.Tick(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantDue := map[runtimedb.BackupRunKind]bool{
+		runtimedb.BackupRunCheck:        false,
+		runtimedb.BackupRunDrill:        false,
+		runtimedb.BackupRunOffsiteCheck: false,
+		runtimedb.BackupRunOffsiteDrill: false,
+	}
+	for _, rep := range reports {
+		if rep.Err != "" {
+			t.Fatalf("post-release report = %+v", rep)
+		}
+		if _, ok := wantDue[rep.Kind]; ok {
+			wantDue[rep.Kind] = true
+		}
+		if rep.Kind == runtimedb.BackupRunBackup || rep.Kind == runtimedb.BackupRunOffsite {
+			t.Fatalf("manual duty reran after release: %+v", reports)
+		}
+	}
+	for kind, ran := range wantDue {
+		if !ran {
+			t.Errorf("due %s duty did not run after release: %+v", kind, reports)
+		}
 	}
 }
 
