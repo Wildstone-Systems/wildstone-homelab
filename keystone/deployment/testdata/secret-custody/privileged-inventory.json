@@ -1,0 +1,24 @@
+{
+  "instance": "example-app",
+  "profileFile": "/etc/wildstone-example/audiobookshelf-profile.yaml",
+  "encryptedSecretFile": "/var/lib/wildstone-example/bootstrap/secret.sops.yaml",
+  "repository": "/var/lib/wildstone-example/deployment.git",
+  "mirrorRepository": "/var/lib/wildstone-example/delivery.git",
+  "bindings": {
+    "Name": "example-app",
+    "Namespace": "example-app",
+    "ServiceAccount": "example-reconciler",
+    "ConfigClaim": "example-config",
+    "MetadataClaim": "example-metadata",
+    "MediaClaim": "example-media",
+    "SecretName": "example-jwt"
+  },
+  "secretDelivery": {
+    "generation": 1,
+    "outputPath": "secret.sops.yaml",
+    "kustomizationNamespace": "example-flux",
+    "kustomizationName": "example-app",
+    "decryptionSecretName": "example-age-identity",
+    "restartPolicy": "recreate-on-ciphertext-revision"
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "schema": 1,
+  "fluxDistribution": "v2.10.0",
+  "kustomizeController": "v1.10.1",
+  "sopsCLI": "v3.13.3",
+  "ageCLI": "v1.3.2"
+}

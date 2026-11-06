@@ -1,9 +1,9 @@
 # Flux deployment-secret custody and recovery
 
-Status: proposed repository contract for #162 under amended ADR-W050. This
-document selects ownership and bounded implementation children; it does not
-create an age identity, decrypt a value, change a cluster, migrate a release,
-or authorize live secret rotation.
+Status: merged repository contract for #162 under amended ADR-W050. Child A
+adds only the synthetic contract oracle and exact implementation-version pins
+below. This document does not create an age identity, decrypt a value, change
+a cluster, migrate a release, or authorize live secret rotation.
 
 ## Scope
 
@@ -48,6 +48,68 @@ whose name ends in `.agekey`. See the upstream
 [Kustomization decryption API](https://fluxcd.io/flux/components/kustomize/kustomizations/#decryption).
 Exact controller, SOPS, and age versions must be pinned and recorded by each
 implementation proof rather than inferred from these links.
+
+### Child A implementation-version pins
+
+The repository-only fixture and the next private-projection child target these
+exact upstream releases:
+
+| Component | Exact version | Role in this child |
+| --- | --- | --- |
+| Flux distribution | [`v2.10.0`](https://github.com/fluxcd/flux2/releases/tag/v2.10.0) | Distribution whose controller set defines the reviewed API surface |
+| Flux kustomize-controller | [`v1.10.1`](https://github.com/fluxcd/kustomize-controller/releases/tag/v1.10.1) | `spec.decryption.provider: sops` reconciler |
+| SOPS CLI | [`v3.13.3`](https://github.com/getsops/sops/releases/tag/v3.13.3) | Local operator encryption/rewrap tool; Keystone does not execute it |
+| age CLI | [`v1.3.2`](https://github.com/FiloSottile/age/releases/tag/v1.3.2) | Local operator identity/recipient tool; Keystone does not execute it |
+
+Tags are version selection, not artifact-integrity evidence. Child C must also
+record the exact installed controller image digest and the verified binary or
+package identities used by its isolated proof. A newer release requires a
+reviewed pin change and the same fixture/test suite; `latest`, ranges and
+floating controller images are not supported inputs.
+
+### Exact planned privileged inventory and safe review
+
+Child B may add exactly one `secretDelivery` object to the existing private
+bootstrap inventory:
+
+```json
+{
+  "secretDelivery": {
+    "generation": 1,
+    "outputPath": "secret.sops.yaml",
+    "kustomizationNamespace": "example-flux",
+    "kustomizationName": "example-app",
+    "decryptionSecretName": "example-age-identity",
+    "restartPolicy": "recreate-on-ciphertext-revision"
+  }
+}
+```
+
+`generation` is positive and monotonic. `outputPath` is the fixed relative
+private-tree filename `secret.sops.yaml`, never a caller-selected or absolute
+path. The Kustomization and decryption-Secret fields bind the privileged outer
+Flux object that ordinary publication cannot edit. The only supported restart
+policy deterministically annotates the Pod template with the exact ciphertext
+revision and retains the singleton `Recreate` behavior.
+
+The Owner review may expose only these new safe fields:
+
+- validation state `encrypted-reference-validated`;
+- exact Secret namespace, name, key and type;
+- declared Secret generation and ciphertext revision;
+- SHA-256 fingerprints of normalized public age recipients, not recipient
+  strings or private identities;
+- relative encrypted output path;
+- bound outer Kustomization namespace/name and decryption Secret name;
+- restart policy and the expected singleton bounded-outage effect; and
+- private-file count, without private host paths or contents.
+
+It must not expose the encrypted payload, SOPS MAC or metadata, raw age
+recipient, local input path, private repository path, private file bytes, or
+age identity. The synthetic oracle lives in
+`keystone/deployment/testdata/secret-custody/`; its encrypted strings and
+recipient are deliberately non-decryptable placeholders and establish only
+structural validation and redaction, not SOPS authenticity.
 
 ## Three deliberately separate inputs
 
