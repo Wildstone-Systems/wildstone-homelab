@@ -655,6 +655,16 @@ func (db *DB) LinkSurfaceIdentity(linkType, externalID, member, createdBy string
 		linkType, externalID, m.PersonID, m.Generation, now(), createdBy)
 	if err != nil {
 		if isUniqueViolation(err) {
+			var person string
+			var generation int64
+			if qerr := db.sql.QueryRow(`SELECT person_id,generation FROM butler_identity_links
+				WHERE link_type=? AND external_id=? AND revoked_at=''`, linkType, externalID).
+				Scan(&person, &generation); qerr == nil && person == m.PersonID && generation == m.Generation {
+				// Provisioning is retried across reconciliation and recovery.
+				// Reasserting the exact current binding is idempotent; a different
+				// Person or generation remains a hard conflict.
+				return nil
+			}
 			return fmt.Errorf("runtimedb: %s %q is already linked to someone", linkType, externalID)
 		}
 		return fmt.Errorf("runtimedb: linking surface identity: %w", err)
@@ -756,6 +766,27 @@ func (db *DB) ResolveSurfaceIdentity(linkType, externalID string) (ButlerMember,
 // which is an integer everywhere else in the codebase.
 func (db *DB) ResolveChatBinding(bindingID int64) (ButlerMember, error) {
 	return db.ResolveSurfaceIdentity(LinkChatBinding, strconv.FormatInt(bindingID, 10))
+}
+
+// CheckButlerMemberGeneration is the durable-work half of A2.1. The live
+// surface resolution supplies generation; every later retrieval, dispatch and
+// publication compares it with the same Person without inferring identity from
+// a mutable handle.
+func (db *DB) CheckButlerMemberGeneration(member string, generation int64) error {
+	if generation <= 0 {
+		return ErrNotAdmitted
+	}
+	m, err := db.GetButlerMember(member)
+	if errors.Is(err, ErrNotFound) {
+		return ErrNotAdmitted
+	}
+	if err != nil {
+		return err
+	}
+	if !m.Active() || m.Generation != generation {
+		return ErrNotAdmitted
+	}
+	return nil
 }
 
 // ListSurfaceLinks returns a member's links, live ones first.

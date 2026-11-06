@@ -263,6 +263,11 @@ func (s *Server) chatInbound(r *http.Request, id principal.Identity, msg inbound
 		return inboundResponse{Accepted: true, Bound: false,
 			Reason: "no admission for this account on this connection"}, http.StatusAccepted, nil
 	}
+	linked, err := s.DB.ResolveChatBinding(binding.ID)
+	if err != nil || linked.Member != binding.Identity {
+		return inboundResponse{Accepted: true, Bound: false,
+			Reason: "no admission for this account on this connection"}, http.StatusAccepted, nil
+	}
 
 	// A voice message has no words yet, so the recording itself stands
 	// in for them in the dedupe key: a redelivered clip is the same
@@ -458,7 +463,7 @@ func (s *Server) chatInbound(r *http.Request, id principal.Identity, msg inbound
 	var (
 		out any
 		st  int
-		ctx = r.Context()
+		ctx = withSurfaceGeneration(r.Context(), linked.Generation)
 	)
 	if voice != nil {
 		// Stored with a 🎙️, so a mis-hearing reads as one on the
@@ -487,11 +492,12 @@ func (s *Server) chatInbound(r *http.Request, id principal.Identity, msg inbound
 			// authority seam has one to carry (§10.1). No Permits: a
 			// chat Connection's ceiling is its Agent's surface, which
 			// RequireSurface below already enforces.
-			Connection: butlerlive.ConnectionScope{Name: at.Name(), Ref: at.Seq, Conversation: conversation, BindingID: binding.ID},
-			Butler:     named,
-			Member:     binding.Identity,
-			Text:       text,
-			Group:      msg.Group,
+			Connection:         butlerlive.ConnectionScope{Name: at.Name(), Ref: at.Seq, Conversation: conversation, BindingID: binding.ID},
+			Butler:             named,
+			Member:             binding.Identity,
+			IdentityGeneration: linked.Generation,
+			Text:               text,
+			Group:              msg.Group,
 			// Nothing to add. The one caller that set this was the
 			// group-audience note, and a group never reaches here any
 			// more (design §8.3).

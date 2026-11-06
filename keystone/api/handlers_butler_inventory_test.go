@@ -279,10 +279,7 @@ func TestPersonSessionInventoryUsesCanonicalIdentityBeforeLimit(t *testing.T) {
 	if err := h.s.DB.RenameButlerMemberHandle("mika", "mikhail"); err != nil {
 		t.Fatal(err)
 	}
-	renamedToken, err := h.s.Principals.Mint(principalNameFor(t, runtimedb.RoleAdmin), "mikhail", 0)
-	if err != nil {
-		t.Fatal(err)
-	}
+	renamedToken := h.console(runtimedb.RoleAdmin, "mikhail")
 	sessions = nil
 	if res := h.doToken(renamedToken, http.MethodGet, "/api/v1/butler/sessions", nil, &sessions); res.StatusCode != http.StatusOK {
 		t.Fatalf("renamed session inventory = %d", res.StatusCode)

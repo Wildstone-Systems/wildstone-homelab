@@ -22,12 +22,7 @@ func webCommandAgents(t *testing.T, h *harness) {
 		t.Fatal(err)
 	}
 	for _, member := range []string{"sam", "giulia"} {
-		if err := h.s.DB.RecordButlerMember(member, runtimedb.RoleMember, "", ""); err != nil {
-			t.Fatal(err)
-		}
-		if err := h.s.DB.AdmitButlerMember(member, "root-admin"); err != nil {
-			t.Fatal(err)
-		}
+		h.person(member)
 	}
 	for _, b := range []runtimedb.Butler{
 		{Name: "sandy", Surface: runtimedb.ButlerSurfaceFamily, AgentClass: runtimedb.AgentClassMember, Model: "kitchen-box"},
@@ -109,6 +104,27 @@ func TestSlashCommandsOnTheDashboardAssistant(t *testing.T) {
 	// exactly as a question would be, so a command cannot confirm it.
 	if status, out = ask("operator", "/help"); status != http.StatusNotFound || out.Command != "" {
 		t.Fatalf("a command to the operator Agent through the dashboard = %d %+v", status, out)
+	}
+}
+
+func TestDashboardAssistantRequiresCurrentTrustedIngressLink(t *testing.T) {
+	h, _ := portalHarness(t)
+	webCommandAgents(t, h)
+	body, _ := json.Marshal(map[string]string{"agent": "sandy", "text": "/help"})
+	ask := func() int {
+		res := h.member(http.MethodPost, "/api/v1/assistant/ask", "sam", "assistant_users",
+			bytes.NewReader(body), "application/json")
+		defer res.Body.Close()
+		return res.StatusCode
+	}
+	if got := ask(); got != http.StatusOK {
+		t.Fatalf("current trusted-ingress link = %d", got)
+	}
+	if err := h.s.DB.RevokeSurfaceLink(runtimedb.LinkTrustedIngress, "sam", "root-admin"); err != nil {
+		t.Fatal(err)
+	}
+	if got := ask(); got != http.StatusForbidden {
+		t.Fatalf("revoked trusted-ingress link dispatched = %d", got)
 	}
 }
 

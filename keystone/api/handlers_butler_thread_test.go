@@ -198,7 +198,7 @@ func TestButlerFollowUpRefusedOnSomeoneElsesSession(t *testing.T) {
 func TestButlerFollowUpUnknownSession404(t *testing.T) {
 	h := newHarness(t)
 	h.wireButler(answerTurns("should never run"), runtimedb.ButlerModeFull)
-	resp := h.do(runtimedb.RoleOperator, "POST", "/api/v1/butler/sessions/bs-404/ask",
+	resp := h.doToken(h.console(runtimedb.RoleOperator, "mika"), "POST", "/api/v1/butler/sessions/bs-404/ask",
 		map[string]string{"message": "hello?"}, nil)
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404", resp.StatusCode)

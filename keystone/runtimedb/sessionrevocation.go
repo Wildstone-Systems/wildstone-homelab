@@ -64,8 +64,12 @@ func (db *DB) ButlerSessionActive(id string) error {
 		return fmt.Errorf("%w: %q is not a session id", ErrSessionRevoked, id)
 	}
 	var revoked string
+	var generation int64
+	var current sql.NullInt64
+	var person sql.NullString
 	err := db.sql.QueryRow(
-		`SELECT revoked_at FROM butler_sessions WHERE seq = ?`, seq).Scan(&revoked)
+		`SELECT s.revoked_at,s.identity_generation,m.generation,s.person_id FROM butler_sessions s
+		 LEFT JOIN butler_members m ON m.person_id=s.person_id WHERE s.seq = ?`, seq).Scan(&revoked, &generation, &current, &person)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return fmt.Errorf("%w: it no longer exists", ErrSessionRevoked)
@@ -77,6 +81,8 @@ func (db *DB) ButlerSessionActive(id string) error {
 			return ErrSessionRevoked
 		}
 		return fmt.Errorf("%w: it was withdrawn at %s", ErrSessionRevoked, at.Format(time.RFC3339))
+	case person.Valid && (generation == 0 || !current.Valid || generation != current.Int64):
+		return fmt.Errorf("%w: its authenticated identity generation changed", ErrSessionRevoked)
 	}
 	return nil
 }

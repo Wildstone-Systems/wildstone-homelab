@@ -137,6 +137,14 @@ func (l *Ledger) Authorize(taskID string) error {
 			return fmt.Errorf("%w: %v", ErrAuthorityWithdrawn, err)
 		}
 	}
+	member, err := l.db.GetButlerMember(task.Owner)
+	if err != nil {
+		return fmt.Errorf("%w: owner generation cannot be read: %v", ErrAuthorityWithdrawn, err)
+	}
+	if task.IdentityGeneration == 0 || member.Generation != task.IdentityGeneration {
+		return fmt.Errorf("%w: %s's authenticated identity generation changed (task=%d current=%d)",
+			ErrAuthorityWithdrawn, task.Owner, task.IdentityGeneration, member.Generation)
+	}
 	return l.derivedAuthority(task)
 }
 
@@ -153,8 +161,13 @@ func (l *Ledger) Authorize(taskID string) error {
 // the reason a person is given names the largest thing that went away
 // rather than an inner consequence of it.
 func (l *Ledger) derivedAuthority(task runtimedb.ButlerTask) error {
-	// The session the request was had in. A routine has none.
-	if task.SessionID != "" {
+	// The session the request was had in. A routine has none. A reviewed
+	// shared-work transfer deliberately keeps the old session only as the
+	// durable locator back to the task; its author is no longer its owner,
+	// so that withdrawn Person session cannot be borrowed as authority by
+	// the new owner. The transferred task's freshly stamped owner generation
+	// is the identity leg that applies after review.
+	if task.SessionID != "" && task.Author == task.Owner {
 		if l.SessionActive == nil {
 			return fmt.Errorf(
 				"%w: it was started in session %s and nothing here can say whether that session still stands",

@@ -122,6 +122,76 @@ func TestRevocationLandsAtTheNextCheck(t *testing.T) {
 	}
 }
 
+func TestEveryLiveSurfaceLinkUsesTheCurrentGeneration(t *testing.T) {
+	for _, linkType := range []string{LinkAPIPrincipal, LinkChatBinding, LinkTrustedIngress} {
+		t.Run(linkType, func(t *testing.T) {
+			db := open(t)
+			admitted(t, db, "sam", RoleMember)
+			if err := db.LinkSurfaceIdentity(linkType, "synthetic-external", "sam", "root-admin"); err != nil {
+				t.Fatal(err)
+			}
+			first, err := db.ResolveSurfaceIdentity(linkType, "synthetic-external")
+			if err != nil {
+				t.Fatalf("current link did not resolve: %v", err)
+			}
+			if err := db.RevokeSurfaceLink(linkType, "synthetic-external", "root-admin"); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := db.ResolveSurfaceIdentity(linkType, "synthetic-external"); !errors.Is(err, ErrNotAdmitted) {
+				t.Fatalf("revoked link resolved: %v", err)
+			}
+			if err := db.AdmitButlerMember("sam", "root-admin"); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := db.ResolveSurfaceIdentity(linkType, "synthetic-external"); !errors.Is(err, ErrNotAdmitted) {
+				t.Fatalf("old link revived after re-admission: %v", err)
+			}
+			current, err := db.GetButlerMember("sam")
+			if err != nil || current.Generation <= first.Generation {
+				t.Fatalf("generation did not advance: before=%d after=%d err=%v", first.Generation, current.Generation, err)
+			}
+		})
+	}
+}
+
+func TestIdentityGenerationFenceSurvivesRestart(t *testing.T) {
+	path := migrated.Path(t)
+	db, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	admitted(t, db, "sam", RoleMember)
+	if err := db.LinkSurfaceIdentity(LinkAPIPrincipal, "synthetic-principal", "sam", "root-admin"); err != nil {
+		t.Fatal(err)
+	}
+	member, err := db.ResolveSurfaceIdentity(LinkAPIPrincipal, "synthetic-principal")
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := db.InsertButlerSession(ButlerSession{
+		Principal: "synthetic-principal", ActingFor: "sam", Surface: ButlerSurfaceFamily,
+		IdentityGeneration: member.Generation,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.RevokeSurfaceLink(LinkAPIPrincipal, "synthetic-principal", "root-admin"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err = Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if err := db.ButlerSessionActive(session); !errors.Is(err, ErrSessionRevoked) {
+		t.Fatalf("restart revived a session admitted under the old generation: %v", err)
+	}
+}
+
 // A child record exists so a guardian relationship can be recorded, and
 // cannot be admitted — the schema refuses it, so no console form or
 // future migration can produce one before that surface has its evidence.

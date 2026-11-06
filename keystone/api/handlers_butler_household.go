@@ -199,6 +199,11 @@ func (s *Server) askHouseholdButler(r *http.Request, id principal.Identity) (any
 	// perfectly reachable Butler because a flag the deployment no longer
 	// uses was left at "off".
 	if s.butlersConfigured() {
+		linked, err := s.resolveRequestSurface(id)
+		if err != nil {
+			return nil, http.StatusForbidden, runtimedb.ErrNotAdmitted
+		}
+		r = r.WithContext(withSurfaceGeneration(r.Context(), linked.Generation))
 		// actingMember, not id.Name: a turn is had by a PERSON (#240),
 		// and a Console caller authenticates as a principal that ACTS
 		// FOR one. Passing the principal here named the credential as
@@ -213,6 +218,11 @@ func (s *Server) askHouseholdButler(r *http.Request, id principal.Identity) (any
 		return nil, http.StatusServiceUnavailable,
 			fmt.Errorf("household butler not configured (needs -butler-provider and a household surface)")
 	}
+	linked, err := s.resolveRequestSurface(id)
+	if err != nil {
+		return nil, http.StatusForbidden, runtimedb.ErrNotAdmitted
+	}
+	r = r.WithContext(withSurfaceGeneration(r.Context(), linked.Generation))
 	return s.runFamilyButlerSession(r.Context(), message, actingMember(id), "", butlerlive.ConsoleConnection)
 }
 
