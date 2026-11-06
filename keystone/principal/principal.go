@@ -42,6 +42,14 @@ type Identity struct {
 	// (ADR-W033 A4.1). Nil for a bearer token, which has no sign-in to
 	// be fresh or stale.
 	AuthTime *time.Time `json:"authTime,omitempty"`
+	// SurfaceLinkType and SurfaceExternalID name the authenticated human
+	// identity that produced ActingFor. They are request-local provenance,
+	// never serialized or accepted from a request body. Butler entry points
+	// resolve them through runtimedb.ResolveSurfaceIdentity before retrieval,
+	// dispatch, and publication (ADR-W030 A2.1).
+	SurfaceLinkType   string `json:"-"`
+	SurfaceExternalID string `json:"-"`
+	SurfaceGeneration int64  `json:"-"`
 }
 
 // Store wraps the runtime DB with the identity semantics.
@@ -115,7 +123,8 @@ func (s *Store) Authenticate(secret string) (Identity, error) {
 	if acting == "" {
 		acting = p.ActingFor
 	}
-	return Identity{Name: p.Name, Role: p.Role, ActingFor: acting}, nil
+	return Identity{Name: p.Name, Role: p.Role, ActingFor: acting,
+		SurfaceLinkType: runtimedb.LinkAPIPrincipal, SurfaceExternalID: p.Name}, nil
 }
 
 // TokenHash returns the database fingerprint for a syntactically valid

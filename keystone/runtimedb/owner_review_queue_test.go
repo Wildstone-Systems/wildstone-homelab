@@ -1,6 +1,7 @@
 package runtimedb
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -379,7 +380,7 @@ func TestReviewPreferenceChangeCancelsQueuedNotice(t *testing.T) {
 				t.Fatalf("notice cancellation: %d %v", canceled, err)
 			}
 			db.sql.Exec("DELETE FROM chat_outbound")
-			if _, err = db.EnqueueChatOutbound(stale); err != nil {
+			if _, err = db.EnqueueChatOutbound(stale); err != nil && !errors.Is(err, ErrNotAdmitted) {
 				t.Fatal(err)
 			}
 			messages, err = db.ChatOutboundAfter(at, 0, 10)

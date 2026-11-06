@@ -76,3 +76,11 @@ d9e06bee8f76ae45f5a7e1efbcca341383d5a06d:keystone/butler/fixtures_test.go:generi
 # test's "IMMICH_API_KEY=abc123", in a commit whose successors no longer
 # carry it.
 b144b5f0ef51512484bd7d0c47f14937fd7b58c6:keystone/butler/hardening_test.go:generic-api-key:25
+
+# PR #328's first production commit repeated the same historical-fixture
+# mistake with a synthetic API-principal identifier. The current test derives
+# that identifier from the shared fixture naming helper, so the key-shaped
+# literal no longer exists in the tree. These pins cover only the two original
+# lines in that one commit and cannot suppress a future finding.
+3b1863f6b1117ce539220d72d20beb423930e654:keystone/api/handlers_butler_identity_test.go:generic-api-key:165
+3b1863f6b1117ce539220d72d20beb423930e654:keystone/api/handlers_butler_identity_test.go:generic-api-key:182

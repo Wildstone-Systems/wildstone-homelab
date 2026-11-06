@@ -77,6 +77,10 @@ type Turn struct {
 
 	// Member is the person talking, already resolved from a binding.
 	Member string
+	// IdentityGeneration is the member generation proven by the live
+	// authenticated surface immediately before this turn. It is stamped on
+	// durable work so a revoke/re-admit cannot lend new authority to old work.
+	IdentityGeneration int64
 
 	// Text is what they said.
 	Text string

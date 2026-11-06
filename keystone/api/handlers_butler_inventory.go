@@ -32,7 +32,7 @@ func (s *Server) inventoryMember(id principal.Identity) (runtimedb.ButlerMember,
 	if person == "" {
 		return runtimedb.ButlerMember{}, false, nil
 	}
-	member, err := s.DB.GetButlerMember(person)
+	member, err := s.resolveRequestSurface(id)
 	if errors.Is(err, runtimedb.ErrNotFound) || (err == nil && !member.Active()) {
 		return runtimedb.ButlerMember{}, true, nil
 	}

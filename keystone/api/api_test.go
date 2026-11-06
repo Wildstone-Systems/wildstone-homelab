@@ -3,6 +3,8 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"fmt"
 
 	"net/http"
 	"net/http/httptest"
@@ -23,10 +25,11 @@ const testDigest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 // harness stands up a real Server over a temp statefile repo + runtime DB
 // and returns bearer tokens for one principal of each role.
 type harness struct {
-	t      *testing.T
-	srv    *httptest.Server
-	s      *Server
-	tokens map[runtimedb.Role]string
+	t                   *testing.T
+	srv                 *httptest.Server
+	s                   *Server
+	tokens              map[runtimedb.Role]string
+	nextPersonPrincipal int
 }
 
 // migrated is the schema, built once for this whole test binary. This
@@ -103,12 +106,7 @@ func newHarness(t *testing.T) *harness {
 func (h *harness) person(handles ...string) {
 	h.t.Helper()
 	for _, handle := range handles {
-		if err := h.s.DB.RecordButlerMember(handle, runtimedb.RoleMember, "", ""); err != nil {
-			h.t.Fatalf("recording %q: %v", handle, err)
-		}
-		if err := h.s.DB.AdmitButlerMember(handle, "fixture"); err != nil {
-			h.t.Fatalf("admitting %q: %v", handle, err)
-		}
+		h.ensurePerson(handle, runtimedb.RoleMember)
 	}
 }
 
@@ -118,11 +116,49 @@ func (h *harness) person(handles ...string) {
 func (h *harness) owner(handles ...string) {
 	h.t.Helper()
 	for _, handle := range handles {
-		if err := h.s.DB.RecordButlerMember(handle, runtimedb.RoleOwner, "", ""); err != nil {
-			h.t.Fatalf("recording owner %q: %v", handle, err)
+		h.ensurePerson(handle, runtimedb.RoleOwner)
+	}
+}
+
+func (h *harness) ensurePerson(handle string, role runtimedb.Role) {
+	h.t.Helper()
+	member, err := h.s.DB.GetButlerMember(handle)
+	if errors.Is(err, runtimedb.ErrNotFound) {
+		if err := h.s.DB.RecordButlerMember(handle, string(role), "", ""); err != nil {
+			h.t.Fatalf("recording %q: %v", handle, err)
 		}
+		member, err = h.s.DB.GetButlerMember(handle)
+	}
+	if err != nil {
+		h.t.Fatalf("reading %q: %v", handle, err)
+	}
+	if role == runtimedb.RoleOwner && member.Role != runtimedb.RoleOwner {
+		if err := h.s.DB.SetButlerMemberRole(handle, string(role), "fixture"); err != nil {
+			h.t.Fatalf("promoting owner %q: %v", handle, err)
+		}
+		member, err = h.s.DB.GetButlerMember(handle)
+		if err != nil {
+			h.t.Fatalf("reading promoted owner %q: %v", handle, err)
+		}
+	}
+	if !member.Active() {
 		if err := h.s.DB.AdmitButlerMember(handle, "fixture"); err != nil {
 			h.t.Fatalf("admitting %q: %v", handle, err)
+		}
+	}
+	if linked, err := h.s.DB.ResolveSurfaceIdentity(runtimedb.LinkTrustedIngress, handle); err != nil || linked.PersonID != member.PersonID {
+		if err := h.s.DB.LinkSurfaceIdentity(runtimedb.LinkTrustedIngress, handle, handle, "fixture"); err != nil {
+			h.t.Fatalf("linking trusted ingress %q: %v", handle, err)
+		}
+	}
+	// The legacy operator fixture authenticates as principal "op" without
+	// ActingFor. An explicit API-principal link makes it a valid human
+	// surface without teaching production code to infer a Person by name.
+	if handle == "op" {
+		if linked, err := h.s.DB.ResolveSurfaceIdentity(runtimedb.LinkAPIPrincipal, handle); err != nil || linked.PersonID != member.PersonID {
+			if err := h.s.DB.LinkSurfaceIdentity(runtimedb.LinkAPIPrincipal, handle, handle, "fixture"); err != nil {
+				h.t.Fatalf("linking operator API principal %q: %v", handle, err)
+			}
 		}
 	}
 }
@@ -151,11 +187,23 @@ func (h *harness) console(role runtimedb.Role, handle string) string {
 	} else {
 		h.person(handle)
 	}
-	tok, err := h.s.Principals.Mint(principalNameFor(h.t, role), handle, 0)
+	h.nextPersonPrincipal++
+	name := fixturePersonPrincipal(h.nextPersonPrincipal)
+	if err := h.s.Principals.Create(name, role, handle); err != nil {
+		h.t.Fatalf("creating a %s principal acting for %q: %v", role, handle, err)
+	}
+	if err := h.s.DB.LinkSurfaceIdentity(runtimedb.LinkAPIPrincipal, name, handle, "fixture"); err != nil {
+		h.t.Fatalf("linking a %s principal acting for %q: %v", role, handle, err)
+	}
+	tok, err := h.s.Principals.Mint(name, handle, 0)
 	if err != nil {
 		h.t.Fatalf("minting a %s token acting for %q: %v", role, handle, err)
 	}
 	return tok
+}
+
+func fixturePersonPrincipal(sequence int) string {
+	return fmt.Sprintf("fixture-person-%d", sequence)
 }
 
 func principalNameFor(t *testing.T, role runtimedb.Role) string {

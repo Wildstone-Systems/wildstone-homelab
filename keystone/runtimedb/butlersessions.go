@@ -56,8 +56,9 @@ type ButlerSession struct {
 	// PersonID and AgentID are the structural identity of the
 	// conversation (ADR-W033 B10). ActingFor and Butler remain the audit
 	// labels a person reads; continuation never joins on those labels.
-	PersonID string `json:"-"`
-	AgentID  int64  `json:"-"`
+	PersonID           string `json:"-"`
+	AgentID            int64  `json:"-"`
+	IdentityGeneration int64  `json:"-"`
 	// InboundConnection is written in the same transaction as this
 	// turn. Ref is zero for a built-in Connection.
 	InboundConnection    string            `json:"-"`
@@ -136,27 +137,42 @@ func (db *DB) InsertButlerSession(s ButlerSession) (string, error) {
 	if s.TranscriptJSON == "" {
 		s.TranscriptJSON = "{}"
 	}
-	if s.Butler != "" {
-		// Old audit/import callers can write labels that no longer resolve.
-		// Preserve those records as history, but leave either structural
-		// leg empty so they can never become continuation candidates. The
-		// person-facing runtime validates both before it reaches this seam.
-		if person, err := resolvePersonID(db.sql, s.ActingFor); err == nil {
-			s.PersonID = person
-		}
-		if err := db.sql.QueryRow(`SELECT seq FROM butlers WHERE name = ?`, s.Butler).Scan(&s.AgentID); err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return "", fmt.Errorf("runtimedb: resolving session agent: %w", err)
-		}
-	}
-	if s.InboundConnection != "" && s.Butler != "" && (s.PersonID == "" || s.AgentID == 0) {
-		return "", fmt.Errorf("runtimedb: an interactive session requires a canonical Person and Agent")
-	}
 	tx, err := db.sql.Begin()
 	if err != nil {
 		return "", fmt.Errorf("runtimedb: inserting butler session: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	// Person identity is independent of whether the legacy single-provider
+	// runner can name an Agent. A live trusted surface still has a canonical
+	// Person and generation, so stamp that leg whenever it resolves.
+	if person, err := resolvePersonID(tx, s.ActingFor); err == nil {
+		s.PersonID = person
+	}
+	if s.Butler != "" {
+		// Old audit/import callers can write labels that no longer resolve.
+		// Preserve those records as history, but leave either structural
+		// leg empty so they can never become continuation candidates. The
+		// person-facing runtime validates both before it reaches this seam.
+		if err := tx.QueryRow(`SELECT seq FROM butlers WHERE name = ?`, s.Butler).Scan(&s.AgentID); err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return "", fmt.Errorf("runtimedb: resolving session agent: %w", err)
+		}
+	}
+	if s.PersonID != "" {
+		var current int64
+		if err := tx.QueryRow(`SELECT generation FROM butler_members WHERE person_id=?`, s.PersonID).Scan(&current); err != nil {
+			return "", fmt.Errorf("runtimedb: reading session identity generation: %w", err)
+		}
+		if s.IdentityGeneration == 0 {
+			s.IdentityGeneration = current
+		}
+		if s.IdentityGeneration != current {
+			return "", ErrNotAdmitted
+		}
+	}
+	if s.InboundConnection != "" && s.Butler != "" && (s.PersonID == "" || s.AgentID == 0) {
+		return "", fmt.Errorf("runtimedb: an interactive session requires a canonical Person and Agent")
+	}
 	var personArg, agentArg any
 	if s.PersonID != "" {
 		personArg = s.PersonID
@@ -165,10 +181,10 @@ func (db *DB) InsertButlerSession(s ButlerSession) (string, error) {
 		agentArg = s.AgentID
 	}
 	res, err := tx.Exec(
-		`INSERT INTO butler_sessions (created_at, principal, acting_for, provider, mode, surface, butler, final_text, capped, transcript_json, person_id, agent_id)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO butler_sessions (created_at, principal, acting_for, provider, mode, surface, butler, final_text, capped, transcript_json, person_id, agent_id, identity_generation)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		now(), s.Principal, s.ActingFor, s.Provider, string(s.Mode), string(s.Surface), s.Butler, s.FinalText,
-		boolInt(s.Capped), s.TranscriptJSON, personArg, agentArg)
+		boolInt(s.Capped), s.TranscriptJSON, personArg, agentArg, s.IdentityGeneration)
 	if err != nil {
 		return "", fmt.Errorf("runtimedb: inserting butler session: %w", err)
 	}
@@ -265,7 +281,8 @@ func (db *DB) AppendButlerTurnsFrom(id string, turns []ButlerTurn, connection st
 		return fmt.Errorf("runtimedb: appending butler turns: %w", err)
 	}
 	var exists int
-	if err := tx.QueryRow(`SELECT COUNT(*) FROM butler_sessions WHERE seq = ?`, seq).Scan(&exists); err != nil {
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM butler_sessions s LEFT JOIN butler_members m ON m.person_id=s.person_id
+		WHERE s.seq=? AND s.revoked_at='' AND (s.person_id IS NULL OR s.identity_generation=m.generation)`, seq).Scan(&exists); err != nil {
 		return fmt.Errorf("runtimedb: appending butler turns: %w", err)
 	}
 	if exists == 0 {
@@ -457,14 +474,14 @@ func getButlerSession(q sessionReader, id string) (ButlerSession, error) {
 		return ButlerSession{}, ErrNotFound
 	}
 	row := q.QueryRow(
-		`SELECT seq, created_at, principal, acting_for, person_id, agent_id, provider, mode, surface, butler, final_text, capped, transcript_json
+		`SELECT seq, created_at, principal, acting_for, person_id, agent_id, provider, mode, surface, butler, final_text, capped, transcript_json, identity_generation
 		 FROM butler_sessions WHERE seq = ?`, seq)
 	var s ButlerSession
 	var created, mode, surface string
 	var capped int
 	var person sql.NullString
 	var agent sql.NullInt64
-	err := row.Scan(&s.Seq, &created, &s.Principal, &s.ActingFor, &person, &agent, &s.Provider, &mode, &surface, &s.Butler, &s.FinalText, &capped, &s.TranscriptJSON)
+	err := row.Scan(&s.Seq, &created, &s.Principal, &s.ActingFor, &person, &agent, &s.Provider, &mode, &surface, &s.Butler, &s.FinalText, &capped, &s.TranscriptJSON, &s.IdentityGeneration)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ButlerSession{}, ErrNotFound
 	}

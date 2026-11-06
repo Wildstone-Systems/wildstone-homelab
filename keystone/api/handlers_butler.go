@@ -233,10 +233,27 @@ func (s *Server) askButler(r *http.Request, id principal.Identity) (any, int, er
 		return nil, st, err
 	}
 	if s.butlersConfigured() {
+		linked, err := s.resolveRequestSurface(id)
+		if err != nil {
+			return nil, http.StatusForbidden, runtimedb.ErrNotAdmitted
+		}
+		r = r.WithContext(withSurfaceGeneration(r.Context(), linked.Generation))
 		// The person the caller acts for, as below — a turn is had by a
 		// Person (ADR-W033 B10), and this branch used the credential's
 		// own name while the one below it did not.
 		return s.askNamedButler(r.Context(), message, named, actingMember(id), actingAsOwner(id), nil)
+	}
+	// Preserve the established unconfigured response: a deployment with no
+	// Butler has no live dispatch boundary to authenticate. The runner takes
+	// the authoritative snapshot again; this read only decides whether there
+	// is a surface whose canonical link must be resolved.
+	provider, gateway, _, _, _ := s.ButlerHost.Current()
+	if provider != nil && gateway != nil {
+		linked, err := s.resolveRequestSurface(id)
+		if err != nil {
+			return nil, http.StatusForbidden, runtimedb.ErrNotAdmitted
+		}
+		r = r.WithContext(withSurfaceGeneration(r.Context(), linked.Generation))
 	}
 	// The unconfigured check lives in the session runner, with the one
 	// snapshot it takes — checking here as well would read the backend
@@ -285,6 +302,11 @@ func (s *Server) askOneButler(r *http.Request, id principal.Identity) (any, int,
 		return nil, http.StatusServiceUnavailable,
 			fmt.Errorf("no butler is configured on this deployment")
 	}
+	linked, err := s.resolveRequestSurface(id)
+	if err != nil {
+		return nil, http.StatusForbidden, runtimedb.ErrNotAdmitted
+	}
+	r = r.WithContext(withSurfaceGeneration(r.Context(), linked.Generation))
 	return s.runNamedButlerSession(r.Context(), butlerlive.Turn{
 		Butler: name,
 		// The person the caller acts for, not the credential's own
@@ -369,6 +391,11 @@ func (s *Server) continueButlerSession(r *http.Request, id principal.Identity) (
 	if err != nil {
 		return nil, st, err
 	}
+	linked, err := s.resolveRequestSurface(id)
+	if err != nil {
+		return nil, http.StatusForbidden, runtimedb.ErrNotAdmitted
+	}
+	r = r.WithContext(withSurfaceGeneration(r.Context(), linked.Generation))
 	sess, err := s.DB.GetButlerSession(r.PathValue("id"))
 	if errors.Is(err, runtimedb.ErrNotFound) {
 		return nil, http.StatusNotFound, fmt.Errorf("butler session not found")
@@ -471,6 +498,10 @@ func (s *Server) runAdminButlerSession(ctx context.Context, message, actingFor, 
 	if code, err := s.turnHasAPerson(actingFor); err != nil {
 		return nil, code, err
 	}
+	generation, genErr := s.admittedGeneration(ctx, actingFor)
+	if genErr != nil {
+		return nil, http.StatusForbidden, genErr
+	}
 	// A COPY, because askGw is the host's gateway and is shared by
 	// every request in flight: binding this person to it would be both
 	// a data race and one caller's identity answering for another's.
@@ -490,6 +521,11 @@ func (s *Server) runAdminButlerSession(ctx context.Context, message, actingFor, 
 		// The provider failed mid-session; nothing durable happened (no
 		// proposals are submitted until the session completes).
 		return nil, http.StatusBadGateway, fmt.Errorf("butler session: %w", err)
+	}
+	// A model call is not a lease on identity: recheck before proposals,
+	// persistence, or publication.
+	if err := s.DB.CheckButlerMemberGeneration(actingFor, generation); err != nil {
+		return nil, http.StatusForbidden, runtimedb.ErrNotAdmitted
 	}
 
 	// Submit every accepted proposal through the ONE proposal pipeline
@@ -531,16 +567,17 @@ func (s *Server) runAdminButlerSession(ctx context.Context, message, actingFor, 
 		},
 	}
 	sessionID, err := s.recordTurn(prior, runtimedb.ButlerSession{
-		Principal:         legacyRuntimePrincipal,
-		ActingFor:         actingFor,
-		Provider:          tr.Audit.Provider,
-		Mode:              askMode,
-		Surface:           runtimedb.ButlerSurfaceAdmin,
-		InboundConnection: connection,
-		FinalText:         finalText,
-		Capped:            tr.CappedIterations,
-		TranscriptJSON:    redact.String(string(transcriptJSON)),
-		Turns:             turns,
+		Principal:          legacyRuntimePrincipal,
+		ActingFor:          actingFor,
+		Provider:           tr.Audit.Provider,
+		Mode:               askMode,
+		Surface:            runtimedb.ButlerSurfaceAdmin,
+		IdentityGeneration: generation,
+		InboundConnection:  connection,
+		FinalText:          finalText,
+		Capped:             tr.CappedIterations,
+		TranscriptJSON:     redact.String(string(transcriptJSON)),
+		Turns:              turns,
 	})
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
