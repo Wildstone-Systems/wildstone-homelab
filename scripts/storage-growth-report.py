@@ -33,6 +33,10 @@ CACHE_PATHS = {
 }
 
 
+class ConfigurationError(ValueError):
+    """A privacy-safe configuration failure with a fixed public code."""
+
+
 class Collector:
     def __init__(self) -> None:
         self.root = Path(os.environ.get("STORAGE_REPORT_ROOT", "/"))
@@ -44,22 +48,28 @@ class Collector:
     def nonnegative_int(self, name: str, default: int) -> int:
         value = os.environ.get(name, str(default))
         if not value.isdecimal() or len(value) > 18:
-            raise ValueError(f"{name} must be a decimal integer of at most 18 digits")
+            raise ConfigurationError(f"{name.lower()}_invalid")
         return int(value, 10)
 
     def positive_int(self, name: str, default: int) -> int:
         value = self.nonnegative_int(name, default)
         if value == 0:
-            raise ValueError(f"{name} must be greater than zero")
+            raise ConfigurationError(f"{name.lower()}_invalid")
         return value
 
     def timestamp(self) -> dt.datetime:
         configured = os.environ.get("REPORT_TIMESTAMP")
         if configured:
-            parsed = dt.datetime.fromisoformat(configured.replace("Z", "+00:00"))
+            try:
+                parsed = dt.datetime.fromisoformat(configured.replace("Z", "+00:00"))
+            except (ValueError, OverflowError) as error:
+                raise ConfigurationError("report_timestamp_invalid") from error
             if parsed.tzinfo is None:
-                raise ValueError("REPORT_TIMESTAMP must include a timezone")
-            return parsed.astimezone(dt.timezone.utc)
+                raise ConfigurationError("report_timestamp_invalid")
+            try:
+                return parsed.astimezone(dt.timezone.utc)
+            except (ValueError, OverflowError) as error:
+                raise ConfigurationError("report_timestamp_invalid") from error
         return dt.datetime.now(dt.timezone.utc)
 
     def path(self, absolute: str) -> Path:
@@ -222,7 +232,10 @@ class Collector:
                     [*DOCKER, "container", "inspect", "--format", "{{.Image}}", container_id],
                     "docker_container_reference_failed",
                 )
-                if image_id is None or len(self.nonempty_lines(image_id)) != 1:
+                if image_id is None:
+                    references_ok = False
+                elif len(self.nonempty_lines(image_id)) != 1:
+                    self.errors.append("docker_container_reference_malformed")
                     references_ok = False
                 else:
                     references.add(self.nonempty_lines(image_id)[0])
@@ -235,6 +248,7 @@ class Collector:
             elif len(self.nonempty_lines(image_id)) == 1:
                 references.add(self.nonempty_lines(image_id)[0])
             else:
+                self.errors.append("docker_protected_image_reference_malformed")
                 references_ok = False
 
         images = set(self.nonempty_lines(images_output)) if images_output is not None else set()
@@ -442,8 +456,20 @@ def main() -> int:
     try:
         collector = Collector()
         result = collector.collect()
-    except (ValueError, OSError) as error:
+    except ConfigurationError as error:
         print(json.dumps({"schemaVersion": 1, "status": "error", "error": str(error)}, sort_keys=True))
+        return 2
+    except (ValueError, OSError, OverflowError):
+        print(
+            json.dumps(
+                {
+                    "schemaVersion": 1,
+                    "status": "error",
+                    "error": "collector_initialization_failed",
+                },
+                sort_keys=True,
+            )
+        )
         return 2
     print(json.dumps(result, separators=(",", ":"), sort_keys=True))
     return 1 if result["status"] == "partial" else 0
