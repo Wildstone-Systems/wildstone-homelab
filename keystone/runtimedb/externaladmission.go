@@ -243,13 +243,14 @@ func (v *SecretVault) AdmitExternalTask(in ExternalTaskAdmissionInput) (External
 	}
 
 	var member, role, butlerName, surface, agentClass, connectionName string
-	err = tx.QueryRow(`SELECT m.member,m.role,b.name,b.surface,b.agent_class,a.transport||':'||a.external_id
+	var identityGeneration int64
+	err = tx.QueryRow(`SELECT m.member,m.role,m.generation,b.name,b.surface,b.agent_class,a.transport||':'||a.external_id
 		FROM butler_members m
 		JOIN butlers b ON b.seq=? AND b.enabled=1 AND b.retired_at=''
 		JOIN butler_addresses a ON a.seq=? AND a.butler=b.seq AND a.revoked_at=''
 		WHERE m.person_id=? AND m.admitted=1 AND m.disabled_at='' AND m.offboarded_at=''`,
 		reg.Butler, reg.Connection, reg.PersonID).
-		Scan(&member, &role, &butlerName, &surface, &agentClass, &connectionName)
+		Scan(&member, &role, &identityGeneration, &butlerName, &surface, &agentClass, &connectionName)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ExternalTaskAdmission{}, ErrNotAdmitted
 	}
@@ -259,12 +260,12 @@ func (v *SecretVault) AdmitExternalTask(in ExternalTaskAdmissionInput) (External
 
 	stamp := now()
 	res, err := tx.Exec(`INSERT INTO butler_tasks
-		(created_at,updated_at,kind,state,author_person_id,owner_person_id,surface,agent_class,audience,
+		(created_at,updated_at,kind,state,author_person_id,owner_person_id,identity_generation,surface,agent_class,audience,
 		 origin_connection,origin_connection_ref,correlation_id,objective,completion_criteria,grants_json,budget_json,
 		 deadline_at,next_wakeup_at,lease_epoch,uncertainty,result_summary,retention,envelope_version,objective_kind,
 		 proposal_only,as_owner,system_extra,origin_conversation,butler)
-		VALUES(?,?,'conversation','pending',?,?,?,?,?,?,?,?,?,?,'{}','{}','','',0,'','','conversation',?,
-		 'effectful',0,?,'',?,?)`, stamp, stamp, reg.PersonID, reg.PersonID, surface, agentClass,
+		VALUES(?,?,'conversation','pending',?,?,?,?,?,?,?,?,?,?,?,'{}','{}','','',0,'','','conversation',?,
+		 'effectful',0,?,'',?,?)`, stamp, stamp, reg.PersonID, reg.PersonID, identityGeneration, surface, agentClass,
 		string(ButlerAudiencePrivate), connectionName, reg.Connection, in.ClientSessionID, in.Objective, "", TaskEnvelopeVersion,
 		role == string(RoleOwner), in.ClientSessionID, butlerName)
 	if err != nil {

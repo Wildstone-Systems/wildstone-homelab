@@ -55,12 +55,7 @@ func freshnessHarness(t *testing.T) *harness {
 	h := newHarness(t)
 	h.s.SetTrustedIngress([]string{"127.0.0.1", "::1"})
 	for member, role := range map[string]string{"mika": runtimedb.RoleOwner, "sandy": runtimedb.RoleMember} {
-		if err := h.s.DB.RecordButlerMember(member, role, "", ""); err != nil {
-			t.Fatal(err)
-		}
-		if err := h.s.DB.AdmitButlerMember(member, "root-admin"); err != nil {
-			t.Fatal(err)
-		}
+		h.ensurePerson(member, runtimedb.Role(role))
 	}
 	return h
 }

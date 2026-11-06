@@ -604,12 +604,13 @@ func (bs *Butlers) task(b runtimedb.Butler, t Turn) (runtimedb.ButlerTask, bool,
 		// owns the BUTLER (A10); they do not own what someone else said
 		// to it, and recording them as the owner here would move a
 		// household member's conversation into the operator's lane.
-		Author:     t.Member,
-		Owner:      t.Member,
-		Surface:    b.Surface,
-		AgentClass: b.AgentClass,
-		Audience:   audience,
-		SessionID:  t.SessionID,
+		Author:             t.Member,
+		Owner:              t.Member,
+		IdentityGeneration: t.IdentityGeneration,
+		Surface:            b.Surface,
+		AgentClass:         b.AgentClass,
+		Audience:           audience,
+		SessionID:          t.SessionID,
 		// The Connection this request arrived over, snapshotted for the
 		// same reason the surface and the Butler are: derived authority
 		// is re-evaluated against what the task was ADMITTED UNDER, not

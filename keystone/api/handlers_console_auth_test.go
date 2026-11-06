@@ -298,12 +298,7 @@ func TestForwardedConsoleAuthRefusesAPersonWhoMayNotAdminister(t *testing.T) {
 // then runs an optional lifecycle step against them.
 func consolePerson(t *testing.T, h *harness, role string, after func(*testing.T, *harness)) {
 	t.Helper()
-	if err := h.s.DB.RecordButlerMember("consoleholder", role, "", ""); err != nil {
-		t.Fatal(err)
-	}
-	if err := h.s.DB.AdmitButlerMember("consoleholder", "root-admin"); err != nil {
-		t.Fatal(err)
-	}
+	h.ensurePerson("consoleholder", runtimedb.Role(role))
 	if role == runtimedb.RoleOwner && after != nil {
 		// Disabling or offboarding the only Owner is refused by the
 		// Last Owner invariant, so give the household a second one.
@@ -424,10 +419,7 @@ func TestDemotionInvalidatesAnElevatedTokenHeldByThatPerson(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	token, err := h.s.Principals.Mint("root-admin", "consoleholder", 0)
-	if err != nil {
-		t.Fatalf("minting: %v", err)
-	}
+	token := h.console(runtimedb.RoleAdmin, "consoleholder")
 
 	// It works while they are an Owner.
 	if res := h.bearer(t, token, http.MethodGet, "/api/v1/butlers"); res.StatusCode != http.StatusOK {
@@ -473,10 +465,7 @@ func TestAnElevatedTokenDiesWithThePersonItActsFor(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			token, err := h.s.Principals.Mint("root-admin", "consoleholder", 0)
-			if err != nil {
-				t.Fatalf("minting: %v", err)
-			}
+			token := h.console(runtimedb.RoleAdmin, "consoleholder")
 			if res := h.bearer(t, token, http.MethodGet, "/api/v1/butlers"); res.StatusCode != http.StatusOK {
 				t.Fatalf("before: status = %d, want 200", res.StatusCode)
 			}
