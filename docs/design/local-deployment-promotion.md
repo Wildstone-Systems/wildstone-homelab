@@ -8,13 +8,20 @@ The accepted Statefile contains product/household history. A Flux reader must no
 
 `statefile.OpenLocalDeployment` initializes/checks this dedicated repository and refuses source-checkout ancestry, symlinked paths, foreign repositories without its marker, group/world-accessible repository directories, remotes and alternate/shallow object storage. Git subprocesses strip inherited Git environment overrides and global/system configuration. No network Git operation is implemented. Initialization installs no software and starts no service; bootstrap must provide Git first.
 
-This initial mapping accepts only `source.yaml`, `release.yaml` and `kustomization.yaml`, with a 1 MiB bound. It constructs a complete tree with Git plumbing, without staging working files or using hooks. It does not validate the meaning of arbitrary bytes: the approved dispatcher must generate and revalidate #256's projection, never accept arbitrary API-provided files.
+This mapping always requires the public-safe `source.yaml`, `release.yaml` and
+`kustomization.yaml` set and may add exactly one private
+`secret.sops.yaml`. The combined snapshot remains bounded to 1 MiB. The local
+repository constructs a complete tree with Git plumbing, without staging
+working files or using hooks. It does not accept arbitrary API-provided files:
+the approved dispatcher generates/revalidates the three public files, verifies
+the fixed private filename and SHA-256 against the reviewed identity, and only
+then supplies the exact ciphertext bytes.
 
 ## Promotion and interruption
 
 The low-level publisher extends `keystone/publish` and `runtimedb`, not the external API. It uses the existing coordinator/execution check and accepted-Statefile revision, plus a mandatory projection-gate seam and a final exact-Plan authority fence. With the gate absent, it refuses work. The opt-in deployment manager derives production review material; a callback cannot substitute for the final DB fence.
 
-1. Freeze files and bind repository identity, operation ID, Plan ID, accepted revision, reviewed digest, expected deployment revision and exact output bytes.
+1. Freeze files and bind repository identity, operation ID, Plan ID, accepted revision, reviewed digest, expected deployment revision, exact public output bytes and the private filename/content digest. Ciphertext bytes are deliberately excluded from Plan/binding JSON, but the publisher verifies them against that digest before building.
 2. Recheck execution authority/accepted revision and the required gate.
 3. Build a candidate commit from the complete output and retain it under a private ref.
 4. Insert an immutable `deployment_promotions` journal row. Retried operation IDs must match the same binding. Concurrent builders use the row winner's candidate, not a newly regenerated commit.
@@ -34,7 +41,7 @@ The existing immediate SQLite writer transaction spans the final authority reads
 
 Git and SQLite still are not one transaction. After a ref update, DB acknowledgment can fail or the process can stop. Exact approved retry recognizes the journal candidate; it never rewinds an owner change. If authority was revoked after the ref advanced, another effect is refused. The manager may acknowledge the exact observed candidate as bookkeeping without treating it as permission for new work or automatically rolling it back.
 
-This low-level fence checks a stored exact binding. The [production manager](approved-local-deployment.md) derives and revalidates it from installation-owned inputs, with fresh interactive Owner approval, fixed instance inventory and a local encrypted-configuration version. It does not trust API-supplied digests or files. The final fenced callback also verifies bounded current input-file fingerprints without DB/network/rendering work.
+This low-level fence checks a stored exact binding. The [production manager](approved-local-deployment.md) derives and revalidates it from installation-owned inputs, with fresh interactive Owner approval, fixed instance inventory and a local encrypted-configuration version. It does not trust API-supplied digests or files. The final fenced callback also verifies bounded current input-file fingerprints without DB/network/rendering work. Ciphertext remains only in the private local input and candidate/mirror Git trees; it is never serialized into Plan JSON or an API response.
 
 ## Source visibility and transport
 

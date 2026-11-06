@@ -37,3 +37,23 @@ func (s *Server) resolveRequestSurface(id principal.Identity) (runtimedb.ButlerM
 	}
 	return linked, nil
 }
+
+// admittedGeneration returns the identity-link generation a turn was
+// admitted under: the one ingress resolved, or (for trusted internal
+// callers with none) the member's current one. Every runner checks it
+// before the model call and again after, so a link revoked mid-call
+// cannot publish work under the newer generation.
+func (s *Server) admittedGeneration(ctx context.Context, member string) (int64, error) {
+	generation := surfaceGeneration(ctx)
+	if generation == 0 {
+		m, err := s.DB.GetButlerMember(member)
+		if err != nil || !m.Active() {
+			return 0, runtimedb.ErrNotAdmitted
+		}
+		generation = m.Generation
+	}
+	if err := s.DB.CheckButlerMemberGeneration(member, generation); err != nil {
+		return 0, runtimedb.ErrNotAdmitted
+	}
+	return generation, nil
+}

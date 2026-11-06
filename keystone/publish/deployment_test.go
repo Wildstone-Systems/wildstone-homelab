@@ -111,7 +111,7 @@ func TestDeploymentPromotionCrashRecovery(t *testing.T) {
 }
 
 func TestDeploymentPromotionRefusesChangedOrUnapprovedWork(t *testing.T) {
-	for _, change := range []string{"missing-gate", "unapproved", "stale", "changed-review", "changed-files", "owner-edit", "ownership-ref-change", "lost-authority", "invalid-files"} {
+	for _, change := range []string{"missing-gate", "unapproved", "stale", "changed-review", "changed-files", "owner-edit", "ownership-ref-change", "lost-authority", "invalid-files", "missing-private-bytes", "changed-private-bytes", "arbitrary-private-path"} {
 		t.Run(change, func(t *testing.T) {
 			p, r := deploymentHarness(t)
 			if change == "changed-review" || change == "changed-files" || change == "owner-edit" || change == "ownership-ref-change" {
@@ -147,6 +147,14 @@ func TestDeploymentPromotionRefusesChangedOrUnapprovedWork(t *testing.T) {
 			case "invalid-files":
 				delete(r.Files, "source.yaml")
 				r.Files["../escape"] = []byte("refused")
+			case "missing-private-bytes":
+				r.PrivateFileDigests = map[string]string{"secret.sops.yaml": strings.Repeat("a", 64)}
+			case "changed-private-bytes":
+				r.PrivateFileDigests = map[string]string{"secret.sops.yaml": strings.Repeat("a", 64)}
+				r.PrivateFiles = map[string][]byte{"secret.sops.yaml": []byte("different ciphertext")}
+			case "arbitrary-private-path":
+				r.PrivateFileDigests = map[string]string{"../secret.sops.yaml": strings.Repeat("a", 64)}
+				r.PrivateFiles = map[string][]byte{"../secret.sops.yaml": []byte("ciphertext")}
 			}
 			before, _ := p.Repo.Head()
 			if _, err := p.Promote(r); err == nil {
@@ -157,6 +165,41 @@ func TestDeploymentPromotionRefusesChangedOrUnapprovedWork(t *testing.T) {
 				t.Fatal("ref changed after refusal")
 			}
 		})
+	}
+}
+
+func TestDeploymentBindingUsesPrivateDigestNotPrivateBytes(t *testing.T) {
+	_, req := deploymentHarness(t)
+	req.PrivateFileDigests = map[string]string{"secret.sops.yaml": strings.Repeat("c", 64)}
+	req.PrivateFiles = map[string][]byte{"secret.sops.yaml": []byte("first private bytes")}
+	a, err := DeploymentBinding(strings.Repeat("d", 64), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.PrivateFiles["secret.sops.yaml"] = []byte("other private bytes")
+	b, err := DeploymentBinding(strings.Repeat("d", 64), req)
+	if err != nil || a != b {
+		t.Fatal("binding serialized private bytes", err)
+	}
+	req.PrivateFileDigests["secret.sops.yaml"] = strings.Repeat("e", 64)
+	c, err := DeploymentBinding(strings.Repeat("d", 64), req)
+	if err != nil || c == a {
+		t.Fatal("binding omitted private file identity", err)
+	}
+}
+
+func TestDeploymentGateReceivesPrivateIdentityOnly(t *testing.T) {
+	p, req := deploymentHarness(t)
+	req.PrivateFileDigests = map[string]string{"secret.sops.yaml": strings.Repeat("c", 64)}
+	req.PrivateFiles = map[string][]byte{"secret.sops.yaml": []byte("private ciphertext")}
+	p.Gate = func(got DeploymentRequest) error {
+		if got.PrivateFiles != nil || got.PrivateFileDigests["secret.sops.yaml"] != strings.Repeat("c", 64) {
+			t.Fatal("gate received ciphertext or lost its safe identity")
+		}
+		return nil
+	}
+	if err := p.authorize(req); err != nil {
+		t.Fatal(err)
 	}
 }
 

@@ -18,8 +18,7 @@ RESTIC_IMAGE = (
     "restic/restic@sha256:9940e6c7421ab3a21ee9fdc4e91596d04c792b600d31b102696c75cbf3ac4481"
 )
 DOCKER = ["docker", "--host", "unix:///var/run/docker.sock"]
-CONTAINERD = [
-    "ctr",
+CONTAINERD_ARGS = [
     "--address",
     "/run/k3s/containerd/containerd.sock",
     "--namespace",
@@ -33,6 +32,10 @@ CACHE_PATHS = {
 }
 
 
+class ConfigurationError(ValueError):
+    """A privacy-safe configuration failure with a fixed public code."""
+
+
 class Collector:
     def __init__(self) -> None:
         self.root = Path(os.environ.get("STORAGE_REPORT_ROOT", "/"))
@@ -44,22 +47,28 @@ class Collector:
     def nonnegative_int(self, name: str, default: int) -> int:
         value = os.environ.get(name, str(default))
         if not value.isdecimal() or len(value) > 18:
-            raise ValueError(f"{name} must be a decimal integer of at most 18 digits")
+            raise ConfigurationError(f"{name.lower()}_invalid")
         return int(value, 10)
 
     def positive_int(self, name: str, default: int) -> int:
         value = self.nonnegative_int(name, default)
         if value == 0:
-            raise ValueError(f"{name} must be greater than zero")
+            raise ConfigurationError(f"{name.lower()}_invalid")
         return value
 
     def timestamp(self) -> dt.datetime:
         configured = os.environ.get("REPORT_TIMESTAMP")
         if configured:
-            parsed = dt.datetime.fromisoformat(configured.replace("Z", "+00:00"))
+            try:
+                parsed = dt.datetime.fromisoformat(configured.replace("Z", "+00:00"))
+            except (ValueError, OverflowError) as error:
+                raise ConfigurationError("report_timestamp_invalid") from error
             if parsed.tzinfo is None:
-                raise ValueError("REPORT_TIMESTAMP must include a timezone")
-            return parsed.astimezone(dt.timezone.utc)
+                raise ConfigurationError("report_timestamp_invalid")
+            try:
+                return parsed.astimezone(dt.timezone.utc)
+            except (ValueError, OverflowError) as error:
+                raise ConfigurationError("report_timestamp_invalid") from error
         return dt.datetime.now(dt.timezone.utc)
 
     def path(self, absolute: str) -> Path:
@@ -122,7 +131,9 @@ class Collector:
             return None
         return result.stdout
 
-    def optional_command(self, argv: list[str]) -> str | None:
+    def optional_command(
+        self, argv: list[str], error_code: str
+    ) -> tuple[str | None, bool]:
         """Run a lookup where a nonzero result means the object is absent."""
         try:
             result = subprocess.run(
@@ -134,8 +145,17 @@ class Collector:
                 timeout=30,
             )
         except (OSError, subprocess.TimeoutExpired):
-            return None
-        return result.stdout if result.returncode == 0 else None
+            self.errors.append(error_code)
+            return None, False
+        return (result.stdout, True) if result.returncode == 0 else (None, True)
+
+    @staticmethod
+    def containerd_client() -> list[str] | None:
+        if shutil.which("ctr") is not None:
+            return ["ctr", *CONTAINERD_ARGS]
+        if shutil.which("k3s") is not None:
+            return ["k3s", "ctr", *CONTAINERD_ARGS]
+        return None
 
     @staticmethod
     def nonempty_lines(output: str) -> list[str]:
@@ -222,19 +242,26 @@ class Collector:
                     [*DOCKER, "container", "inspect", "--format", "{{.Image}}", container_id],
                     "docker_container_reference_failed",
                 )
-                if image_id is None or len(self.nonempty_lines(image_id)) != 1:
+                if image_id is None:
+                    references_ok = False
+                elif len(self.nonempty_lines(image_id)) != 1:
+                    self.errors.append("docker_container_reference_malformed")
                     references_ok = False
                 else:
                     references.add(self.nonempty_lines(image_id)[0])
         for image_ref in protected_refs:
-            image_id = self.optional_command(
+            image_id, lookup_ok = self.optional_command(
                 [*DOCKER, "image", "inspect", "--format", "{{.Id}}", image_ref],
+                "docker_protected_image_reference_failed",
             )
-            if image_id is None:
+            if not lookup_ok:
+                references_ok = False
+            elif image_id is None:
                 continue
             elif len(self.nonempty_lines(image_id)) == 1:
                 references.add(self.nonempty_lines(image_id)[0])
             else:
+                self.errors.append("docker_protected_image_reference_malformed")
                 references_ok = False
 
         images = set(self.nonempty_lines(images_output)) if images_output is not None else set()
@@ -301,7 +328,8 @@ class Collector:
                 "referencedImageCount": None,
                 "unreferencedImageCount": None,
             }
-        if shutil.which("ctr") is None:
+        containerd_client = self.containerd_client()
+        if containerd_client is None:
             self.errors.append("containerd_binary_missing_with_runtime")
             return {
                 "presence": "present",
@@ -316,11 +344,11 @@ class Collector:
             }
 
         images_output = self.command(
-            [*CONTAINERD, "images", "list", "-q"],
+            [*containerd_client, "images", "list", "-q"],
             "containerd_image_inventory_failed",
         )
         containers_output = self.command(
-            [*CONTAINERD, "containers", "list", "-q"],
+            [*containerd_client, "containers", "list", "-q"],
             "containerd_container_inventory_failed",
         )
         protected_refs, protected_ok = self.protected_images()
@@ -329,7 +357,7 @@ class Collector:
         if containers_output is not None:
             for container_id in self.nonempty_lines(containers_output):
                 info = self.command(
-                    [*CONTAINERD, "containers", "info", container_id],
+                    [*containerd_client, "containers", "info", container_id],
                     "containerd_container_reference_failed",
                 )
                 if info is None:
@@ -442,8 +470,20 @@ def main() -> int:
     try:
         collector = Collector()
         result = collector.collect()
-    except (ValueError, OSError) as error:
+    except ConfigurationError as error:
         print(json.dumps({"schemaVersion": 1, "status": "error", "error": str(error)}, sort_keys=True))
+        return 2
+    except (ValueError, OSError, OverflowError):
+        print(
+            json.dumps(
+                {
+                    "schemaVersion": 1,
+                    "status": "error",
+                    "error": "collector_initialization_failed",
+                },
+                sort_keys=True,
+            )
+        )
         return 2
     print(json.dumps(result, separators=(",", ":"), sort_keys=True))
     return 1 if result["status"] == "partial" else 0

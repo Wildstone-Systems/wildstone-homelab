@@ -23,6 +23,11 @@ type DeploymentRequest struct {
 	ReviewDigest     string
 	ExpectedRevision string
 	Files            map[string][]byte
+	// PrivateFileDigests are safe approval identity. PrivateFiles contains the
+	// exact local ciphertext only inside the dispatcher and is deliberately
+	// excluded from JSON binding/Plan serialization.
+	PrivateFileDigests map[string]string
+	PrivateFiles       map[string][]byte `json:"-"`
 }
 
 // DeploymentPublisher reuses the publication package and runtime DB but keeps
@@ -61,6 +66,15 @@ func (p *DeploymentPublisher) authorize(req DeploymentRequest) error {
 	for name, data := range req.Files {
 		gateReq.Files[name] = append([]byte(nil), data...)
 	}
+	if req.PrivateFileDigests != nil {
+		gateReq.PrivateFileDigests = make(map[string]string, len(req.PrivateFileDigests))
+		for name, digest := range req.PrivateFileDigests {
+			gateReq.PrivateFileDigests[name] = digest
+		}
+	}
+	// Gates receive only the reviewed private filename/digest identity. Raw
+	// ciphertext is confined to this publisher's internal candidate build.
+	gateReq.PrivateFiles = nil
 	return p.Gate(gateReq)
 }
 
@@ -80,8 +94,24 @@ func (p *DeploymentPublisher) Promote(req DeploymentRequest) (runtimedb.Deployme
 	if len(req.Files) != 3 {
 		return runtimedb.DeploymentPromotion{}, fmt.Errorf("deployment: exact projection files required")
 	}
+	if len(req.PrivateFileDigests) != len(req.PrivateFiles) || len(req.PrivateFiles) > 1 {
+		return runtimedb.DeploymentPromotion{}, fmt.Errorf("deployment: exact private projection files required")
+	}
 	total := 0
 	for _, data := range req.Files {
+		total += len(data)
+		if total > 1<<20 {
+			return runtimedb.DeploymentPromotion{}, fmt.Errorf("deployment: projection exceeds 1 MiB")
+		}
+	}
+	for name, data := range req.PrivateFiles {
+		if name != "secret.sops.yaml" || len(data) == 0 || !regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(req.PrivateFileDigests[name]) {
+			return runtimedb.DeploymentPromotion{}, fmt.Errorf("deployment: invalid private projection file")
+		}
+		sum := sha256.Sum256(data)
+		if hex.EncodeToString(sum[:]) != req.PrivateFileDigests[name] {
+			return runtimedb.DeploymentPromotion{}, fmt.Errorf("deployment: private projection digest mismatch")
+		}
 		total += len(data)
 		if total > 1<<20 {
 			return runtimedb.DeploymentPromotion{}, fmt.Errorf("deployment: projection exceeds 1 MiB")
@@ -93,6 +123,22 @@ func (p *DeploymentPublisher) Promote(req DeploymentRequest) (runtimedb.Deployme
 		files[name] = append([]byte(nil), data...)
 	}
 	req.Files = files
+	var privateDigests map[string]string
+	if req.PrivateFileDigests != nil {
+		privateDigests = make(map[string]string, len(req.PrivateFileDigests))
+		for name, digest := range req.PrivateFileDigests {
+			privateDigests[name] = digest
+		}
+	}
+	req.PrivateFileDigests = privateDigests
+	var privateFiles map[string][]byte
+	if req.PrivateFiles != nil {
+		privateFiles = make(map[string][]byte, len(req.PrivateFiles))
+		for name, data := range req.PrivateFiles {
+			privateFiles[name] = append([]byte(nil), data...)
+		}
+	}
+	req.PrivateFiles = privateFiles
 	binding, err := deploymentBinding(p.Repo.Identity(), req)
 	if err != nil {
 		return runtimedb.DeploymentPromotion{}, err
@@ -109,7 +155,17 @@ func (p *DeploymentPublisher) Promote(req DeploymentRequest) (runtimedb.Deployme
 		if head != req.ExpectedRevision {
 			return row, statefile.ErrDiverged
 		}
-		candidate, err := p.Repo.Build(req.ExpectedRevision, req.OperationID, req.Files)
+		complete := make(map[string][]byte, len(req.Files)+len(req.PrivateFiles))
+		for name, data := range req.Files {
+			complete[name] = data
+		}
+		for name, data := range req.PrivateFiles {
+			if complete[name] != nil {
+				return row, fmt.Errorf("deployment: overlapping projection files")
+			}
+			complete[name] = data
+		}
+		candidate, err := p.Repo.Build(req.ExpectedRevision, req.OperationID, complete)
 		if err != nil {
 			return row, err
 		}
@@ -151,7 +207,9 @@ func (p *DeploymentPublisher) Promote(req DeploymentRequest) (runtimedb.Deployme
 	}
 	effect := func() error {
 		if p.ValidateInputs != nil {
-			if err := p.ValidateInputs(req); err != nil {
+			safeReq := req
+			safeReq.PrivateFiles = nil
+			if err := p.ValidateInputs(safeReq); err != nil {
 				return err
 			}
 		}
@@ -198,8 +256,24 @@ func (p *DeploymentPublisher) Promote(req DeploymentRequest) (runtimedb.Deployme
 func deploymentBinding(repositoryIdentity string, req DeploymentRequest) (string, error) {
 	material, err := json.Marshal(struct {
 		Repo    string
-		Request DeploymentRequest
-	}{repositoryIdentity, req})
+		Request struct {
+			OperationID        string
+			PlanID             string
+			AcceptedRevision   string
+			ReviewDigest       string
+			ExpectedRevision   string
+			Files              map[string][]byte
+			PrivateFileDigests map[string]string `json:",omitempty"`
+		}
+	}{repositoryIdentity, struct {
+		OperationID        string
+		PlanID             string
+		AcceptedRevision   string
+		ReviewDigest       string
+		ExpectedRevision   string
+		Files              map[string][]byte
+		PrivateFileDigests map[string]string `json:",omitempty"`
+	}{req.OperationID, req.PlanID, req.AcceptedRevision, req.ReviewDigest, req.ExpectedRevision, req.Files, req.PrivateFileDigests}})
 	if err != nil {
 		return "", err
 	}

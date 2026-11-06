@@ -19,6 +19,9 @@ fi
 case "${DOCKER_MODE:-ok}:$*" in
   fail:*) exit 7 ;;
   malformed:'image ls --no-trunc --format {{.ID}}') printf '\n' ;;
+  container-empty:'container inspect --format {{.Image}} live-container') printf '\n' ;;
+  container-multiline:'container inspect --format {{.Image}} live-container') printf '%s\n' sha256:live sha256:extra ;;
+  protected-multiline:'image inspect --format {{.Id}} example.internal/scheduled@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa') printf '%s\n' sha256:scheduled sha256:extra ;;
   *:'image ls --no-trunc --format {{.ID}}') printf '%s\n' sha256:live sha256:restic sha256:scheduled sha256:unused ;;
   *:'ps -aq --no-trunc') printf '%s\n' live-container scheduled-container ;;
   *:'container inspect --format {{.Image}} live-container') printf '%s\n' sha256:live ;;
@@ -35,6 +38,9 @@ STUB
 
 cat > "$bin/ctr" <<'STUB'
 #!/bin/bash
+if [[ $1 == ctr ]]; then
+  shift
+fi
 if [[ $1 == --address ]]; then
   [[ $2 == /run/k3s/containerd/containerd.sock && $3 == --namespace && $4 == k8s.io ]] || exit 9
   shift 4
@@ -49,6 +55,7 @@ case "${CTR_MODE:-ok}:$*" in
 esac
 STUB
 chmod +x "$bin/docker" "$bin/ctr"
+cp "$bin/ctr" "$bin/k3s"
 
 run_report() {
   local output=$1
@@ -115,15 +122,17 @@ assert_report "$output" 'r["filesystem"]["belowMinimum"] is True and [c["id"] fo
 test -f "$root/var/cache/wildstone/build/disposable"
 mv "$bin/ctr.disabled" "$bin/ctr"
 
-# Containerd-only.
+# Containerd-only using the client bundled by the repository's k3s install.
 reset_root
 touch "$root/run/k3s/containerd/containerd.sock"
 mkdir -p "$root/var/lib/rancher/k3s/agent/containerd/io.containerd.content.v1.content" \
   "$root/var/lib/rancher/k3s/agent/containerd/io.containerd.snapshotter.v1.overlayfs"
 mv "$bin/docker" "$bin/docker.disabled"
+mv "$bin/ctr" "$bin/ctr.disabled"
 run_report "$output"
 assert_report "$output" 'r["status"] == "complete" and r["runtime"]["containerd"]["unreferencedImageCount"] == 1'
 assert_report "$output" 'r["runtime"]["docker"]["presence"] == "not_present"'
+mv "$bin/ctr.disabled" "$bin/ctr"
 mv "$bin/docker.disabled" "$bin/docker"
 
 # Coexistence hosts collect both runtimes without double-counting category totals.
@@ -151,6 +160,19 @@ assert_report "$output" 'r["status"] == "partial" and "docker_binary_missing_wit
 mv "$bin/docker.disabled" "$bin/docker"
 mv "$bin/ctr.disabled" "$bin/ctr"
 
+# A present k3s runtime with neither supported client fails visibly.
+reset_root
+touch "$root/run/k3s/containerd/containerd.sock"
+mkdir -p "$root/var/lib/rancher/k3s/agent/containerd/io.containerd.content.v1.content"
+mv "$bin/ctr" "$bin/ctr.disabled"
+mv "$bin/k3s" "$bin/k3s.disabled"
+status=0
+run_report "$output" || status=$?
+[[ $status == 1 ]]
+assert_report "$output" 'r["status"] == "partial" and "containerd_binary_missing_with_runtime" in r["errors"] and r["runtime"]["containerd"]["unreferencedImageCount"] is None'
+mv "$bin/ctr.disabled" "$bin/ctr"
+mv "$bin/k3s.disabled" "$bin/k3s"
+
 # Failed and malformed runtime reference output fails closed and reports no unreferenced count.
 reset_root
 touch "$root/var/run/docker.sock"
@@ -163,6 +185,34 @@ status=0
 run_report "$output" DOCKER_MODE=malformed || status=$?
 [[ $status == 1 ]]
 assert_report "$output" 'r["status"] == "partial" and "docker_reference_unknown" in r["errors"] and r["runtime"]["docker"]["unreferencedImageCount"] is None'
+for mode in container-empty container-multiline; do
+  status=0
+  run_report "$output" DOCKER_MODE="$mode" || status=$?
+  [[ $status == 1 ]]
+  assert_report "$output" 'r["status"] == "partial" and "docker_container_reference_malformed" in r["errors"] and r["runtime"]["docker"]["unreferencedImageCount"] is None'
+done
+status=0
+run_report "$output" DOCKER_MODE=protected-multiline || status=$?
+[[ $status == 1 ]]
+assert_report "$output" 'r["status"] == "partial" and "docker_protected_image_reference_malformed" in r["errors"] and r["runtime"]["docker"]["unreferencedImageCount"] is None'
+"$python_bin" - "$script_dir/storage-growth-report.py" <<'PY'
+import importlib.util
+import sys
+from unittest import mock
+
+spec = importlib.util.spec_from_file_location("storage_growth_report", sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+collector = object.__new__(module.Collector)
+collector.errors = []
+with mock.patch.object(module.subprocess, "run", side_effect=OSError("private-path")):
+    output, lookup_ok = collector.optional_command(
+        ["docker", "image", "inspect", "private-reference"],
+        "docker_protected_image_reference_failed",
+    )
+assert output is None and not lookup_ok
+assert collector.errors == ["docker_protected_image_reference_failed"]
+PY
 reset_root
 touch "$root/run/k3s/containerd/containerd.sock"
 mkdir -p "$root/var/lib/rancher/k3s/agent/containerd/io.containerd.content.v1.content"
@@ -171,11 +221,23 @@ run_report "$output" CTR_MODE=malformed || status=$?
 [[ $status == 1 ]]
 assert_report "$output" 'r["status"] == "partial" and "containerd_container_reference_malformed" in r["errors"]'
 
-# Invalid configuration is rejected without echoing the supplied value.
+# Invalid configuration is rejected with fixed codes and never echoes values.
+for setting in RETENTION_DAYS=not-a-number RETENTION_DAYS=0; do
+  status=0
+  run_report "$output" "$setting" || status=$?
+  [[ $status == 2 ]]
+  assert_report "$output" 'r == {"schemaVersion": 1, "status": "error", "error": "retention_days_invalid"} and "not-a-number" not in str(r)'
+done
 status=0
-run_report "$output" RETENTION_DAYS=not-a-number || status=$?
+run_report "$output" MIN_FREE_BYTES=private-example-value || status=$?
 [[ $status == 2 ]]
-assert_report "$output" 'r["status"] == "error" and "RETENTION_DAYS" in r["error"] and "not-a-number" not in r["error"]'
+assert_report "$output" 'r == {"schemaVersion": 1, "status": "error", "error": "min_free_bytes_invalid"} and "private-example-value" not in str(r)'
+for timestamp in private-example-value 2026-11-06T00:00:00; do
+  status=0
+  run_report "$output" REPORT_TIMESTAMP="$timestamp" || status=$?
+  [[ $status == 2 ]]
+  assert_report "$output" 'r == {"schemaVersion": 1, "status": "error", "error": "report_timestamp_invalid"} and "private-example-value" not in str(r)'
+done
 
 unit_dir="$script_dir/../packaging/host-logging"
 timer_target=$(sed -n 's/^Unit=//p' "$unit_dir/storage-growth-report.timer")
@@ -188,4 +250,4 @@ if grep -Eiq '^Exec(Start|StartPre|StartPost)=.*(delete|prune|remove|rm )' \
   exit 1
 fi
 
-echo 'storage-growth-report: 7 offline scenarios passed'
+echo 'storage-growth-report: 18 offline scenarios passed'

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -89,6 +90,74 @@ func TestHelmProjectionBindsReviewAndPreservesStorage(t *testing.T) {
 	}
 	if changed.Digest == a.Digest {
 		t.Fatal("changed credential reference reused review")
+	}
+}
+
+func TestHelmProjectionReferencesPrivateEncryptedSecretDeterministically(t *testing.T) {
+	p, b, rev := helmFixture(t)
+	b.SecretFile = "secret.sops.yaml"
+	b.SecretGeneration = 7
+	b.SecretRestartPolicy = "recreate-on-ciphertext-revision"
+	projection, err := NewEngine().ProjectHelm(p, nil, b, rev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(projection.Files) != 3 || projection.Files[b.SecretFile] != nil {
+		t.Fatal("ciphertext entered the public-safe Helm projection")
+	}
+	var release map[string]any
+	if err := yaml.Unmarshal(projection.Files["release.yaml"], &release); err != nil {
+		t.Fatal(err)
+	}
+	annotations := release["spec"].(map[string]any)["values"].(map[string]any)["podAnnotations"].(map[string]any)
+	if annotations["wildstone.dev/encrypted-secret-revision"] != b.SecretRevision {
+		t.Fatal("Pod replacement is not bound to the ciphertext revision")
+	}
+	var kustomization map[string]any
+	if err := yaml.Unmarshal(projection.Files["kustomization.yaml"], &kustomization); err != nil {
+		t.Fatal(err)
+	}
+	if got := kustomization["resources"].([]any); !reflect.DeepEqual(got, []any{"source.yaml", "release.yaml", "secret.sops.yaml"}) {
+		t.Fatalf("private Secret not referenced exactly once: %v", got)
+	}
+	for _, change := range []string{"revision", "generation"} {
+		changed := b
+		if change == "revision" {
+			changed.SecretRevision = strings.Repeat("d", 64)
+		} else {
+			changed.SecretGeneration++
+		}
+		next, err := NewEngine().ProjectHelm(p, nil, changed, rev)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if next.Digest == projection.Digest {
+			t.Fatalf("changed secret %s reused projection digest", change)
+		}
+	}
+}
+
+func TestHelmProjectionRefusesArbitrarySecretProjection(t *testing.T) {
+	for _, change := range []string{"path", "missing-generation", "restart", "partial"} {
+		t.Run(change, func(t *testing.T) {
+			p, b, rev := helmFixture(t)
+			b.SecretFile = "secret.sops.yaml"
+			b.SecretGeneration = 1
+			b.SecretRestartPolicy = "recreate-on-ciphertext-revision"
+			switch change {
+			case "path":
+				b.SecretFile = "../secret.sops.yaml"
+			case "missing-generation":
+				b.SecretGeneration = 0
+			case "restart":
+				b.SecretRestartPolicy = "always"
+			case "partial":
+				b.SecretFile = ""
+			}
+			if _, err := NewEngine().ProjectHelm(p, nil, b, rev); err == nil {
+				t.Fatal("arbitrary/incomplete Secret projection accepted")
+			}
+		})
 	}
 }
 

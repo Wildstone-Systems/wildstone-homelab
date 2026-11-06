@@ -63,12 +63,12 @@ func newFixture(t *testing.T) *fixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg := Config{Instance: "example-app", ProfileFile: filepath.Join(root, "profile.yaml"), EncryptedSecretFile: filepath.Join(root, "secret.sops.yaml"), Repository: filepath.Join(root, "deployment.git"), MirrorRepository: filepath.Join(root, "delivery.git"), Bindings: capability.HelmBindings{Name: "example-app", Namespace: "example-app", ServiceAccount: "example-reconciler", ConfigClaim: "example-config", MetadataClaim: "example-metadata", MediaClaim: "example-media", SecretName: "example-jwt"}}
+	cfg := Config{Instance: "example-app", ProfileFile: filepath.Join(root, "profile.yaml"), EncryptedSecretFile: filepath.Join(root, "secret.sops.yaml"), Repository: filepath.Join(root, "deployment.git"), MirrorRepository: filepath.Join(root, "delivery.git"), Bindings: capability.HelmBindings{Name: "example-app", Namespace: "example-app", ServiceAccount: "example-reconciler", ConfigClaim: "example-config", MetadataClaim: "example-metadata", MediaClaim: "example-media", SecretName: "example-jwt"}, SecretDelivery: &SecretDeliveryConfig{Generation: 1, OutputPath: "secret.sops.yaml", KustomizationNamespace: "example-flux", KustomizationName: "example-app", DecryptionSecretName: "example-age-identity", RestartPolicy: "recreate-on-ciphertext-revision"}}
 	if err := os.WriteFile(cfg.ProfileFile, profile, 0600); err != nil {
 		t.Fatal(err)
 	}
 	// Encrypted-shaped opaque fixture only, not actual credential/key material.
-	secret := map[string]any{"apiVersion": "v1", "kind": "Secret", "metadata": map[string]any{"name": cfg.Bindings.SecretName, "namespace": cfg.Bindings.Namespace}, "stringData": map[string]any{"jwt-secret": "ENC[" + "REPLACED-payload]"}, "sops": map[string]any{"mac": "ENC[" + "REPLACED-mac]"}}
+	secret := map[string]any{"apiVersion": "v1", "kind": "Secret", "metadata": map[string]any{"name": cfg.Bindings.SecretName, "namespace": cfg.Bindings.Namespace}, "type": "Opaque", "stringData": map[string]any{"jwt-secret": "ENC[" + "REPLACED-payload]"}, "sops": map[string]any{"age": []any{map[string]any{"recipient": "age1syntheticrecipientnotadeploymentidentity", "enc": "-----BEGIN AGE ENCRYPTED FILE-----\nREPLACED-stanza\n-----END AGE ENCRYPTED FILE-----\n"}}, "lastmodified": "2026-11-06T00:00:00Z", "mac": "ENC[" + "REPLACED-mac]", "encrypted_regex": "^(data|stringData)$", "version": "3.13.3"}}
 	raw, err := yaml.Marshal(secret)
 	if err != nil {
 		t.Fatal(err)
@@ -110,6 +110,27 @@ func approve(t *testing.T, f *fixture, id string) {
 	}
 }
 
+func completeRequest(t *testing.T, f *fixture, req publish.DeploymentRequest) publish.DeploymentRequest {
+	t.Helper()
+	s, err := load(f.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.PrivateFiles = s.privateFiles()
+	return req
+}
+
+func completeFiles(req publish.DeploymentRequest) map[string][]byte {
+	files := map[string][]byte{}
+	for name, data := range req.Files {
+		files[name] = data
+	}
+	for name, data := range req.PrivateFiles {
+		files[name] = data
+	}
+	return files
+}
+
 func TestOwnerPlanToLocalPromotionAndMirrorObservation(t *testing.T) {
 	f := newFixture(t)
 	rec := propose(t, f, "UTC")
@@ -131,6 +152,14 @@ func TestOwnerPlanToLocalPromotionAndMirrorObservation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if doc.Deployment.Review.Secret == nil || doc.Deployment.Review.Secret.SecretGeneration != 1 || doc.Deployment.Review.Secret.OutputPath != "secret.sops.yaml" || doc.Deployment.Review.Secret.PrivateFileCount != 1 {
+		t.Fatal("managed encrypted Secret review missing")
+	}
+	for _, private := range []string{"REPLACED-payload", "REPLACED-mac", "REPLACED-stanza", "age1syntheticrecipientnotadeploymentidentity", f.cfg.EncryptedSecretFile, f.cfg.Repository} {
+		if strings.Contains(rec.PlanJSON, private) {
+			t.Fatalf("Plan JSON exposed private projection material %q", private)
+		}
+	}
 	accepted, err := f.m.State.AcceptedRevision()
 	if err != nil || accepted != doc.Deployment.SourceRevision {
 		t.Fatal("acceptance split from Plan", err)
@@ -146,6 +175,14 @@ func TestOwnerPlanToLocalPromotionAndMirrorObservation(t *testing.T) {
 	current, err := f.m.DB.GetPlan(rec.ID)
 	if err != nil || current.State != runtimedb.PlanApplied {
 		t.Fatal("local promotion not acknowledged", err)
+	}
+	wantSecret, err := os.ReadFile(f.cfg.EncryptedSecretFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotSecret, err := exec.Command("git", "--git-dir="+f.cfg.Repository, "show", statusRevision(t, f.m, rec.ID)+":secret.sops.yaml").Output()
+	if err != nil || string(gotSecret) != string(wantSecret) {
+		t.Fatal("private ciphertext was not projected byte-for-byte", err)
 	}
 	status := f.m.Status(rec.ID)
 	if status.Phase != "promoted" || status.Delivery != "unavailable" || status.Reconciliation != "unobserved" || status.Application != "unobserved" {
@@ -173,6 +210,73 @@ func TestOwnerPlanToLocalPromotionAndMirrorObservation(t *testing.T) {
 	status = f.m.Status(rec.ID)
 	if status.Delivery != "mirrored" || status.MirrorRevision != status.PromotedRevision || status.Application != "unobserved" {
 		t.Fatal(status)
+	}
+}
+
+func statusRevision(t *testing.T, m *Manager, id string) string {
+	t.Helper()
+	status := m.Status(id)
+	if status.PromotedRevision == "" {
+		t.Fatal("missing promoted revision")
+	}
+	return status.PromotedRevision
+}
+
+func TestManagedSecretRotationBindsGenerationCiphertextAndPodReplacement(t *testing.T) {
+	f := newFixture(t)
+	first := propose(t, f, "UTC")
+	approve(t, f, first.ID)
+	f.m.Resume()
+	firstDoc, err := runtimedb.DecodeDeploymentPlan(first.PlanJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(f.cfg.EncryptedSecretFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rotated := []byte(strings.Replace(string(raw), "REPLACED-payload", "REPLACED-rotated-payload", 1))
+	if err := os.WriteFile(f.cfg.EncryptedSecretFile, rotated, 0600); err != nil {
+		t.Fatal(err)
+	}
+	f.cfg.SecretDelivery.Generation = 2
+	writeConfig(t, f.path, f.cfg)
+
+	second := propose(t, f, "UTC")
+	secondDoc, err := runtimedb.DecodeDeploymentPlan(second.PlanJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, b := firstDoc.Deployment.Review, secondDoc.Deployment.Review
+	if a.Secret == nil || b.Secret == nil || b.Secret.SecretGeneration != 2 || a.Secret.CiphertextRevision == b.Secret.CiphertextRevision || a.ProjectionDigest == b.ProjectionDigest {
+		t.Fatal("rotation reused generation/ciphertext/projection identity")
+	}
+	if !strings.Contains(b.Files["release.yaml"], "wildstone.dev/encrypted-secret-revision: "+b.Secret.CiphertextRevision) {
+		t.Fatal("rotation did not deterministically replace the Pod template")
+	}
+	if strings.Contains(second.PlanJSON, "REPLACED-rotated-payload") {
+		t.Fatal("rotated ciphertext entered Plan JSON")
+	}
+	approve(t, f, second.ID)
+	f.m.Resume()
+	got, err := exec.Command("git", "--git-dir="+f.cfg.Repository, "show", statusRevision(t, f.m, second.ID)+":secret.sops.yaml").Output()
+	if err != nil || string(got) != string(rotated) {
+		t.Fatal("rotated ciphertext was not projected exactly", err)
+	}
+}
+
+func TestManagedSecretGenerationCannotAdvanceWithoutNewCiphertext(t *testing.T) {
+	f := newFixture(t)
+	first := propose(t, f, "UTC")
+	approve(t, f, first.ID)
+	f.m.Resume()
+	f.cfg.SecretDelivery.Generation = 2
+	writeConfig(t, f.path, f.cfg)
+	if _, err := f.m.Propose("example-owner", f.cfg.Instance, "UTC"); err == nil {
+		t.Fatal("new Secret generation reused prior ciphertext")
+	}
+	if head, err := f.m.repo.Head(); err != nil || head != statusRevision(t, f.m, first.ID) {
+		t.Fatal("ref changed after generation continuity refusal", err)
 	}
 }
 
@@ -300,8 +404,8 @@ func TestResumeFromPreparedAndUnacknowledgedRef(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			req := request(rec.ID, doc)
-			candidate, err := f.m.repo.Build(req.ExpectedRevision, req.OperationID, req.Files)
+			req := completeRequest(t, f, request(rec.ID, doc))
+			candidate, err := f.m.repo.Build(req.ExpectedRevision, req.OperationID, completeFiles(req))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -443,6 +547,126 @@ func TestPendingPromotionStopsForChangedAuthorityInputsAndOwnerRef(t *testing.T)
 	}
 }
 
+func TestManagedSecretDeliveryInventoryAndSOPSShapeAreClosed(t *testing.T) {
+	for _, change := range []string{"generation", "output-path", "kustomization-namespace", "application-kustomization-namespace", "decryption-name", "restart", "missing-age", "extra-sops-provider", "sops-version", "encrypted-regex", "recipient", "secret-type", "metadata", "trailing-document"} {
+		t.Run(change, func(t *testing.T) {
+			f := newFixture(t)
+			switch change {
+			case "generation":
+				f.cfg.SecretDelivery.Generation = 0
+				writeConfig(t, f.path, f.cfg)
+			case "output-path":
+				f.cfg.SecretDelivery.OutputPath = "nested/secret.sops.yaml"
+				writeConfig(t, f.path, f.cfg)
+			case "kustomization-namespace":
+				f.cfg.SecretDelivery.KustomizationNamespace = "../flux"
+				writeConfig(t, f.path, f.cfg)
+			case "application-kustomization-namespace":
+				f.cfg.SecretDelivery.KustomizationNamespace = f.cfg.Bindings.Namespace
+				writeConfig(t, f.path, f.cfg)
+			case "decryption-name":
+				f.cfg.SecretDelivery.DecryptionSecretName = ""
+				writeConfig(t, f.path, f.cfg)
+			case "restart":
+				f.cfg.SecretDelivery.RestartPolicy = "always"
+				writeConfig(t, f.path, f.cfg)
+			default:
+				raw, err := os.ReadFile(f.cfg.EncryptedSecretFile)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if change == "trailing-document" {
+					raw = append(raw, []byte("---\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: unreviewed\n")...)
+					if err := os.WriteFile(f.cfg.EncryptedSecretFile, raw, 0600); err != nil {
+						t.Fatal(err)
+					}
+					break
+				}
+				var doc map[string]any
+				if err := yaml.Unmarshal(raw, &doc); err != nil {
+					t.Fatal(err)
+				}
+				sops := doc["sops"].(map[string]any)
+				switch change {
+				case "missing-age":
+					delete(sops, "age")
+				case "extra-sops-provider":
+					sops["kms"] = []any{map[string]any{"arn": "example"}}
+				case "sops-version":
+					sops["version"] = "latest"
+				case "encrypted-regex":
+					sops["encrypted_regex"] = ".*"
+				case "recipient":
+					sops["age"].([]any)[0].(map[string]any)["recipient"] = "private arbitrary recipient"
+				case "secret-type":
+					doc["type"] = "kubernetes.io/tls"
+				case "metadata":
+					doc["metadata"].(map[string]any)["labels"] = map[string]any{"unreviewed": "true"}
+				}
+				changed, err := yaml.Marshal(doc)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(f.cfg.EncryptedSecretFile, changed, 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := load(f.path); err == nil {
+				t.Fatal("arbitrary managed Secret input accepted")
+			}
+		})
+	}
+}
+
+func TestLegacyPlacementFingerprintEncodingIsStable(t *testing.T) {
+	f := newFixture(t)
+	f.cfg.SecretDelivery = nil
+	writeConfig(t, f.path, f.cfg)
+
+	got, err := load(f.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := f.cfg.Bindings
+	type legacyBindings struct {
+		Name           string
+		Namespace      string
+		ServiceAccount string
+		ConfigClaim    string
+		MetadataClaim  string
+		MediaClaim     string
+		SecretName     string
+		SecretRevision string
+	}
+	want := digest(encoded(struct {
+		Instance, Repository, Mirror string
+		Bindings                     legacyBindings
+	}{f.cfg.Instance, f.cfg.Repository, f.cfg.MirrorRepository, legacyBindings{
+		Name: b.Name, Namespace: b.Namespace, ServiceAccount: b.ServiceAccount,
+		ConfigClaim: b.ConfigClaim, MetadataClaim: b.MetadataClaim, MediaClaim: b.MediaClaim,
+		SecretName: b.SecretName, SecretRevision: "",
+	}}))
+	if got.placement != want {
+		t.Fatalf("legacy placement fingerprint changed: got %s want %s", got.placement, want)
+	}
+}
+
+func TestMissingManagedSecretFailsClosedWithoutRegeneration(t *testing.T) {
+	f := newFixture(t)
+	if err := os.Remove(f.cfg.EncryptedSecretFile); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.m.Propose("example-owner", f.cfg.Instance, "UTC"); err == nil {
+		t.Fatal("missing encrypted Secret produced a Plan")
+	}
+	if _, err := os.Stat(f.cfg.EncryptedSecretFile); !os.IsNotExist(err) {
+		t.Fatal("missing encrypted Secret was regenerated")
+	}
+	if head, err := f.m.repo.Head(); err != nil || head != "" {
+		t.Fatal("missing encrypted Secret advanced deployment Git", err)
+	}
+}
+
 func TestRevokePreparedPlanCannotResumeNewEffect(t *testing.T) {
 	f := newFixture(t)
 	rec := propose(t, f, "UTC")
@@ -451,8 +675,8 @@ func TestRevokePreparedPlanCannotResumeNewEffect(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	req := request(rec.ID, doc)
-	candidate, err := f.m.repo.Build(req.ExpectedRevision, req.OperationID, req.Files)
+	req := completeRequest(t, f, request(rec.ID, doc))
+	candidate, err := f.m.repo.Build(req.ExpectedRevision, req.OperationID, completeFiles(req))
 	if err != nil {
 		t.Fatal(err)
 	}

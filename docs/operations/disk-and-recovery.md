@@ -76,6 +76,9 @@ as `not_present`; a missing
 binary beside runtime storage, unreadable path, failed command, or malformed
 reference inventory makes the report `partial` and the service exits nonzero.
 No incomplete reference scan reports an unreferenced-image count.
+Containerd inventory uses a standalone `ctr` when installed and otherwise the
+`k3s ctr` client bundled by the supported k3s installation; both are fixed to
+the local k3s containerd socket and `k8s.io` namespace.
 
 `candidates` is a dry-run review list, not a deletion request. It can contain
 only aggregate entries for the four fixed disposable caches built into the
