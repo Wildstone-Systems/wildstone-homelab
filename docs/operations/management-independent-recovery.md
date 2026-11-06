@@ -281,10 +281,11 @@ off-host recovery.
 - #163: established scheduler/executor and atomic capture of runtime, Git,
   optional claims and keys; actual off-host restore execution.
 - #165: identity-directory, Traefik, certificate/internal-CA and DNS recovery.
-- #166: #317 accepted an isolated source/Kustomization/HelmRelease, independent
-  source operation while Keystone was down, Pod replacement, continuity, and
-  fail-closed input checks. A reversible source revision change/rollback and
-  full management recovery acceptance remain separately gated.
+- #166: #317 established an isolated source/Kustomization/HelmRelease,
+  independent source operation while Keystone was down, Pod replacement,
+  continuity, fail-closed input checks, and reversible exact source selection.
+  Its bounded Helm-history retention limitation is recorded; full management
+  recovery acceptance remains separately gated.
 - #168: data-preserving chart 0.1-to-0.2 ownership migration and rollback with
   new writes retained.
 - #180: HA. This contract remains one SQLite writer and does not authorize a
