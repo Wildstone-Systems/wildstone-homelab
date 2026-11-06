@@ -2,17 +2,18 @@
 
 # Wildstone HomeLab
 
-**Your home server, run by an experienced sysadmin that never sleeps.**
+**A household platform for your home server — built on tools you can trust.**
 
-A self-hosted control plane with desired-state reconciliation,
-capability-driven deployment, and a constrained AI operator — the Butler.
+Guided setup, a curated app experience, approved changes and a
+constrained AI operator (the Butler), on top of established open-source
+infrastructure.
 
 [![CI](https://github.com/Wildstone-Systems/wildstone-homelab/actions/workflows/ci.yml/badge.svg)](https://github.com/Wildstone-Systems/wildstone-homelab/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/Wildstone-Systems/wildstone-homelab?include_prereleases&label=release)](https://github.com/Wildstone-Systems/wildstone-homelab/releases)
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
 ![Status: Alpha](https://img.shields.io/badge/status-alpha-orange.svg)
 
-[Install](#quick-start) · [Features](#features) · [Docs](docs/README.md) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md)
+[Status](#project-status) · [Install](#quick-start) · [Docs](docs/README.md) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md)
 
 </div>
 
@@ -23,26 +24,67 @@ capability-driven deployment, and a constrained AI operator — the Butler.
 ## Why Wildstone?
 
 The modern home is full of other people's computers. Wildstone is the
-counter-move: the home lab as **household infrastructure**, coordinated by
-a Butler with scoped tools and explicit authority.
+counter-move: the home lab as **household infrastructure**.
 
-- **You stay in charge** — infrastructure changes are proposed as Plans and need your approval.
-- **Local first** — runs on your hardware, under your control.
-- **Safe by design** — no arbitrary shell on the wire; every action is typed and checked.
+- **You stay in charge** — infrastructure changes are proposed as Plans and need your approval. Agents can propose, never approve.
+- **Local first** — your settings, secrets and deployment config stay on your machines. No GitHub account, cloud service or telemetry required.
+- **No reinvented wheels** — proven tools do the heavy lifting; Wildstone adds the household experience on top.
+- **Safe by design** — no arbitrary shell; every action is typed and permission-checked.
 
 Read the full story in [docs/vision.md](docs/vision.md).
 
-## Features
+## How it works
 
-- 🧠 **The Butler** — an AI operator with scoped tools and explicit permissions.
-- 🔁 **Desired-state reconciliation** — describe what you want; Wildstone keeps it that way.
-- 📦 **75+ ready-made packages** — Jellyfin, Immich, Home Assistant, Vaultwarden, Paperless, Ollama, Pi-hole and more ([browse](packages/)).
-- ✅ **Plans & policy** — every infrastructure change is reviewed before it runs.
-- 💾 **Backup & recovery** — local and off-site (S3) backups with a tested [recovery runbook](docs/recovery.md).
-- 🖥️ **Console + CLI** — a web UI and the `wild` CLI, both on the same public API.
-- 🌐 **Multi-node** — enroll extra Linux machines; optional Tailscale networking.
+Wildstone is the **product layer**. Established tools do the infrastructure work.
+
+| Job | Done by |
+|---|---|
+| Household intent, approvals, integrations, audit | **Wildstone** (Keystone, Console, CLI, Butler) |
+| Running and scheduling apps | Kubernetes (K3s) |
+| Deploying approved config | Flux + Helm (upstream charts) |
+| Web access / ingress | Traefik |
+| Sign-in | Authelia + LLDAP |
+| Deployment secrets | SOPS / age |
+| Backups | Restic + app-native tools |
+| Narrow host tasks | Wardstone (typed host agent) |
+
+**The flow, in plain terms:**
+
+1. You (or the Butler) propose a change.
+2. You review and approve the Plan.
+3. Wildstone writes the approved config to a **local** Git repo on your server.
+4. Flux picks it up and Kubernetes runs it.
+5. Wildstone shows you what actually happened.
+
+Details: [ADR-W050](docs/decisions/ADR-W050-multi-node-runtime-kubernetes-engine-host-providers-editions.md) ·
+[migration plan](docs/design/w050-migration-plan.md) ·
+[local deployment](docs/design/approved-local-deployment.md).
+
+## Project status
+
+> [!WARNING]
+> **Alpha, and mid-transition.** The project is moving from its own Docker-based
+> runtime to the Kubernetes/Flux/Helm platform above. Expect breaking changes.
+> Back up anything you can't afford to lose.
+
+| Area | State |
+|---|---|
+| Linux/systemd + Docker installer | ✅ Available today ([`v0.1.13-alpha`](https://github.com/Wildstone-Systems/wildstone-homelab/releases/tag/v0.1.13-alpha) was the first public release) |
+| Plans, approvals, Console/CLI, Butler | ✅ Working, actively evolving |
+| Local & off-site backup and recovery | 🧪 Implemented, being re-validated for the new platform |
+| K3s + Flux deployment path | 🚧 In progress — single-node proofs, not yet the default |
+| Apps as upstream Helm charts | 🚧 Being added in curated waves |
+| Multi-node, HA, automatic failover | 📋 Planned ([ADR-W051](docs/decisions/ADR-W051-failure-domains-and-recovery.md), proposed) |
+| Self-upgrade of the management release | 📋 Planned — release metadata is published, upgrades not enabled |
+
+Follow along in the [alpha tracker](https://github.com/Wildstone-Systems/wildstone-homelab/issues/13)
+and [open pull requests](https://github.com/Wildstone-Systems/wildstone-homelab/pulls).
 
 ## Quick start
+
+> [!NOTE]
+> This installs the **current** Linux/systemd + Docker path, not the new
+> Kubernetes platform.
 
 On a Linux host, run:
 
@@ -62,39 +104,8 @@ The installer:
 - Docker on workload nodes
 - On Proxmox: install inside a Linux guest (not on the Proxmox host)
 
-Manual `--role` installs, joining more machines, pinning a version and
-air-gapped installs are covered in [docs/install.md](docs/install.md).
-
-## Project status
-
-> [!WARNING]
-> **Alpha software.** [`v0.1.13-alpha`](https://github.com/Wildstone-Systems/wildstone-homelab/releases/tag/v0.1.13-alpha)
-> is the first public release. It installs and runs, but it is not yet
-> production-ready. Back up anything you can't afford to lose.
-
-- Some capabilities are well tested; others are still experimental.
-- Not every package has passed live install and restore testing.
-- Upgrades between alpha releases may need manual steps.
-- Kubernetes placement and automatic failover are **not** shipped yet — see the
-  proposed [ADR-W051](docs/decisions/ADR-W051-failure-domains-and-recovery.md)
-  on top of the accepted [ADR-W050](docs/decisions/ADR-W050-multi-node-runtime-kubernetes-engine-host-providers-editions.md).
-
-Track progress in the [alpha tracker](https://github.com/Wildstone-Systems/wildstone-homelab/issues/13)
-and the [documentation review](docs/design/documentation-refresh-2026-10-22.md).
-
-## How it works
-
-| Component | Role |
-|---|---|
-| **Keystone** | Control plane: API, Reconciler, Capability Engine, Policy Engine, Statefile, Butler |
-| **Wardstone** | Privileged host agent (`wardstoned`) that runs workloads through a typed boundary |
-| **Statefile** | Git-backed record of your desired state |
-| **Butler** | AI operator that proposes Plans and performs permitted household actions |
-| **Console** | Web UI (TypeScript/React) |
-| **`wild`** | Command-line client |
-
-New here? Start with [docs/concepts.md](docs/concepts.md) and the
-[glossary](docs/glossary.md).
+Manual installs, extra nodes, version pinning and more:
+[docs/install.md](docs/install.md).
 
 ## Documentation
 
@@ -102,23 +113,21 @@ New here? Start with [docs/concepts.md](docs/concepts.md) and the
 |---|---|
 | [Vision](docs/vision.md) | Why this exists |
 | [Concepts](docs/concepts.md) | The mental model |
-| [Install](docs/install.md) | Installing from a release |
+| [Install](docs/install.md) | Installing the current release |
 | [Recovery](docs/recovery.md) | Recovery contract and total-host-loss runbook |
 | [Threat model](docs/threat-model.md) | Trust boundaries and residual risks |
-| [Releasing](docs/releasing.md) | Cutting a release |
-| [Decisions](docs/decisions/) | W-series ADRs |
-| [Implementation scope](docs/02-implementation-scope.md) | Epic scope and planning guidance |
-| [App Management Contract 0.1](docs/design/application-management-contract-v0.1.md) | Proposed operational contract ([comparison](docs/design/application-management-contract-v0.1-comparison.md)) |
+| [Decisions](docs/decisions/) | W-series ADRs (start with W050) |
+| [Releasing](docs/releasing.md) · [Release contract](docs/design/management-release-contract.md) | How releases are cut and signed |
+| [Glossary](docs/glossary.md) | Shared vocabulary |
 | [Full index](docs/README.md) | Everything, with authority order |
 
 ## Ground rules
 
-These are enforced from commit one:
-
 1. **No secrets in this repository, ever** — including test fixtures. CI runs a secret scanner on every push.
-2. **No `Exec(string)` in the Wardstone protocol.** "No arbitrary shell" is a property of the wire format, not a policy hope.
+2. **No arbitrary shell in Wardstone.** "No arbitrary shell" is a property of the wire format, not a policy hope.
 3. **Console, CLI and Butler use the same public API.** No private UI-only or AI-only endpoints.
-4. **Infrastructure changes use Plans.** Agent, household and opt-in host actions keep their own scoped checks; no Agent may approve its own infrastructure Plan.
+4. **Infrastructure changes use Plans.** No Agent may approve its own Plan.
+5. **Your deployment config stays local.** Never pushed to GitHub or any external service by default.
 
 ## Building from source
 
@@ -141,23 +150,24 @@ CI runs `gofmt -l`, `go vet ./...` and `go test -race ./...` per module.
 
 | Path | Contents |
 |---|---|
-| `proto/` | gRPC + resource schemas — the contract everything else consumes |
-| `wardstone/` | Privileged host agent |
-| `keystone/` | Control plane |
+| `proto/` | gRPC + resource schemas — the shared contract |
+| `keystone/` | Control plane: API, Plans, policy, Statefile, Butler |
+| `wardstone/` | Typed host agent |
 | `cli/` | `wild` CLI |
-| `console/` | Web UI |
-| `packages/` | Capability packages and the package toolchain |
-| `scripts/install.sh` | Release installer, setup and node enrollment |
-| `installer/` | Installer background docs |
-| `testing/` | e2e harness, scrubbed fixtures, restore-drill runner |
+| `console/` | Web UI (TypeScript/React) |
+| `charts/` | Helm chart for the Wildstone management release |
+| `packages/` | App packages (legacy catalog, migrating to upstream charts) |
+| `runtimes/` | Agent/worker runtimes |
+| `scripts/` | Installer and release tooling |
+| `testing/` | e2e harness, scrubbed fixtures, restore drills |
 | `docs/` | Product docs and ADRs |
 
 </details>
 
 ## Contributing
 
-Issues and small PRs are welcome; for large PRs, please open an issue to
-talk first. See [CONTRIBUTING.md](CONTRIBUTING.md).
+Issues and small PRs are welcome; for large PRs, please open an issue first.
+See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 Found a vulnerability? Please report it privately — see [SECURITY.md](SECURITY.md).
 
