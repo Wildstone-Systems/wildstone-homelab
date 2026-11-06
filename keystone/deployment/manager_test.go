@@ -548,7 +548,7 @@ func TestPendingPromotionStopsForChangedAuthorityInputsAndOwnerRef(t *testing.T)
 }
 
 func TestManagedSecretDeliveryInventoryAndSOPSShapeAreClosed(t *testing.T) {
-	for _, change := range []string{"generation", "output-path", "kustomization-namespace", "application-kustomization-namespace", "decryption-name", "restart", "missing-age", "extra-sops-provider", "sops-version", "encrypted-regex", "recipient", "secret-type", "metadata"} {
+	for _, change := range []string{"generation", "output-path", "kustomization-namespace", "application-kustomization-namespace", "decryption-name", "restart", "missing-age", "extra-sops-provider", "sops-version", "encrypted-regex", "recipient", "secret-type", "metadata", "trailing-document"} {
 		t.Run(change, func(t *testing.T) {
 			f := newFixture(t)
 			switch change {
@@ -574,6 +574,13 @@ func TestManagedSecretDeliveryInventoryAndSOPSShapeAreClosed(t *testing.T) {
 				raw, err := os.ReadFile(f.cfg.EncryptedSecretFile)
 				if err != nil {
 					t.Fatal(err)
+				}
+				if change == "trailing-document" {
+					raw = append(raw, []byte("---\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: unreviewed\n")...)
+					if err := os.WriteFile(f.cfg.EncryptedSecretFile, raw, 0600); err != nil {
+						t.Fatal(err)
+					}
+					break
 				}
 				var doc map[string]any
 				if err := yaml.Unmarshal(raw, &doc); err != nil {
@@ -608,6 +615,39 @@ func TestManagedSecretDeliveryInventoryAndSOPSShapeAreClosed(t *testing.T) {
 				t.Fatal("arbitrary managed Secret input accepted")
 			}
 		})
+	}
+}
+
+func TestLegacyPlacementFingerprintEncodingIsStable(t *testing.T) {
+	f := newFixture(t)
+	f.cfg.SecretDelivery = nil
+	writeConfig(t, f.path, f.cfg)
+
+	got, err := load(f.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := f.cfg.Bindings
+	type legacyBindings struct {
+		Name           string
+		Namespace      string
+		ServiceAccount string
+		ConfigClaim    string
+		MetadataClaim  string
+		MediaClaim     string
+		SecretName     string
+		SecretRevision string
+	}
+	want := digest(encoded(struct {
+		Instance, Repository, Mirror string
+		Bindings                     legacyBindings
+	}{f.cfg.Instance, f.cfg.Repository, f.cfg.MirrorRepository, legacyBindings{
+		Name: b.Name, Namespace: b.Namespace, ServiceAccount: b.ServiceAccount,
+		ConfigClaim: b.ConfigClaim, MetadataClaim: b.MetadataClaim, MediaClaim: b.MediaClaim,
+		SecretName: b.SecretName, SecretRevision: "",
+	}}))
+	if got.placement != want {
+		t.Fatalf("legacy placement fingerprint changed: got %s want %s", got.placement, want)
 	}
 }
 

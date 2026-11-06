@@ -172,7 +172,7 @@ func load(path string) (inputs, error) {
 	out.placement = digest(encoded(struct {
 		Instance, Repository, Mirror string
 		Bindings                     capability.HelmBindings
-		SecretDelivery               *SecretDeliveryConfig
+		SecretDelivery               *SecretDeliveryConfig `json:",omitempty"`
 	}{c.Instance, c.Repository, c.MirrorRepository, b, delivery}))
 	// Validate every namespace/name/claim and the supported mapping now.
 	b.SecretRevision = out.secret
@@ -195,8 +195,13 @@ func encryptedSecret(raw []byte, b capability.HelmBindings) error {
 func inspectEncryptedSecret(raw []byte, b capability.HelmBindings) (encryptedSecretInfo, error) {
 	var info encryptedSecretInfo
 	var doc map[string]any
-	if err := yaml.Unmarshal(raw, &doc); err != nil {
+	decoder := yaml.NewDecoder(bytes.NewReader(raw))
+	if err := decoder.Decode(&doc); err != nil {
 		return info, fmt.Errorf("deployment: encrypted Secret configuration required")
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return info, fmt.Errorf("deployment: one encrypted Secret document required")
 	}
 	for k := range doc {
 		switch k {

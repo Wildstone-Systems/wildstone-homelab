@@ -24,7 +24,7 @@ type HelmBindings struct {
 	SecretName     string
 	// SecretRevision identifies the encrypted configuration revision, not a
 	// plaintext secret hash. Publication must verify it before dispatch.
-	SecretRevision string `json:",omitempty"`
+	SecretRevision string
 	// SecretFile enables the separately owned encrypted Secret projection.
 	// Only one fixed relative filename and deterministic restart policy are
 	// supported; the ciphertext bytes are never passed to this package.
