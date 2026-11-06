@@ -11,7 +11,7 @@ import shutil
 import stat as statmode
 import subprocess
 import sys
-from typing import Any
+from typing import Any, Callable
 
 
 RESTIC_IMAGE = (
@@ -75,7 +75,13 @@ class Collector:
         return self.root / absolute.lstrip("/")
 
     def tree_scan(
-        self, absolute: str, error_code: str, *, include_files: bool = False
+        self,
+        absolute: str,
+        error_code: str,
+        *,
+        include_files: bool = False,
+        file_name_filter: Callable[[str], bool] | None = None,
+        count_directories: bool = True,
     ) -> tuple[int, str, list[tuple[int, float]]]:
         path = self.path(absolute)
         try:
@@ -89,20 +95,37 @@ class Collector:
         files: list[tuple[int, float]] = []
         try:
             root_device = root_stat.st_dev
-            total += root_stat.st_blocks * 512
             if not statmode.S_ISDIR(root_stat.st_mode):
                 raise NotADirectoryError
+            if count_directories:
+                total += root_stat.st_blocks * 512
+            seen_inodes = {(root_stat.st_dev, root_stat.st_ino)}
             pending = [path]
             while pending:
                 current = pending.pop()
                 with os.scandir(current) as entries:
                     for entry in entries:
                         entry_stat = entry.stat(follow_symlinks=False)
-                        total += entry_stat.st_blocks * 512
+                        inode = (entry_stat.st_dev, entry_stat.st_ino)
                         if statmode.S_ISDIR(entry_stat.st_mode):
+                            if inode in seen_inodes:
+                                continue
+                            seen_inodes.add(inode)
+                            if count_directories:
+                                total += entry_stat.st_blocks * 512
                             if entry_stat.st_dev == root_device:
                                 pending.append(Path(entry.path))
-                        elif include_files and statmode.S_ISREG(entry_stat.st_mode):
+                            continue
+                        is_regular = statmode.S_ISREG(entry_stat.st_mode)
+                        if file_name_filter is not None and (
+                            not is_regular or not file_name_filter(entry.name)
+                        ):
+                            continue
+                        if inode in seen_inodes:
+                            continue
+                        seen_inodes.add(inode)
+                        total += entry_stat.st_blocks * 512
+                        if include_files and is_regular:
                             files.append((entry_stat.st_blocks * 512, entry_stat.st_mtime))
         except (OSError, PermissionError):
             self.errors.append(error_code)
@@ -111,6 +134,22 @@ class Collector:
 
     def tree_bytes(self, absolute: str, error_code: str) -> tuple[int, str]:
         total, status, _ = self.tree_scan(absolute, error_code)
+        return total, status
+
+    @staticmethod
+    def docker_log_name(name: str) -> bool:
+        container_id, marker, rotation = name.partition("-json.log")
+        return bool(container_id and marker) and (
+            not rotation or (rotation.startswith(".") and rotation[1:].isdigit())
+        )
+
+    def docker_log_bytes(self) -> tuple[int, str]:
+        total, status, _ = self.tree_scan(
+            "/var/lib/docker/containers",
+            "docker_log_storage_unreadable",
+            file_name_filter=self.docker_log_name,
+            count_directories=False,
+        )
         return total, status
 
     def command(self, argv: list[str], error_code: str) -> str | None:
@@ -506,6 +545,7 @@ class Collector:
         containerd = self.containerd()
         cache_totals, cache_statuses, candidates = self.caches()
         log_bytes, log_status = self.tree_bytes("/var/log", "log_storage_unreadable")
+        docker_log_bytes, docker_log_status = self.docker_log_bytes()
         result = {
             "schemaVersion": 1,
             "collectedAt": self.now.isoformat().replace("+00:00", "Z"),
@@ -522,6 +562,8 @@ class Collector:
                 "cacheStatus": cache_statuses,
                 "logBytes": log_bytes,
                 "logStatus": log_status,
+                "dockerContainerLogBytes": docker_log_bytes,
+                "dockerContainerLogStatus": docker_log_status,
                 "totalsAreNonAdditive": True,
             },
             "candidates": candidates,

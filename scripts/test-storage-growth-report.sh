@@ -106,9 +106,12 @@ output="$fixture/report.json"
 reset_root
 touch "$root/var/run/docker.sock"
 mkdir -p "$root/var/lib/docker/image" "$root/var/lib/docker/overlay2" \
-  "$root/var/lib/docker/volumes/application-data/_data" "$root/var/cache/wildstone/build" \
+  "$root/var/lib/docker/volumes/application-data/_data" \
+  "$root/var/lib/docker/containers/live-container" "$root/var/cache/wildstone/build" \
   "$root/var/cache/unlisted"
 printf data > "$root/var/lib/docker/volumes/application-data/_data/preserve"
+printf log > "$root/var/lib/docker/containers/live-container/live-container-json.log"
+printf rotated > "$root/var/lib/docker/containers/live-container/live-container-json.log.1"
 printf old > "$root/var/cache/wildstone/build/disposable"
 printf old > "$root/var/cache/unlisted/not-a-candidate"
 touch -d '2026-09-01T00:00:00Z' "$root/var/cache/wildstone/build/disposable"
@@ -118,7 +121,20 @@ assert_report "$output" 'r["status"] == "complete" and r["runtime"]["docker"]["u
 assert_report "$output" 'r["runtime"]["containerd"]["presence"] == "not_present"'
 assert_report "$output" 'r["runtime"]["containerd"]["imageStorageStatus"] == "not_present"'
 assert_report "$output" '[c["id"] for c in r["candidates"]] == ["wildstone-build"]'
+assert_report "$output" 'r["categories"]["dockerContainerLogBytes"] > 0 and r["categories"]["dockerContainerLogStatus"] == "complete"'
 assert_report "$output" '"application-data" not in str(r) and "restic/restic" not in str(r) and "example.internal" not in str(r)'
+first_candidate_bytes=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["candidates"][0]["bytes"])' "$output")
+first_docker_log_bytes=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["categories"]["dockerContainerLogBytes"])' "$output")
+ln "$root/var/cache/wildstone/build/disposable" \
+  "$root/var/cache/wildstone/build/disposable-hardlink"
+ln "$root/var/lib/docker/containers/live-container/live-container-json.log.1" \
+  "$root/var/lib/docker/containers/live-container/live-container-json.log.2"
+printf metadata > "$root/var/lib/docker/containers/live-container/config.v2.json"
+run_report "$output"
+second_candidate_bytes=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["candidates"][0]["bytes"])' "$output")
+second_docker_log_bytes=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["categories"]["dockerContainerLogBytes"])' "$output")
+[[ $second_candidate_bytes == "$first_candidate_bytes" ]]
+[[ $second_docker_log_bytes == "$first_docker_log_bytes" ]]
 first_build_bytes=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["categories"]["buildCacheBytes"])' "$output")
 dd if=/dev/zero of="$root/var/cache/wildstone/build/new-growth" bs=4096 count=2 status=none
 run_report "$output"
