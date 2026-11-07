@@ -156,6 +156,9 @@ func TestExitedContainerKeepsPlanAndReportsBoundedObservation(t *testing.T) {
 	if !o.AwaitingApproval || !strings.Contains(o.Detail, "exited") || !strings.Contains(o.Detail, "exit code 2") {
 		t.Fatalf("observed = %+v, want exited detail and pending approval", o)
 	}
+	if o.AppHealth != "" {
+		t.Fatalf("untrusted application health was persisted: %q", o.AppHealth)
+	}
 	if strings.Contains(o.Detail, "private-token-value") || strings.Contains(o.Detail, "nothing is wrong") {
 		t.Fatalf("runtime text escaped the closed observation vocabulary: %q", o.Detail)
 	}

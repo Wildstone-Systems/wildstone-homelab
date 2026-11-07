@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/butlerlive"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/butlerstore"
@@ -34,6 +35,16 @@ func webCommandAgents(t *testing.T, h *harness) {
 		if err := h.s.DB.GrantButlerAccess(b.Name, "sam", "root-admin"); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+func TestObservedAtSuffixMakesStatusFreshnessExplicit(t *testing.T) {
+	at := time.Date(2026, time.November, 7, 1, 2, 3, 0, time.FixedZone("offset", -6*60*60))
+	if got, want := observedAtSuffix(at), " (observed 2026-11-07T07:02:03Z)"; got != want {
+		t.Fatalf("suffix = %q, want %q", got, want)
+	}
+	if got := observedAtSuffix(time.Time{}); got != "" {
+		t.Fatalf("zero timestamp suffix = %q", got)
 	}
 }
 
@@ -173,5 +184,63 @@ func TestSlashCommandsInTheConsoleChat(t *testing.T) {
 	resp, code, err = ask("operator", "giulia", "/status")
 	if err == nil || code != http.StatusNotFound || resp.Command != "" {
 		t.Fatalf("/status without access to the Agent = %d %v %+v", code, err, resp)
+	}
+}
+
+func TestStatusSummaryDoesNotHideApplicationHealthBehindConvergence(t *testing.T) {
+	h := newHarness(t)
+	if err := h.s.DB.UpsertObserved(runtimedb.Observed{
+		Kind: "Container", Name: "app", Healthy: true, AppHealth: "unhealthy",
+		Detail: "unhealthy: Docker healthcheck reported unhealthy",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	st, err := h.s.statusSummary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Quiet() || len(st.Unhealthy) != 1 || st.Unhealthy[0].Name != "app" {
+		t.Fatalf("status summary hid application health: %+v", st)
+	}
+	if err := h.s.DB.UpsertObserved(runtimedb.Observed{
+		Kind: "Container", Name: "app", Healthy: true, AppHealth: "starting",
+		Detail: "starting: Docker healthcheck has not reported ready",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	st, err = h.s.statusSummary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Quiet() || len(st.Unhealthy) != 0 || len(st.Starting) != 1 {
+		t.Fatalf("starting application was not kept distinct: %+v", st)
+	}
+
+	if err := h.s.DB.UpsertObserved(runtimedb.Observed{
+		Kind: "Container", Name: "app", Healthy: false, AwaitingApproval: true, AppHealth: "healthy",
+		Detail: "running: Docker container is healthy; managed configuration differs from desired state; Update is waiting for your approval",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	st, err = h.s.statusSummary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(st.Unhealthy) != 0 || st.Awaiting != 1 {
+		t.Fatalf("pending healthy change was classified as a failure: %+v", st)
+	}
+
+	if err := h.s.DB.UpsertObserved(runtimedb.Observed{
+		Kind: "Container", Name: "app", Healthy: false, AwaitingApproval: true,
+		Detail: "exited: Docker container stopped (exit code 2); Update is waiting for your approval",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	st, err = h.s.statusSummary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(st.Unhealthy) != 1 || st.Awaiting != 0 || st.Unhealthy[0].Name != "app" {
+		t.Fatalf("observed exit was hidden behind approval: %+v", st)
 	}
 }

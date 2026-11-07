@@ -123,6 +123,16 @@ that manufactured a drift proposal once showed 27 of 45 resources red
 while every container was up, and the reading fooled the person who wrote
 it (F75).
 
+That distinction does not erase an observation the reconciler actually
+made. For the retained Docker backend, a pending resource reports a closed,
+bounded cause when observation proved it missing, stopped (with the typed
+exit code), unhealthy, starting, or different from managed desired state.
+Healthy running state remains distinct from managed configuration mismatch.
+Runtime-supplied status text is never copied into durable/public detail, and
+an unavailable or unknown observation invents no cause. This evidence is
+status only: it does not change the Plan steps, risk, approval, retry, or
+apply authority.
+
 **A status row outlives its resource only while the resource does.** Rows
 are cleared when a delete applies; rows for resources nothing desires and
 no plan is acting on are pruned, because a create that never succeeded

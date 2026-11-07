@@ -1073,7 +1073,10 @@ func (r *Reconciler) observeContainer(ctx context.Context, nodeID string, k resK
 	// The container's own opinion, recorded whatever the convergence
 	// verdict turns out to be: a converged container whose app says
 	// "unhealthy" is exactly the case this exists to make visible.
-	appHealth := inspect.GetAppHealth()
+	appHealth := ""
+	if inspect.GetRunning() {
+		appHealth = dockerAppHealth(inspect.GetAppHealth())
+	}
 	matches := inspect.GetLabels()[specHashLabel] == specHash(want.Container, containerNetworkFor(want.Container), configDigest(r.ManagedPrefix, want.Container, cfgContents), hostAliases) &&
 		containerHardeningMatches(want.Container, inspect)
 	detail := dockerObservedDetail(inspect, matches)
@@ -1094,10 +1097,16 @@ func dockerObservedDetail(inspect *wsv1.InspectContainerResult, matches bool) st
 		}
 		return "stopped: Docker container is not running"
 	}
-	switch inspect.GetAppHealth() {
+	switch dockerAppHealth(inspect.GetAppHealth()) {
 	case "unhealthy":
+		if !matches {
+			return "unhealthy: Docker healthcheck reported unhealthy; managed configuration differs from desired state"
+		}
 		return "unhealthy: Docker healthcheck reported unhealthy"
 	case "starting":
+		if !matches {
+			return "starting: Docker healthcheck has not reported ready; managed configuration differs from desired state"
+		}
 		return "starting: Docker healthcheck has not reported ready"
 	case "healthy":
 		if !matches {
@@ -1109,6 +1118,15 @@ func dockerObservedDetail(inspect *wsv1.InspectContainerResult, matches bool) st
 		return "drifted: managed Docker configuration differs from desired state"
 	}
 	return ""
+}
+
+func dockerAppHealth(raw string) string {
+	switch raw {
+	case "healthy", "starting", "unhealthy":
+		return raw
+	default:
+		return ""
+	}
 }
 
 // containerHardeningMatches compares fields that desired state explicitly

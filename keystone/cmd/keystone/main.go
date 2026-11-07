@@ -1785,8 +1785,11 @@ func serve(lis, apiLis net.Listener, joinTokens, hosts, dataDir string, ingestEv
 			}
 			out := make([]butler.ObservedResource, 0, len(rows))
 			for _, o := range rows {
+				condition := o.Condition()
 				out = append(out, butler.ObservedResource{
-					Kind: o.Kind, Name: o.Name, Node: o.Node, Healthy: o.Healthy, Detail: o.Detail,
+					Kind: o.Kind, Name: o.Name, Node: o.Node, Healthy: o.Healthy,
+					AwaitingApproval: o.AwaitingApproval, Problem: condition == runtimedb.OperatorProblem,
+					Starting: condition == runtimedb.OperatorStarting, Detail: o.Detail, UpdatedAt: o.UpdatedAt,
 				})
 			}
 			return out, nil

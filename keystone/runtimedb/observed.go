@@ -4,7 +4,20 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
+)
+
+// OperatorCondition is the closed presentation state shared by public status
+// consumers. It keeps an observed fault visible even when repair is waiting
+// for approval, without treating every pending requested change as broken.
+type OperatorCondition uint8
+
+const (
+	OperatorHealthy OperatorCondition = iota
+	OperatorWaiting
+	OperatorStarting
+	OperatorProblem
 )
 
 // Observed is the latest observed status for one resource — the runtime
@@ -20,9 +33,9 @@ type Observed struct {
 	// Distinct from Healthy so a surface can say "waiting for you"
 	// rather than colouring it the same red as a broken service.
 	AwaitingApproval bool `json:"awaitingApproval,omitempty"`
-	// AppHealth is the container's OWN healthcheck, verbatim from Docker
-	// ("starting", "healthy", "unhealthy"), and empty when the image
-	// declares none.
+	// AppHealth is the container's OWN healthcheck reduced to the closed
+	// vocabulary "starting", "healthy", or "unhealthy". It is empty when
+	// the image declares none or the runtime supplies an unknown value.
 	//
 	// Distinct from Healthy for the reason AwaitingApproval is: it
 	// answers a different question. Healthy means Wildstone got the
@@ -35,11 +48,41 @@ type Observed struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 }
 
+// Condition reduces the durable status fields to the operator-facing state.
+// Docker observation detail is assembled by the reconciler from this closed
+// vocabulary; runtime-supplied text is never interpreted here.
+func (o Observed) Condition() OperatorCondition {
+	if observedProblemDetail(o.Detail) || o.AppHealth == "unhealthy" {
+		return OperatorProblem
+	}
+	if o.AppHealth == "starting" {
+		return OperatorStarting
+	}
+	if o.AwaitingApproval {
+		return OperatorWaiting
+	}
+	if !o.Healthy {
+		return OperatorProblem
+	}
+	return OperatorHealthy
+}
+
+func observedProblemDetail(detail string) bool {
+	detail = strings.TrimSpace(detail)
+	for _, prefix := range []string{"missing:", "exited:", "stopped:", "unhealthy:", "drifted:"} {
+		if strings.HasPrefix(detail, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
 // UpsertObserved records the latest observation for (kind, name).
 func (db *DB) UpsertObserved(o Observed) error {
 	if o.Kind == "" || o.Name == "" {
 		return fmt.Errorf("runtimedb: observed kind and name required")
 	}
+	o.AppHealth = normalizeAppHealth(o.AppHealth)
 	_, err := db.sql.Exec(
 		`INSERT INTO observed (kind, name, node, healthy, detail, awaiting_approval, app_health, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -53,6 +96,15 @@ func (db *DB) UpsertObserved(o Observed) error {
 		return fmt.Errorf("runtimedb: upserting observed %s/%s: %w", o.Kind, o.Name, err)
 	}
 	return nil
+}
+
+func normalizeAppHealth(raw string) string {
+	switch raw {
+	case "healthy", "starting", "unhealthy":
+		return raw
+	default:
+		return ""
+	}
 }
 
 // DeleteObserved removes the observation for (kind, name) — a resource

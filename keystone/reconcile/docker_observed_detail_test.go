@@ -33,7 +33,9 @@ func TestDockerObservedDetailUsesClosedBoundedClasses(t *testing.T) {
 		{"exited", &wsv1.InspectContainerResult{Status: "exited", ExitCode: 137}, true, "exited: Docker container stopped (exit code 137)"},
 		{"other stopped", &wsv1.InspectContainerResult{Status: "private/path/value"}, true, "stopped: Docker container is not running"},
 		{"unhealthy", &wsv1.InspectContainerResult{Running: true, AppHealth: "unhealthy"}, true, "unhealthy: Docker healthcheck reported unhealthy"},
+		{"unhealthy and drifted", &wsv1.InspectContainerResult{Running: true, AppHealth: "unhealthy"}, false, "unhealthy: Docker healthcheck reported unhealthy; managed configuration differs from desired state"},
 		{"starting", &wsv1.InspectContainerResult{Running: true, AppHealth: "starting"}, true, "starting: Docker healthcheck has not reported ready"},
+		{"starting and drifted", &wsv1.InspectContainerResult{Running: true, AppHealth: "starting"}, false, "starting: Docker healthcheck has not reported ready; managed configuration differs from desired state"},
 		{"spec drift", &wsv1.InspectContainerResult{Running: true, AppHealth: "private-token-value"}, false, "drifted: managed Docker configuration differs from desired state"},
 		{"healthy requested change", &wsv1.InspectContainerResult{Running: true, AppHealth: "healthy"}, false, "running: Docker container is healthy; managed configuration differs from desired state"},
 		{"healthy and matching", &wsv1.InspectContainerResult{Running: true, AppHealth: "healthy"}, true, ""},
@@ -48,6 +50,23 @@ func TestDockerObservedDetailUsesClosedBoundedClasses(t *testing.T) {
 				t.Fatalf("runtime-originated text escaped the closed vocabulary: %q", got)
 			}
 		})
+	}
+}
+
+func TestDockerAppHealthUsesClosedBoundedClasses(t *testing.T) {
+	for _, tt := range []struct {
+		got  string
+		want string
+	}{
+		{"healthy", "healthy"},
+		{"starting", "starting"},
+		{"unhealthy", "unhealthy"},
+		{"private-token-value", ""},
+		{"", ""},
+	} {
+		if got := dockerAppHealth(tt.got); got != tt.want {
+			t.Errorf("dockerAppHealth(%q) = %q, want %q", tt.got, got, tt.want)
+		}
 	}
 }
 
