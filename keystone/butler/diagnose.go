@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/butler/provider"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/plan"
@@ -17,10 +18,14 @@ import (
 // this package keeps importing neither keystone/reconcile nor
 // keystone/runtimedb (structural_test.go pins the former).
 type ObservedResource struct {
-	Kind    string
-	Name    string
-	Node    string
-	Healthy bool
+	Kind             string
+	Name             string
+	Node             string
+	Healthy          bool
+	AwaitingApproval bool
+	Problem          bool
+	Starting         bool
+	UpdatedAt        time.Time
 	// Detail is agent/reconciler-composed free text — attacker-
 	// influenceable, which is why the diagnose tool is registered
 	// Untrusted and its whole result rides inside the envelope.
@@ -56,7 +61,13 @@ type diagnosisEntry struct {
 	Observed *ObservedResource // nil: no observation recorded yet
 }
 
-func (e diagnosisEntry) broken() bool { return e.Observed == nil || !e.Observed.Healthy }
+func (e diagnosisEntry) broken() bool {
+	return e.Observed == nil || e.Observed.Problem || (!e.Observed.Healthy && !e.Observed.AwaitingApproval)
+}
+
+func (e diagnosisEntry) waiting() bool {
+	return e.Observed != nil && (e.Observed.AwaitingApproval || e.Observed.Starting)
+}
 
 func (e diagnosisEntry) describe() string {
 	// Space-separated (not Kind/name): a joined 24+-char [A-Za-z/-] run
@@ -66,13 +77,37 @@ func (e diagnosisEntry) describe() string {
 	if e.Observed == nil {
 		return id + ": no observed status recorded (never reconciled, or observation lost)"
 	}
+	withObservedAt := func(s string) string {
+		if e.Observed.UpdatedAt.IsZero() {
+			return s
+		}
+		return s + " (observed " + e.Observed.UpdatedAt.UTC().Format(time.RFC3339) + ")"
+	}
+	if e.Observed.Problem {
+		if d := strings.TrimSpace(e.Observed.Detail); d != "" {
+			return withObservedAt(fmt.Sprintf("%s: UNHEALTHY — %s", id, d))
+		}
+		return withObservedAt(id + ": UNHEALTHY")
+	}
+	if e.Observed.Starting {
+		if d := strings.TrimSpace(e.Observed.Detail); d != "" {
+			return withObservedAt(fmt.Sprintf("%s: STARTING — %s", id, d))
+		}
+		return withObservedAt(id + ": STARTING")
+	}
+	if e.Observed.AwaitingApproval {
+		if d := strings.TrimSpace(e.Observed.Detail); d != "" {
+			return withObservedAt(fmt.Sprintf("%s: WAITING FOR APPROVAL — %s", id, d))
+		}
+		return withObservedAt(id + ": WAITING FOR APPROVAL")
+	}
 	if e.Observed.Healthy {
-		return id + ": healthy"
+		return withObservedAt(id + ": healthy")
 	}
 	if d := strings.TrimSpace(e.Observed.Detail); d != "" {
-		return fmt.Sprintf("%s: UNHEALTHY — %s", id, d)
+		return withObservedAt(fmt.Sprintf("%s: UNHEALTHY — %s", id, d))
 	}
-	return id + ": UNHEALTHY"
+	return withObservedAt(id + ": UNHEALTHY")
 }
 
 // handleDiagnose walks one capability's resources in plan.KindOrder
@@ -129,11 +164,14 @@ func handleDiagnose(_ context.Context, gw *ToolGateway, input map[string]any) (T
 		return entries[i].Res.Metadata.Name < entries[j].Res.Metadata.Name
 	})
 
-	var broken, healthy []diagnosisEntry
+	var broken, waiting, healthy []diagnosisEntry
 	for _, e := range entries {
-		if e.broken() {
+		switch {
+		case e.broken():
 			broken = append(broken, e)
-		} else {
+		case e.waiting():
+			waiting = append(waiting, e)
+		default:
 			healthy = append(healthy, e)
 		}
 	}
@@ -141,7 +179,15 @@ func handleDiagnose(_ context.Context, gw *ToolGateway, input map[string]any) (T
 	var b strings.Builder
 	fmt.Fprintf(&b, "diagnosis for capability %s (%d resources):\n", cap, len(entries))
 	if len(broken) == 0 {
-		b.WriteString("all resources healthy — nothing to diagnose.\n")
+		if len(waiting) == 0 {
+			b.WriteString("all resources healthy — nothing to diagnose.\n")
+		} else {
+			b.WriteString("no resources are known broken.\n")
+			b.WriteString("waiting:\n")
+			for _, e := range waiting {
+				fmt.Fprintf(&b, "  - %s\n", e.describe())
+			}
+		}
 		return ToolOutcome{Content: b.String()}, nil
 	}
 	root := broken[0]
@@ -149,6 +195,12 @@ func handleDiagnose(_ context.Context, gw *ToolGateway, input map[string]any) (T
 	if len(broken) > 1 {
 		b.WriteString("consequences (unhealthy downstream of the root cause):\n")
 		for _, e := range broken[1:] {
+			fmt.Fprintf(&b, "  - %s\n", e.describe())
+		}
+	}
+	if len(waiting) > 0 {
+		b.WriteString("waiting (not diagnosed as failures):\n")
+		for _, e := range waiting {
 			fmt.Fprintf(&b, "  - %s\n", e.describe())
 		}
 	}

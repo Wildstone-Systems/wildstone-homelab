@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/resource"
 	"github.com/Wildstone-Systems/wildstone-homelab/keystone/statefile"
@@ -185,6 +186,51 @@ func TestDiagnose_AllHealthy(t *testing.T) {
 	out := diagnosePhotos(t, healthyPhotos())
 	if !strings.Contains(out, "all resources healthy") {
 		t.Fatalf("healthy capability not reported as such:\n%s", out)
+	}
+}
+
+func TestDiagnose_ApplicationUnhealthyDespiteConvergedConfiguration(t *testing.T) {
+	obs := healthyPhotos()
+	o := obs["Container/immich-server"]
+	o.Problem = true
+	o.Detail = "unhealthy: Docker healthcheck reported unhealthy"
+	obs["Container/immich-server"] = o
+	out := diagnosePhotos(t, obs)
+	expectRootCause(t, out, "Container immich-server", nil)
+	if strings.Contains(out, "all resources healthy") {
+		t.Fatalf("application health was hidden behind convergence:\n%s", out)
+	}
+}
+
+func TestDiagnose_ExitedResourceAwaitingApprovalIsStillBroken(t *testing.T) {
+	obs := healthyPhotos()
+	o := obs["Container/immich-server"]
+	o.Healthy = false
+	o.AwaitingApproval = true
+	o.Problem = true
+	o.Detail = "exited: Docker container stopped (exit code 2); Update is waiting for your approval"
+	o.UpdatedAt = time.Date(2026, time.November, 7, 1, 2, 3, 0, time.UTC)
+	obs["Container/immich-server"] = o
+	out := diagnosePhotos(t, obs)
+	expectRootCause(t, out, "Container immich-server", nil)
+	if !strings.Contains(out, "exited") || !strings.Contains(out, "observed 2026-11-07T01:02:03Z") || strings.Contains(out, "no resources are known broken") {
+		t.Fatalf("observed exit was hidden behind approval:\n%s", out)
+	}
+}
+
+func TestDiagnose_AwaitingApprovalIsNotAFailure(t *testing.T) {
+	obs := healthyPhotos()
+	o := obs["Container/immich-server"]
+	o.Healthy = false
+	o.AwaitingApproval = true
+	o.Detail = "running: Docker container is healthy; managed configuration differs from desired state; Update is waiting for your approval"
+	obs["Container/immich-server"] = o
+	out := diagnosePhotos(t, obs)
+	if strings.Contains(out, "LIKELY ROOT CAUSE") || strings.Contains(out, "UNHEALTHY") {
+		t.Fatalf("pending requested change was diagnosed as a failure:\n%s", out)
+	}
+	if !strings.Contains(out, "WAITING FOR APPROVAL") || strings.Contains(out, "all resources healthy") {
+		t.Fatalf("pending requested change was not reported distinctly:\n%s", out)
 	}
 }
 

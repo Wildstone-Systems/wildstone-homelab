@@ -45,7 +45,8 @@ func observedFor(t *testing.T, db *runtimedb.DB, kind, name string) runtimedb.Ob
 // state this test needs to be able to distinguish from healthy.
 type containerApplier struct {
 	okApplier
-	live map[string]map[string]string
+	live     map[string]map[string]string
+	observed map[string]*wsv1.InspectContainerResult
 }
 
 func (a *containerApplier) Apply(ctx context.Context, node string, op *wsv1.Operation) (*wsv1.OpResult, error) {
@@ -59,6 +60,9 @@ func (a *containerApplier) Apply(ctx context.Context, node string, op *wsv1.Oper
 		return &wsv1.OpResult{}, nil
 	case *wsv1.Operation_InspectContainer:
 		a.ops++
+		if got := a.observed[o.InspectContainer.GetName()]; got != nil {
+			return &wsv1.OpResult{Result: &wsv1.OpResult_InspectContainer{InspectContainer: got}}, nil
+		}
 		labels, ok := a.live[o.InspectContainer.GetName()]
 		if !ok {
 			return &wsv1.OpResult{Result: &wsv1.OpResult_Error{
@@ -91,8 +95,8 @@ func TestDriftAwaitingApprovalIsNotHealthy(t *testing.T) {
 	if _, err := l.Tick(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if o := observedFor(t, db, "Container", "app"); !o.Healthy {
-		t.Fatalf("converged container is not healthy: %+v", o)
+	if o := observedFor(t, db, "Container", "app"); !o.Healthy || o.Detail != "" {
+		t.Fatalf("converged container retained stale observation detail: %+v", o)
 	}
 
 	// Change the image: observe sees a spec mismatch, the diff is a
@@ -121,6 +125,68 @@ func TestDriftAwaitingApprovalIsNotHealthy(t *testing.T) {
 	}
 	if !strings.Contains(o.Detail, "approval") {
 		t.Errorf("detail = %q, want it to say a human has to approve, not merely that nothing was applied", o.Detail)
+	}
+	if !strings.Contains(o.Detail, "configuration differs") || strings.Contains(o.Detail, "nothing is wrong") {
+		t.Errorf("detail = %q, want the bounded Docker observation instead of the fixed reassurance", o.Detail)
+	}
+}
+
+func TestExitedContainerKeepsPlanAndReportsBoundedObservation(t *testing.T) {
+	l, state, db, _ := harness(t)
+	applier := &containerApplier{}
+	l.Rec.Applier = applier
+	if err := state.Put(container("app", "n1", testImage)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := l.Tick(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	labels := applier.live["app"]
+	applier.observed = map[string]*wsv1.InspectContainerResult{
+		"app": {Labels: labels, Running: false, Status: "exited", ExitCode: 2, AppHealth: "private-token-value"},
+	}
+	out, err := l.Tick(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.DriftProposed == "" {
+		t.Fatalf("stopped-container tick = %+v, want the unchanged pending-approval path", out)
+	}
+	o := observedFor(t, db, "Container", "app")
+	if !o.AwaitingApproval || !strings.Contains(o.Detail, "exited") || !strings.Contains(o.Detail, "exit code 2") {
+		t.Fatalf("observed = %+v, want exited detail and pending approval", o)
+	}
+	if o.AppHealth != "" {
+		t.Fatalf("untrusted application health was persisted: %q", o.AppHealth)
+	}
+	if strings.Contains(o.Detail, "private-token-value") || strings.Contains(o.Detail, "nothing is wrong") {
+		t.Fatalf("runtime text escaped the closed observation vocabulary: %q", o.Detail)
+	}
+}
+
+func TestUnhealthyContainerReportsClosedObservationWithoutPlanChange(t *testing.T) {
+	l, state, db, _ := harness(t)
+	applier := &containerApplier{}
+	l.Rec.Applier = applier
+	if err := state.Put(container("app", "n1", testImage)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := l.Tick(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	applier.observed = map[string]*wsv1.InspectContainerResult{
+		"app": {Labels: applier.live["app"], Running: true, Status: "running", AppHealth: "unhealthy"},
+	}
+	out, err := l.Tick(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.DriftProposed != "" || len(out.PlanIDs) != 0 {
+		t.Fatalf("health-only observation changed Plan behavior: %+v", out)
+	}
+	o := observedFor(t, db, "Container", "app")
+	if o.Detail != "unhealthy: Docker healthcheck reported unhealthy" || o.AppHealth != "unhealthy" {
+		t.Fatalf("observed = %+v, want the closed unhealthy class", o)
 	}
 }
 

@@ -755,6 +755,7 @@ func (l *Loop) recordObserved(g nodeGroup, outcome *reconcile.Outcome) {
 		}
 		if action, needsWork := planned[key]; needsWork && !converged[key] {
 			o.Healthy = false
+			observedDetail := outcome.ObservedDetail[key]
 			// WHY it is not applied is the part an operator needs, and
 			// the two reasons are nothing alike (F75). A Medium/High
 			// plan waits for a human — the system behaving exactly as
@@ -766,7 +767,13 @@ func (l *Loop) recordObserved(g nodeGroup, outcome *reconcile.Outcome) {
 			// the fix, with the plan history open in front of them.
 			if outcome.PendingApproval {
 				o.AwaitingApproval = true
-				o.Detail = action.String() + " is waiting for your approval; nothing is wrong with this resource"
+				if observedDetail != "" {
+					o.Detail = observedDetail + "; " + action.String() + " is waiting for your approval"
+				} else {
+					o.Detail = action.String() + " is waiting for your approval; nothing is wrong with this resource"
+				}
+			} else if observedDetail != "" {
+				o.Detail = observedDetail
 			} else {
 				switch action {
 				case plan.ActionCreate:
@@ -775,6 +782,10 @@ func (l *Loop) recordObserved(g nodeGroup, outcome *reconcile.Outcome) {
 					o.Detail = "drifted: " + action.String() + " planned, not applied"
 				}
 			}
+		} else if o.AppHealth == "unhealthy" || o.AppHealth == "starting" {
+			// Application readiness is independent from convergence. Preserve
+			// its closed observation class even when no Plan work exists.
+			o.Detail = outcome.ObservedDetail[key]
 		}
 		if detail, bad := unhealthy[key]; bad {
 			o.Healthy = false
