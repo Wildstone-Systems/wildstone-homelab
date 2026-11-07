@@ -13,6 +13,7 @@ func TestObservedConditionKeepsObservedProblemsVisibleWhileApprovalWaits(t *test
 		{"exited awaiting repair", Observed{AwaitingApproval: true, Detail: "exited: Docker container stopped (exit code 2); Update is waiting for your approval"}, OperatorProblem},
 		{"exited retained starting health", Observed{AwaitingApproval: true, AppHealth: "starting", Detail: "exited: Docker container stopped (exit code 2); Update is waiting for your approval"}, OperatorProblem},
 		{"missing awaiting repair", Observed{AwaitingApproval: true, Detail: "missing: Docker container was not found; Create is waiting for your approval"}, OperatorProblem},
+		{"configuration drift awaiting approval", Observed{AwaitingApproval: true, Detail: "drifted: managed Docker configuration differs from desired state; Update is waiting for your approval"}, OperatorWaiting},
 		{"unhealthy converged", Observed{Healthy: true, AppHealth: "unhealthy"}, OperatorProblem},
 		{"starting", Observed{Healthy: true, AppHealth: "starting"}, OperatorStarting},
 		{"failed", Observed{Healthy: false}, OperatorProblem},

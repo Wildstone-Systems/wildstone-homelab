@@ -226,7 +226,7 @@ func TestStatusSummaryDoesNotHideApplicationHealthBehindConvergence(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(st.Unhealthy) != 0 || st.Awaiting != 1 {
+	if len(st.Unhealthy) != 0 || len(st.Awaiting) != 1 {
 		t.Fatalf("pending healthy change was classified as a failure: %+v", st)
 	}
 
@@ -240,7 +240,21 @@ func TestStatusSummaryDoesNotHideApplicationHealthBehindConvergence(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(st.Unhealthy) != 1 || st.Awaiting != 0 || st.Unhealthy[0].Name != "app" {
+	if len(st.Unhealthy) != 1 || len(st.Awaiting) != 0 || st.Unhealthy[0].Name != "app" {
 		t.Fatalf("observed exit was hidden behind approval: %+v", st)
+	}
+
+	if err := h.s.DB.UpsertObserved(runtimedb.Observed{
+		Kind: "Container", Name: "app", Healthy: false, AwaitingApproval: true,
+		Detail: "drifted: managed Docker configuration differs from desired state; Update is waiting for your approval",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	st, err = h.s.statusSummary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(st.Unhealthy) != 0 || len(st.Awaiting) != 1 || !strings.Contains(st.Awaiting[0].Detail, "configuration differs") {
+		t.Fatalf("configuration drift was mislabeled as unhealthy or hidden: %+v", st)
 	}
 }

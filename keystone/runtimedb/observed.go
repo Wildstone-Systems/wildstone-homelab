@@ -69,7 +69,7 @@ func (o Observed) Condition() OperatorCondition {
 
 func observedProblemDetail(detail string) bool {
 	detail = strings.TrimSpace(detail)
-	for _, prefix := range []string{"missing:", "exited:", "stopped:", "unhealthy:", "drifted:"} {
+	for _, prefix := range []string{"missing:", "exited:", "stopped:", "unhealthy:"} {
 		if strings.HasPrefix(detail, prefix) {
 			return true
 		}
