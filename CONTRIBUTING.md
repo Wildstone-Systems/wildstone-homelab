@@ -27,13 +27,16 @@ that ambiguous questions resolve against. During the alpha:
 Wildstone is being replaced in place (#338). **New work goes in the new
 tree** (`bootstrap/`, `platform/`, `catalog/`, `recovery/`) under the
 rules in [`docs/architecture/README.md`](docs/architecture/README.md):
-no import, call or path reference to Keystone, Wardstone, the old
-Console or other legacy code; reuse by moving files, with tests. Check it
+no import, call or runtime path reference to Keystone, Wardstone,
+the old Console or other legacy code. Reuse selectively while implementing
+features, with independent tests. Check it
 locally with `python3 tools/architecture/check_boundaries.py`.
 
-Legacy code is frozen: security fixes and CI upkeep only, until
-[its deletion gate](docs/architecture/legacy-inventory.md#deletion-gates)
-passes. Ground rule 1 below applies everywhere; rules 2–5 describe the
+Keep legacy code as development reference while building and validating
+the replacement. Retire unused components only during a separate
+post-validation consolidation phase. The
+[legacy inventory](docs/architecture/legacy-inventory.md) is a reuse
+reference, not a deletion schedule. Ground rule 1 below applies everywhere; rules 2–5 describe the
 legacy architecture and apply to legacy code.
 
 ## Ground rules (enforced by CI and structural tests — not negotiable)
