@@ -81,7 +81,7 @@ database and the harness scripts were deleted afterwards.
 
 | # | Baseline | Requirement | Status | Evidence |
 |---|---|---|---|---|
-| R1 | §2 | Invocation carries a trusted initiating-person identifier, assigned by the runtime | partial | Derived from a binding or principal and never from model output (`api/handlers_chat_message.go:209`, `butlerlive/butlerlive.go:239-252`); but the account it is derived from is asserted in the adapter's request body (F-155-10) and two routes derive it two different ways (F-155-15) |
+| R1 | §2 | Invocation carries a trusted initiating-person identifier, assigned by the runtime | partial | Derived from a binding or canonical acting Person and never from model output (`api/handlers_chat_message.go:209`, `api/api.go:canonicalActingPerson`, `butlerlive/butlerlive.go:239-252`); but the account it is derived from is asserted in the adapter's request body (F-155-10) |
 | R2 | §2 | Trusted Butler identifier, not accepted from the message | implemented | The adapter's own credential is the address; naming a Butler in the body is refused (`api/handlers_butler_named.go:33-79`); `TestTheAddressDecidesNotTheMessage` |
 | R3 | §2 | Trusted conversation-audience identifier | missing | Audience is `msg.Group`, a boolean in the adapter's request body, and it decides both the gateway and the task audience (F-155-10) |
 | R4 | §2 | Trusted task identifier | implemented | `butlerlive/serve.go:65-80`; a conversation cannot change Butler mid-thread (`butlerlive/serve.go:250-268`) |
@@ -418,24 +418,17 @@ to someone who no longer has authority.
 
 ### F-155-15 — two derivations of "who is asking" in the same server
 
-- **Current status:** open
-- **Current evidence:** `keystone/api/api.go:authenticate` and chat Person claim paths still need a cross-surface canonical-identity regression.
+- **Current status:** implemented
+- **Current evidence:** Commit `8966ce1` makes `keystone/api/api.go:canonicalActingPerson` resolve every authenticated `ActingFor` claim to one active Person before handlers run; `personHandler` rejects Person-authored Agent operations that lack that binding, including capability requests and decisions. `runtimeRequestCredential` repeats the same derivation at the static delivery poll/ack boundary. `TestConsoleAndLinkedAPIPrincipalUseOneCanonicalActingPerson`, `TestCapabilityRequestPermissionsAndSeparation`, and `TestDeliveryReauthenticationUsesTheCanonicalActingPerson` prove canonical attribution while audit rows retain distinct principals. The adjacent regressions refuse bare-machine impersonation and unknown or ambiguous Person claims.
 - **Current owner:** chickenrat17
-- **Tracking:** #316
-- **Audit status:** partial
-- **Audit evidence:** `keystone/api/handlers_butler_tasks.go:44-49` — `actingMember(id)` prefers `id.ActingFor`, falling back to `id.Name`. It is what the identity, authority, task and offboarding handlers use. But `keystone/api/handlers_butler.go:199` passes `id.Name` into `askNamedButler` as the member, and `handlers_butler_named.go` `askOneButler` sets `Member: id.Name` directly.
+- **Tracking:** #306
+- **Audit status:** implemented
+- **Audit evidence:** `keystone/api/api.go:authenticate` canonicalizes the acting Person for OAuth, static bearer, and Console identities. Person-authored routes then use that canonical `ActingFor` value; runtime and OAuth machine identities remain distinct and the audit record keeps the original principal name.
 
-For a Console caller the two agree — `consoleForwardAuth` sets `Name`
-and `ActingFor` to the same string (`api/auth_console.go:79`). They
-diverge for a bearer token minted with an acting identity
-(`principal/principal.go:57-79`), where the Butler session runs as the
-token's principal while the task and grant handlers attribute the same
-person's work to whoever it acts for. `ActingFor` is described as "the
-acting-identity field (ADR-W001 foundation)" and is the value stamped on
-every audit row (`api/api.go:539`).
-
-Low severity today and cheap to get wrong later: it is the identifier
-§2 says the runtime assigns, and the runtime assigns it two ways.
+The canonical Person is deliberately separate from the authenticating
+principal. That keeps OAuth clients, runtimes, and linked API clients
+visible in audit while ensuring that all Person-owned work is filed under
+the admitted household identity assigned by the runtime.
 
 ### F-155-16 — the household's own configuration: the latent conditions are live
 
