@@ -21,6 +21,17 @@ infrastructure.
 
 > Less like Portainer. More like hiring an experienced systems administrator.
 
+> [!IMPORTANT]
+> **The architecture is being replaced in place.** New development follows
+> [docs/architecture/](docs/architecture/README.md): Ubuntu 24.04 + K3s,
+> Longhorn, Forgejo, Flux, Rancher, Authelia/LLDAP and Homarr (#338).
+> Keystone, Wardstone, the Console, `wild`, `packages/` and the Docker
+> installer below are the **legacy architecture**: non-production, frozen
+> and retained as reference while the new platform is built and validated.
+> The [inventory](docs/architecture/legacy-inventory.md) is for selective reuse,
+> not early retirement.
+> The published installer keeps working until its replacement ships.
+
 ## Why Wildstone?
 
 The modern home is full of other people's computers. Wildstone is the
@@ -111,6 +122,8 @@ Manual installs, extra nodes, version pinning and more:
 
 | Guide | What's inside |
 |---|---|
+| [Architecture](docs/architecture/README.md) | **New architecture: boundaries and build–validate–retire strategy** |
+| [Legacy inventory](docs/architecture/legacy-inventory.md) | Reference for selective reuse and post-validation consolidation |
 | [Vision](docs/vision.md) | Why this exists |
 | [Concepts](docs/concepts.md) | The mental model |
 | [Install](docs/install.md) | Installing the current release |
@@ -148,8 +161,12 @@ CI runs `gofmt -l`, `go vet ./...` and `go test -race ./...` per module.
 <details>
 <summary><strong>Repository layout</strong></summary>
 
+Everything below the first two rows is legacy architecture.
+
 | Path | Contents |
 |---|---|
+| `bootstrap/`, `platform/`, `catalog/`, `recovery/` | **New architecture** — created by #341, #343, #347 ([contract](docs/architecture/README.md)) |
+| `tools/architecture/` | Boundary checker for the new tree |
 | `proto/` | gRPC + resource schemas — the shared contract |
 | `keystone/` | Control plane: API, Plans, policy, Statefile, Butler |
 | `wardstone/` | Typed host agent |

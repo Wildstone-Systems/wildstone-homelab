@@ -22,6 +22,23 @@ that ambiguous questions resolve against. During the alpha:
 - There is **no support SLA**. This runs a real family's home; that
   household's needs set the priorities.
 
+## New architecture first
+
+Wildstone is being replaced in place (#338). **New work goes in the new
+tree** (`bootstrap/`, `platform/`, `catalog/`, `recovery/`) under the
+rules in [`docs/architecture/README.md`](docs/architecture/README.md):
+no import, call or runtime path reference to Keystone, Wardstone,
+the old Console or other legacy code. Reuse selectively while implementing
+features, with independent tests. Check it
+locally with `python3 tools/architecture/check_boundaries.py`.
+
+Keep legacy code as development reference while building and validating
+the replacement. Retire unused components only during a separate
+post-validation consolidation phase. The
+[legacy inventory](docs/architecture/legacy-inventory.md) is a reuse
+reference, not a deletion schedule. Ground rule 1 below applies everywhere; rules 2–5 describe the
+legacy architecture and apply to legacy code.
+
 ## Ground rules (enforced by CI and structural tests — not negotiable)
 
 1. No secrets in the repository, ever, including test fixtures.

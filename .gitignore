@@ -7,6 +7,8 @@
 secrets/
 
 # Build artifacts
+__pycache__/
+*.py[cod]
 bin/
 dist/
 *.test

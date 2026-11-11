@@ -1,0 +1,53 @@
+{
+  "_comment": "The new-architecture dependency contract (docs/architecture/README.md, #350). Read by check_boundaries.py. Changing a rule is a reviewed change to that contract.",
+  "new_roots": [
+    "bootstrap",
+    "platform",
+    "catalog",
+    "recovery"
+  ],
+  "exempt_suffixes": [
+    ".md"
+  ],
+  "forbidden_terms": [
+    {
+      "pattern": "\\bkeystone\\b",
+      "reason": "Keystone is legacy; new code must not call, import or run it"
+    },
+    {
+      "pattern": "\\bwardstoned?\\b",
+      "reason": "Wardstone is legacy; new code must not call, import or run it"
+    },
+    {
+      "pattern": "\\bwild-playbooks\\b",
+      "reason": "the signed Wardstone playbook tool is legacy"
+    },
+    {
+      "pattern": "\\bstatefile\\b",
+      "reason": "the Keystone Statefile is legacy state; Git/Flux is the source of truth"
+    },
+    {
+      "pattern": "\\bwildstone-management\\b",
+      "reason": "the legacy management chart and release are retired"
+    },
+    {
+      "pattern": "\\bwildstone-console\\b",
+      "reason": "the legacy Console is retired; Homarr is the landing page"
+    },
+    {
+      "pattern": "wildstone-homelab/(cli|proto|testing)\\b",
+      "reason": "legacy Go modules must not be required or imported"
+    }
+  ],
+  "forbidden_paths": [
+    {
+      "pattern": "(\\.\\./)+(keystone|wardstone|console|packages|runtimes|packaging|installer|wallpapers|proto|deploy)\\b",
+      "reason": "relative path escapes into a legacy directory"
+    },
+    {
+      "pattern": "\\b(deploy/ansible|deploy/systemd|charts/wildstone-management|packages/versions\\.lock|scripts/install\\.sh|testing/e2e|console/src)\\b",
+      "reason": "reference to a legacy path; move reusable files into the new tree instead"
+    }
+  ],
+  "inventory": "docs/architecture/legacy-inventory.md"
+}

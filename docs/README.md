@@ -2,6 +2,12 @@
 
 Wildstone product documentation and ADRs.
 
+**Start here for new work:** [`architecture/`](architecture/README.md) —
+the in-place replacement's layout and dependency rules (#350), and the
+[legacy reuse inventory](architecture/legacy-inventory.md). Most
+other documents below describe the **legacy architecture** and remain
+available for reference until full-platform validation and later cleanup.
+
 - `02-implementation-scope.md` — historical implementation scope, epics and estimates, with current planning guidance.
 - `decisions/` — Wildstone ADRs (W-series).
 
