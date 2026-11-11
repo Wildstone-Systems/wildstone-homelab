@@ -1,9 +1,12 @@
-# Retain / adapt / retire inventory
+# Legacy reference and reuse inventory
 
 Status: **preparatory inventory for #350**, inspected at `1ef9d7c`. It
 classifies the repository for the in-place replacement decided in #338.
-It authorizes **no deletion and no change to running systems**. Each row
-names the issue that owns the work and the gate that must pass first.
+It authorizes **no deletion and no change to running systems**.
+Classification and proposed gates are preliminary historical notes, not
+an implementation order or authorization to retire code. Build and
+validate the replacement first. Consult specific rows for reuse only
+when the corresponding new implementation needs them.
 
 `tools/architecture/check_boundaries.py` (CI job `architecture
 boundaries`) keeps this file honest:
@@ -18,9 +21,13 @@ edit this file in the same PR.
 
 | Disposition | Meaning |
 |---|---|
-| **Retain** | Stays and serves the new architecture as it is. |
-| **Adapt** | Useful logic, pins or tests. The owning issue **moves** it into the new tree (`bootstrap/`, `platform/`, `catalog/`, `recovery/`), strips legacy coupling and adds tests there. New code never references the old path. |
-| **Retire** | Legacy architecture. Delete once its gate passes. Until then it is frozen: security fixes and CI upkeep only. |
+| **Retain** | Likely useful in the final repository; confirm during consolidation. |
+| **Adapt** | Potentially reusable logic, pins or tests. Inspect as needed during implementation; extract or move with independent tests, without creating legacy runtime dependencies. |
+| **Retire** | Candidate for eventual cleanup **after** the standard new platform passes end-to-end validation. No deletion is scheduled now. |
+
+The final column ("Gate before the change") records the original audit's
+**hypothetical** evidence thresholds. They are not active deletion gates;
+no deletion follows automatically from completing #341–#348.
 
 "Evidence" is the existing test or proof that shows the code works. It
 was **not rerun** for this inventory unless noted. #340 holds the
@@ -153,9 +160,9 @@ manifest, not the new create/join installer.
 
 ## `keystone/` — outcomes to re-derive, not code to import
 
-These packages are **retired**, but each holds tested behaviour the new
-path must reproduce with upstream tools. Rows exist so the gate is not
-forgotten.
+These packages are **candidates for later retirement**, but each holds
+tested behavior or requirements that may be useful to the new platform.
+Use the rows as a reference, not deletion instructions.
 
 | Path | Disposition | Outcome to preserve / evidence | Owner | Gate before the change |
 |---|---|---|---|---|
@@ -189,17 +196,19 @@ deleted. This keeps every existing security check in force.
 | `.github/rulesets/main.json` | Retain | Remove a required check **in the same PR** that deletes its job, never before. | retirement PRs | — |
 | `.github/dependabot.yml` | Retain | Drop legacy directories as they are deleted; add new ones. | — | — |
 
-## Deletion gates
+## Consolidation and retirement (deferred)
 
-A gate is passed only with linked evidence (CI run or issue comment).
-No gate is passed today.
+**No legacy deletion is authorized or scheduled by this inventory.**
+First complete and validate the working standard platform: fresh
+bare-metal bootstrap, Longhorn state retention, Forgejo/Flux,
+Rancher/identity/Homarr, curated apps, backup and independent site-loss
+recovery, and worker/replica expansion. Verify that none of these paths
+depend on legacy services.
 
-| Gate | What must be true | Then delete |
-|---|---|---|
-| **K3s path** | #341 create/resume and Longhorn storage tests pass in a QEMU Ubuntu 24.04 guest from `platform/`/`bootstrap/` alone. | `deploy/ansible` retire rows, `scripts/engine-try.sh`, `scripts/engine-fence-check.sh`, `testing/e2e/engine*`, `e2e.yml` `engine-local`, `installer/`. |
-| **Catalog** | #343 Flux + catalog installs Audiobookshelf with data kept across upgrade/rollback; #346 qualifies the other curated apps. | `packages/`. |
-| **Console** | #345 Homarr + Authelia/LLDAP usable on LAN after first install. | `console/`, `wallpapers/`, `scripts/console-coverage.py`, `console` CI job and required check. |
-| **Installer switch** | #341–#345 together give a working first install; README and `docs/install.md` rewritten; a new release asset replaces `install.sh`. | `scripts/install.sh`, `scripts/uninstall.sh`, legacy installer tests, `release.yml` legacy builds. |
-| **Wardstone** | Host duties covered without a daemon: bootstrap (#341), worker join (#348), host exports/schedules (#347). | `wardstone/`, `deploy/systemd`, Wardstone playbooks, `packaging/wardstoned.service`. |
-| **Keystone** | Installer switch + #342 Forgejo restore + #343 SOPS custody + #347 isolated total-site recovery drill all pass. | `keystone/`, `cli/`, `proto/`, `charts/`, `packaging/management`, `release/`, management scripts, `exit-drill.yml`, `go.work*`, remaining legacy CI jobs and their required checks. |
-| **Agents** | #339 decides where agent runtimes live. | `runtimes/`, `cli/cmd/agent-bridge`, `cli/cmd/chat-adapter`, related CI. |
+Then create a separate consolidation task based on the **actual** new
+codebase. Audit which files, fixtures, tests, CI protections and
+release assets remain in use, and delete unused legacy components in
+focused reviewed PRs. The candidate gate column above is historical
+context, not a binding sequence. Move necessary security checks,
+including gitleaks, before removing their current workflows.
+Multi-server control-plane HA (#349) is not a prerequisite for cleanup.
