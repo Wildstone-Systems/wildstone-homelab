@@ -314,7 +314,8 @@ func (s *Server) chatResumeConversation(c chatCommandCtx) (string, error) {
 type statusSummary struct {
 	Resources     int
 	Unhealthy     []runtimedb.Observed
-	Awaiting      int
+	Starting      []runtimedb.Observed
+	Awaiting      []runtimedb.Observed
 	PendingPlans  []runtimedb.PlanRecord
 	Nodes         []runtimedb.Node
 	Connected     int
@@ -323,7 +324,7 @@ type statusSummary struct {
 
 // Quiet reports whether there is nothing a person needs to know about.
 func (st statusSummary) Quiet() bool {
-	return len(st.Unhealthy) == 0 && len(st.PendingPlans) == 0 && st.Connected == len(st.Nodes)
+	return len(st.Unhealthy) == 0 && len(st.Starting) == 0 && len(st.Awaiting) == 0 && len(st.PendingPlans) == 0 && st.Connected == len(st.Nodes)
 }
 
 func (s *Server) statusSummary() (statusSummary, error) {
@@ -334,13 +335,13 @@ func (s *Server) statusSummary() (statusSummary, error) {
 	}
 	st.Resources = len(observed)
 	for _, o := range observed {
-		switch {
-		case o.Healthy:
-		case o.AwaitingApproval:
-			// A plan waiting for a human is not a fault (F75).
-			st.Awaiting++
-		default:
+		switch o.Condition() {
+		case runtimedb.OperatorProblem:
 			st.Unhealthy = append(st.Unhealthy, o)
+		case runtimedb.OperatorStarting:
+			st.Starting = append(st.Starting, o)
+		case runtimedb.OperatorWaiting:
+			st.Awaiting = append(st.Awaiting, o)
 		}
 	}
 	// The state query, not a page of history: a plan left unresolved
@@ -390,8 +391,11 @@ func (s *Server) chatStatus(c chatCommandCtx) (string, error) {
 		b.WriteString("Everything is converged and nothing is waiting on you.\n")
 	}
 	fmt.Fprintf(&b, "%d of %d resources unhealthy", len(st.Unhealthy), st.Resources)
-	if st.Awaiting > 0 {
-		fmt.Fprintf(&b, " (%d more held back by a plan awaiting you)", st.Awaiting)
+	if len(st.Awaiting) > 0 {
+		fmt.Fprintf(&b, " (%d more held back by a plan awaiting you)", len(st.Awaiting))
+	}
+	if len(st.Starting) > 0 {
+		fmt.Fprintf(&b, "\n%s still starting", plural(len(st.Starting), "resource is", "resources are"))
 	}
 	fmt.Fprintf(&b, "\n%s waiting for approval", plural(len(st.PendingPlans), "plan", "plans"))
 	if len(st.Nodes) == 0 {
@@ -414,8 +418,44 @@ func (s *Server) chatStatus(c chatCommandCtx) (string, error) {
 		if o.Detail != "" {
 			fmt.Fprintf(&b, " — %s", o.Detail)
 		}
+		b.WriteString(observedAtSuffix(o.UpdatedAt))
+	}
+	for i, o := range st.Starting {
+		if i == 0 {
+			b.WriteString("\n")
+		}
+		if i == 5 {
+			fmt.Fprintf(&b, "\n…and %d more starting", len(st.Starting)-5)
+			break
+		}
+		fmt.Fprintf(&b, "\n· %s/%s — starting", o.Kind, o.Name)
+		if o.Detail != "" {
+			fmt.Fprintf(&b, ": %s", o.Detail)
+		}
+		b.WriteString(observedAtSuffix(o.UpdatedAt))
+	}
+	for i, o := range st.Awaiting {
+		if i == 0 {
+			b.WriteString("\n")
+		}
+		if i == 5 {
+			fmt.Fprintf(&b, "\n…and %d more awaiting approval", len(st.Awaiting)-5)
+			break
+		}
+		fmt.Fprintf(&b, "\n· %s/%s — awaiting approval", o.Kind, o.Name)
+		if o.Detail != "" {
+			fmt.Fprintf(&b, ": %s", o.Detail)
+		}
+		b.WriteString(observedAtSuffix(o.UpdatedAt))
 	}
 	return b.String(), nil
+}
+
+func observedAtSuffix(at time.Time) string {
+	if at.IsZero() {
+		return ""
+	}
+	return " (observed " + at.UTC().Format(time.RFC3339) + ")"
 }
 
 func (s *Server) chatPlans(c chatCommandCtx) (string, error) {
