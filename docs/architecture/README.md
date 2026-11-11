@@ -3,7 +3,8 @@
 Status: **authoritative for all new development** (#350, parent #338).
 Everything else in this repository is the **legacy architecture**:
 non-production, frozen except for security fixes and CI upkeep, and
-retired path by path through [the inventory](legacy-inventory.md).
+retained as reference while the new platform is built and tested.
+The [inventory](legacy-inventory.md) is for selective reuse, not scheduled deletion.
 
 ## Decision in one paragraph
 
@@ -47,17 +48,16 @@ not product code.
    publisher or management chart, or any legacy path (`deploy/ansible`,
    `packages/`, `scripts/install.sh`, …). This includes runtime
    dependencies: no calls to their services, ports, sockets or files.
-2. **Reuse by moving.** To reuse legacy code, the owning issue **moves**
-   it into a new root (`git mv`), removes the legacy coupling and adds a
-   test there. Copying is allowed only while a legacy consumer still
-   needs the old file; the inventory row then says which deletion removes
-   the copy. Never reference the old path.
+2. **Reuse selectively.** Build the new capability in the new tree. As
+   needed, inspect useful legacy configuration, scripts, code and tests;
+   extract or move the useful parts with independent tests, removing
+   legacy runtime coupling. Do not create dependencies on legacy paths.
 3. **Go modules build alone.** A Go module under a new root has its own
    `go.mod`, is **not** listed in `go.work`, and must build and test with
    `GOWORK=off`. It must not `require` or `replace` a legacy module.
 4. **Legacy never depends on new code.** Legacy release, installer and
-   tests must not call into the new roots. This keeps every retirement a
-   plain deletion. (Checked in review, not by CI.)
+   tests must not call into the new roots. The separate trees remain
+   independent during development. (Checked in review, not by CI.)
 5. **Upstream first.** No new daemon, custom scheduler, custom GitOps
    reconciler, controller or compatibility layer. Flux is the only
    reconciler for ordinary apps; Longhorn and Forgejo are the two
@@ -107,32 +107,31 @@ python3 -m unittest discover -s tools/architecture -p 'test_*.py' -v
   pinned `helm lint`/`template`. No path filters on required jobs: a
   path-filtered required check never reports and blocks the PR.
 
-## Follow-up PR order
+## Implementation strategy: build → validate → consolidate → retire
 
-Smallest useful steps. Each is one PR, reviewed before the next.
-Backup design (#347) starts alongside bootstrap, as #338 requires.
+Functional delivery is tracked by **#341–#348**. #349 is later multi-server
+HA and does not block initial validation or cleanup.
 
-1. **#341a — preflight + K3s create/resume.** Create `bootstrap/` and
-   `platform/k3s/`; move `prereqs.yml`, `k3s-server.yml` and templates
-   (re-enable Traefik); move the QEMU harness from `testing/e2e`; add a
-   VM job. Delete `installer/`.
-2. **#341b — Longhorn V1 by direct Helm.** Pinned chart, explicit r1
-   Retain class, move `engine-storage-check.sh` and `disk-guard.sh` with
-   reboot and missing-mount tests.
-3. **Retire K3s legacy.** Delete the `deploy/ansible` retire rows,
-   `engine-try.sh`, `engine-fence-check.sh`, `engine_test.go`,
-   `engine-guest.sh` and the `engine-local` job.
-4. **#342 — Forgejo + local Git**, with its own backup/restore test.
-5. **#347a — recovery baseline**: Restic, key custody, Forgejo and Git
-   export. Create `recovery/`.
-6. **#343 — Flux + catalog + CLI app install**, proven with
-   Audiobookshelf. Create `catalog/`.
-7. **#345 — identity, ingress, Homarr.** Then retire the Console.
-8. **#344 — Rancher** with the Fleet/Flux boundary.
-9. **#346 — curated app profiles**, then retire `packages/`.
-10. **Installer switch** — new release asset, README/install docs, then
-    retire `scripts/install.sh` and the legacy release.
-11. **#348 — worker join and replica expansion**; **#347b — isolated
-    total-site drill**. Then retire Wardstone, then Keystone and the
-    rest (see [deletion gates](legacy-inventory.md#deletion-gates)).
-12. **#349** — later HA, not part of the single-server MVP.
+1. **Build the foundation (#341–#345).** Implement Ubuntu/K3s/Longhorn,
+   Forgejo, Flux/catalog/CLI, Rancher, identity and Homarr in the new
+   roots. Split implementation PRs as needed. Do **not** delete the legacy
+   installer, Console or management stack during these slices.
+2. **Complete capabilities (#346–#348) and backup/recovery (#347).**
+   Prove curated applications, NAS and hardware-aware placement,
+   independent off-site recovery, worker joins and Longhorn expansion.
+   Consult the legacy inventory only when a relevant reusable component
+   could save work; extract it without retaining legacy dependencies.
+3. **Validate the complete standard platform end to end.** Establish
+   independent fresh-install, reboot, admin/dashboard, app persistence,
+   backup/site-loss recovery and worker-expansion evidence. Verify
+   the new deployment does not require the legacy runtime.
+4. **Consolidate and retire separately.** After successful full-platform
+   validation, audit the *actual* implementation to decide what is used,
+   what remains valuable and what can be removed. Retire Keystone,
+   Wardstone, Console and obsolete installers/tests/workflows in focused
+   reviewable PRs. Preserve security checks and required-test coverage
+   before retiring their former jobs.
+
+The [legacy inventory](legacy-inventory.md) is a **reference**, not an
+early retirement plan or a set of required file moves. No existing
+production installation needs migration or compatibility support.
