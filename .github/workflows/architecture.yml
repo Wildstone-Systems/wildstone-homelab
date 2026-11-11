@@ -1,0 +1,53 @@
+name: architecture
+
+# Independent CI for the new architecture (docs/architecture/README.md,
+# #350). It never depends on a legacy job or toolchain: only the runner's
+# Python 3 and, when the new tree has shell scripts, pinned shellcheck.
+# Runs on every pull request with no path filter, so it can be made a
+# required check without ever leaving a PR waiting for a skipped job.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  boundaries:
+    name: architecture boundaries
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - name: boundary checker tests
+        run: python3 -m unittest discover -s tools/architecture -p 'test_*.py' -v
+      - name: new tree has no legacy dependency; inventory is complete
+        run: python3 tools/architecture/check_boundaries.py
+      # Same version and checksums as ci.yml's shellcheck: one reviewed
+      # pin for the whole repository. Skipped, without a download, until
+      # a new root holds a shell script.
+      - name: shellcheck (new roots)
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(find bootstrap platform catalog recovery -name '*.sh' -type f 2>/dev/null | sort)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "no shell scripts under the new roots yet"
+            exit 0
+          fi
+          v=v0.9.0
+          case "$(uname -m)" in
+            x86_64)  arch=x86_64;  sum=700324c6dd0ebea0117591c6cc9d7350d9c7c5c287acbad7630fa17b1d4d9e2f ;;
+            aarch64) arch=aarch64; sum=179c579ef3481317d130adebede74a34dbbc2df961a70916dd4039ebf0735fae ;;
+            *) echo "no pinned shellcheck for $(uname -m)"; exit 1 ;;
+          esac
+          curl -fsSL -o "$RUNNER_TEMP/shellcheck.tar.xz" \
+            "https://github.com/koalaman/shellcheck/releases/download/$v/shellcheck-$v.linux.$arch.tar.xz"
+          echo "$sum  $RUNNER_TEMP/shellcheck.tar.xz" | sha256sum -c -
+          tar -xJf "$RUNNER_TEMP/shellcheck.tar.xz" -C "$RUNNER_TEMP"
+          for f in "${files[@]}"; do bash -n "$f"; done
+          "$RUNNER_TEMP/shellcheck-$v/shellcheck" "${files[@]}"
