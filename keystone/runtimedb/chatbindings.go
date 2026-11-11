@@ -13,6 +13,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 )
 
@@ -202,11 +203,39 @@ func (db *DB) RedeemChatClaimCode(hash string, at Connection, account, displayNa
 	}
 
 	stamp := now()
+	rows, err := tx.Query(`SELECT id,person_id FROM chat_bindings
+		WHERE connection=? AND account=? AND revoked_at=''`, at.Seq, account)
+	if err != nil {
+		return ChatBinding{}, fmt.Errorf("runtimedb: reading replaced binding: %w", err)
+	}
+	var replaced []struct {
+		id     int64
+		person string
+	}
+	for rows.Next() {
+		var old struct {
+			id     int64
+			person string
+		}
+		if err := rows.Scan(&old.id, &old.person); err != nil {
+			rows.Close()
+			return ChatBinding{}, err
+		}
+		replaced = append(replaced, old)
+	}
+	if err := rows.Close(); err != nil {
+		return ChatBinding{}, err
+	}
 	if _, err := tx.Exec(
 		`UPDATE chat_bindings SET revoked_at = ?
 		 WHERE connection = ? AND account = ? AND revoked_at = ''`,
 		stamp, at.Seq, account); err != nil {
 		return ChatBinding{}, fmt.Errorf("runtimedb: replacing binding: %w", err)
+	}
+	for _, old := range replaced {
+		if err := revokeChatIdentityLinkTx(tx, old.id, old.person, stamp, createdBy); err != nil {
+			return ChatBinding{}, err
+		}
 	}
 	// The binding carries the code's Person across unchanged rather than
 	// resolving the handle again: they are the same Person by
@@ -228,6 +257,15 @@ func (db *DB) RedeemChatClaimCode(hash string, at Connection, account, displayNa
 	id, err := res.LastInsertId()
 	if err != nil {
 		return ChatBinding{}, err
+	}
+	var generation int64
+	if err := tx.QueryRow(`SELECT generation FROM butler_members WHERE person_id=?`, person).Scan(&generation); err != nil {
+		return ChatBinding{}, err
+	}
+	if _, err := tx.Exec(`INSERT INTO butler_identity_links
+		(link_type,external_id,person_id,generation,created_at,created_by)
+		VALUES(?,?,?,?,?,?)`, LinkChatBinding, strconv.FormatInt(id, 10), person, generation, stamp, createdBy); err != nil {
+		return ChatBinding{}, fmt.Errorf("runtimedb: linking chat binding identity: %w", err)
 	}
 	if _, err := tx.Exec(
 		`UPDATE chat_claim_codes SET redeemed_at = ?, binding_id = ? WHERE hash = ? AND redeemed_at = ''`,
@@ -342,7 +380,19 @@ func (db *DB) ListChatBindings(withRevoked bool) ([]ChatBinding, error) {
 // or unknown binding reports ErrNotFound rather than pretending to have
 // done something.
 func (db *DB) RevokeChatBinding(id int64) error {
-	res, err := db.sql.Exec(`UPDATE chat_bindings SET revoked_at = ? WHERE id = ? AND revoked_at = ''`, now(), id)
+	tx, err := db.sql.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck
+	var person string
+	if err := tx.QueryRow(`SELECT person_id FROM chat_bindings WHERE id=? AND revoked_at=''`, id).Scan(&person); errors.Is(err, sql.ErrNoRows) {
+		return ErrNotFound
+	} else if err != nil {
+		return fmt.Errorf("runtimedb: reading chat binding for revocation: %w", err)
+	}
+	stamp := now()
+	res, err := tx.Exec(`UPDATE chat_bindings SET revoked_at = ? WHERE id = ? AND revoked_at = ''`, stamp, id)
 	if err != nil {
 		return fmt.Errorf("runtimedb: revoking chat binding: %w", err)
 	}
@@ -352,6 +402,28 @@ func (db *DB) RevokeChatBinding(id int64) error {
 	}
 	if n == 0 {
 		return ErrNotFound
+	}
+	if err := revokeChatIdentityLinkTx(tx, id, person, stamp, "chat-binding-revoked"); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func revokeChatIdentityLinkTx(tx *sql.Tx, id int64, person, stamp, actor string) error {
+	res, err := tx.Exec(`UPDATE butler_identity_links SET revoked_at=?,revoked_by=?
+		WHERE link_type=? AND external_id=? AND revoked_at=''`,
+		stamp, actor, LinkChatBinding, strconv.FormatInt(id, 10))
+	if err != nil {
+		return fmt.Errorf("runtimedb: revoking chat identity link: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n > 0 {
+		if _, err := tx.Exec(`UPDATE butler_members SET generation=generation+1 WHERE person_id=?`, person); err != nil {
+			return fmt.Errorf("runtimedb: bumping revoked chat identity generation: %w", err)
+		}
 	}
 	return nil
 }

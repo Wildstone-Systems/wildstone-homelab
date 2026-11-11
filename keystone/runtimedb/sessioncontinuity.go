@@ -55,6 +55,7 @@ func (db *DB) RecentSessionCandidates(identity, agent string, since, after time.
 		  FROM butler_sessions s
 		  LEFT JOIN butler_session_connections p ON p.session = s.seq AND p.direction = 'inbound'
 		 WHERE s.person_id = ? AND s.agent_id = ? AND s.revoked_at = ''
+		   AND s.identity_generation = (SELECT generation FROM butler_members WHERE person_id=s.person_id)
 		   AND EXISTS (SELECT 1 FROM butler_session_turns t
 		                WHERE t.session = s.seq AND t.created_at > ?)
 		 GROUP BY s.seq, p.connection_ref, p.connection_name
@@ -123,18 +124,23 @@ func (db *DB) GetButlerSessionForContinuation(id string, destinationRef int64, a
 		return ButlerSession{}, false, ErrNotFound
 	}
 	var revoked string
-	if err := tx.QueryRow(`SELECT revoked_at FROM butler_sessions WHERE seq=?`, seq).Scan(&revoked); err != nil {
+	var generation, current int64
+	if err := tx.QueryRow(`SELECT s.revoked_at,s.identity_generation,m.generation
+		FROM butler_sessions s JOIN butler_members m ON m.person_id=s.person_id WHERE s.seq=?`, seq).Scan(&revoked, &generation, &current); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			err = ErrNotFound
 		}
-		return ButlerSession{}, false, err
+		return ButlerSession{}, false, fmt.Errorf("reading continuation generation: %w", err)
 	}
 	if revoked != "" {
 		return ButlerSession{}, false, ErrSessionRevoked
 	}
+	if generation == 0 || generation != current {
+		return ButlerSession{}, false, ErrSessionRevoked
+	}
 	provenance, err := sessionConnectionProvenance(tx, id)
 	if err != nil {
-		return ButlerSession{}, false, err
+		return ButlerSession{}, false, fmt.Errorf("reading continuation provenance: %w", err)
 	}
 	// The destination may not yet appear among the session's origins. Resolve
 	// it independently in this same snapshot; an ingress Connection value can
@@ -144,14 +150,14 @@ func (db *DB) GetButlerSessionForContinuation(id string, destinationRef int64, a
 		return ButlerSession{}, false, nil
 	}
 	if err != nil {
-		return ButlerSession{}, false, err
+		return ButlerSession{}, false, fmt.Errorf("reading continuation destination: %w", err)
 	}
 	if !authorize(provenance, destination) {
 		return ButlerSession{}, false, nil
 	}
 	session, err := getButlerSession(tx, id)
 	if err != nil {
-		return ButlerSession{}, false, err
+		return ButlerSession{}, false, fmt.Errorf("reading continuation session: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return ButlerSession{}, false, err

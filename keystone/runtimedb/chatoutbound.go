@@ -136,10 +136,26 @@ func (db *DB) EnqueueChatOutbound(m ChatOutbound) (int64, error) {
 		return 0, err
 	}
 	defer tx.Rollback()
+	var identityGeneration int64
+	if m.BindingID != 0 {
+		err = tx.QueryRow(`SELECT p.generation FROM chat_bindings b
+			JOIN butler_members p ON p.person_id=b.person_id
+			JOIN butler_identity_links l ON l.link_type='chat-binding'
+			 AND l.external_id=CAST(b.id AS TEXT) AND l.person_id=b.person_id
+			WHERE b.id=? AND b.connection=? AND b.revoked_at='' AND l.revoked_at=''
+			 AND l.generation=p.generation AND p.admitted=1
+			 AND p.disabled_at='' AND p.offboarded_at=''`, m.BindingID, m.Connection).Scan(&identityGeneration)
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, ErrNotAdmitted
+		}
+		if err != nil {
+			return 0, fmt.Errorf("runtimedb: checking outbound identity: %w", err)
+		}
+	}
 	// speech is named only when there is some, like a turn's source:
 	// a text-only message is the column's default.
-	cols, marks := "connection, target, body, kind, binding_id, correlation_id, dedupe_key, created_at, expires_at, hold_until", "?, ?, ?, ?, ?, ?, ?, ?, ?, ?"
-	args := []any{m.Connection, m.Target, m.Body, m.Kind, m.BindingID, m.CorrelationID,
+	cols, marks := "connection, target, body, kind, binding_id, identity_generation, correlation_id, dedupe_key, created_at, expires_at, hold_until", "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?"
+	args := []any{m.Connection, m.Target, m.Body, m.Kind, m.BindingID, identityGeneration, m.CorrelationID,
 		m.DedupeKey, now(), m.ExpiresAt.UTC().Format(time.RFC3339Nano), timeText(m.HoldUntil)}
 	if m.Speech = strings.TrimSpace(m.Speech); m.Speech != "" {
 		cols, marks, args = cols+", speech", marks+", ?", append(args, truncateUTF8(m.Speech, MaxChatBodyBytes))
@@ -199,8 +215,12 @@ func (db *DB) EnqueueChatOutbound(m ChatOutbound) (int64, error) {
 // can revive a message composed under withdrawn authority.
 const outboundAdmissionPredicate = `(o.binding_id = 0 OR EXISTS (
 	SELECT 1 FROM chat_bindings b JOIN butler_members p ON p.person_id = b.person_id
+	JOIN butler_identity_links l ON l.link_type = 'chat-binding'
+	 AND l.external_id = CAST(b.id AS TEXT) AND l.person_id = b.person_id
 	WHERE b.id = o.binding_id AND b.connection = o.connection
-	  AND b.revoked_at = '' AND p.admitted = 1 AND p.disabled_at = '' AND p.offboarded_at = ''
+	  AND b.revoked_at = '' AND l.revoked_at = '' AND l.generation = p.generation
+	  AND o.identity_generation = l.generation
+	  AND p.admitted = 1 AND p.disabled_at = '' AND p.offboarded_at = ''
 ))`
 
 // ChatOutboundAfter returns undelivered, unexpired messages for one

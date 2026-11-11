@@ -3,6 +3,8 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -153,6 +155,42 @@ func TestChatRecipientRequiresAFamilyBinding(t *testing.T) {
 	}
 	if _, _, _, err := h.s.ChatRecipientFor("telegram", "sam"); err == nil {
 		t.Fatalf("a revoked binding is still a notification target")
+	}
+	if res, out := h.send(runtimedb.RoleConcierge, map[string]any{
+		"transport": "telegram", "account": "12345", "text": "stale", "messageId": "revoked-binding",
+	}); res.StatusCode != http.StatusAccepted || out.Bound {
+		t.Fatalf("revoked binding dispatched: status=%d out=%+v", res.StatusCode, out)
+	}
+}
+
+func TestQueuedChatReplyCannotBorrowANewerBindingGeneration(t *testing.T) {
+	h := newHarness(t)
+	binding := h.bindAccount(t, "family", "sam", "telegram", "synthetic-account")
+	at := h.agentAt(t, "family", "telegram")
+	seq, err := h.s.DB.EnqueueChatOutbound(runtimedb.ChatOutbound{
+		Connection: at.Seq, Target: "synthetic-account", Body: "synthetic reply",
+		BindingID: binding.ID, DedupeKey: "identity-generation-delivery",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.s.DB.ChatOutboundReady(at, seq); err != nil {
+		t.Fatalf("current binding was not deliverable: %v", err)
+	}
+	if err := h.s.DB.RevokeSurfaceLink(runtimedb.LinkChatBinding, fmt.Sprint(binding.ID), "root-admin"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.s.DB.ChatOutboundReady(at, seq); !errors.Is(err, runtimedb.ErrNotFound) {
+		t.Fatalf("revoked binding published a queued reply: %v", err)
+	}
+	if err := h.s.DB.AdmitButlerMember("sam", "root-admin"); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.s.DB.LinkSurfaceIdentity(runtimedb.LinkChatBinding, fmt.Sprint(binding.ID), "sam", "root-admin"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.s.DB.ChatOutboundReady(at, seq); !errors.Is(err, runtimedb.ErrNotFound) {
+		t.Fatalf("re-admission revived an old queued reply: %v", err)
 	}
 }
 

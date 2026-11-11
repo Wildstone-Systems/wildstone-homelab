@@ -219,9 +219,9 @@ func (db *DB) OffboardMember(member, actor, administrator string) (OffboardingRe
 			if _, err := db.sql.Exec(
 				`UPDATE butler_tasks
 				 SET owner_person_id = ?, origin_connection = '', origin_connection_ref = 0, origin_conversation = '',
-				     updated_at = ?
+				     identity_generation = (SELECT generation FROM butler_members WHERE person_id = ?), updated_at = ?
 				 WHERE seq = ?`,
-				adminPerson, now(), t.Seq); err != nil {
+				adminPerson, adminPerson, now(), t.Seq); err != nil {
 				return result, fmt.Errorf("runtimedb: transferring shared work: %w", err)
 			}
 			// It still pauses: A4 says transferred work waits for grant

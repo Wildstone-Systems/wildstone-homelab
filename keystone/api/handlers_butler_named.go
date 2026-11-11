@@ -130,6 +130,23 @@ func (s *Server) butlersConfigured() bool {
 // second way of recording what happened — two audit paths would mean
 // two things to keep true.
 func (s *Server) runNamedButlerSession(ctx context.Context, turn butlerlive.Turn, prior *turnContext) (any, int, error) {
+	if turn.IdentityGeneration == 0 {
+		turn.IdentityGeneration = surfaceGeneration(ctx)
+	}
+	if turn.IdentityGeneration == 0 {
+		// This function is also the trusted internal seam used by command and
+		// proposal tests. HTTP/chat entry points resolve a canonical surface
+		// link before they arrive here; internal callers still bind to the
+		// member's current generation rather than manufacturing generation 0.
+		member, err := s.DB.GetButlerMember(turn.Member)
+		if err != nil || !member.Active() {
+			return nil, http.StatusForbidden, runtimedb.ErrNotAdmitted
+		}
+		turn.IdentityGeneration = member.Generation
+	}
+	if err := s.DB.CheckButlerMemberGeneration(turn.Member, turn.IdentityGeneration); err != nil {
+		return nil, http.StatusForbidden, runtimedb.ErrNotAdmitted
+	}
 	if turn.Source == "" {
 		turn.Source = turnSource(ctx)
 	}
@@ -173,6 +190,11 @@ func (s *Server) runNamedButlerSession(ctx context.Context, turn butlerlive.Turn
 		default:
 			return preserved, http.StatusBadGateway, fmt.Errorf("butler session: %w", err)
 		}
+	}
+	// A model call is not a lease on identity. Recheck immediately before
+	// proposals, session history, or the response can be published.
+	if err := s.DB.CheckButlerMemberGeneration(turn.Member, turn.IdentityGeneration); err != nil {
+		return nil, http.StatusForbidden, runtimedb.ErrNotAdmitted
 	}
 
 	// Proposals go through the ONE pipeline (ADR-W017 A3), as principal
@@ -231,6 +253,7 @@ func (s *Server) runNamedButlerSession(ctx context.Context, turn butlerlive.Turn
 		// session filed under a name the caller supplied would be a
 		// conversation attributed to a Butler that did not hold it.
 		Butler:               ans.Butler,
+		IdentityGeneration:   turn.IdentityGeneration,
 		InboundConnection:    turn.Connection.Name,
 		InboundConnectionRef: turn.Connection.Ref,
 		FinalText:            finalText,
@@ -373,6 +396,7 @@ func (s *Server) preserveFailedTurn(turn butlerlive.Turn, prior *turnContext, an
 		Mode:                 mode,
 		Surface:              ans.Surface,
 		Butler:               ans.Butler,
+		IdentityGeneration:   turn.IdentityGeneration,
 		InboundConnection:    turn.Connection.Name,
 		InboundConnectionRef: turn.Connection.Ref,
 		TranscriptJSON:       failed,
