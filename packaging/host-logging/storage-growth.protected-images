@@ -1,0 +1,4 @@
+# One immutable image reference per line. Keep scheduled-job images here even
+# when no container currently references them. The pinned backup image is also
+# built into the collector so a missing file cannot make it a cleanup candidate.
+restic/restic@sha256:9940e6c7421ab3a21ee9fdc4e91596d04c792b600d31b102696c75cbf3ac4481
