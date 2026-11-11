@@ -27,7 +27,9 @@ infrastructure.
 > Longhorn, Forgejo, Flux, Rancher, Authelia/LLDAP and Homarr (#338).
 > Keystone, Wardstone, the Console, `wild`, `packages/` and the Docker
 > installer below are the **legacy architecture**: non-production, frozen
-> and retired path by path per the [inventory](docs/architecture/legacy-inventory.md).
+> and retained as reference while the new platform is built and validated.
+> The [inventory](docs/architecture/legacy-inventory.md) is for selective reuse,
+> not early retirement.
 > The published installer keeps working until its replacement ships.
 
 ## Why Wildstone?
@@ -120,8 +122,8 @@ Manual installs, extra nodes, version pinning and more:
 
 | Guide | What's inside |
 |---|---|
-| [Architecture](docs/architecture/README.md) | **New architecture: layout, dependency rules, follow-up order** |
-| [Legacy inventory](docs/architecture/legacy-inventory.md) | Retain/adapt/retire by path, with deletion gates |
+| [Architecture](docs/architecture/README.md) | **New architecture: boundaries and build–validate–retire strategy** |
+| [Legacy inventory](docs/architecture/legacy-inventory.md) | Reference for selective reuse and post-validation consolidation |
 | [Vision](docs/vision.md) | Why this exists |
 | [Concepts](docs/concepts.md) | The mental model |
 | [Install](docs/install.md) | Installing the current release |
