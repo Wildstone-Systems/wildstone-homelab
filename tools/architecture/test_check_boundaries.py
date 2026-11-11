@@ -103,6 +103,29 @@ class NewRootTests(unittest.TestCase):
         f.write("platform/blob.bin", b"\0keystone\0")
         self.assertEqual(f.roots(), [])
 
+    def test_symlink_into_legacy_is_refused(self):
+        f = Fixture(self)
+        f.write("deploy/ansible/prereqs.yml", "- hosts: localhost\n")
+        (f.root / "platform").mkdir()
+        (f.root / "platform/k3s").symlink_to("../deploy/ansible")
+        (f.root / "platform/prereqs.yml").symlink_to("../deploy/ansible/prereqs.yml")
+        found = f.roots()
+        self.assertTrue(any(v.startswith("platform/k3s: symlink") for v in found), found)
+        self.assertTrue(any(v.startswith("platform/prereqs.yml: symlink") for v in found), found)
+
+    def test_symlink_root_is_refused(self):
+        f = Fixture(self)
+        f.write("deploy/ansible/prereqs.yml", "- hosts: localhost\n")
+        (f.root / "platform").symlink_to("deploy/ansible")
+        self.assertTrue(any(v.startswith("platform: a new root") for v in f.roots()))
+
+    def test_symlink_within_new_roots_is_allowed(self):
+        f = Fixture(self)
+        f.write("platform/k3s/config.yaml", "a: 1\n")
+        (f.root / "bootstrap").mkdir()
+        (f.root / "bootstrap/k3s").symlink_to("../platform/k3s")
+        self.assertEqual(f.roots(), [])
+
     def test_similar_words_are_not_flagged(self):
         f = Fixture(self)
         f.write("platform/notes.yaml", "keystones: 2\nconsole: serial\nscripts/check.sh\n../scripts/x.sh\n")
@@ -121,6 +144,12 @@ class GoWorkTests(unittest.TestCase):
         found = f.go_work()
         self.assertEqual(len(found), 2, found)
         self.assertTrue(found[0].startswith("go.work:5:"), found)
+
+    def test_quoted_and_inline_entries_are_refused(self):
+        f = Fixture(self)
+        f.write("go.work", 'go 1.26.0\n\nuse "./bootstrap/cli"\nuse `./catalog`\nuse ( ./keystone "recovery/drill" )\nuse ./platform/../platform/x\n')
+        found = f.go_work()
+        self.assertEqual([v.split(":")[1] for v in found], ["3", "4", "5", "6"], found)
 
 
 class InventoryTests(unittest.TestCase):

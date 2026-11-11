@@ -32,6 +32,8 @@ RULES_FILE = Path(__file__).with_name("boundaries.json")
 SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "dist"}
 # A row of the inventory table whose first cell is one backticked path.
 INVENTORY_ROW = re.compile(r"^\|\s*`([^`]+)`\s*\|")
+# One go.work path: "quoted", `raw`, or bare (golang.org/x/mod/modfile).
+GO_WORK_TOKEN = re.compile(r'"((?:[^"\\]|\\.)*)"|`([^`]*)`|([^\s()"`]+)')
 
 
 @dataclass(frozen=True)
@@ -78,22 +80,46 @@ def read_text(path: Path) -> str | None:
 
 
 def iter_files(root: Path):
+    """Regular files under root. Symlinks are yielded, never followed."""
     for directory, dirnames, filenames in os.walk(root):
-        dirnames[:] = sorted(d for d in dirnames if d not in SKIP_DIRS)
-        for name in sorted(filenames):
+        links = sorted(d for d in dirnames if (Path(directory) / d).is_symlink())
+        dirnames[:] = sorted(d for d in dirnames if d not in SKIP_DIRS and d not in links)
+        for name in links + sorted(filenames):
             yield Path(directory) / name
+
+
+def check_symlink(repo: Path, link: Path, roots: tuple[str, ...]) -> Violation | None:
+    """A link may only point inside the new roots: a link into legacy code is a dependency."""
+    relative = link.relative_to(repo).as_posix()
+    target = Path(os.path.normpath(link.parent / os.readlink(link)))
+    try:
+        inside = target.relative_to(repo.resolve() if target.is_absolute() else repo).parts
+    except ValueError:
+        inside = ()
+    if inside and inside[0] in roots:
+        return None
+    return Violation(relative, 0, f"symlink to {os.readlink(link)} leaves the new roots; move the files instead")
 
 
 def check_new_roots(repo: Path, rules: dict) -> list[Violation]:
     compiled = compile_rules(rules)
     exempt = tuple(rules.get("exempt_suffixes", []))
+    roots = tuple(rules["new_roots"])
     found: list[Violation] = []
-    for root_name in rules["new_roots"]:
+    for root_name in roots:
         root = repo / root_name
         if not root.is_dir():
             continue
+        if root.is_symlink():
+            found.append(Violation(root_name, 0, "a new root must be a real directory, not a symlink"))
+            continue
         for file in iter_files(root):
             relative = file.relative_to(repo).as_posix()
+            if file.is_symlink():
+                violation = check_symlink(repo, file, roots)
+                if violation:
+                    found.append(violation)
+                continue
             # The file's own path counts too: platform/keystone-shim.yaml is
             # as much a dependency as a line that names Keystone.
             for rule in compiled:
@@ -117,13 +143,22 @@ def check_go_work(repo: Path, rules: dict) -> list[Violation]:
         return []
     roots = tuple(rules["new_roots"])
     found = []
+    in_block = False
     for number, line in enumerate(work.read_text(encoding="utf-8").splitlines(), start=1):
-        entry = line.split("//", 1)[0].strip().strip("()").strip()
-        if entry.startswith("use "):
-            entry = entry[4:].strip()
-        entry = entry.removeprefix("./").rstrip("/")
-        if entry and entry.split("/", 1)[0] in roots:
-            found.append(Violation("go.work", number, f"{entry} must build with GOWORK=off; do not add it to the legacy workspace"))
+        text = line.split("//", 1)[0].strip()
+        if not in_block:
+            if not re.match(r"use\b", text):
+                continue
+            text = text[3:].strip()
+            if text.startswith("("):
+                in_block, text = True, text[1:]
+        if in_block and ")" in text:
+            in_block, text = False, text.split(")", 1)[0]
+        for quoted, raw, bare in GO_WORK_TOKEN.findall(text):
+            entry = (quoted.replace('\\"', '"') if quoted else raw or bare).strip()
+            entry = os.path.normpath(entry).replace(os.sep, "/").removeprefix("./")
+            if entry.split("/", 1)[0] in roots:
+                found.append(Violation("go.work", number, f"{entry} must build with GOWORK=off; do not add it to the legacy workspace"))
     return found
 
 
